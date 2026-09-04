@@ -403,6 +403,7 @@ fn auth_context_is_built_from_id_token_claims() {
             sign_in_second_factor: Some("totp".into()),
             second_factor_identifier: Some("mfa-1".into()),
             tenant: None,
+            sign_in_attributes: None,
         },
         custom,
     };

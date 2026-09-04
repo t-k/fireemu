@@ -11,11 +11,13 @@
 
 use core::fmt;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use fireemu_core_limits::evaluate::LimitViolation;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::base32;
+use crate::claims::ClaimValue;
 use crate::totp::{hotp, time_step, TotpParams};
 
 /// TOTP policy (versioned; unconfirmed values are conformance items).
@@ -161,10 +163,89 @@ pub struct PendingEnrollment {
 }
 
 /// Pending second-factor sign-in.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct PendingSignIn {
     /// Started at.
     pub started_at: LogicalInstant,
+    /// First-factor provenance retained until the second factor is accepted.
+    pub(crate) context: PendingSignInContext,
+}
+
+impl fmt::Debug for PendingSignIn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PendingSignIn")
+            .field("started_at", &self.started_at)
+            .field("context", &self.context)
+            .finish()
+    }
+}
+
+/// First-factor provenance retained by an opaque MFA pending credential.
+#[derive(Clone, Default, PartialEq)]
+pub struct PendingSignInContext {
+    sign_in_provider: Option<String>,
+    is_new_user: bool,
+    sign_in_attributes: Option<Arc<ClaimValue>>,
+}
+
+impl PendingSignInContext {
+    /// Creates the provenance carried through second-factor verification.
+    #[must_use]
+    pub fn new(
+        sign_in_provider: Option<String>,
+        is_new_user: bool,
+        sign_in_attributes: Option<ClaimValue>,
+    ) -> Self {
+        Self {
+            sign_in_provider,
+            is_new_user,
+            sign_in_attributes: sign_in_attributes.map(Arc::new),
+        }
+    }
+
+    /// Provider selected by the first factor.
+    #[must_use]
+    pub fn sign_in_provider(&self) -> Option<&str> {
+        self.sign_in_provider.as_deref()
+    }
+
+    /// Whether the first factor created the account.
+    #[must_use]
+    pub const fn is_new_user(&self) -> bool {
+        self.is_new_user
+    }
+
+    /// SAML or OIDC attributes supplied by the first factor.
+    #[must_use]
+    pub fn sign_in_attributes(&self) -> Option<&ClaimValue> {
+        self.sign_in_attributes.as_deref()
+    }
+
+    pub(crate) fn retained_heap_bytes(&self) -> u64 {
+        let mut total = self
+            .sign_in_provider
+            .as_ref()
+            .map_or(0, |provider| provider.len() as u64);
+        if let Some(attributes) = &self.sign_in_attributes {
+            let mut encoded = String::new();
+            attributes.write_canonical_json(&mut encoded);
+            total = total.saturating_add(encoded.len() as u64);
+        }
+        total
+    }
+}
+
+impl fmt::Debug for PendingSignInContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PendingSignInContext")
+            .field("sign_in_provider", &self.sign_in_provider)
+            .field("is_new_user", &self.is_new_user)
+            .field(
+                "sign_in_attributes",
+                &self.sign_in_attributes.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 /// Enrollment material returned to the client. `Debug` redacts the secret and the URI.
@@ -303,7 +384,7 @@ impl fmt::Display for MfaError {
 impl std::error::Error for MfaError {}
 
 /// Per-user MFA state.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct MfaState {
     totp: Vec<TotpFactor>,
     phone: Vec<PhoneFactor>,
@@ -440,10 +521,34 @@ impl MfaState {
         self.pending_sign_ins.contains_key(id)
     }
 
+    pub(crate) fn pending_sign_in(&self, id: &str) -> Option<&PendingSignIn> {
+        self.pending_sign_ins.get(id)
+    }
+
     /// Outstanding pending enrollments and sign-ins together (the per-user budget).
     #[must_use]
     pub fn pending_count(&self) -> usize {
         self.pending_enrollments.len() + self.pending_sign_ins.len()
+    }
+
+    pub(crate) fn pending_retained_bytes(&self) -> u64 {
+        let enrollments = self
+            .pending_enrollments
+            .iter()
+            .fold(0_u64, |total, (id, pending)| {
+                total
+                    .saturating_add(id.len() as u64)
+                    .saturating_add(core::mem::size_of_val(pending) as u64)
+                    .saturating_add(pending.secret.expose_for_enrollment().len() as u64)
+            });
+        self.pending_sign_ins
+            .iter()
+            .fold(enrollments, |total, (id, pending)| {
+                total
+                    .saturating_add(id.len() as u64)
+                    .saturating_add(core::mem::size_of_val(pending) as u64)
+                    .saturating_add(pending.context.retained_heap_bytes())
+            })
     }
 
     /// Drops every pending enrollment that expired more than `enrollment_grace` ago and every

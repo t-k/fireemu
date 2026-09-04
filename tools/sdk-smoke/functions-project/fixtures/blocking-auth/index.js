@@ -23,6 +23,28 @@ function validatedMutation(user) {
 
 exports.fxBeforeCreate = beforeUserCreated((event) => validatedMutation(event.data));
 exports.fxBeforeSignIn = beforeUserSignedIn(() => ({ sessionClaims: { source: "blocking" } }));
+exports.fxBeforeSignInContext = beforeUserSignedIn((event) => {
+  if (
+    event.eventType !==
+    "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp"
+  ) {
+    throw new Error("blocking context used the wrong event type");
+  }
+  return { sessionClaims: { contextObserved: true } };
+});
+exports.fxBeforeSignInMethod = beforeUserSignedIn((event) => ({
+  sessionClaims: { observedEventType: event.eventType },
+}));
+exports.fxSessionClaimsAtLimit = beforeUserSignedIn(() => ({
+  sessionClaims: { value: "a".repeat(988) },
+}));
+exports.fxSessionClaimsOverLimit = beforeUserSignedIn(() => ({
+  sessionClaims: { value: "😀".repeat(495) },
+}));
+exports.fxCombinedClaimsOverLimit = beforeUserSignedIn(() => ({
+  customClaims: { custom: "a".repeat(600) },
+  sessionClaims: { session: "b".repeat(600) },
+}));
 exports.fxLegacyBeforeCreate = functionsV1.auth.user().beforeCreate(validatedMutation);
 exports.fxPermissionDenied = beforeUserCreated(() => {
   throw new HttpsError("permission-denied", "fixture rejected");

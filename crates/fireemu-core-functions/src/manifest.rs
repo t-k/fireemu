@@ -185,6 +185,15 @@ impl BlockingAuthEvent {
         }
     }
 
+    /// Fully qualified event type exposed to a Blocking Auth handler.
+    #[must_use]
+    pub const fn event_type(self) -> &'static str {
+        match self {
+            Self::BeforeCreate => "providers/cloud.auth/eventTypes/user.beforeCreate",
+            Self::BeforeSignIn => "providers/cloud.auth/eventTypes/user.beforeSignIn",
+        }
+    }
+
     /// Parses either the short or legacy provider event type.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {

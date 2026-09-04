@@ -2493,6 +2493,50 @@ fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
     )
 }
 
+fn blocking_auth_context_json(
+    project: &str,
+    tenant: Option<&str>,
+    event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    event_id: &str,
+    timestamp: &str,
+) -> serde_json::Value {
+    let event_type = match (event, request.sign_in_method.as_deref()) {
+        (fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn, Some(method)) => {
+            format!("{}:{method}", event.event_type())
+        }
+        _ => event.event_type().to_owned(),
+    };
+    let mut context = serde_json::json!({
+        "eventId": event_id,
+        "eventType": event_type,
+        "resource": {
+            "service": "identitytoolkit.googleapis.com",
+            "name": blocking_auth_resource_name(project, tenant),
+        },
+        "timestamp": timestamp,
+        "params": {},
+    });
+    if let Some(info) = &request.additional_user_info {
+        context["additionalUserInfo"] = serde_json::json!({
+            "providerId": info.provider_id,
+            "profile": info.profile,
+            "isNewUser": info.is_new_user,
+        });
+    }
+    if let Some(credential) = &request.credential {
+        let mut value = serde_json::json!({
+            "providerId": credential.provider_id,
+            "signInMethod": credential.sign_in_method,
+        });
+        if let Some(claims) = &credential.claims {
+            value["claims"] = claims.clone();
+        }
+        context["credential"] = value;
+    }
+    context
+}
+
 fn with_blocking_auth_project<T, E>(
     runtime_project: &str,
     request_project: &str,
@@ -2620,12 +2664,13 @@ impl BlockingAuthBridge {
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
+        context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
     ) -> Result<
         Option<serde_json::Value>,
         fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
     > {
         with_blocking_auth_project(self.runtime.project(), project, || {
-            self.invoke_matching_namespace(project, tenant, event, user)
+            self.invoke_matching_namespace(project, tenant, event, user, context)
         })
     }
 
@@ -2635,6 +2680,7 @@ impl BlockingAuthBridge {
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
+        context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
     ) -> Result<
         Option<serde_json::Value>,
         fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
@@ -2649,17 +2695,19 @@ impl BlockingAuthBridge {
             return Ok(None);
         };
         let user_json = blocking_auth_user_json(user, tenant);
-        let resource_name = blocking_auth_resource_name(project, tenant);
+        let event_context = blocking_auth_context_json(
+            project,
+            tenant,
+            event,
+            context,
+            &format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
+            &fireemu_core_types::time::LogicalInstant::to_rfc3339(self.runtime.now())
+                .unwrap_or_default(),
+        );
         let body = serde_json::json!({
             "data": {
                 "user": user_json,
-                "context": {
-                    "eventId": format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
-                    "eventType": event.as_str(),
-                    "resource": {"service": "identitytoolkit.googleapis.com", "name": resource_name},
-                    "timestamp": fireemu_core_types::time::LogicalInstant::to_rfc3339(self.runtime.now()).unwrap_or_default(),
-                    "params": {},
-                }
+                "context": event_context,
             }
         })
         .to_string();
@@ -2726,8 +2774,14 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<serde_json::Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure>
     {
-        self.invoke_for_namespace(self.runtime.project(), None, event, user)
-            .map(|value| value.unwrap_or_else(|| serde_json::json!({})))
+        self.invoke_for_namespace(
+            self.runtime.project(),
+            None,
+            event,
+            user,
+            &fireemu_adapter_http::identity_toolkit::AuthBlockingContext::default(),
+        )
+        .map(|value| value.unwrap_or_else(|| serde_json::json!({})))
     }
 
     fn invoke_for(
@@ -2740,7 +2794,27 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         Option<serde_json::Value>,
         fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
     > {
-        self.invoke_for_namespace(project, tenant, event, user)
+        self.invoke_for_namespace(
+            project,
+            tenant,
+            event,
+            user,
+            &fireemu_adapter_http::identity_toolkit::AuthBlockingContext::default(),
+        )
+    }
+
+    fn invoke_for_with_context(
+        &self,
+        project: &str,
+        tenant: Option<&str>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+        context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    ) -> Result<
+        Option<serde_json::Value>,
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
+    > {
+        self.invoke_for_namespace(project, tenant, event, user, context)
     }
 }
 
@@ -3068,6 +3142,76 @@ mod tests {
         .unwrap();
         assert_eq!(value, Some(json!({"accepted": true})));
         assert!(forwarded.get());
+    }
+
+    #[test]
+    fn blocking_auth_context_uses_the_functions_sdk_shape() {
+        use fireemu_adapter_http::identity_toolkit::{
+            AuthBlockingAdditionalUserInfo, AuthBlockingContext, AuthBlockingCredential,
+        };
+
+        let claims = json!({"roles": ["billing", "support"]});
+        let request = AuthBlockingContext {
+            credential: Some(AuthBlockingCredential {
+                claims: Some(claims.clone()),
+                provider_id: "oidc.corp".to_owned(),
+                sign_in_method: "oidc.corp".to_owned(),
+            }),
+            additional_user_info: Some(AuthBlockingAdditionalUserInfo {
+                provider_id: "oidc.corp".to_owned(),
+                profile: Some(claims.clone()),
+                is_new_user: false,
+            }),
+            sign_in_method: Some("oidc.corp".to_owned()),
+        };
+
+        let value = super::blocking_auth_context_json(
+            "demo-app",
+            Some("customer"),
+            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+            &request,
+            "event-1",
+            "2026-08-29T12:01:00Z",
+        );
+
+        assert_eq!(
+            value,
+            json!({
+                "eventId": "event-1",
+                "eventType": "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
+                "resource": {
+                    "service": "identitytoolkit.googleapis.com",
+                    "name": "projects/demo-app/tenants/customer"
+                },
+                "timestamp": "2026-08-29T12:01:00Z",
+                "params": {},
+                "additionalUserInfo": {
+                    "providerId": "oidc.corp",
+                    "profile": claims,
+                    "isNewUser": false
+                },
+                "credential": {
+                    "providerId": "oidc.corp",
+                    "signInMethod": "oidc.corp",
+                    "claims": {"roles": ["billing", "support"]}
+                }
+            })
+        );
+        assert!(value["credential"].get("idToken").is_none());
+        assert!(value["credential"].get("accessToken").is_none());
+
+        let before_create = super::blocking_auth_context_json(
+            "demo-app",
+            None,
+            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+            &request,
+            "event-2",
+            "2026-08-29T12:01:00Z",
+        );
+        assert_eq!(
+            before_create["eventType"],
+            "providers/cloud.auth/eventTypes/user.beforeCreate"
+        );
     }
 
     #[test]

@@ -11,8 +11,8 @@ const CONSOLE_LEVELS = Object.freeze({
 
 const TRUNCATION_MARKER = "... [truncated]";
 
-// Cloud Logging accepts a LogEntry of at most 256 KiB. Keeping the message within that
-// production boundary also leaves ample room below the runner protocol's 16 MiB frame limit.
+// Cloud Logging documents an approximate 256 KiB limit for the whole LogEntry. Applying that
+// value conservatively to the message also leaves ample room below the 16 MiB protocol limit.
 export const MAX_LOG_MESSAGE_BYTES = 256 * 1024;
 
 export function boundLogMessage(value, maxBytes = MAX_LOG_MESSAGE_BYTES) {

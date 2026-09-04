@@ -1831,6 +1831,10 @@
             {
               "behaviour": "function USER logs retain the severity documented for production Cloud Functions instead of being forced to info as the official emulator transport does",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "individual runner messages are truncated on a UTF-8 boundary at a conservative 256 KiB cap derived from Cloud Logging's approximate limit for the entire LogEntry",
+              "precision": "conservative"
             }
           ],
           "productionOnly": [],

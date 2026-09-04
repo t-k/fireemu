@@ -92,6 +92,22 @@ struct ServiceAssembly {
     pubsub: fireemu_adapter_pubsub::PubSubHandle,
 }
 
+fn function_log_input(
+    level: &str,
+    message: &str,
+    function: Option<&str>,
+    user: bool,
+    timestamp_ms: i64,
+) -> fireemu_adapter_logging::LogInput {
+    let mut input = fireemu_adapter_logging::LogInput::plain(level, message, timestamp_ms)
+        .for_emulator("functions");
+    if let Some(function) = function {
+        input = input.for_function(function);
+    }
+    input.user = user;
+    input
+}
+
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let BoundStartup {
         cfg,
@@ -657,14 +673,13 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
                         );
                     }
                     for line in slice.lines {
-                        bus.publish(
-                            &fireemu_adapter_logging::LogInput::plain(
-                                "info",
-                                line,
-                                clock_millis(&clock),
-                            )
-                            .for_emulator("functions"),
-                        );
+                        bus.publish(&function_log_input(
+                            line.level(),
+                            line.message(),
+                            line.function(),
+                            line.is_user(),
+                            clock_millis(&clock),
+                        ));
                     }
                 }
             }
@@ -1082,5 +1097,31 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::function_log_input;
+    use fireemu_adapter_logging::wire::build_bundle;
+
+    #[test]
+    fn function_user_logs_keep_the_official_logging_metadata() {
+        let bundle = build_bundle(&function_log_input(
+            "warning",
+            "payment delayed",
+            Some("settlePayment"),
+            true,
+            123,
+        ));
+
+        assert_eq!(bundle["level"], "warning");
+        assert_eq!(bundle["message"], "payment delayed");
+        assert_eq!(bundle["data"]["metadata"]["emulator"]["name"], "functions");
+        assert_eq!(
+            bundle["data"]["metadata"]["function"]["name"],
+            "settlePayment"
+        );
+        assert_eq!(bundle["data"]["metadata"]["type"], "USER");
     }
 }

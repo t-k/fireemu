@@ -1719,6 +1719,8 @@
       "decision": "Active supported surface: the Emulator Hub serves discovery (GET /emulators in the official shape), the background-trigger switch and the locator file firebase-tools writes; the export trigger stays open until the import/export contract exists.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
+        "https://firebase.google.com/docs/functions/writing-and-viewing-logs",
+        "https://cloud.google.com/logging/quotas",
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/src/emulator/types.ts"
       ],
       "issues": [
@@ -1800,9 +1802,13 @@
             }
           ],
           "evidence": {
-            "tests": [],
+            "tests": [
+              "concurrent_real_sdk_logs_keep_their_function_identity",
+              "runner_log_frames_preserve_function_and_user_metadata"
+            ],
             "integration": [
-              "crates/fireemu-adapter-logging/tests/websocket_client.rs"
+              "crates/fireemu-adapter-logging/tests/websocket_client.rs",
+              "crates/fireemu/tests/functions_discovery.rs"
             ],
             "conformance": []
           },
@@ -1823,8 +1829,12 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "the functions runner's lines are fed to the bus tagged emulator=functions, but function-name tagging of those lines is best effort and currently absent (a runner line carries an invocation id, not a function name), and only the first codebase's runner is polled",
+              "behaviour": "function USER logs retain the severity documented for production Cloud Functions instead of being forced to info as the official emulator transport does",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "individual runner messages are truncated on a UTF-8 boundary at a conservative 256 KiB cap derived from Cloud Logging's approximate limit for the entire LogEntry",
+              "precision": "conservative"
             }
           ],
           "productionOnly": [],

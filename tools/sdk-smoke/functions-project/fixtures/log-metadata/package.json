@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-log-metadata",
+  "private": true,
+  "main": "index.js",
+  "description": "Concurrent function log attribution fixture."
+}

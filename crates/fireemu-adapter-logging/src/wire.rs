@@ -35,7 +35,7 @@ pub struct LogInput {
     pub emulator: Option<String>,
     /// `data.metadata.function.name`, when the line names a function.
     pub function: Option<String>,
-    /// Function *user* output: type `USER`, forced to level `info`, as `EmulatorLogger` does.
+    /// Function *user* output: type `USER`, while retaining the production severity.
     pub user: bool,
 }
 
@@ -70,17 +70,13 @@ impl LogInput {
 
 /// Builds one `EmulatorLog` frame as the official transport would serialise it.
 ///
-/// The `data.metadata` object carries the emulator/function tags; `USER` output is forced to
-/// level `info`. `message` has its control characters stripped (see [`strip_control`]). The
-/// bundle never carries a raw control byte, and `serde_json` escapes every string, so no log
-/// content can break the frame.
+/// The `data.metadata` object carries the emulator/function tags. `USER` output retains its
+/// production severity even though the official emulator forces it to `info`. `message` has its
+/// control characters stripped (see [`strip_control`]). The bundle never carries a raw control
+/// byte, and `serde_json` escapes every string, so no log content can break the frame.
 #[must_use]
 pub fn build_bundle(input: &LogInput) -> Value {
-    let level = if input.user {
-        "info".to_owned()
-    } else {
-        input.level.to_lowercase()
-    };
+    let level = input.level.to_lowercase();
     let mut metadata = serde_json::Map::new();
     if let Some(name) = &input.emulator {
         metadata.insert("emulator".to_owned(), json!({ "name": name }));
@@ -345,11 +341,11 @@ mod tests {
     }
 
     #[test]
-    fn user_output_is_forced_to_info() {
+    fn user_output_keeps_the_production_severity() {
         let mut input = LogInput::plain("ERROR", "> user log", 1);
         input.user = true;
         let b = build_bundle(&input);
-        assert_eq!(b["level"], "info");
+        assert_eq!(b["level"], "error");
         assert_eq!(b["data"]["metadata"]["type"], "USER");
     }
 

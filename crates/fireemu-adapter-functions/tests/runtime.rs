@@ -27,6 +27,47 @@ use serde_json::json;
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 
+#[tokio::test]
+async fn runner_log_frames_preserve_function_and_user_metadata() {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    })
+    .await
+    .unwrap();
+
+    let invocation = runner
+        .invoke(
+            json!({
+                "type": "invoke",
+                "invocationId": "log-metadata-1",
+                "function": "ok",
+                "entryPoint": "ok",
+                "trigger": "firestore",
+                "event": {"data": {}}
+            }),
+            Duration::from_secs(5),
+        )
+        .await;
+    assert_eq!(
+        invocation.outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    let logs = runner.logs_since(None);
+    let log = logs
+        .lines
+        .iter()
+        .find(|line| line.message() == "invoked ok")
+        .expect("the invocation log is retained");
+    assert_eq!(log.display(), "info log-metadata-1 invoked ok");
+    assert_eq!(log.function(), Some("ok"));
+    assert!(log.is_user());
+    runner.shutdown().await;
+}
+
 fn doc(path: &str, v: i64) -> Document {
     Document {
         path: DocumentPath::parse(
@@ -1788,7 +1829,7 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
         .logs_since(None)
         .lines
         .iter()
-        .any(|l| l.contains("invoked withAuth")));
+        .any(|line| line.display().contains("invoked withAuth")));
     // Delayed: not idle until the clock passes the hold.
     let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
     let uid = store

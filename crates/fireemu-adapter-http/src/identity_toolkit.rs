@@ -624,7 +624,28 @@ fn issue_tokens_with(
     extra: Option<&CustomClaims>,
     provider: Option<fireemu_core_auth::store::Provider>,
 ) -> Result<Value, JsonResponse> {
-    issue_tokens_replacing(store, uid, second, at, extra, provider, None)
+    issue_tokens_replacing(store, uid, second, at, extra, provider, None, None)
+}
+
+fn issue_tokens_with_sign_in_attributes(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    second: Option<&SecondFactorAssertion>,
+    at: LogicalInstant,
+    extra: Option<&CustomClaims>,
+    provider: Option<fireemu_core_auth::store::Provider>,
+    sign_in_attributes: Option<&ClaimValue>,
+) -> Result<Value, JsonResponse> {
+    issue_tokens_replacing(
+        store,
+        uid,
+        second,
+        at,
+        extra,
+        provider,
+        sign_in_attributes,
+        None,
+    )
 }
 
 /// Issues policy-adjusted tokens and retires the replayed authentication's provisional
@@ -636,6 +657,7 @@ fn issue_tokens_replacing(
     at: LogicalInstant,
     extra: Option<&CustomClaims>,
     provider: Option<fireemu_core_auth::store::Provider>,
+    sign_in_attributes: Option<&ClaimValue>,
     provisional_refresh: Option<&str>,
 ) -> Result<Value, JsonResponse> {
     let mut claims = store
@@ -644,6 +666,7 @@ fn issue_tokens_replacing(
     if let Some(p) = &provider {
         p.id().clone_into(&mut claims.firebase.sign_in_provider);
     }
+    claims.firebase.sign_in_attributes = sign_in_attributes.cloned();
     if let Some(extra) = extra {
         for (k, v) in extra.entries() {
             claims
@@ -682,6 +705,14 @@ struct Session {
     provider: String,
     second_factor: Option<SecondFactorAssertion>,
     extra_claims: CustomClaims,
+    sign_in_attributes: Option<ClaimValue>,
+}
+
+fn sign_in_attributes(payload: &JsonValue) -> Option<ClaimValue> {
+    payload
+        .get("firebase")
+        .and_then(|firebase| firebase.get("sign_in_attributes"))
+        .map(ClaimValue::from_json)
 }
 
 fn verify_session(
@@ -712,6 +743,7 @@ fn verify_session(
             verified_at: at,
         })
     });
+    let sign_in_attributes = sign_in_attributes(&decoded.payload);
     let mut extra_claims = CustomClaims::default();
     if let JsonValue::Object(values) = &decoded.payload {
         for (name, value) in values {
@@ -727,6 +759,7 @@ fn verify_session(
             provider,
             second_factor,
             extra_claims,
+            sign_in_attributes,
         })
         .ok_or_else(|| error(400, "USER_NOT_FOUND"))
 }
@@ -1226,6 +1259,15 @@ fn dispatch_with_blocking_hook(
                     Ok(session) => session.clone(),
                     Err(_) => return error(500, "INTERNAL"),
                 };
+                let sign_in_attributes = committed_response
+                    .body
+                    .get("idToken")
+                    .or_else(|| committed_response.body.get("id_token"))
+                    .and_then(Value::as_str)
+                    .and_then(|token| {
+                        fireemu_core_auth::jwt::verify_id_token_decoded(token, &committed, at).ok()
+                    })
+                    .and_then(|(_, decoded)| sign_in_attributes(&decoded.payload));
                 let Ok(claims) = committed.id_token_claims_for_session(&session, at) else {
                     return error(500, "INTERNAL");
                 };
@@ -1234,6 +1276,7 @@ fn dispatch_with_blocking_hook(
                     provider: claims.firebase.sign_in_provider,
                     second_factor: session.second_factor,
                     extra_claims: claims.custom,
+                    sign_in_attributes,
                 })
             } else {
                 None
@@ -1285,6 +1328,7 @@ fn dispatch_with_blocking_hook(
                     at,
                     Some(&session.extra_claims),
                     Some(provider),
+                    session.sign_in_attributes.as_ref(),
                     Some(provisional_refresh),
                 ) {
                     Ok(tokens) => tokens,
@@ -2403,6 +2447,17 @@ fn finish_sign_in(
     provider: Option<fireemu_core_auth::store::Provider>,
     extra: &[(&str, Value)],
 ) -> JsonResponse {
+    finish_sign_in_with_attributes(store, uid, at, provider, extra, None)
+}
+
+fn finish_sign_in_with_attributes(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    at: LogicalInstant,
+    provider: Option<fireemu_core_auth::store::Provider>,
+    extra: &[(&str, Value)],
+    sign_in_attributes: Option<&ClaimValue>,
+) -> JsonResponse {
     let factors = mfa_info(store, uid, true);
     if !factors.is_empty() {
         // Second factor required: no ID token yet, only a pending credential.
@@ -2418,7 +2473,15 @@ fn finish_sign_in(
             Err(e) => mfa_error(&e),
         };
     }
-    match issue_tokens_with(store, uid, None, at, None, provider) {
+    match issue_tokens_with_sign_in_attributes(
+        store,
+        uid,
+        None,
+        at,
+        None,
+        provider,
+        sign_in_attributes,
+    ) {
         Ok(mut body) => {
             for (k, v) in extra {
                 body[*k] = v.clone();
@@ -4475,6 +4538,7 @@ struct IdpUserInfo {
     last_name: Option<String>,
     federated_id: String,
     raw_user_info: String,
+    sign_in_attributes: Option<ClaimValue>,
 }
 
 /// `/^[^@]+@[^@]+$/`: the official `isValidEmailAddress`.
@@ -4521,6 +4585,7 @@ fn fake_fetch_user_info(provider_id: &str, claims: &Value, saml: Option<&Value>)
         first_name: None,
         last_name: None,
         raw_user_info: claims.to_string(),
+        sign_in_attributes: None,
     };
     if provider_id == "google.com" {
         info.federated_id = format!("https://accounts.google.com/{}", info.raw_id);
@@ -4558,9 +4623,13 @@ fn fake_fetch_user_info(provider_id: &str, claims: &Value, saml: Option<&Value>)
         let attributes = saml
             .and_then(|s| s.get("assertion"))
             .and_then(|a| a.get("attributeStatements"))
-            .cloned()
-            .unwrap_or(Value::Null);
-        info.raw_user_info = attributes.to_string();
+            .cloned();
+        info.raw_user_info = attributes.clone().unwrap_or(Value::Null).to_string();
+        info.sign_in_attributes = attributes.and_then(|attributes| {
+            fireemu_core_types::json::parse(&attributes.to_string())
+                .ok()
+                .and_then(|attributes| claims_from_json(&attributes))
+        });
     }
     // oidc.* and every other provider keep the JSON claims as rawUserInfo (the default).
     info
@@ -4807,12 +4876,13 @@ fn sign_in_with_idp(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> 
         }
     }
 
-    finish_sign_in(
+    finish_sign_in_with_attributes(
         store,
         &uid,
         at,
         Some(fireemu_core_auth::store::Provider::Federated(provider_id)),
         &base,
+        info.sign_in_attributes.as_ref(),
     )
 }
 

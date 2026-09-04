@@ -1695,7 +1695,13 @@ fn a_saml_assertion_signs_in_and_carries_the_attribute_statements() {
     let saml = json!({
         "assertion": {
             "subject": {"nameId": "person@saml.example.com"},
-            "attributeStatements": {"department": ["eng"], "role": ["admin"]}
+            "attributeStatements": {
+                "active": true,
+                "department": ["eng"],
+                "level": 3,
+                "nested": {"region": "west"},
+                "role": ["admin"]
+            }
         }
     });
     let post_body = format!(
@@ -1723,6 +1729,49 @@ fn a_saml_assertion_signs_in_and_carries_the_attribute_statements() {
         c["firebase"]["identities"]["saml.myidp"],
         json!(["saml-user-1"])
     );
+    assert_eq!(
+        c["firebase"]["sign_in_attributes"],
+        saml["assertion"]["attributeStatements"]
+    );
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({
+            "grant_type": "refresh_token",
+            "refresh_token": signed["refreshToken"]
+        }),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    let refreshed_claims = claims(refreshed["id_token"].as_str().unwrap());
+    assert!(
+        refreshed_claims["firebase"]
+            .get("sign_in_attributes")
+            .is_none(),
+        "the official refresh session does not retain one-time IdP attributes: {refreshed_claims}"
+    );
+}
+
+#[test]
+fn a_saml_assertion_without_attribute_statements_omits_sign_in_attributes() {
+    let s = state();
+    let saml = json!({
+        "assertion": {"subject": {"nameId": "without-attributes@saml.example.com"}}
+    });
+    let post_body = format!(
+        "providerId=saml.myidp&id_token={}&SAMLResponse={}",
+        percent(&json!({"sub": "saml-user-without-attributes"}).to_string()),
+        percent(&saml.to_string())
+    );
+
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": post_body, "requestUri": DUMMY_URI}),
+    );
+
+    assert_eq!(status, 200, "{signed}");
+    let token = claims(signed["idToken"].as_str().unwrap());
+    assert!(token["firebase"].get("sign_in_attributes").is_none());
 }
 
 #[test]
@@ -1776,6 +1825,8 @@ fn an_oidc_assertion_keeps_the_claims_as_raw_user_info() {
     assert_eq!(raw["email"], "o@example.com");
     // federatedId is the raw id for a non-google provider.
     assert_eq!(signed["federatedId"], "oidc-9");
+    let token = claims(signed["idToken"].as_str().unwrap());
+    assert!(token["firebase"].get("sign_in_attributes").is_none());
 }
 
 #[test]

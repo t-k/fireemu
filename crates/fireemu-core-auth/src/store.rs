@@ -2593,6 +2593,7 @@ impl AuthStore {
                 sign_in_second_factor: second.map(|a| a.sign_in_second_factor.clone()),
                 second_factor_identifier: second.map(|a| a.second_factor_identifier.clone()),
                 tenant: self.tenant_id.clone(),
+                sign_in_attributes: None,
             },
             custom: user.custom_claims.clone(),
         })

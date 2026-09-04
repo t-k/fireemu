@@ -234,7 +234,7 @@ impl CustomClaims {
 }
 
 /// The `firebase` claim block.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FirebaseClaims {
     /// Provider identities, e.g. `{"email": ["a@example.com"]}`.
     pub identities: BTreeMap<String, Vec<String>>,
@@ -246,6 +246,8 @@ pub struct FirebaseClaims {
     pub second_factor_identifier: Option<String>,
     /// Identity Platform tenant ID, absent for the parent project namespace.
     pub tenant: Option<String>,
+    /// Additional attributes from the identity provider used for this sign-in.
+    pub sign_in_attributes: Option<ClaimValue>,
 }
 
 /// ID token claims (unsigned; signing is an adapter concern).
@@ -340,6 +342,9 @@ impl IdTokenClaims {
         }
         if let Some(tenant) = &self.firebase.tenant {
             firebase.insert("tenant".to_owned(), ClaimValue::String(tenant.clone()));
+        }
+        if let Some(attributes) = &self.firebase.sign_in_attributes {
+            firebase.insert("sign_in_attributes".to_owned(), attributes.clone());
         }
         entries.insert("firebase".into(), ClaimValue::Map(firebase));
         let mut out = String::new();

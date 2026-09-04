@@ -339,8 +339,11 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
 
     let project = match project {
         Some(project) => project,
-        None => resolve_project(Path::new("."), None)?
-            .unwrap_or_else(|| config::RuntimeConfig::default().auth_project),
+        None => {
+            let rc = read_firebaserc(Path::new("."))?;
+            resolve_project(rc.as_ref(), None)?
+                .unwrap_or_else(|| config::RuntimeConfig::default().auth_project)
+        }
     };
     let locator = hub::Locator::path_for(&project);
     let text = std::fs::read_to_string(&locator).map_err(|_| {
@@ -696,16 +699,27 @@ fn project_dir(path: &Path) -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
-/// Resolves `--project` against the `.firebaserc` of a project directory, when there is one.
-fn resolve_project(dir: &Path, requested: Option<&str>) -> Result<Option<String>, CliError> {
+/// Reads the `.firebaserc` of a project directory once for alias and deploy-target resolution.
+fn read_firebaserc(dir: &Path) -> Result<Option<serde_json::Value>, CliError> {
     let rc_path = dir.join(".firebaserc");
     let Ok(text) = std::fs::read_to_string(&rc_path) else {
-        return Ok(requested.map(str::to_owned));
+        return Ok(None);
     };
     let rc: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
         CliError::refused(format!("{} does not parse: {e}", diagnostic_path(&rc_path)))
     })?;
-    Ok(config::resolve_project_alias(&rc, requested)?)
+    Ok(Some(rc))
+}
+
+/// Resolves `--project` against the already-read `.firebaserc`, when there is one.
+fn resolve_project(
+    rc: Option<&serde_json::Value>,
+    requested: Option<&str>,
+) -> Result<Option<String>, CliError> {
+    match rc {
+        Some(rc) => Ok(config::resolve_project_alias(rc, requested)?),
+        None => Ok(requested.map(str::to_owned)),
+    }
 }
 
 /// A port given on the command line overrides `firebase.json`, which overrides the canonical
@@ -786,7 +800,8 @@ fn parse_options(
             }
         }
     }
-    if let Some(project) = resolve_project(&project_root, raw.project.as_deref())? {
+    let rc = read_firebaserc(&project_root)?;
+    if let Some(project) = resolve_project(rc.as_ref(), raw.project.as_deref())? {
         // The alias, when `--project` named one, is what a codebase's `.env.<alias>` file is
         // keyed by (`findEnvfiles`). A `--project` value that is already a project ID is not
         // an alias, and neither is one that resolves to itself.
@@ -796,6 +811,16 @@ fn parse_options(
             .filter(|requested| *requested != project)
             .map(str::to_owned);
         cfg.auth_project = project;
+    }
+    if !cfg.storage_rules_by_target.is_empty() {
+        let rc = rc.as_ref().ok_or_else(|| {
+            CliError::refused(
+                "firebase.json declares Storage targets but the project has no .firebaserc"
+                    .to_owned(),
+            )
+        })?;
+        let project = cfg.auth_project.clone();
+        cfg.resolve_storage_rules_targets(rc, &project)?;
     }
     if !only.functions {
         cfg.functions_source = None;
@@ -1292,16 +1317,58 @@ fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
     }
 }
 
-fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
-    match &cfg.storage_rules_file {
-        Some(path) => {
-            let source = std::fs::read_to_string(path)
-                .map_err(|e| format!("storage rules source {path}: {e}"))?;
-            LoadedRules::from_source(&source)
-                .map_err(|e| format!("storage rules source {path} does not parse: {e}"))
-        }
-        None => Ok(LoadedRules::default()),
+struct LoadedStorageRules {
+    registry: Arc<fireemu_adapter_http::storage::StorageRulesRegistry>,
+    watched: Vec<(String, Arc<RulesetSlot>)>,
+}
+
+fn read_storage_rules(path: &str) -> Result<LoadedRules, String> {
+    let source =
+        std::fs::read_to_string(path).map_err(|e| format!("storage rules source {path}: {e}"))?;
+    LoadedRules::from_source(&source)
+        .map_err(|e| format!("storage rules source {path} does not parse: {e}"))
+}
+
+fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String> {
+    if cfg.storage_rules_by_target.is_empty() {
+        let loaded = match &cfg.storage_rules_file {
+            Some(path) => read_storage_rules(path)?,
+            None => LoadedRules::default(),
+        };
+        let slot = Arc::new(RulesetSlot::new(loaded));
+        let watched = cfg
+            .storage_rules_file
+            .iter()
+            .map(|path| (path.clone(), slot.clone()))
+            .collect();
+        return Ok(LoadedStorageRules {
+            registry: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+                slot,
+            )),
+            watched,
+        });
     }
+    if cfg.storage_buckets_by_target.len() != cfg.storage_rules_by_target.len() {
+        return Err("Storage rules targets were not resolved through .firebaserc".to_owned());
+    }
+    let mut by_bucket = std::collections::BTreeMap::new();
+    let mut watched = Vec::new();
+    for (target, path) in &cfg.storage_rules_by_target {
+        let slot = Arc::new(RulesetSlot::new(read_storage_rules(path)?));
+        let buckets = cfg.storage_buckets_by_target.get(target).ok_or_else(|| {
+            format!("Storage rules target {target:?} has no resolved bucket mapping")
+        })?;
+        for bucket in buckets {
+            by_bucket.insert(bucket.clone(), slot.clone());
+        }
+        watched.push((path.clone(), slot));
+    }
+    Ok(LoadedStorageRules {
+        registry: Arc::new(
+            fireemu_adapter_http::storage::StorageRulesRegistry::per_bucket(by_bucket),
+        ),
+        watched,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1482,7 +1549,7 @@ fn start_firestore_config_reload_supervisors(
     backend: &Arc<LocalBackend>,
     rules: &Arc<RulesetSlot>,
     database_rules: &std::collections::BTreeMap<String, Arc<RulesetSlot>>,
-    storage_rules: &Arc<RulesetSlot>,
+    storage_rules: &LoadedStorageRules,
     barrier: &Arc<fireemu_core_session::barrier::AdmissionBarrier>,
 ) {
     for (database, files) in &cfg.firestore_databases {
@@ -1502,8 +1569,8 @@ fn start_firestore_config_reload_supervisors(
             start_rules_reload_supervisor(path.clone(), "Firestore rules", rules, barrier);
         }
     }
-    if let Some(path) = &cfg.storage_rules_file {
-        start_rules_reload_supervisor(path.clone(), "Storage rules", storage_rules, barrier);
+    for (path, slot) in &storage_rules.watched {
+        start_rules_reload_supervisor(path.clone(), "Storage rules", slot, barrier);
     }
     for (database, files) in &cfg.firestore_databases {
         if let Some(path) = &files.indexes {
@@ -1527,7 +1594,7 @@ fn storage_state(
     clock: &Arc<Mutex<VirtualClock>>,
     registry: &Arc<fireemu_core_auth::store::AuthRegistry>,
     tenancy: &fireemu_core_session::tenancy::SharedTenancy,
-    storage_rules: &Arc<RulesetSlot>,
+    storage_rules: &Arc<fireemu_adapter_http::storage::StorageRulesRegistry>,
     events: Option<fireemu_adapter_http::storage::StorageEventSink>,
     backend: &Arc<LocalBackend>,
     faults: &fireemu_core_session::fault::SharedFaultRegistry,
@@ -1961,7 +2028,7 @@ fn control_state(
     clock: &Arc<Mutex<VirtualClock>>,
     rules: &Arc<RulesetSlot>,
     database_rules: &std::collections::BTreeMap<String, Arc<RulesetSlot>>,
-    storage_rules: &Arc<RulesetSlot>,
+    storage_rules: &Arc<fireemu_adapter_http::storage::StorageRulesRegistry>,
     backend: &Arc<LocalBackend>,
     auth_store: &Arc<Mutex<AuthStore>>,
     storage: &Arc<fireemu_adapter_http::storage::StorageState>,
@@ -1994,10 +2061,7 @@ fn control_state(
             slot.clone(),
         )));
     }
-    snapshot_hooks.push(Arc::new(snapshots::Rules(
-        "storage rules",
-        storage_rules.clone(),
-    )));
+    snapshot_hooks.push(Arc::new(snapshots::StorageRules(storage_rules.clone())));
     if let Some(runtime) = functions {
         snapshot_hooks.push(Arc::new(snapshots::Functions(runtime.clone())));
     }

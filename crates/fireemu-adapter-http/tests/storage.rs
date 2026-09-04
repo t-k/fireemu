@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 
-use fireemu_adapter_http::storage::{handle, StorageRequest, StorageState};
+use fireemu_adapter_http::storage::{handle, StorageRequest, StorageRulesRegistry, StorageState};
 use fireemu_adapter_http::storage_server::{
     serve_storage_with_budget, BodyBudget, MAX_STORAGE_BODY_BYTES,
 };
@@ -39,11 +39,11 @@ fn state_with(rules: Option<&str>, token_acceptance: TokenAcceptance) -> Storage
             ))),
         )),
         tenancy: None,
-        rules: Arc::new(RulesetSlot::new(
+        rules: Arc::new(StorageRulesRegistry::global(Arc::new(RulesetSlot::new(
             rules.map_or_else(LoadedRules::default, |r| {
                 LoadedRules::from_source(r).unwrap()
             }),
-        )),
+        )))),
         project: "demo-app".to_owned(),
         events: None,
         barrier: None,
@@ -129,6 +129,70 @@ fn anonymous_multipart_upload(
             &body,
         ),
     )
+}
+
+fn anonymous_multipart_upload_to(
+    s: &StorageState,
+    bucket: &str,
+    name: &str,
+) -> fireemu_adapter_http::storage::StorageResponse {
+    let (content_type, body) = multipart(&json!({}), "text/plain", b"content");
+    handle(
+        s,
+        req(
+            "POST",
+            &format!("/v0/b/{bucket}/o?name={name}&uploadType=multipart"),
+            &[
+                ("content-type", &content_type),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
+            &body,
+        ),
+    )
+}
+
+#[test]
+fn targeted_storage_rules_are_isolated_by_bucket_and_unknown_buckets_fail_closed() {
+    const ALLOW: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow write: if true; } } }";
+    const DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow write: if false; } } }";
+    let allow = Arc::new(RulesetSlot::new(LoadedRules::from_source(ALLOW).unwrap()));
+    let deny = Arc::new(RulesetSlot::new(LoadedRules::from_source(DENY).unwrap()));
+    let mut s = state(None);
+    s.rules = Arc::new(StorageRulesRegistry::per_bucket(BTreeMap::from([
+        ("public.example.test".to_owned(), allow),
+        ("private.example.test".to_owned(), deny),
+    ])));
+
+    assert_eq!(
+        anonymous_multipart_upload_to(&s, "public.example.test", "allowed.txt").status,
+        200
+    );
+    assert_eq!(
+        anonymous_multipart_upload_to(&s, "private.example.test", "denied.txt").status,
+        403
+    );
+    assert_eq!(
+        anonymous_multipart_upload_to(&s, "unknown.example.test", "unknown.txt").status,
+        403
+    );
+    let store = s.store.lock().unwrap();
+    assert!(store
+        .get(
+            &BucketName::try_new("public.example.test").unwrap(),
+            &ObjectName::try_new("allowed.txt").unwrap()
+        )
+        .is_some());
+    for (bucket, object) in [
+        ("private.example.test", "denied.txt"),
+        ("unknown.example.test", "unknown.txt"),
+    ] {
+        assert!(store
+            .get(
+                &BucketName::try_new(bucket).unwrap(),
+                &ObjectName::try_new(object).unwrap()
+            )
+            .is_none());
+    }
 }
 
 #[test]

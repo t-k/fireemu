@@ -31,7 +31,7 @@ fn state(app_check: Option<fireemu_core_app_check::AppCheckGate>) -> ControlStat
         edition: FirestoreEdition::Standard,
         capabilities: json!({"schemaVersion": 1}).into(),
         rules: Arc::new(RulesetSlot::default()),
-        storage_rules: Arc::new(RulesetSlot::default()),
+        storage_rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
         reset_hooks: Vec::new(),
         functions: None,
         control_token: TOKEN.to_owned(),

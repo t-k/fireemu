@@ -59,6 +59,197 @@ const MAX_MULTIPART_BOUNDARY_LEN: usize = 70;
 /// Observer of Storage object events (see [`StorageState::events`]).
 pub type StorageEventSink = Arc<dyn Fn(&StorageEvent) + Send + Sync>;
 
+/// Atomically selected Storage Rules configuration.
+///
+/// A global ruleset is the object-form `firebase.json` contract. A bucket map is the
+/// target-based array contract; it deliberately has no fallback, so a bucket omitted from
+/// `.firebaserc` cannot inherit another bucket's authorization policy.
+#[derive(Debug)]
+enum StorageRulesMode {
+    Global(Arc<RulesetSlot>),
+    PerBucket(BTreeMap<String, Arc<RulesetSlot>>),
+}
+
+/// Storage Rules registry shared by the Firebase SDK surface, the control API and snapshots.
+#[derive(Debug)]
+pub struct StorageRulesRegistry {
+    mode: std::sync::RwLock<StorageRulesMode>,
+}
+
+#[derive(Clone, Debug)]
+enum StorageRulesSnapshotMode {
+    Global {
+        slot: Arc<RulesetSlot>,
+        loaded: LoadedRules,
+    },
+    PerBucket(BTreeMap<String, (Arc<RulesetSlot>, LoadedRules)>),
+}
+
+/// Captured Storage Rules registry used by the session snapshot protocol.
+#[derive(Clone, Debug)]
+pub struct StorageRulesRegistrySnapshot(StorageRulesSnapshotMode);
+
+impl StorageRulesRegistrySnapshot {
+    /// Conservative retained-byte estimate for snapshot admission.
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        match &self.0 {
+            StorageRulesSnapshotMode::Global { loaded, .. } => loaded.retained_bytes(),
+            StorageRulesSnapshotMode::PerBucket(slots) => slots
+                .values()
+                .map(|(_, loaded)| loaded.retained_bytes())
+                .fold(0, u64::saturating_add),
+        }
+    }
+}
+
+impl StorageRulesRegistry {
+    /// Creates the object-form configuration used for every bucket.
+    #[must_use]
+    pub fn global(slot: Arc<RulesetSlot>) -> Self {
+        Self {
+            mode: std::sync::RwLock::new(StorageRulesMode::Global(slot)),
+        }
+    }
+
+    /// Creates a target-based configuration. A missing bucket is denied.
+    #[must_use]
+    pub fn per_bucket(slots: BTreeMap<String, Arc<RulesetSlot>>) -> Self {
+        Self {
+            mode: std::sync::RwLock::new(StorageRulesMode::PerBucket(slots)),
+        }
+    }
+
+    /// Selects the immutable slot associated with `bucket`.
+    fn slot_for_bucket(&self, bucket: &str) -> Result<Option<Arc<RulesetSlot>>, String> {
+        let mode = self
+            .mode
+            .read()
+            .map_err(|_| "storage rules registry is poisoned".to_owned())?;
+        Ok(match &*mode {
+            StorageRulesMode::Global(slot) => Some(slot.clone()),
+            StorageRulesMode::PerBucket(slots) => slots.get(bucket).cloned(),
+        })
+    }
+
+    /// Replaces any current configuration with one global rules generation.
+    ///
+    /// The official `/internal/setRules` endpoint rebuilds its rules manager in the same way;
+    /// this is the path used by `@firebase/rules-unit-testing`.
+    pub fn replace_loaded(&self, loaded: LoadedRules) -> Result<(), String> {
+        let mut mode = self
+            .mode
+            .write()
+            .map_err(|_| "storage rules registry is poisoned".to_owned())?;
+        *mode = StorageRulesMode::Global(Arc::new(RulesetSlot::new(loaded)));
+        Ok(())
+    }
+
+    /// Parses and installs one global rules source.
+    pub fn replace_source(&self, source: &str) -> Result<(), String> {
+        let loaded = LoadedRules::from_source(source).map_err(|error| error.to_string())?;
+        self.replace_loaded(loaded)
+    }
+
+    /// Installs the explicit no-rules global generation used by the control extension.
+    pub fn clear(&self) -> Result<(), String> {
+        self.replace_loaded(LoadedRules::default())
+    }
+
+    /// Returns the global generation, or `None` while target-based rules are active.
+    pub fn global_snapshot(
+        &self,
+    ) -> Result<Option<fireemu_core_rules::runtime::RulesetSnapshot>, String> {
+        let mode = self
+            .mode
+            .read()
+            .map_err(|_| "storage rules registry is poisoned".to_owned())?;
+        match &*mode {
+            StorageRulesMode::Global(slot) => slot.snapshot().map(Some),
+            StorageRulesMode::PerBucket(_) => Ok(None),
+        }
+    }
+
+    /// Captures the registry mode and every active rules generation.
+    pub fn capture(&self) -> Result<StorageRulesRegistrySnapshot, String> {
+        let mode = self
+            .mode
+            .read()
+            .map_err(|_| "storage rules registry is poisoned".to_owned())?;
+        let snapshot = match &*mode {
+            StorageRulesMode::Global(slot) => StorageRulesSnapshotMode::Global {
+                slot: slot.clone(),
+                loaded: slot.snapshot()?.loaded().as_ref().clone(),
+            },
+            StorageRulesMode::PerBucket(slots) => {
+                let mut captured = BTreeMap::new();
+                for (bucket, slot) in slots {
+                    captured.insert(
+                        bucket.clone(),
+                        (slot.clone(), slot.snapshot()?.loaded().as_ref().clone()),
+                    );
+                }
+                StorageRulesSnapshotMode::PerBucket(captured)
+            }
+        };
+        Ok(StorageRulesRegistrySnapshot(snapshot))
+    }
+
+    /// Restores a captured mode and its complete rules generations.
+    pub fn restore(&self, snapshot: &StorageRulesRegistrySnapshot) -> Result<(), String> {
+        let replacement = match &snapshot.0 {
+            StorageRulesSnapshotMode::Global { slot, loaded } => {
+                slot.replace_loaded(loaded.clone())?;
+                StorageRulesMode::Global(slot.clone())
+            }
+            StorageRulesSnapshotMode::PerBucket(slots) => {
+                let mut restored = BTreeMap::new();
+                let mut replaced: Vec<Arc<RulesetSlot>> = Vec::new();
+                for (bucket, (slot, loaded)) in slots {
+                    if !replaced.iter().any(|seen| Arc::ptr_eq(seen, slot)) {
+                        slot.replace_loaded(loaded.clone())?;
+                        replaced.push(slot.clone());
+                    }
+                    restored.insert(bucket.clone(), slot.clone());
+                }
+                StorageRulesMode::PerBucket(restored)
+            }
+        };
+        let mut mode = self
+            .mode
+            .write()
+            .map_err(|_| "storage rules registry is poisoned".to_owned())?;
+        *mode = replacement;
+        Ok(())
+    }
+
+    /// Returns each distinct configured slot for hot reload and snapshot diagnostics.
+    pub fn slots(&self) -> Result<Vec<Arc<RulesetSlot>>, String> {
+        let mode = self
+            .mode
+            .read()
+            .map_err(|_| "storage rules registry is poisoned".to_owned())?;
+        let mut out = Vec::new();
+        match &*mode {
+            StorageRulesMode::Global(slot) => out.push(slot.clone()),
+            StorageRulesMode::PerBucket(slots) => {
+                for slot in slots.values() {
+                    if !out.iter().any(|seen| Arc::ptr_eq(seen, slot)) {
+                        out.push(slot.clone());
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+impl Default for StorageRulesRegistry {
+    fn default() -> Self {
+        Self::global(Arc::new(RulesetSlot::default()))
+    }
+}
+
 /// A locked object store that hands the events of its critical section to the sink when
 /// it is released (still inside the lock, so events leave in commit order).
 pub struct StoreGuard<'a> {
@@ -101,8 +292,8 @@ pub struct StorageState {
     pub auth: Arc<fireemu_core_auth::store::AuthRegistry>,
     /// Which session owns which bucket; `None` puts every bucket in `project`.
     pub tenancy: Option<fireemu_core_session::tenancy::SharedTenancy>,
-    /// Storage Security Rules (`service firebase.storage`).
-    pub rules: Arc<RulesetSlot>,
+    /// Storage Security Rules (`service firebase.storage`), selected by request bucket.
+    pub rules: Arc<StorageRulesRegistry>,
     /// Project (default buckets `{project}.appspot.com` / `{project}.firebasestorage.app`).
     pub project: String,
     /// Observer of object events (Storage triggers), called inside the store's critical
@@ -1309,11 +1500,21 @@ impl StorageState {
         resource: Option<RulesValue>,
         request_resource: RulesValue,
     ) -> Result<(), StorageResponse> {
+        let selected = self
+            .rules
+            .slot_for_bucket(bucket.as_str())
+            .map_err(|_| error_response(Dialect::Firebase, 500, "rules poisoned"))?;
+        let Some(slot) = selected else {
+            return Err(error_response(
+                Dialect::Firebase,
+                403,
+                "Permission denied. Storage Emulator has no loaded ruleset.",
+            ));
+        };
         if matches!(principal, Principal::Owner) {
             return Ok(());
         }
-        let rules = self
-            .rules
+        let rules = slot
             .snapshot()
             .map_err(|_| error_response(Dialect::Firebase, 500, "rules poisoned"))?;
         let Some(ruleset) = &rules.ruleset else {

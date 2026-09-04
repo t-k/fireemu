@@ -155,6 +155,12 @@ pub struct RuntimeConfig {
     pub firestore_databases: BTreeMap<String, FirestoreDatabaseFiles>,
     /// Path of the Storage Security Rules source, if configured.
     pub storage_rules_file: Option<String>,
+    /// Rules files declared by a target-based Storage array, before `.firebaserc` expansion.
+    pub storage_rules_by_target: BTreeMap<String, String>,
+    /// Rules files selected by concrete bucket after `.firebaserc` expansion.
+    pub storage_rules_by_bucket: BTreeMap<String, String>,
+    /// Concrete buckets grouped by target, preserving one hot-reload slot per target.
+    pub storage_buckets_by_target: BTreeMap<String, Vec<String>>,
     /// Whether Security Rules are enforced on the Firestore surface.
     pub rules_enforced: bool,
     /// Functions HTTP bind address.
@@ -379,6 +385,9 @@ impl Default for RuntimeConfig {
             rules_file: None,
             firestore_databases: BTreeMap::new(),
             storage_rules_file: None,
+            storage_rules_by_target: BTreeMap::new(),
+            storage_rules_by_bucket: BTreeMap::new(),
+            storage_buckets_by_target: BTreeMap::new(),
             rules_enforced: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
             pubsub_addr: "127.0.0.1:8085".to_owned(),
@@ -559,9 +568,18 @@ impl Selection {
                     ));
                 }
                 sel.functions_codebase = Some(codebase.to_owned());
+            } else if let (Some(target), true) = (codebase, service == "storage") {
+                if target.is_empty() {
+                    return Err(ConfigError(
+                        "--only storage:: needs a target name after the colon".to_owned(),
+                    ));
+                }
+                // firebase-tools uses the qualifier for deploy selection, but the emulator
+                // controller starts Storage with every configured target. Retaining it here
+                // would incorrectly narrow the rules registry.
             } else if let Some(codebase) = codebase {
                 return Err(ConfigError(format!(
-                    "--only: {service:?} takes no `:{codebase}` qualifier; only `functions:<codebase>` does"
+                    "--only: {service:?} takes no `:{codebase}` qualifier; only `functions:<codebase>` and `storage:<target>` do"
                 )));
             }
             match service {
@@ -667,6 +685,9 @@ pub struct FirebaseJsonReport {
 /// The `firebase.json` keys that name a Firestore database entry.
 const FIRESTORE_ENTRY_KEYS: [&str; 4] = ["database", "rules", "indexes", "index"];
 
+/// The official keys of one Cloud Storage configuration entry.
+const STORAGE_ENTRY_KEYS: [&str; 2] = ["target", "rules"];
+
 /// The `firebase.json` keys of one Functions codebase that fireemu reads; the deploy hooks
 /// (`predeploy`, `postdeploy`) belong to `firebase deploy` and are not emulator settings.
 const FUNCTIONS_ENTRY_KEYS: [&str; 6] = [
@@ -737,8 +758,8 @@ impl RuntimeConfig {
     ///
     /// - `firestore` in object or array form: per-database `rules` and `indexes` (also the legacy
     ///   `index` spelling), with named databases isolated from `(default)`;
-    /// - `storage` in object or array form: the `rules` of the entry without a `target`, or
-    ///   of the first one;
+    /// - `storage` in object form: one rules file for every bucket; array form: every entry
+    ///   names a deploy target which is resolved through `.firebaserc` before startup;
     /// - `functions` in object or array form: every codebase is parsed, validated and loaded;
     ///   `--only functions:<codebase>` narrows the run to one codebase;
     /// - `emulators.<name>.host` / `.port` for every served product plus `hub` and `ui`, and
@@ -915,7 +936,7 @@ impl RuntimeConfig {
         &mut self,
         section: Option<&Value>,
         file: &dyn Fn(&Value, &str) -> Result<String, ConfigError>,
-        report: &mut FirebaseJsonReport,
+        _report: &mut FirebaseJsonReport,
     ) -> Result<(), ConfigError> {
         let entries: Vec<(&serde_json::Map<String, Value>, String)> = match section {
             None => Vec::new(),
@@ -936,33 +957,120 @@ impl RuntimeConfig {
                 ))
             }
         };
-        // The daemon evaluates one Storage ruleset for every bucket, so the entry without a
-        // deploy target (the project-wide one) wins, and the rest are named in a notice.
-        let mut chosen: Option<usize> = None;
-        for (i, (entry, _)) in entries.iter().enumerate() {
-            let targeted = entry.contains_key("target") || entry.contains_key("bucket");
-            if !targeted {
-                chosen = Some(i);
-                break;
-            }
-        }
-        let chosen = chosen.unwrap_or(0);
-        for (i, (entry, path)) in entries.iter().enumerate() {
-            let label = entry
-                .get("bucket")
-                .or_else(|| entry.get("target"))
-                .and_then(Value::as_str)
-                .unwrap_or("the project's buckets");
-            if i == chosen {
-                if let Some(v) = entry.get("rules") {
-                    self.storage_rules_file = Some(file(v, &format!("{path}.rules"))?);
+        self.storage_rules_file = None;
+        self.storage_rules_by_target.clear();
+        self.storage_rules_by_bucket.clear();
+        self.storage_buckets_by_target.clear();
+        let array_form = section.is_some_and(Value::is_array);
+        for (entry, path) in entries {
+            for key in entry.keys() {
+                if !STORAGE_ENTRY_KEYS.contains(&key.as_str()) {
+                    return Err(ConfigError(format!(
+                        "firebase.json: unknown key {path}.{key}"
+                    )));
                 }
-            } else if entry.contains_key("rules") {
-                report.notices.push(format!(
-                    "{path}.rules: fireemu evaluates one Storage ruleset for every bucket, so the rules of {label} are not loaded"
-                ));
+            }
+            let rules = entry
+                .get("rules")
+                .ok_or_else(|| ConfigError(format!("firebase.json: {path}.rules is required")))?;
+            let rules = file(rules, &format!("{path}.rules"))?;
+            if array_form {
+                let target = entry
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .filter(|target| !target.is_empty())
+                    .ok_or_else(|| {
+                        ConfigError(format!(
+                            "firebase.json: {path}.target is required and must be a non-empty string"
+                        ))
+                    })?;
+                if self
+                    .storage_rules_by_target
+                    .insert(target.to_owned(), rules)
+                    .is_some()
+                {
+                    return Err(ConfigError(format!(
+                        "firebase.json: storage declares target {target:?} twice"
+                    )));
+                }
+            } else {
+                if entry.contains_key("target") {
+                    return Err(ConfigError(
+                        "firebase.json: storage.target is valid only when storage is an array"
+                            .to_owned(),
+                    ));
+                }
+                self.storage_rules_file = Some(rules);
             }
         }
+        Ok(())
+    }
+
+    /// Expands target-based Storage rules through `.firebaserc.targets[project].storage`.
+    ///
+    /// This runs only after the effective project alias has been resolved. Missing or malformed
+    /// mappings are refused before any listener binds; target mode never falls back to a global
+    /// ruleset because doing so could authorize a bucket with another bucket's policy.
+    pub fn resolve_storage_rules_targets(
+        &mut self,
+        rc: &Value,
+        project: &str,
+    ) -> Result<(), ConfigError> {
+        if self.storage_rules_by_target.is_empty() {
+            return Ok(());
+        }
+        let targets = rc
+            .get("targets")
+            .and_then(Value::as_object)
+            .ok_or_else(|| ConfigError(".firebaserc: targets must be an object".to_owned()))?;
+        let project_targets = targets
+            .get(project)
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                ConfigError(format!(
+                    ".firebaserc: targets.{project}.storage is required by firebase.json"
+                ))
+            })?;
+        let storage = project_targets
+            .get("storage")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                ConfigError(format!(
+                    ".firebaserc: targets.{project}.storage must be an object"
+                ))
+            })?;
+        let mut by_bucket = BTreeMap::new();
+        let mut buckets_by_target = BTreeMap::new();
+        for (target, path) in &self.storage_rules_by_target {
+            let resources = storage
+                .get(target)
+                .and_then(Value::as_array)
+                .filter(|resources| !resources.is_empty())
+                .ok_or_else(|| {
+                    ConfigError(format!(
+                        ".firebaserc: targets.{project}.storage.{target} must be a non-empty array"
+                    ))
+                })?;
+            let mut target_buckets = Vec::with_capacity(resources.len());
+            for (index, resource) in resources.iter().enumerate() {
+                let bucket = resource.as_str().filter(|bucket| !bucket.is_empty()).ok_or_else(
+                    || {
+                        ConfigError(format!(
+                            ".firebaserc: targets.{project}.storage.{target}[{index}] must be a non-empty string"
+                        ))
+                    },
+                )?;
+                if by_bucket.insert(bucket.to_owned(), path.clone()).is_some() {
+                    return Err(ConfigError(format!(
+                        ".firebaserc: Storage bucket {bucket:?} belongs to more than one target"
+                    )));
+                }
+                target_buckets.push(bucket.to_owned());
+            }
+            buckets_by_target.insert(target.clone(), target_buckets);
+        }
+        self.storage_rules_by_bucket = by_bucket;
+        self.storage_buckets_by_target = buckets_by_target;
         Ok(())
     }
 
@@ -2463,6 +2571,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn storage_targets_resolve_to_bucket_specific_rule_files() {
+        let mut cfg = RuntimeConfig::default();
+        cfg.apply_firebase_json(
+            &json!({
+                "storage": [
+                    {"target": "public", "rules": "public.rules"},
+                    {"target": "private", "rules": "private.rules"}
+                ]
+            }),
+            std::path::Path::new("/proj"),
+            &Selection::default(),
+        )
+        .unwrap();
+
+        cfg.resolve_storage_rules_targets(
+            &json!({
+                "targets": {
+                    "demo-app": {
+                        "storage": {
+                            "public": ["demo-app.appspot.com", "assets.example.test"],
+                            "private": ["private.example.test"]
+                        }
+                    }
+                }
+            }),
+            "demo-app",
+        )
+        .unwrap();
+
+        assert_eq!(
+            cfg.storage_rules_by_bucket,
+            BTreeMap::from([
+                (
+                    "assets.example.test".to_owned(),
+                    "/proj/public.rules".to_owned()
+                ),
+                (
+                    "demo-app.appspot.com".to_owned(),
+                    "/proj/public.rules".to_owned()
+                ),
+                (
+                    "private.example.test".to_owned(),
+                    "/proj/private.rules".to_owned()
+                ),
+            ])
+        );
+        assert_eq!(cfg.storage_rules_file, None);
+    }
+
+    #[test]
+    fn storage_target_configuration_is_complete_and_unambiguous() {
+        let base = std::path::Path::new("/proj");
+        for malformed in [
+            json!({"storage": [{"rules": "storage.rules"}]}),
+            json!({"storage": [{"target": "uploads"}]}),
+            json!({"storage": [
+                {"target": "uploads", "rules": "one.rules"},
+                {"target": "uploads", "rules": "two.rules"}
+            ]}),
+        ] {
+            assert!(
+                RuntimeConfig::default()
+                    .apply_firebase_json(&malformed, base, &Selection::default())
+                    .is_err(),
+                "{malformed}"
+            );
+        }
+
+        let mut cfg = RuntimeConfig::default();
+        cfg.apply_firebase_json(
+            &json!({"storage": [{"target": "uploads", "rules": "storage.rules"}]}),
+            base,
+            &Selection::default(),
+        )
+        .unwrap();
+        for malformed in [
+            json!({}),
+            json!({"targets": []}),
+            json!({"targets": {"demo-app": {"storage": {"uploads": []}}}}),
+            json!({"targets": {"demo-app": {"storage": {"uploads": [1]}}}}),
+        ] {
+            assert!(
+                cfg.clone()
+                    .resolve_storage_rules_targets(&malformed, "demo-app")
+                    .is_err(),
+                "{malformed}"
+            );
+        }
+    }
+
     /// Every `firebase.json` in the corpus `tools/config-schema-check` validates is loaded
     /// by the real loader too, and every invalid one is refused by it. Without this the two
     /// could drift: a file the schema accepts but the daemon refuses would only be found by
@@ -2749,9 +2948,14 @@ mod tests {
         let all = Selection::default();
         assert!(all.firestore && all.auth && all.storage && all.functions && all.appcheck);
         assert!(!all.explicit);
-        // A qualifier belongs to functions alone.
+        // Functions uses the qualifier to select one codebase. The official emulator accepts
+        // a Storage deploy-target qualifier but starts Storage with every configured rules
+        // target, so no Storage filter is retained here.
         assert!(Selection::parse("firestore:default").is_err());
         assert!(Selection::parse("functions:").is_err());
+        let storage = Selection::parse("storage:uploads").unwrap();
+        assert!(storage.storage);
+        assert_eq!(storage.functions_codebase, None);
         // Every official service fireemu does not serve is refused with its status.
         for (name, status) in UNSERVED_OFFICIAL_SERVICES {
             let message = Selection::parse(&format!("firestore,{name}"))

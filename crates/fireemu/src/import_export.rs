@@ -2312,7 +2312,7 @@ mod tests {
             clock: clock.clone(),
             auth: auth.clone(),
             tenancy: None,
-            rules: Arc::new(RulesetSlot::default()),
+            rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
             project: "demo-app".to_owned(),
             events: None,
             barrier: None,

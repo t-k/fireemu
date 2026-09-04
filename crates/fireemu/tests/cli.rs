@@ -664,6 +664,56 @@ fn a_project_alias_from_firebaserc_resolves_the_project() {
 }
 
 #[test]
+fn storage_target_rules_are_resolved_before_the_emulator_starts() {
+    let dir = scratch("storage-targets");
+    let rules = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+    write(&dir, "public.rules", rules);
+    write(&dir, "private.rules", rules);
+    let firebase = write(
+        &dir,
+        "firebase.json",
+        r#"{"storage":[{"target":"public","rules":"public.rules"},{"target":"private","rules":"private.rules"}]}"#,
+    );
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects":{"default":"demo-targets"},"targets":{"demo-targets":{"storage":{"public":["demo-targets.appspot.com"],"private":["private.example.test"]}}}}"#,
+    );
+
+    let out = exec_with(
+        &[
+            "--firebase-json",
+            firebase.to_str().unwrap(),
+            "--only",
+            "storage:public",
+        ],
+        &["true"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects":{"default":"demo-targets"},"targets":{"demo-targets":{"storage":{"public":["demo-targets.appspot.com"]}}}}"#,
+    );
+    let out = exec_with(
+        &[
+            "--firebase-json",
+            firebase.to_str().unwrap(),
+            "--only",
+            "storage",
+        ],
+        &["true"],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("targets.demo-targets.storage.private"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn config_accepts_a_firebase_json_as_well_as_the_canonical_configuration() {
     let dir = scratch("config-kind");
     write(

@@ -732,17 +732,18 @@
     "status": "implemented",
     "precision": "boundary-conformance",
     "implemented": [
-      "each log line is one WebSocket text frame {\"level\": <lowercase>, \"data\": <merged splat objects with metadata>, \"timestamp\": <ms since epoch on the virtual clock>, \"message\": <text, VT/control characters stripped>}, as loggingEmulator.js WebSocketTransport.log produces",
+      "each log line is one WebSocket text frame {\"level\": <lowercase>, \"data\": <structured fields merged with trusted metadata>, \"timestamp\": <ms since epoch on the virtual clock>, \"message\": <text, VT/control characters stripped>}, as loggingEmulator.js WebSocketTransport.log produces",
+      "firebase-functions/logger output preserves arbitrary nested/list/scalar fields and all eight production severities (debug, info, notice, warning, error, critical, alert, emergency); a user-supplied metadata field is retained under data.metadata.user so it cannot replace trusted attribution",
       "data.metadata.emulator.name tags the emulator (EmulatorLogger.forEmulator) and data.metadata.function.name tags the function (forFunction); function user output is type USER while retaining the production severity instead of the official emulator's forced info level",
       "on connect a client is sent the whole retained history and then live frames, with no request/response, no filtering and no authentication",
       "the RFC 6455 handshake (Sec-WebSocket-Accept = base64(SHA-1(key + magic))), masked client frames, ping/pong and a clean close",
-      "every current Node codebase runner feeds its log lines into the bus tagged emulator=functions; invocation-scoped console and firebase-functions/logger output also carries data.metadata.function.name without crossing concurrent function contexts, individual runner log messages have a conservative UTF-8-safe 256 KiB cap derived from Cloud Logging's approximate whole-LogEntry limit, and each emulator's own lifecycle line is tagged with emulator=<name>"
+      "every current Node codebase runner feeds its log lines into the bus tagged emulator=functions; invocation-scoped console and firebase-functions/logger output also carries data.metadata.function.name without crossing concurrent function contexts, individual runner log entries have a conservative UTF-8-safe 256 KiB source cap and a 64-level structured-data depth cap, unpaired UTF-16 surrogates fall back to protocol-safe plain text, and each emulator's own lifecycle line is tagged with emulator=<name>"
     ],
     "unimplemented": [
       "differential verification of the official Emulator UI's Logs page consuming the stream end to end (a browser matrix); the primary evidence is a Rust client that connects to the bound port and asserts the handshake and a functions log frame"
     ],
     "notes": [
-      "divergences from the official emulator, all recorded on the logging surface: the handshake is loopback-only (the official server has none), the retained history is bounded to 1000 frames (the official one is unbounded in memory), individual runner messages have a conservative 256 KiB cap, function USER logs retain production severity instead of being forced to info, and control-character stripping also drops lone C0/DEL bytes, not only ANSI sequences"
+      "divergences from the official emulator, all recorded on the logging surface: the handshake is loopback-only (the official server has none), the retained history is bounded to 1000 frames (the official one is unbounded in memory), individual runner log entries have conservative 256 KiB source and 64-level depth caps, user metadata is nested under data.metadata.user when trusted attribution is present, function USER logs retain production severity instead of being forced to info, and control-character stripping also drops C0/C1/DEL and Unicode bidi-formatting controls from messages and structured field keys/string values, not only ANSI sequences; sanitized key collisions are retained under deterministic suffixes"
     ]
   },
   "DATA-1": {

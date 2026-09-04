@@ -95,19 +95,21 @@ function send(msg) {
   frameWrite(payload);
 }
 
-function log(level, message, invocationId, functionName, user = false) {
-  send({
+function log(level, message, invocationId, functionName, user = false, fields) {
+  const entry = {
     type: "log",
     level,
     message: boundLogMessage(message),
     invocationId,
     functionName,
     user,
-  });
+  };
+  if (fields && Object.keys(fields).length > 0) entry.fields = fields;
+  send(entry);
 }
 
 const invocationLogger = createInvocationLogger((entry) =>
-  log(entry.level, entry.message, entry.invocationId, entry.functionName, entry.user),
+  log(entry.level, entry.message, entry.invocationId, entry.functionName, entry.user, entry.fields),
 );
 invocationLogger.install();
 

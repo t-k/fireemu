@@ -155,6 +155,7 @@ while True:
         "invocationId": msg["invocationId"],
         "functionName": name,
         "user": True,
+        "fields": {"code": 47, "nested": {"attempts": [1, 2]}},
     })
     if "fail" in name:
         send({"type": "result", "invocationId": msg["invocationId"], "ok": False, "error": f"{name} failed"})

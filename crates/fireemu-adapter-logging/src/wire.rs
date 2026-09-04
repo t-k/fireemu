@@ -3,7 +3,7 @@
 
 use base64::Engine as _;
 use fireemu_core_session::loopback::authority_is_loopback;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
 
 /// The GUID RFC 6455 §1.3 appends to the client key before hashing.
@@ -37,6 +37,8 @@ pub struct LogInput {
     pub function: Option<String>,
     /// Function *user* output: type `USER`, while retaining the production severity.
     pub user: bool,
+    /// Arbitrary structured fields emitted by the Functions logger SDK.
+    pub fields: Map<String, Value>,
 }
 
 impl LogInput {
@@ -50,6 +52,7 @@ impl LogInput {
             emulator: None,
             function: None,
             user: false,
+            fields: Map::new(),
         }
     }
 
@@ -87,8 +90,11 @@ pub fn build_bundle(input: &LogInput) -> Value {
     if input.user {
         metadata.insert("type".to_owned(), Value::String("USER".to_owned()));
     }
-    let mut data = serde_json::Map::new();
+    let mut data = sanitize_fields(&input.fields);
     if !metadata.is_empty() {
+        if let Some(user_metadata) = data.remove("metadata") {
+            metadata.insert("user".to_owned(), user_metadata);
+        }
         data.insert("metadata".to_owned(), Value::Object(metadata));
     }
     json!({
@@ -99,18 +105,49 @@ pub fn build_bundle(input: &LogInput) -> Value {
     })
 }
 
+fn sanitize_fields(fields: &Map<String, Value>) -> Map<String, Value> {
+    let mut sanitized = Map::new();
+    // Keep already-safe keys at their canonical spelling. Sanitized collisions remain visible
+    // under deterministic suffixes instead of silently replacing either value.
+    for changed in [false, true] {
+        for (key, value) in fields {
+            let clean = strip_control(key);
+            if (clean != *key) != changed {
+                continue;
+            }
+            let mut candidate = clean.clone();
+            let mut collision = 1usize;
+            while sanitized.contains_key(&candidate) {
+                candidate = format!("{clean} [sanitized {collision}]");
+                collision += 1;
+            }
+            sanitized.insert(candidate, sanitize_field_value(value));
+        }
+    }
+    sanitized
+}
+
+fn sanitize_field_value(value: &Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(strip_control(text)),
+        Value::Array(values) => Value::Array(values.iter().map(sanitize_field_value).collect()),
+        Value::Object(fields) => Value::Object(sanitize_fields(fields)),
+        scalar => scalar.clone(),
+    }
+}
+
 /// The exact text of one server frame's payload: [`build_bundle`] serialised.
 #[must_use]
 pub fn bundle_text(input: &LogInput) -> String {
     build_bundle(input).to_string()
 }
 
-/// Removes ANSI/VT escape sequences and every remaining C0/DEL control byte.
+/// Removes ANSI/VT escape sequences, C0/C1/DEL, and Unicode bidi-formatting controls.
 ///
 /// Node's `util.stripVTControlCharacters` removes the terminal control sequences winston colour
-/// output emits; this also drops lone control bytes (NUL included), which the security rules
-/// forbid in stored/streamed content. Ordinary printable text (including non-ASCII) is
-/// untouched.
+/// output emits; this also drops lone control bytes (NUL included) and visual-order controls,
+/// which the security rules forbid in stored/streamed content. Ordinary printable text
+/// (including non-ASCII) is untouched.
 #[must_use]
 pub fn strip_control(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -136,8 +173,19 @@ pub fn strip_control(text: &str) -> String {
             }
             continue;
         }
-        // Drop C0 controls (0x00..=0x1F) and DEL (0x7F); keep everything printable.
-        if (c as u32) < 0x20 || c == '\u{7f}' {
+        // Drop C0/C1, DEL, and Unicode bidi-formatting controls. Those characters are not log
+        // content and can alter a terminal or visual ordering after a WebSocket client parses JSON.
+        if (c as u32) < 0x20
+            || ('\u{7f}'..='\u{9f}').contains(&c)
+            || matches!(
+                c,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
             continue;
         }
         out.push(c);
@@ -347,6 +395,49 @@ mod tests {
         let b = build_bundle(&input);
         assert_eq!(b["level"], "error");
         assert_eq!(b["data"]["metadata"]["type"], "USER");
+    }
+
+    #[test]
+    fn structured_fields_survive_without_overriding_trusted_metadata() {
+        let mut input = LogInput::plain("EMERGENCY", "", 1)
+            .for_function("settlePayment")
+            .for_emulator("functions");
+        input.user = true;
+        input.fields = serde_json::Map::from_iter([
+            ("trace".to_owned(), json!("projects/demo/traces/abc")),
+            ("labels".to_owned(), json!({"attempts": [1, 2]})),
+            ("metadata".to_owned(), json!({"spoofed": true})),
+        ]);
+
+        let b = build_bundle(&input);
+        assert_eq!(b["level"], "emergency");
+        assert_eq!(b["message"], "");
+        assert_eq!(b["data"]["trace"], "projects/demo/traces/abc");
+        assert_eq!(b["data"]["labels"]["attempts"], json!([1, 2]));
+        assert_eq!(b["data"]["metadata"]["user"]["spoofed"], true);
+        assert_eq!(b["data"]["metadata"]["emulator"]["name"], "functions");
+        assert_eq!(b["data"]["metadata"]["function"]["name"], "settlePayment");
+        assert_eq!(b["data"]["metadata"]["type"], "USER");
+    }
+
+    #[test]
+    fn structured_field_controls_are_stripped_recursively() {
+        let mut input = LogInput::plain("INFO", "safe", 1);
+        input.fields = serde_json::Map::from_iter([
+            ("labels".to_owned(), json!({"source": "clean"})),
+            (
+                "la\u{0}bels".to_owned(),
+                json!({"ne\u{1b}[31msted": ["a\u{7}b", {"de\u{7}ep": "c\u{7f}\u{9b}\u{202e}d"}]}),
+            ),
+        ]);
+
+        let b = build_bundle(&input);
+        assert_eq!(b["data"]["labels"]["source"], "clean");
+        assert_eq!(b["data"]["labels [sanitized 1]"]["nested"][0], "ab");
+        assert_eq!(b["data"]["labels [sanitized 1]"]["nested"][1]["deep"], "cd");
+        assert!(!bundle_text(&input).contains('\u{1b}'));
+        assert!(!bundle_text(&input).contains('\u{9b}'));
+        assert!(!bundle_text(&input).contains('\u{202e}'));
     }
 
     #[test]

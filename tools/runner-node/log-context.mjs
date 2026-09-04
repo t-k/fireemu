@@ -10,14 +10,27 @@ const CONSOLE_LEVELS = Object.freeze({
 });
 
 const TRUNCATION_MARKER = "... [truncated]";
+const STRUCTURED_SEVERITIES = new Set([
+  "DEBUG",
+  "INFO",
+  "NOTICE",
+  "WARNING",
+  "ERROR",
+  "CRITICAL",
+  "ALERT",
+  "EMERGENCY",
+]);
+const MAX_STRUCTURED_LOG_DEPTH = 64;
 
 // Cloud Logging documents an approximate 256 KiB limit for the whole LogEntry. Applying that
 // value conservatively to the message also leaves ample room below the 16 MiB protocol limit.
 export const MAX_LOG_MESSAGE_BYTES = 256 * 1024;
 
 export function boundLogMessage(value, maxBytes = MAX_LOG_MESSAGE_BYTES) {
-  const message = String(value);
-  const bytes = Buffer.from(message, "utf8");
+  const bytes = Buffer.from(String(value), "utf8");
+  // A UTF-8 round trip replaces lone UTF-16 surrogates while preserving valid pairs. Without
+  // this, JSON.stringify emits an escape that serde_json correctly refuses on the protocol side.
+  const message = bytes.toString("utf8");
   if (bytes.length <= maxBytes) return message;
   const marker = Buffer.from(TRUNCATION_MARKER, "utf8");
   if (maxBytes <= marker.length) return marker.subarray(0, maxBytes).toString("utf8");
@@ -26,18 +39,56 @@ export function boundLogMessage(value, maxBytes = MAX_LOG_MESSAGE_BYTES) {
   return `${bytes.subarray(0, end).toString("utf8")}${TRUNCATION_MARKER}`;
 }
 
-function structuredLevel(message, fallbackLevel) {
+function hasUnpairedSurrogate(text) {
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSafeStructuredValue(root) {
+  const pending = [{ value: root, depth: 1 }];
+  while (pending.length > 0) {
+    const { value, depth } = pending.pop();
+    if (depth > MAX_STRUCTURED_LOG_DEPTH) return false;
+    if (typeof value === "string" && hasUnpairedSurrogate(value)) return false;
+    if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        if (hasUnpairedSurrogate(key)) return false;
+        pending.push({ value: child, depth: depth + 1 });
+      }
+    }
+  }
+  return true;
+}
+
+function structuredEntry(message, fallbackLevel) {
   try {
     const parsed = JSON.parse(message);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { level: fallbackLevel, message };
+    }
     const severity = typeof parsed?.severity === "string" ? parsed.severity.toUpperCase() : "";
-    if (severity === "DEBUG") return "debug";
-    if (severity === "INFO" || severity === "NOTICE") return "info";
-    if (severity === "WARNING") return "warn";
-    if (["ERROR", "CRITICAL", "ALERT", "EMERGENCY"].includes(severity)) return "error";
+    if (!STRUCTURED_SEVERITIES.has(severity) || !isSafeStructuredValue(parsed)) {
+      return { level: fallbackLevel, message };
+    }
+    const { severity: _severity, message: structuredMessage, ...fields } = parsed;
+    return {
+      level: severity.toLowerCase(),
+      message: typeof structuredMessage === "string" ? structuredMessage : "",
+      fields,
+    };
   } catch {
     // Plain console output is not structured logging.
   }
-  return fallbackLevel;
+  return { level: fallbackLevel, message };
 }
 
 export function createInvocationLogger(emit) {
@@ -58,10 +109,11 @@ export function createInvocationLogger(emit) {
             original(...values);
             return;
           }
-          const message = format(...values);
+          const message = boundLogMessage(format(...values));
+          const entry =
+            values.length === 1 ? structuredEntry(message, level) : { level, message };
           emit({
-            level: values.length === 1 ? structuredLevel(message, level) : level,
-            message,
+            ...entry,
             functionName: active.functionName,
             invocationId: active.invocationId,
             user: true,

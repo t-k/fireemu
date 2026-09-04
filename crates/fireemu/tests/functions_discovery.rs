@@ -187,9 +187,7 @@ struct ProcessGroupGuard(Option<i32>);
 impl ProcessGroupGuard {
     fn new(pgid: i32) -> Self {
         assert!(pgid > 1, "refusing to guard an unsafe process group");
-        let own_pgid = census::find(std::process::id() as i32)
-            .expect("the test process is visible")
-            .pgid;
+        let own_pgid = census::own_process_group().expect("the test process is visible");
         assert_ne!(pgid, own_pgid, "refusing to guard the test process group");
         Self(Some(pgid))
     }
@@ -261,6 +259,13 @@ fn arm_shutdown_fixture(port: u16, project: &str, marker: &Path) -> serde_json::
             Err(error) => panic!("the Functions listener did not start: {error}"),
         }
     }
+}
+
+fn assert_listener_closed(port: u16, label: &str, signal: &str) {
+    assert!(
+        TcpStream::connect(("127.0.0.1", port)).is_err(),
+        "the {label} listener survived {signal}"
+    );
 }
 
 fn exec(source: &Path, config: Option<&Path>) -> Output {
@@ -454,8 +459,21 @@ fn inspect_functions_refuses_to_start_when_the_requested_port_is_occupied() {
         "{error}"
     );
     drop(listener);
-    std::net::TcpListener::bind(("127.0.0.1", inspector_port))
-        .unwrap_or_else(|cause| panic!("runner retained the occupied inspector port: {cause}"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::net::TcpListener::bind(("127.0.0.1", inspector_port)) {
+            Ok(rebound) => {
+                drop(rebound);
+                break;
+            }
+            Err(cause)
+                if cause.kind() == std::io::ErrorKind::AddrInUse && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(cause) => panic!("runner retained the occupied inspector port: {cause}"),
+        }
+    }
 }
 
 #[test]
@@ -479,112 +497,111 @@ fn inspect_functions_refuses_a_listener_closed_during_module_loading() {
 }
 
 #[cfg(unix)]
+fn assert_signal_shutdown(signal: &str, label: &str) {
+    let unrelated = ChildGuard::new(
+        Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let dir = scratch(&format!("signal-{label}"));
+    let marker = dir.join("runner-exit.txt");
+    let project = format!("demo-functions-shutdown-{label}-{}", std::process::id());
+    let locator = std::env::temp_dir().join(format!("hub-{project}.json"));
+    let functions_port = free_port();
+    let hub_port = free_port();
+    let functions_port_text = functions_port.to_string();
+    let hub_port_text = hub_port.to_string();
+    let source = fixture("shutdown-signal");
+    let daemon = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args([
+                "up",
+                "--project",
+                &project,
+                "--firestore-port",
+                "0",
+                "--http-port",
+                "0",
+                "--storage-port",
+                "0",
+                "--functions-port",
+                &functions_port_text,
+                "--pubsub-port",
+                "0",
+                "--ui-port",
+                "0",
+                "--hub-port",
+                &hub_port_text,
+                "--logging-port",
+                "0",
+                "--functions",
+                source.to_str().unwrap(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let daemon_pid = daemon.id();
+    let armed = arm_shutdown_fixture(functions_port, &project, &marker);
+    let runner_pid = i32::try_from(armed["runnerPid"].as_i64().unwrap()).unwrap();
+    let child_pid = i32::try_from(armed["childPid"].as_i64().unwrap()).unwrap();
+    let runner = census::find(runner_pid).expect("the Node runner is visible");
+    let mut runner_group = ProcessGroupGuard::new(runner.pgid);
+    assert_eq!(
+        runner.pgid, runner_pid,
+        "the runner leads its owned process group"
+    );
+    assert_eq!(
+        census::find(child_pid)
+            .expect("the fixture child is visible")
+            .pgid,
+        runner.pgid
+    );
+    assert!(
+        locator.exists(),
+        "the exact daemon locator was not published"
+    );
+    assert!(Command::new("kill")
+        .args([signal, &daemon_pid.to_string()])
+        .status()
+        .unwrap()
+        .success());
+    let output = daemon.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "graceful\n");
+    census::assert_process_group_empty(
+        runner.pgid,
+        "Functions runner signal shutdown",
+        Duration::from_secs(5),
+    );
+    runner_group.disarm();
+    assert_listener_closed(functions_port, "Functions", signal);
+    assert_listener_closed(hub_port, "Hub", signal);
+    assert!(!locator.exists(), "the Hub locator survived {signal}");
+    assert!(
+        census::alive(i32::try_from(unrelated.id()).unwrap()),
+        "signal cleanup stopped an unrelated process"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn sigterm_and_sigint_gracefully_shutdown_real_node_runners_and_their_children() {
     for (signal, label) in [("-TERM", "term"), ("-INT", "int")] {
-        let unrelated = ChildGuard::new(
-            Command::new("sleep")
-                .arg("30")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap(),
-        );
-        let dir = scratch(&format!("signal-{label}"));
-        let marker = dir.join("runner-exit.txt");
-        let project = format!("demo-functions-shutdown-{label}-{}", std::process::id());
-        let locator = std::env::temp_dir().join(format!("hub-{project}.json"));
-        let functions_port = free_port();
-        let hub_port = free_port();
-        let functions_port_text = functions_port.to_string();
-        let hub_port_text = hub_port.to_string();
-        let source = fixture("shutdown-signal");
-        let daemon = ChildGuard::new(
-            Command::new(env!("CARGO_BIN_EXE_fireemu"))
-                .args([
-                    "up",
-                    "--project",
-                    &project,
-                    "--firestore-port",
-                    "0",
-                    "--http-port",
-                    "0",
-                    "--storage-port",
-                    "0",
-                    "--functions-port",
-                    &functions_port_text,
-                    "--pubsub-port",
-                    "0",
-                    "--ui-port",
-                    "0",
-                    "--hub-port",
-                    &hub_port_text,
-                    "--logging-port",
-                    "0",
-                    "--functions",
-                    source.to_str().unwrap(),
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-        );
-        let daemon_pid = daemon.id();
-        let armed = arm_shutdown_fixture(functions_port, &project, &marker);
-        let runner_pid = armed["runnerPid"].as_i64().unwrap() as i32;
-        let child_pid = armed["childPid"].as_i64().unwrap() as i32;
-        let runner = census::find(runner_pid).expect("the Node runner is visible");
-        let mut runner_group = ProcessGroupGuard::new(runner.pgid);
-        assert_eq!(
-            runner.pgid, runner_pid,
-            "the runner leads its owned process group"
-        );
-        assert_eq!(
-            census::find(child_pid)
-                .expect("the fixture child is visible")
-                .pgid,
-            runner.pgid
-        );
-        assert!(
-            locator.exists(),
-            "the exact daemon locator was not published"
-        );
-        assert!(Command::new("kill")
-            .args([signal, &daemon_pid.to_string()])
-            .status()
-            .unwrap()
-            .success());
-        let output = daemon.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "stdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "graceful\n");
-        census::assert_process_group_empty(
-            runner.pgid,
-            "Functions runner signal shutdown",
-            Duration::from_secs(5),
-        );
-        runner_group.disarm();
-        assert!(
-            TcpStream::connect(("127.0.0.1", functions_port)).is_err(),
-            "the Functions listener survived {signal}"
-        );
-        assert!(
-            TcpStream::connect(("127.0.0.1", hub_port)).is_err(),
-            "the Hub listener survived {signal}"
-        );
-        assert!(!locator.exists(), "the Hub locator survived {signal}");
-        assert!(
-            census::alive(unrelated.id() as i32),
-            "signal cleanup stopped an unrelated process"
-        );
-        let _ = std::fs::remove_dir_all(dir);
+        assert_signal_shutdown(signal, label);
     }
 }
 

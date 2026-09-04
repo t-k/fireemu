@@ -2501,10 +2501,12 @@ fn blocking_auth_context_json(
     event_id: &str,
     timestamp: &str,
 ) -> serde_json::Value {
-    let event_type = request.sign_in_method.as_ref().map_or_else(
-        || event.event_type().to_owned(),
-        |method| format!("{}:{method}", event.event_type()),
-    );
+    let event_type = match (event, request.sign_in_method.as_deref()) {
+        (fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn, Some(method)) => {
+            format!("{}:{method}", event.event_type())
+        }
+        _ => event.event_type().to_owned(),
+    };
     let mut context = serde_json::json!({
         "eventId": event_id,
         "eventType": event_type,
@@ -3197,6 +3199,19 @@ mod tests {
         );
         assert!(value["credential"].get("idToken").is_none());
         assert!(value["credential"].get("accessToken").is_none());
+
+        let before_create = super::blocking_auth_context_json(
+            "demo-app",
+            None,
+            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+            &request,
+            "event-2",
+            "2026-08-29T12:01:00Z",
+        );
+        assert_eq!(
+            before_create["eventType"],
+            "providers/cloud.auth/eventTypes/user.beforeCreate"
+        );
     }
 
     #[test]

@@ -220,6 +220,19 @@ impl PendingSignInContext {
     pub fn sign_in_attributes(&self) -> Option<&ClaimValue> {
         self.sign_in_attributes.as_deref()
     }
+
+    pub(crate) fn retained_heap_bytes(&self) -> u64 {
+        let mut total = self
+            .sign_in_provider
+            .as_ref()
+            .map_or(0, |provider| provider.len() as u64);
+        if let Some(attributes) = &self.sign_in_attributes {
+            let mut encoded = String::new();
+            attributes.write_canonical_json(&mut encoded);
+            total = total.saturating_add(encoded.len() as u64);
+        }
+        total
+    }
 }
 
 impl fmt::Debug for PendingSignInContext {
@@ -516,6 +529,26 @@ impl MfaState {
     #[must_use]
     pub fn pending_count(&self) -> usize {
         self.pending_enrollments.len() + self.pending_sign_ins.len()
+    }
+
+    pub(crate) fn pending_retained_bytes(&self) -> u64 {
+        let enrollments = self
+            .pending_enrollments
+            .iter()
+            .fold(0_u64, |total, (id, pending)| {
+                total
+                    .saturating_add(id.len() as u64)
+                    .saturating_add(core::mem::size_of_val(pending) as u64)
+                    .saturating_add(pending.secret.expose_for_enrollment().len() as u64)
+            });
+        self.pending_sign_ins
+            .iter()
+            .fold(enrollments, |total, (id, pending)| {
+                total
+                    .saturating_add(id.len() as u64)
+                    .saturating_add(core::mem::size_of_val(pending) as u64)
+                    .saturating_add(pending.context.retained_heap_bytes())
+            })
     }
 
     /// Drops every pending enrollment that expired more than `enrollment_grace` ago and every

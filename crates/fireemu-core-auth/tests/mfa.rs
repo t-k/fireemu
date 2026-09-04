@@ -62,6 +62,7 @@ fn pending_sign_in_provenance_is_redacted_and_consumed_with_the_credential() {
     let code = totp_at(&secret, &s.policy().params(), t0());
     s.finalize_totp_enrollment(&uid, &material.session_id, code, t0())
         .unwrap();
+    let retained_before_pending = s.retained_user_bytes();
     let attributes = ClaimValue::Map(std::collections::BTreeMap::from([(
         "private-marker".to_owned(),
         ClaimValue::String("must-not-appear-in-debug".to_owned()),
@@ -81,10 +82,16 @@ fn pending_sign_in_provenance_is_redacted_and_consumed_with_the_credential() {
     let debug = format!("{stored:?}");
     assert!(debug.contains("[redacted]"));
     assert!(!debug.contains("must-not-appear-in-debug"));
+    assert!(
+        s.retained_user_bytes()
+            >= retained_before_pending + "must-not-appear-in-debug".len() as u64,
+        "the snapshot budget must include retained first-factor attributes"
+    );
 
     let code = totp_at(&secret, &s.policy().params(), later);
     s.finalize_mfa_sign_in(&uid, &pending, code, later).unwrap();
     assert!(s.pending_sign_in_context(&pending).is_none());
+    assert!(s.retained_user_bytes() < retained_before_pending + 64);
 }
 
 #[test]
@@ -313,4 +320,19 @@ fn custom_claims_reject_reserved_names_and_enforce_the_byte_limit() {
         .insert("k", ClaimValue::String("日".repeat(331)))
         .unwrap();
     assert!(jp_over.check_size().is_err());
+}
+
+#[test]
+fn blocking_response_claims_use_the_functions_sdk_reserved_names() {
+    let mut claims = CustomClaims::default();
+    claims
+        .insert_blocking_response("sub", ClaimValue::String("ignored-subject".to_owned()))
+        .unwrap();
+    claims
+        .insert_blocking_response("", ClaimValue::Bool(true))
+        .unwrap();
+    assert_eq!(
+        claims.insert_blocking_response("firebase", ClaimValue::Null),
+        Err(CustomClaimsError::ReservedName("firebase".to_owned()))
+    );
 }

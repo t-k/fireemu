@@ -109,6 +109,26 @@ fn assert_blocking_sign_in_contract(port: u16, before_create_body: &str) {
         response["userRecord"]["sessionClaims"]["contextObserved"],
         true
     );
+    for method in [
+        "password",
+        "anonymous",
+        "custom",
+        "emailLink",
+        "phone",
+        "oidc.corp",
+        "saml.corp",
+    ] {
+        let method_body = before_create_body.replace(
+            "providers/cloud.auth/eventTypes/user.beforeCreate",
+            &format!("providers/cloud.auth/eventTypes/user.beforeSignIn:{method}"),
+        );
+        let (status, response) = invoke_blocking_runner(port, "fxBeforeSignInMethod", &method_body);
+        assert_eq!(status, 200, "{method}: {response}");
+        assert_eq!(
+            response["userRecord"]["sessionClaims"]["observedEventType"],
+            format!("providers/cloud.auth/eventTypes/user.beforeSignIn:{method}")
+        );
+    }
     let (status, response) = invoke_blocking_runner(port, "fxSessionClaimsAtLimit", &sign_in_body);
     assert_eq!(status, 200, "{response}");
     assert_eq!(

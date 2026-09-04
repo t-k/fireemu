@@ -129,6 +129,29 @@ pub const RESERVED_CLAIM_NAMES: &[&str] = &[
     "user_id",
 ];
 
+/// Claim names the Firebase Functions SDK rejects in Blocking Auth responses.
+///
+/// This list is intentionally narrower than [`RESERVED_CLAIM_NAMES`]. Blocking Auth is a
+/// distinct protocol boundary: the SDK permits names such as `sub`, while the ID-token encoder
+/// below still gives protocol-owned claims precedence when the token is assembled.
+pub const BLOCKING_RESPONSE_RESERVED_CLAIM_NAMES: &[&str] = &[
+    "acr",
+    "amr",
+    "at_hash",
+    "aud",
+    "auth_time",
+    "azp",
+    "cnf",
+    "c_hash",
+    "exp",
+    "iat",
+    "iss",
+    "jti",
+    "nbf",
+    "nonce",
+    "firebase",
+];
+
 /// Custom claims errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CustomClaimsError {
@@ -165,6 +188,23 @@ impl CustomClaims {
             return Err(CustomClaimsError::EmptyName);
         }
         if RESERVED_CLAIM_NAMES.contains(&name) {
+            return Err(CustomClaimsError::ReservedName(name.to_owned()));
+        }
+        self.entries.insert(name.to_owned(), value);
+        Ok(())
+    }
+
+    /// Inserts a claim returned by a Blocking Auth function.
+    ///
+    /// The Functions SDK applies its own reserved-name list and permits an empty property name.
+    /// Callers must separately enforce its `JSON.stringify(...).length` boundary before using
+    /// this method.
+    pub fn insert_blocking_response(
+        &mut self,
+        name: &str,
+        value: ClaimValue,
+    ) -> Result<(), CustomClaimsError> {
+        if BLOCKING_RESPONSE_RESERVED_CLAIM_NAMES.contains(&name) {
             return Err(CustomClaimsError::ReservedName(name.to_owned()));
         }
         self.entries.insert(name.to_owned(), value);

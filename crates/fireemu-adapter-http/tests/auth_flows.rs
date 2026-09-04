@@ -41,6 +41,10 @@ struct FixedBeforeSignInHook {
     response: Value,
 }
 
+struct RejectBeforeSignInHook {
+    timeout: bool,
+}
+
 impl AuthBlockingHook for FixedBeforeSignInHook {
     fn invoke(
         &self,
@@ -52,6 +56,24 @@ impl AuthBlockingHook for FixedBeforeSignInHook {
         } else {
             json!({})
         })
+    }
+}
+
+impl AuthBlockingHook for RejectBeforeSignInHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if event == BlockingAuthEvent::BeforeSignIn {
+            Err(if self.timeout {
+                BlockingFunctionFailure::timeout()
+            } else {
+                BlockingFunctionFailure::unhandled()
+            })
+        } else {
+            Ok(json!({}))
+        }
     }
 }
 
@@ -128,6 +150,42 @@ fn state() -> AuthState {
 fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
     let r = handle(state, "POST", path, body);
     (r.status, r.body)
+}
+
+fn finalize_phone_mfa(state: &AuthState, body: &Value) -> (u16, Value) {
+    post(state, &format!("{V2}/accounts/mfaSignIn:finalize"), body)
+}
+
+fn assert_phone_mfa_refused(
+    state: &mut AuthState,
+    body: &Value,
+    hook: Arc<dyn AuthBlockingHook>,
+    expected_status: u16,
+) {
+    state.blocking = Some(hook);
+    let (status, response) = finalize_phone_mfa(state, body);
+    assert_eq!(status, expected_status, "{response}");
+    assert_eq!(state.store.lock().unwrap().pending_sign_in_count(), 1);
+}
+
+fn assert_phone_mfa_failures_roll_back(state: &mut AuthState, body: &Value) {
+    for hook in [
+        Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
+        Arc::new(RejectBeforeSignInHook { timeout: true }),
+    ] {
+        assert_phone_mfa_refused(state, body, hook, 503);
+    }
+    for response in [
+        json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"firebase": "reserved"}}}),
+        json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"value": "x".repeat(1_001)}}}),
+    ] {
+        assert_phone_mfa_refused(
+            state,
+            body,
+            Arc::new(FixedBeforeSignInHook { response }),
+            400,
+        );
+    }
 }
 
 fn get(state: &AuthState, path: &str) -> (u16, Value) {
@@ -752,8 +810,10 @@ fn phone_enrollment_needs_a_verified_eligible_first_factor_and_refuses_without_s
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn phone_second_factor_enrollment_and_sign_in() {
-    let s = state();
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut s = state();
     let user = sign_up(&s, "mfa@example.com");
     let id_token = user["idToken"].as_str().unwrap().to_owned();
     verify_email(&s, user["localId"].as_str().unwrap());
@@ -787,6 +847,9 @@ fn phone_second_factor_enrollment_and_sign_in() {
         .unwrap()
         .to_owned();
     // Password sign-in now stops at the second factor.
+    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+        contexts: Arc::clone(&contexts),
+    }));
     let (status, pending) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -831,6 +894,11 @@ fn phone_second_factor_enrollment_and_sign_in() {
         let c = claims(signed["idToken"].as_str().unwrap());
         assert_eq!(c["firebase"]["sign_in_second_factor"], "phone");
     }
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].0, BlockingAuthEvent::BeforeSignIn);
+    assert_eq!(recorded[0].1.sign_in_method.as_deref(), Some("password"));
+    drop(recorded);
     // Admin: users created with phone factors, listed in mfaInfo; withdraw removes them.
     let (status, created) = admin(
         &s,
@@ -1983,6 +2051,108 @@ fn blocking_auth_receives_idp_context_and_can_select_session_claims() {
 }
 
 #[test]
+fn blocking_auth_receives_every_non_idp_sign_in_method() {
+    fn recorded_method(
+        state: &mut AuthState,
+        contexts: &Arc<Mutex<Vec<(BlockingAuthEvent, AuthBlockingContext)>>>,
+        path: &str,
+        body: &Value,
+    ) -> String {
+        state.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+            contexts: Arc::clone(contexts),
+        }));
+        let (status, response) = post(state, path, body);
+        assert_eq!(status, 200, "{response}");
+        let recorded = contexts.lock().unwrap();
+        let context = recorded
+            .iter()
+            .rev()
+            .find(|(event, _)| *event == BlockingAuthEvent::BeforeSignIn)
+            .map(|(_, context)| context)
+            .unwrap();
+        assert!(context.credential.is_none());
+        assert!(context.additional_user_info.is_none());
+        context.sign_in_method.clone().unwrap()
+    }
+
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+
+    let mut password = state();
+    sign_up(&password, "blocking-password@example.com");
+    assert_eq!(
+        recorded_method(
+            &mut password,
+            &contexts,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "blocking-password@example.com", "password": "hunter22"}),
+        ),
+        "password"
+    );
+
+    contexts.lock().unwrap().clear();
+    let mut custom = state();
+    assert_eq!(
+        recorded_method(
+            &mut custom,
+            &contexts,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": custom_token("blocking-custom")}),
+        ),
+        "custom"
+    );
+
+    contexts.lock().unwrap().clear();
+    let mut email_link = state();
+    let (status, sent) = post(
+        &email_link,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "blocking-link@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (_, codes) = get(&email_link, &format!("{EMU}/oobCodes"));
+    assert_eq!(
+        recorded_method(
+            &mut email_link,
+            &contexts,
+            &format!("{V1}/accounts:signInWithEmailLink"),
+            &json!({"email": "blocking-link@example.com", "oobCode": codes["oobCodes"][0]["oobCode"]}),
+        ),
+        "emailLink"
+    );
+
+    contexts.lock().unwrap().clear();
+    let mut phone = state();
+    let (status, sent) = post(
+        &phone,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+15550001234", "recaptchaToken": "ignored"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (_, codes) = get(&phone, &format!("{EMU}/verificationCodes"));
+    assert_eq!(
+        recorded_method(
+            &mut phone,
+            &contexts,
+            &format!("{V1}/accounts:signInWithPhoneNumber"),
+            &json!({"sessionInfo": sent["sessionInfo"], "code": codes["verificationCodes"][0]["code"]}),
+        ),
+        "phone"
+    );
+
+    contexts.lock().unwrap().clear();
+    let mut anonymous = state();
+    assert_eq!(
+        recorded_method(
+            &mut anonymous,
+            &contexts,
+            &format!("{V1}/accounts:signUp"),
+            &json!({}),
+        ),
+        "anonymous"
+    );
+}
+
+#[test]
 fn blocking_auth_receives_saml_attribute_context() {
     let contexts = Arc::new(Mutex::new(Vec::new()));
     let mut s = state();
@@ -2044,9 +2214,7 @@ fn federated_mfa_finalize_preserves_attributes_and_invokes_blocking_auth_once() 
         .as_str()
         .unwrap()
         .to_owned();
-    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
-        contexts: Arc::clone(&contexts),
-    }));
+    s.blocking = Some(Arc::new(RejectBeforeSignInHook { timeout: false }));
     let oidc = json!({
         "sub": "oidc-mfa",
         "email": "federated-mfa@example.com",
@@ -2077,13 +2245,16 @@ fn federated_mfa_finalize_preserves_attributes_and_invokes_blocking_auth_once() 
         .unwrap()["code"]
         .as_str()
         .unwrap();
-    let (status, signed) = post(
-        &s,
-        &format!("{V2}/accounts/mfaSignIn:finalize"),
-        &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": code}}),
-    );
+    let finalize = json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": code}});
+    assert_phone_mfa_failures_roll_back(&mut s, &finalize);
+
+    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+        contexts: Arc::clone(&contexts),
+    }));
+    let (status, signed) = finalize_phone_mfa(&s, &finalize);
 
     assert_eq!(status, 200, "{signed}");
+    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
     assert_eq!(
         signed
             .as_object()
@@ -2239,8 +2410,35 @@ fn blocking_auth_enforces_the_functions_sdk_claim_payload_boundaries() {
     }));
     assert_eq!(status, 400, "{refused}");
 
+    // The Functions SDK permits names such as `sub` that the Admin SDK refuses. The
+    // Identity token encoder still gives the protocol-owned subject precedence.
+    let (status, allowed) = sign_in(json!({
+        "userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"sub": "not-the-token-subject"}}
+    }));
+    assert_eq!(status, 200, "{allowed}");
+    let token = claims(allowed["idToken"].as_str().unwrap());
+    assert_ne!(token["sub"], "not-the-token-subject");
+
     let (status, refused) = sign_in(json!({
-        "userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"sub": "reserved"}}
+        "userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"firebase": "reserved"}}
+    }));
+    assert_eq!(status, 400, "{refused}");
+
+    // JSON.stringify uses the two-character escapes `\\b` and `\\f`; the canonical token
+    // encoder deliberately uses six-character Unicode escapes and must not define this limit.
+    for escaped in ['\u{0008}', '\u{000c}'] {
+        let exactly_one_thousand = json!({"v": escaped.to_string().repeat(496)});
+        let (status, allowed) = sign_in(json!({
+            "userRecord": {"updateMask": "sessionClaims", "sessionClaims": exactly_one_thousand}
+        }));
+        assert_eq!(status, 200, "{allowed}");
+    }
+
+    // JavaScript expands 1e20 to decimal notation. The padding makes the SDK representation
+    // exactly 1,001 UTF-16 code units, while a Rust exponent spelling would appear shorter.
+    let exponent_boundary = json!({"n": 1e20, "v": "a".repeat(967)});
+    let (status, refused) = sign_in(json!({
+        "userRecord": {"updateMask": "sessionClaims", "sessionClaims": exponent_boundary}
     }));
     assert_eq!(status, 400, "{refused}");
 }

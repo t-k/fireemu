@@ -315,7 +315,7 @@ pub struct AuthBlockingContext {
     pub credential: Option<AuthBlockingCredential>,
     /// Additional provider profile information for the sign-in.
     pub additional_user_info: Option<AuthBlockingAdditionalUserInfo>,
-    /// Provider-backed sign-in method used to suffix the event type.
+    /// Sign-in method used to suffix the before-sign-in event type.
     pub sign_in_method: Option<String>,
 }
 
@@ -764,7 +764,7 @@ fn issue_tokens_replacing(
         for (k, v) in extra.entries() {
             claims
                 .custom
-                .insert(k, v.clone())
+                .insert_blocking_response(k, v.clone())
                 .map_err(|e| error(400, &format!("INVALID_CUSTOM_TOKEN : {e}")))?;
         }
     }
@@ -1091,37 +1091,172 @@ fn blocking_truthy(value: Option<&Value>) -> bool {
 
 const BLOCKING_CLAIMS_MAX_CHARACTERS: usize = 1_000;
 
-fn blocking_claims(value: Option<&Value>, field: &str) -> Result<CustomClaims, String> {
-    let Some(value @ Value::Object(_)) = value else {
+fn javascript_stringify_string_len(value: &str) -> usize {
+    2_usize.saturating_add(value.chars().fold(0_usize, |length, character| {
+        length.saturating_add(match character {
+            '"' | '\\' | '\u{0008}' | '\u{000c}' | '\n' | '\r' | '\t' => 2,
+            '\u{0000}'..='\u{001f}' => 6,
+            other => other.len_utf16(),
+        })
+    }))
+}
+
+fn javascript_number_string(value: &serde_json::Number) -> String {
+    if value.is_i64() || value.is_u64() {
+        return value.to_string();
+    }
+    let Some(number) = value.as_f64() else {
+        return value.to_string();
+    };
+    if number == 0.0 {
+        return "0".to_owned();
+    }
+    let raw = value.to_string();
+    let (negative, unsigned) = raw
+        .strip_prefix('-')
+        .map_or((false, raw.as_str()), |unsigned| (true, unsigned));
+    let (mantissa, exponent) = unsigned
+        .split_once(['e', 'E'])
+        .map_or((unsigned, 0_i32), |(mantissa, exponent)| {
+            (mantissa, exponent.parse::<i32>().unwrap_or(0))
+        });
+    let decimal = mantissa.find('.').unwrap_or(mantissa.len());
+    let mut digits = mantissa
+        .chars()
+        .filter(|character| *character != '.')
+        .collect::<String>();
+    let leading_zeroes = digits
+        .chars()
+        .take_while(|character| *character == '0')
+        .count();
+    digits.drain(..leading_zeroes);
+    let decimal_position = i32::try_from(decimal)
+        .unwrap_or(i32::MAX)
+        .saturating_add(exponent)
+        .saturating_sub(i32::try_from(leading_zeroes).unwrap_or(i32::MAX));
+    while digits.ends_with('0') && digits.len() > 1 {
+        digits.pop();
+    }
+    if digits.is_empty() {
+        return "0".to_owned();
+    }
+    let scientific_exponent = decimal_position.saturating_sub(1);
+    let mut formatted = if (-6..21).contains(&scientific_exponent) {
+        if decimal_position <= 0 {
+            let zeroes = usize::try_from(decimal_position.saturating_neg()).unwrap_or(usize::MAX);
+            format!("0.{}{}", "0".repeat(zeroes), digits)
+        } else {
+            let position = usize::try_from(decimal_position).unwrap_or(usize::MAX);
+            if position >= digits.len() {
+                format!(
+                    "{}{}",
+                    digits,
+                    "0".repeat(position.saturating_sub(digits.len()))
+                )
+            } else {
+                format!("{}.{}", &digits[..position], &digits[position..])
+            }
+        }
+    } else {
+        let mut scientific = digits.remove(0).to_string();
+        if !digits.is_empty() {
+            scientific.push('.');
+            scientific.push_str(&digits);
+        }
+        let sign = if scientific_exponent >= 0 { "+" } else { "" };
+        format!("{scientific}e{sign}{scientific_exponent}")
+    };
+    if negative {
+        formatted.insert(0, '-');
+    }
+    formatted
+}
+
+fn javascript_json_stringify_len(value: &Value) -> usize {
+    match value {
+        Value::Null | Value::Bool(true) => 4,
+        Value::Bool(false) => 5,
+        Value::Number(value) => javascript_number_string(value).len(),
+        Value::String(value) => javascript_stringify_string_len(value),
+        Value::Array(values) => values
+            .iter()
+            .fold(2_usize, |length, value| {
+                length.saturating_add(javascript_json_stringify_len(value))
+            })
+            .saturating_add(values.len().saturating_sub(1)),
+        Value::Object(values) => values
+            .iter()
+            .fold(2_usize, |length, (name, value)| {
+                length
+                    .saturating_add(javascript_stringify_string_len(name))
+                    .saturating_add(1)
+                    .saturating_add(javascript_json_stringify_len(value))
+            })
+            .saturating_add(values.len().saturating_sub(1)),
+    }
+}
+
+fn blocking_claim_value(value: &Value) -> ClaimValue {
+    match value {
+        Value::Null => ClaimValue::Null,
+        Value::Bool(value) => ClaimValue::Bool(*value),
+        Value::Number(value) => value.as_i64().map_or_else(
+            || ClaimValue::Float(value.as_f64().unwrap_or(0.0)),
+            ClaimValue::Int,
+        ),
+        Value::String(value) => ClaimValue::String(value.clone()),
+        Value::Array(values) => ClaimValue::List(values.iter().map(blocking_claim_value).collect()),
+        Value::Object(values) => ClaimValue::Map(
+            values
+                .iter()
+                .map(|(name, value)| (name.clone(), blocking_claim_value(value)))
+                .collect(),
+        ),
+    }
+}
+
+struct BlockingClaims {
+    claims: CustomClaims,
+    original: serde_json::Map<String, Value>,
+}
+
+fn blocking_claims(value: Option<&Value>, field: &str) -> Result<BlockingClaims, String> {
+    let Some(value @ Value::Object(object)) = value else {
         return Err(format!(
             "BLOCKING_FUNCTION_ERROR_RESPONSE : ((Response has malformed {field}.))"
         ));
     };
-    let claims = CustomClaims::parse_attributes(&value.to_string()).map_err(|error| {
-        format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid {field}: {error}.))")
-    })?;
-    if claims.canonical_json().encode_utf16().count() > BLOCKING_CLAIMS_MAX_CHARACTERS {
+    if javascript_json_stringify_len(value) > BLOCKING_CLAIMS_MAX_CHARACTERS {
         return Err(format!(
             "BLOCKING_FUNCTION_ERROR_RESPONSE : ((The {field} payload should not exceed {BLOCKING_CLAIMS_MAX_CHARACTERS} characters.))"
         ));
     }
-    Ok(claims)
+    let mut claims = CustomClaims::default();
+    for (name, value) in object {
+        claims
+            .insert_blocking_response(name, blocking_claim_value(value))
+            .map_err(|error| {
+                format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid {field}: {error}.))")
+            })?;
+    }
+    Ok(BlockingClaims {
+        claims,
+        original: object.clone(),
+    })
 }
 
 fn validate_combined_blocking_claims(
-    custom_claims: Option<&CustomClaims>,
-    session_claims: Option<&CustomClaims>,
+    custom_claims: Option<&BlockingClaims>,
+    session_claims: Option<&BlockingClaims>,
 ) -> Result<(), String> {
     let (Some(custom_claims), Some(session_claims)) = (custom_claims, session_claims) else {
         return Ok(());
     };
-    let mut combined = custom_claims.clone();
-    for (name, value) in session_claims.entries() {
-        combined.insert(name, value.clone()).map_err(|error| {
-            format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid sessionClaims: {error}.))")
-        })?;
+    let mut combined = custom_claims.original.clone();
+    for (name, value) in &session_claims.original {
+        combined.insert(name.clone(), value.clone());
     }
-    if combined.canonical_json().encode_utf16().count() > BLOCKING_CLAIMS_MAX_CHARACTERS {
+    if javascript_json_stringify_len(&Value::Object(combined)) > BLOCKING_CLAIMS_MAX_CHARACTERS {
         return Err(format!(
             "BLOCKING_FUNCTION_ERROR_RESPONSE : ((The customClaims and sessionClaims payloads should not exceed {BLOCKING_CLAIMS_MAX_CHARACTERS} characters combined.))"
         ));
@@ -1191,66 +1326,99 @@ fn apply_blocking_response(
     }
     validate_combined_blocking_claims(custom_claims.as_ref(), session_claims.as_ref())?;
     if let Some(claims) = custom_claims {
-        store.set_custom_claims(uid, claims).map_err(|error| {
-            format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid customClaims: {error}.))")
-        })?;
+        store
+            .set_custom_claims(uid, claims.claims)
+            .map_err(|error| {
+                format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid customClaims: {error}.))")
+            })?;
     }
-    Ok(session_claims)
+    Ok(session_claims.map(|claims| claims.claims))
 }
 
 fn blocking_context(
     response: &JsonResponse,
     event: fireemu_core_functions::manifest::BlockingAuthEvent,
     pending: Option<&PendingSignInContext>,
+    sign_in_method: Option<&str>,
 ) -> AuthBlockingContext {
     if let Some(pending) = pending {
-        let Some(provider_id) = pending
-            .sign_in_provider()
-            .filter(|provider| provider.starts_with("saml.") || provider.starts_with("oidc."))
-        else {
-            return AuthBlockingContext::default();
-        };
-        let claims = pending.sign_in_attributes().and_then(claim_value_to_json);
-        let credential = claims.clone().map(|claims| AuthBlockingCredential {
-            claims: Some(claims),
-            provider_id: provider_id.to_owned(),
-            sign_in_method: provider_id.to_owned(),
+        let provider_id = pending.sign_in_provider();
+        let is_idp = provider_id
+            .is_some_and(|provider| provider.starts_with("saml.") || provider.starts_with("oidc."));
+        let claims = is_idp
+            .then(|| pending.sign_in_attributes().and_then(claim_value_to_json))
+            .flatten();
+        let credential = provider_id.filter(|_| is_idp).and_then(|provider_id| {
+            claims.clone().map(|claims| AuthBlockingCredential {
+                claims: Some(claims),
+                provider_id: provider_id.to_owned(),
+                sign_in_method: provider_id.to_owned(),
+            })
         });
         return AuthBlockingContext {
             credential,
-            additional_user_info: Some(AuthBlockingAdditionalUserInfo {
-                provider_id: provider_id.to_owned(),
-                profile: claims,
-                is_new_user: pending.is_new_user(),
+            additional_user_info: provider_id.filter(|_| is_idp).map(|provider_id| {
+                AuthBlockingAdditionalUserInfo {
+                    provider_id: provider_id.to_owned(),
+                    profile: claims,
+                    is_new_user: pending.is_new_user(),
+                }
             }),
-            sign_in_method: Some(provider_id.to_owned()),
+            sign_in_method: sign_in_method.map(str::to_owned),
         };
     }
-    let Some(provider_id) = response.body.get("providerId").and_then(Value::as_str) else {
-        return AuthBlockingContext::default();
-    };
+    let provider_id = response.body.get("providerId").and_then(Value::as_str);
     let profile = response
         .body
         .get("rawUserInfo")
         .and_then(Value::as_str)
         .and_then(|raw| serde_json::from_str(raw).ok())
         .filter(|profile: &Value| !profile.is_null());
-    let claims = (provider_id.starts_with("saml.") || provider_id.starts_with("oidc."))
+    let claims = provider_id
+        .is_some_and(|provider| provider.starts_with("saml.") || provider.starts_with("oidc."))
         .then(|| profile.clone())
         .flatten();
-    let credential = claims.map(|claims| AuthBlockingCredential {
-        claims: Some(claims),
-        provider_id: provider_id.to_owned(),
-        sign_in_method: provider_id.to_owned(),
+    let credential = provider_id.and_then(|provider_id| {
+        claims.map(|claims| AuthBlockingCredential {
+            claims: Some(claims),
+            provider_id: provider_id.to_owned(),
+            sign_in_method: provider_id.to_owned(),
+        })
     });
     AuthBlockingContext {
         credential,
-        additional_user_info: Some(AuthBlockingAdditionalUserInfo {
+        additional_user_info: provider_id.map(|provider_id| AuthBlockingAdditionalUserInfo {
             provider_id: provider_id.to_owned(),
             profile,
             is_new_user: event == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
         }),
-        sign_in_method: Some(provider_id.to_owned()),
+        sign_in_method: sign_in_method.map(str::to_owned),
+    }
+}
+
+fn blocking_sign_in_method<'a>(
+    handler: routes::Handler,
+    body: &Value,
+    response: &'a JsonResponse,
+    pending: Option<&'a PendingSignInContext>,
+) -> Option<&'a str> {
+    if let Some(method) = pending.and_then(PendingSignInContext::sign_in_provider) {
+        return Some(method);
+    }
+    match handler {
+        routes::Handler::SignUp => {
+            Some(if body.get("password").and_then(Value::as_str).is_some() {
+                "password"
+            } else {
+                "anonymous"
+            })
+        }
+        routes::Handler::SignInWithPassword => Some("password"),
+        routes::Handler::SignInWithCustomToken => Some("custom"),
+        routes::Handler::SignInWithEmailLink => Some("emailLink"),
+        routes::Handler::SignInWithPhoneNumber => Some("phone"),
+        routes::Handler::SignInWithIdp => response.body.get("providerId").and_then(Value::as_str),
+        _ => None,
     }
 }
 
@@ -1316,6 +1484,13 @@ fn dispatch_with_blocking_hook(
     let signed_in = is_authentication
         && response.status == 200
         && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some());
+    let sign_in_method = blocking_sign_in_method(
+        handler,
+        body,
+        &response,
+        pending_continuation.as_ref().map(|(_, context)| context),
+    )
+    .map(str::to_owned);
     let project = store.project_id().to_owned();
     let tenant = store.tenant_id().map(str::to_owned);
     drop(store);
@@ -1334,6 +1509,7 @@ fn dispatch_with_blocking_hook(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
                         None,
+                        sign_in_method.as_deref(),
                     );
                     match blocking.invoke_for_with_context(
                         &project,
@@ -1375,6 +1551,7 @@ fn dispatch_with_blocking_hook(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                         pending_continuation.as_ref().map(|(_, context)| context),
+                        sign_in_method.as_deref(),
                     );
                     match blocking.invoke_for_with_context(
                         &project,
@@ -1527,7 +1704,10 @@ fn dispatch_with_blocking_hook(
                 }
                 if let Some(claims) = session_claims {
                     for (name, value) in claims.entries() {
-                        if let Err(reason) = session.extra_claims.insert(name, value.clone()) {
+                        if let Err(reason) = session
+                            .extra_claims
+                            .insert_blocking_response(name, value.clone())
+                        {
                             return error(
                                 400,
                                 &format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {reason}"),
@@ -2655,7 +2835,7 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         store,
         &uid,
         at,
-        None,
+        Some(fireemu_core_auth::store::Provider::Password),
         &[
             ("kind", json!("identitytoolkit#VerifyPasswordResponse")),
             ("registered", json!(true)),
@@ -5579,6 +5759,31 @@ mod tests {
         ) -> Result<Value, BlockingFunctionFailure> {
             unreachable!("the route classifier never invokes a hook")
         }
+    }
+
+    #[test]
+    fn blocking_claim_length_uses_javascript_number_and_escape_spelling() {
+        for (value, expected) in [
+            (json!(1e20), "100000000000000000000"),
+            (json!(1e21), "1e+21"),
+            (json!(1e-6), "0.000001"),
+            (json!(1e-7), "1e-7"),
+            (json!(-0.0), "0"),
+            (json!(123.45), "123.45"),
+        ] {
+            let Value::Number(number) = value else {
+                unreachable!();
+            };
+            assert_eq!(javascript_number_string(&number), expected);
+        }
+        assert_eq!(
+            javascript_json_stringify_len(&json!({"v": "\u{0008}\u{000c}"})),
+            r#"{"v":"\b\f"}"#.encode_utf16().count()
+        );
+        assert_eq!(
+            javascript_json_stringify_len(&json!({"v": "😀"})),
+            r#"{"v":"😀"}"#.encode_utf16().count()
+        );
     }
 
     #[test]

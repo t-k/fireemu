@@ -32,6 +32,9 @@ exports.fxBeforeSignInContext = beforeUserSignedIn((event) => {
   }
   return { sessionClaims: { contextObserved: true } };
 });
+exports.fxBeforeSignInMethod = beforeUserSignedIn((event) => ({
+  sessionClaims: { observedEventType: event.eventType },
+}));
 exports.fxSessionClaimsAtLimit = beforeUserSignedIn(() => ({
   sessionClaims: { value: "a".repeat(988) },
 }));

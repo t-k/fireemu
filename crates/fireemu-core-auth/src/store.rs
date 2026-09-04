@@ -654,6 +654,7 @@ fn user_record_bytes(user: &UserRecord) -> u64 {
         total = total.saturating_add(text(&f.display_name));
         total = total.saturating_add(f.phone_number.len() as u64);
     }
+    total = total.saturating_add(user.mfa.pending_retained_bytes());
     total
 }
 

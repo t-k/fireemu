@@ -152,18 +152,18 @@ fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
     (r.status, r.body)
 }
 
-fn finalize_phone_mfa(state: &AuthState, body: &Value) -> (u16, Value) {
+fn finalize_mfa(state: &AuthState, body: &Value) -> (u16, Value) {
     post(state, &format!("{V2}/accounts/mfaSignIn:finalize"), body)
 }
 
-fn assert_phone_mfa_refused(
+fn assert_mfa_finalize_refused(
     state: &mut AuthState,
     body: &Value,
     hook: Arc<dyn AuthBlockingHook>,
     expected_status: u16,
 ) {
     state.blocking = Some(hook);
-    let (status, response) = finalize_phone_mfa(state, body);
+    let (status, response) = finalize_mfa(state, body);
     assert_eq!(status, expected_status, "{response}");
     assert_eq!(state.store.lock().unwrap().pending_sign_in_count(), 1);
 }
@@ -173,13 +173,13 @@ fn assert_phone_mfa_failures_roll_back(state: &mut AuthState, body: &Value) {
         Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
         Arc::new(RejectBeforeSignInHook { timeout: true }),
     ] {
-        assert_phone_mfa_refused(state, body, hook, 503);
+        assert_mfa_finalize_refused(state, body, hook, 503);
     }
     for response in [
         json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"firebase": "reserved"}}}),
         json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"value": "x".repeat(1_001)}}}),
     ] {
-        assert_phone_mfa_refused(
+        assert_mfa_finalize_refused(
             state,
             body,
             Arc::new(FixedBeforeSignInHook { response }),
@@ -2251,7 +2251,7 @@ fn federated_mfa_finalize_preserves_attributes_and_invokes_blocking_auth_once() 
     s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
         contexts: Arc::clone(&contexts),
     }));
-    let (status, signed) = finalize_phone_mfa(&s, &finalize);
+    let (status, signed) = finalize_mfa(&s, &finalize);
 
     assert_eq!(status, 200, "{signed}");
     assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
@@ -2343,14 +2343,20 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
         .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(30))
         .unwrap();
     let code = totp_at(&secret, &TotpPolicy::default().params(), second);
-    let (status, signed) = post(
-        &s,
-        &format!("{V2}/accounts/mfaSignIn:finalize"),
-        &json!({
-            "mfaPendingCredential": pending["mfaPendingCredential"],
-            "totpVerificationInfo": {"verificationCode": code}
-        }),
+    let finalize = json!({
+        "mfaPendingCredential": pending["mfaPendingCredential"],
+        "totpVerificationInfo": {"verificationCode": code}
+    });
+    assert_mfa_finalize_refused(
+        &mut s,
+        &finalize,
+        Arc::new(RejectBeforeSignInHook { timeout: false }),
+        503,
     );
+    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+        contexts: Arc::clone(&contexts),
+    }));
+    let (status, signed) = finalize_mfa(&s, &finalize);
 
     assert_eq!(status, 200, "{signed}");
     let token = claims(signed["idToken"].as_str().unwrap());

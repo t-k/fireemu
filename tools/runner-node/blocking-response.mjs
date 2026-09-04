@@ -38,11 +38,20 @@ function validateClaims(name, claims, HttpsError) {
 }
 
 function validateBlockingResult(value, eventType, HttpsError) {
-  if (!value || typeof value !== "object" || value.userRecord) return;
-  validateClaims("customClaims", value.customClaims, HttpsError);
-  if (!String(eventType).includes("beforeSignIn") || !value.sessionClaims) return;
-  validateClaims("sessionClaims", value.sessionClaims, HttpsError);
-  const combined = { ...value.customClaims, ...value.sessionClaims };
+  if (!value || typeof value !== "object") return;
+  const hasWireRecord = Object.prototype.hasOwnProperty.call(value, "userRecord");
+  const authRequest = hasWireRecord ? value.userRecord : value;
+  if (
+    !authRequest ||
+    typeof authRequest !== "object" ||
+    Array.isArray(authRequest)
+  ) {
+    throw new HttpsError("invalid-argument", "The userRecord response must be an object.");
+  }
+  validateClaims("customClaims", authRequest.customClaims, HttpsError);
+  if (!String(eventType).includes("beforeSignIn") || !authRequest.sessionClaims) return;
+  validateClaims("sessionClaims", authRequest.sessionClaims, HttpsError);
+  const combined = { ...authRequest.customClaims, ...authRequest.sessionClaims };
   if (JSON.stringify(combined).length > claimsMaxPayloadSize) {
     throw new HttpsError(
       "invalid-argument",
@@ -54,7 +63,7 @@ function validateBlockingResult(value, eventType, HttpsError) {
 export function blockingResult(value, eventType, HttpsError) {
   if (!value || typeof value !== "object") return {};
   validateBlockingResult(value, eventType, HttpsError);
-  if (value.userRecord) return value;
+  if (Object.prototype.hasOwnProperty.call(value, "userRecord")) return value;
   const userRecord = {};
   const updateMask = [];
   for (const [publicName, wireName] of [

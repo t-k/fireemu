@@ -44,3 +44,50 @@ test("custom and session claims enforce reserved and combined limits", () => {
     (error) => error.code === "invalid-argument" && /combined/.test(error.message),
   );
 });
+
+test("SDK wire responses cannot bypass claim validation", () => {
+  assert.throws(
+    () =>
+      blockingResult(
+        { userRecord: { updateMask: "sessionClaims", sessionClaims: { firebase: "reserved" } } },
+        "beforeSignIn",
+        HttpsError,
+      ),
+    (error) => error.code === "invalid-argument" && /reserved/.test(error.message),
+  );
+  assert.throws(
+    () =>
+      blockingResult(
+        {
+          userRecord: {
+            updateMask: "sessionClaims",
+            sessionClaims: { value: "😀".repeat(495) },
+          },
+        },
+        "beforeSignIn",
+        HttpsError,
+      ),
+    (error) => error.code === "invalid-argument" && /sessionClaims payload/.test(error.message),
+  );
+  assert.throws(
+    () =>
+      blockingResult(
+        {
+          userRecord: {
+            updateMask: "customClaims,sessionClaims",
+            customClaims: { custom: "a".repeat(600) },
+            sessionClaims: { session: "b".repeat(600) },
+          },
+        },
+        "beforeSignIn",
+        HttpsError,
+      ),
+    (error) => error.code === "invalid-argument" && /combined/.test(error.message),
+  );
+  for (const userRecord of [null, "invalid", []]) {
+    assert.throws(
+      () => blockingResult({ userRecord }, "beforeSignIn", HttpsError),
+      (error) => error.code === "invalid-argument" && /userRecord/.test(error.message),
+    );
+  }
+});

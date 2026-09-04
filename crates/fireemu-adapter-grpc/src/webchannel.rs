@@ -381,6 +381,43 @@ impl ListenTraceState {
     }
 }
 
+fn trace_listen_request(
+    state: Option<&Arc<Mutex<ListenTraceState>>>,
+    session: u64,
+    request: &pb::ListenRequest,
+) {
+    let Some(state) = state else { return };
+    let Ok(mut state) = state.lock() else { return };
+    let (action, target, lifetime) = match request.target_change.as_ref() {
+        Some(pb::listen_request::TargetChange::AddTarget(target)) => (
+            "add",
+            target.target_id,
+            Some(state.request_add(target.target_id)),
+        ),
+        Some(pb::listen_request::TargetChange::RemoveTarget(target)) => {
+            ("remove", *target, state.request_remove(*target))
+        }
+        None => return,
+    };
+    trace(&TraceEvent::ListenRequest {
+        session,
+        action,
+        target,
+        lifetime,
+    });
+}
+
+fn trace_listen_response(
+    state: Option<&Arc<Mutex<ListenTraceState>>>,
+    session: u64,
+    response: &pb::ListenResponse,
+) {
+    let Some(state) = state else { return };
+    if let Ok(state) = state.lock() {
+        trace(&state.response_event(session, response));
+    }
+}
+
 /// 128 bits from the operating system CSPRNG.
 ///
 /// A channel id was always unguessable-by-construction, but since App Check admits a channel
@@ -1434,7 +1471,8 @@ fn spawn_stream(
     });
     match kind {
         StreamKind::Listen => {
-            let trace_state = Arc::new(Mutex::new(ListenTraceState::default()));
+            let trace_state =
+                trace_enabled().then(|| Arc::new(Mutex::new(ListenTraceState::default())));
             let request_trace_state = trace_state.clone();
             let trace_session = session.trace_id;
             let inbound = MappedStream {
@@ -1442,31 +1480,11 @@ fn spawn_stream(
                 f: move |r: Result<Value, Status>| {
                     r.and_then(|v| listen_request_from_json(&v).map_err(|e| bad_json(&e)))
                         .inspect(|request| {
-                            if let Ok(mut state) = request_trace_state.lock() {
-                                match request.target_change.as_ref() {
-                                    Some(pb::listen_request::TargetChange::AddTarget(target)) => {
-                                        let lifetime = state.request_add(target.target_id);
-                                        trace(&TraceEvent::ListenRequest {
-                                            session: trace_session,
-                                            action: "add",
-                                            target: target.target_id,
-                                            lifetime: Some(lifetime),
-                                        });
-                                    }
-                                    Some(pb::listen_request::TargetChange::RemoveTarget(
-                                        target,
-                                    )) => {
-                                        let lifetime = state.request_remove(*target);
-                                        trace(&TraceEvent::ListenRequest {
-                                            session: trace_session,
-                                            action: "remove",
-                                            target: *target,
-                                            lifetime,
-                                        });
-                                    }
-                                    None => {}
-                                }
-                            }
+                            trace_listen_request(
+                                request_trace_state.as_ref(),
+                                trace_session,
+                                request,
+                            );
                         })
                 },
             };
@@ -1474,9 +1492,7 @@ fn spawn_stream(
             tokio::spawn(async move {
                 while let Some(item) = rx.recv().await {
                     let forwarded = item.map(|response| {
-                        if let Ok(state) = trace_state.lock() {
-                            trace(&state.response_event(trace_session, &response));
-                        }
+                        trace_listen_response(trace_state.as_ref(), trace_session, &response);
                         listen_response_to_json(&response)
                     });
                     if out_tx.send(forwarded).await.is_err() {

@@ -353,12 +353,15 @@
   "FN-HTTP-1": {
     "implemented": [
       "onRequest / onCall (v2) and v1 HTTPS functions proxied to the runner at /{project}/{region}/{function}[/path], with the path and query below the mount point reaching the handler",
+      "v2 callable streaming for the exact Accept: text/event-stream protocol: response.sendChunk values and onCallGenkit stream values arrive progressively, the callable final result remains pending until completion, and a client disconnect aborts the runner response signal and releases runtime admission",
+      "streamed v2 responses retain one bounded backpressure slot, obey the function deadline, and enforce production's 10 MiB streaming response limit cumulatively without buffering the whole response",
       "the official emulator's two 404s: `Not Found` (text/plain) for a path that is not a function route, and `Function <region>-<name> does not exist, valid functions are: <trigger keys>` (text/html) for a route whose function is unknown, with the keys in the official order (grouped by region, export order within a region)",
       "timeoutSeconds: a function that overruns it gets the official answer, HTTP 500 with the body {\"code\":\"ECONNRESET\"} and no content-type, and the emulator logs `Your function timed out after ~Ns.`",
       "CORS for an onRequest function on a loopback origin: the preflight answer cors({origin: true}) produces (204, the origin reflected, GET,HEAD,PUT,PATCH,POST,DELETE, the requested headers, Vary), and Access-Control-Allow-Origin on the ordinary answer"
     ],
     "notes": [
       "needs functions.source (or --functions <dir>) and the bundled Node runner; the codebase must have express installed (a dependency of firebase-functions)",
+      "the real Firebase Web SDK .stream() acceptance test covers ordinary onCall and onCallGenkit chunks, final results, HttpsError after a chunk, non-streaming sendChunk, downstream cancellation, and admission release",
       "conformance: functions/callable-error-envelope, functions/callable-auth-context, functions/http-routing-cors-and-timeouts (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
       "callable preflights vary on every request field used for admission (Origin, method, requested headers, Fetch Metadata site and mode), while the official emulator varies only on Origin and requested headers; the extra members keep a shared cache from replaying an admitted response for a request the proxy would refuse",
       "a non-loopback Origin is refused with 403 rather than reflected: the official emulator runs its runtime with enableCors and answers any origin on the internet",

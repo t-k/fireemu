@@ -32,6 +32,8 @@ If `firebase.json` exists, `init` references it instead of copying its settings.
 
 Functions source reloads hash all non-ignored file content. One daemon-wide source-work admission paces scans and snapshots to 64 MiB/s and 20,000 directory entries/s, stops abandoned work between 64 KiB chunks, and rejects a watch or reload operation whose source tree exceeds 100,000 entries or 128 directory levels. These are local resource-safety limits rather than Firebase CLI compatibility claims.
 
+Second-generation callable functions support the Firebase Web SDK's `.stream()` API. `response.sendChunk()` and `onCallGenkit` stream values are forwarded progressively, the final result resolves when the handler completes, and client cancellation reaches the handler's response signal. Streamed responses use bounded backpressure and the production 10 MiB response limit.
+
 For CI or scripted setup, use the non-interactive form:
 
 ```sh
@@ -130,7 +132,7 @@ The following is a product-level summary, not a claim that every API and edge ca
 | Cloud Firestore | Native-mode gRPC, REST, and WebChannel access; transactions, queries, listeners, indexes, limits, and Security Rules |
 | Firebase Authentication | Client and Admin REST surfaces, emulator actions, custom tokens, email and phone flows, MFA, tenants, and fixture identity providers |
 | Cloud Storage for Firebase | Firebase and JSON object APIs, resumable uploads, generations, listing, and Security Rules |
-| Cloud Functions for Firebase | v2 HTTP, callable, Firestore, Storage, and scheduled functions through the bundled Node.js runner |
+| Cloud Functions for Firebase | v2 HTTP and callable functions, including callable streaming, plus Firestore, Storage, and scheduled functions through the bundled Node.js runner |
 | Cloud Pub/Sub | The documented gRPC subset used by the supported Functions flows |
 | Emulator logging | The EmulatorLog WebSocket with bounded local history and per-function Node log attribution |
 | Firebase App Check | A fireemu-specific local implementation; this is not an official Emulator Suite parity claim |

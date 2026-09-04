@@ -378,7 +378,7 @@ For callable `Authorization`, the daemon accepts only a Firebase ID token verifi
 
 The runner sets `FIREBASE_DEBUG_MODE=true` and enables only the `skipTokenVerification` debug feature required by `firebase-functions` when the callable trusted protocol is active. The runner is bound to loopback, protected by a CSPRNG-generated per-runner secret, and accepts requests only from the daemon proxy. The daemon removes all caller-supplied runner-secret fields before inserting exactly one trusted value. Startup fails if the installed `firebase-functions` version changes the debug-feature semantics or the runner cannot prove loopback binding. This arrangement makes the daemon the sole trust boundary for both decoded credentials: the SDK wrapper may decode forwarded tokens without contacting hard-coded Google endpoints, but it never receives an unverified Auth or App Check token from ingress.
 
-For a valid token, v2 `request.app` and v1 `context.app` contain the app ID and decoded claims. When the callable declares `enforceAppCheck: true`, missing or invalid input returns the callable 401 `UNAUTHENTICATED` envelope before the user handler runs. When false or omitted, missing or invalid input invokes the handler with `app` undefined. Raw `onRequest` functions preserve `X-Firebase-AppCheck` and receive no automatic verification context.
+For a valid token, v2 `request.app` and v1 `context.app` contain the app ID and decoded claims. When the callable declares `enforceAppCheck: true`, missing or invalid input returns the callable `UNAUTHENTICATED` envelope before the user handler runs. An ordinary request receives the wrapper-compatible HTTP 401 JSON response; an exact v2 streaming request receives the wrapper-compatible HTTP 200 response containing one SSE error record. When enforcement is false or omitted, missing or invalid input invokes the handler with `app` undefined. Raw `onRequest` functions preserve `X-Firebase-AppCheck` and receive no automatic verification context.
 
 `consumeAppCheckToken: true` is unsupported in the initial delivery. Current `firebase-functions` keeps the option inside the callable wrapper's closure (v1 and v2 alike; `__endpoint.callableTrigger` is an empty object), so reading `__endpoint` / `__trigger` cannot reveal it. Discovery therefore needs a version-bounded loader instrumentation in the runner (wrapping the `onCall` exports of the installed, supported `firebase-functions` versions before user code loads, capturing the options) or an explicit trusted runner protocol extension. The fail-closed interpretation is three-valued: `true` obtained → discovery fails with `APP_CHECK_REPLAY_UNSUPPORTED`; `false` obtained reliably → callable App Check may be enabled; the value cannot be obtained → starting Functions with App Check enabled fails at startup. The value is never guessed as `false`, because a hidden `consumeAppCheckToken: true` would otherwise run with `alreadyConsumed: false`. Unknown metadata shapes are startup errors, not warnings.
 
@@ -452,7 +452,7 @@ Product mapping is:
 | Firestore REST and WebChannel | HTTP 403 Google JSON `PERMISSION_DENIED` |
 | Firebase Storage dialect | HTTP 403 Firebase Storage JSON error |
 | Firebase Auth client route | HTTP 403 Google JSON `PERMISSION_DENIED` |
-| Callable Functions | HTTP 401 callable `UNAUTHENTICATED` envelope |
+| Callable Functions | HTTP 401 callable `UNAUTHENTICATED` JSON envelope; exact v2 streaming requests receive HTTP 200 with one `UNAUTHENTICATED` SSE error record |
 | Exchange invalid attestation | HTTP 403 `PERMISSION_DENIED`, `App attestation failed.` |
 | Exchange malformed request | HTTP 400 `INVALID_ARGUMENT` |
 | Unsupported limited-use exchange | HTTP 501 `UNIMPLEMENTED` |
@@ -542,6 +542,7 @@ For each Auth, Firestore, and Storage surface, cover the Cartesian matrix of bas
 7. `a forged Auth token never populates callable Auth context when App Check is active`
 8. `mixed-case duplicate App Check headers never reach runner-side decoding`
 9. `Bearer owner never populates callable Auth context`
+10. `an enforced streaming callable returns the SDK SSE error without invoking the handler`
 
 ### Management, lifecycle, and observations
 

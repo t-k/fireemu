@@ -33,6 +33,7 @@ const activeSubscriptions = new Map();
 const callbackAfterUnsubscribe = [];
 const deniedOperations = [];
 const cleanupCallbacks = [];
+const cleanupErrors = [];
 let subscriptionOrdinal = 0;
 
 const record = (event, fields = {}) => events.push({ event, ...fields });
@@ -74,8 +75,18 @@ const cleanup = async () => {
     try {
       await callback();
     } catch (error) {
-      record("cleanup-error", { message: error?.message || String(error) });
+      const message = error?.message || String(error);
+      cleanupErrors.push(message);
+      record("cleanup-error", { message });
     }
+  }
+};
+const expectPathIsolation = async (scope, references) => {
+  for (const [name, reference] of references) {
+    await expectPermissionDenied(`${scope}-${name}-read`, () => getDoc(reference));
+    await expectPermissionDenied(`${scope}-${name}-write`, () =>
+      setDoc(reference, { revision: 0 }),
+    );
   }
 };
 const expectPermissionDenied = async (label, operation) => {
@@ -139,11 +150,13 @@ const run = async () => {
     const db = getFirestore(firebaseApp);
     connectFirestoreEmulator(db, "127.0.0.1", firestorePort);
 
-    const unauthenticatedRef = doc(db, "lifecycle-users", "unauthenticated");
-    await expectPermissionDenied("unauthenticated-read", () => getDoc(unauthenticatedRef));
-    await expectPermissionDenied("unauthenticated-write", () =>
-      setDoc(unauthenticatedRef, { revision: 0 }),
-    );
+    const isolationReferences = (uid) => [
+      ["user", doc(db, "lifecycle-users", uid)],
+      ["project", doc(db, "lifecycle-projects", uid)],
+      ["mail", doc(db, "lifecycle-mail", uid)],
+      ["destination", doc(db, "lifecycle-destinations", uid, "items", "primary")],
+    ];
+    await expectPathIsolation("unauthenticated", isolationReferences("unauthenticated"));
 
     const authReady = deferred();
     let authOrdinal = 0;
@@ -166,11 +179,7 @@ const run = async () => {
     const user = await bounded(authReady.promise, "auth readiness");
     if (user.uid !== credential.user.uid) throw new Error("Auth readiness changed identity");
 
-    const otherUserRef = doc(db, "lifecycle-users", "another-user");
-    await expectPermissionDenied("cross-user-read", () => getDoc(otherUserRef));
-    await expectPermissionDenied("cross-user-write", () =>
-      setDoc(otherUserRef, { revision: 0 }),
-    );
+    await expectPathIsolation("cross-user", isolationReferences("another-user"));
 
     const userRef = doc(db, "lifecycle-users", user.uid);
     const projectRef = doc(db, "lifecycle-projects", user.uid);
@@ -298,7 +307,7 @@ const run = async () => {
       passed:
         diagnostics.maximumConnectedForms() === 1 &&
         callbackAfterUnsubscribe.length === 0 &&
-        deniedOperations.length === 4 &&
+        deniedOperations.length === 16 &&
         JSON.stringify(firstProjectValues) === JSON.stringify([0]) &&
         JSON.stringify(replacementProjectValues) === JSON.stringify([0, 1]),
       maximumConnectedForms: diagnostics.maximumConnectedForms(),
@@ -320,7 +329,11 @@ const run = async () => {
     await cleanup();
     diagnostics.sample("settled");
     diagnostics.observer.disconnect();
-    if (summary) summary.eventCount = events.length;
+    if (summary) {
+      summary.cleanupErrors = cleanupErrors;
+      summary.passed &&= cleanupErrors.length === 0;
+      summary.eventCount = events.length;
+    }
   }
   return summary;
 };

@@ -70,6 +70,8 @@ const MAX_TRACE_COMPLETED_TARGETS: usize = 256;
 const MAX_TRACE_EVENTS_PER_SESSION: u64 = 4096;
 /// Diagnostic messages wait in a bounded queue and are dropped rather than blocking protocol work.
 const TRACE_QUEUE_CAPACITY: usize = 1024;
+/// Process-wide trace budget for one rolling one-second window.
+const MAX_TRACE_EVENTS_PER_SECOND: u64 = 2048;
 
 fn trace_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -319,9 +321,9 @@ fn trace_sender() -> Option<&'static SyncSender<String>> {
         let _ = std::thread::Builder::new()
             .name("webchannel-trace".to_owned())
             .spawn(move || {
-                let stderr = std::io::stderr();
-                let mut stderr = stderr.lock();
                 while let Ok(line) = receiver.recv() {
+                    let stderr = std::io::stderr();
+                    let mut stderr = stderr.lock();
                     let _ = writeln!(stderr, "[webchannel] {line}");
                 }
             });
@@ -329,10 +331,45 @@ fn trace_sender() -> Option<&'static SyncSender<String>> {
     }))
 }
 
+struct TraceRateLimiter {
+    window_started: Instant,
+    emitted: u64,
+}
+
+impl TraceRateLimiter {
+    fn allow(&mut self, now: Instant) -> bool {
+        if now.duration_since(self.window_started) >= Duration::from_secs(1) {
+            self.window_started = now;
+            self.emitted = 0;
+        }
+        if self.emitted >= MAX_TRACE_EVENTS_PER_SECOND {
+            return false;
+        }
+        self.emitted += 1;
+        true
+    }
+}
+
+fn claim_global_trace_slot() -> bool {
+    static LIMITER: OnceLock<Mutex<TraceRateLimiter>> = OnceLock::new();
+    let limiter = LIMITER.get_or_init(|| {
+        Mutex::new(TraceRateLimiter {
+            window_started: Instant::now(),
+            emitted: 0,
+        })
+    });
+    limiter
+        .try_lock()
+        .is_ok_and(|mut limiter| limiter.allow(Instant::now()))
+}
+
 /// Redacted tracing: generated numeric identifiers, counts and sizes only. Formatting happens
 /// after protocol locks are released, and a full or disconnected sink drops the event.
 fn trace(event: &TraceEvent) {
     let Some(sender) = trace_sender() else { return };
+    if !claim_global_trace_slot() {
+        return;
+    }
     match sender.try_send(format_trace_event(event)) {
         Ok(()) | Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {}
     }
@@ -526,6 +563,9 @@ struct WebchannelListenObserver {
 impl ListenObserver for WebchannelListenObserver {
     fn exchange(&self, request: Option<&pb::ListenRequest>, responses: &[pb::ListenResponse]) {
         let event_limit = self.session.trace_event_capacity();
+        if event_limit == 0 {
+            return;
+        }
         let events = match self.state.lock() {
             Ok(mut state) => {
                 state.exchange_events(self.session.trace_id, request, responses, event_limit)
@@ -1732,6 +1772,21 @@ mod tests {
         ] {
             assert!(!rendered.contains(secret));
         }
+    }
+
+    #[test]
+    fn trace_rate_limiter_resets_after_its_bounded_window() {
+        let started = Instant::now();
+        let mut limiter = TraceRateLimiter {
+            window_started: started,
+            emitted: 0,
+        };
+
+        for _ in 0..MAX_TRACE_EVENTS_PER_SECOND {
+            assert!(limiter.allow(started));
+        }
+        assert!(!limiter.allow(started));
+        assert!(limiter.allow(started + Duration::from_secs(1)));
     }
 
     #[test]

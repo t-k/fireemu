@@ -12,6 +12,10 @@ import time
 
 GRACE_SECONDS = 2.0
 POLL_SECONDS = 0.01
+INHERITED_DESCRIPTOR_VARIABLES = (
+    "FIREEMU_QUINT_AUTHORITY_LOCK_FD",
+    "FIREEMU_QUINT_APALACHE_CAPABILITY_FD",
+)
 
 
 def parse_arguments() -> tuple[dict[int, int], list[str]]:
@@ -72,6 +76,21 @@ def normalized_status(return_code: int) -> int:
     return 128 - return_code if return_code < 0 else return_code
 
 
+def inherited_descriptors() -> tuple[int, ...]:
+    descriptors = []
+    for variable in INHERITED_DESCRIPTOR_VARIABLES:
+        value = os.environ.get(variable)
+        if not value:
+            continue
+        try:
+            descriptor = int(value)
+            os.fstat(descriptor)
+        except (ValueError, OSError) as error:
+            raise ValueError(f"invalid inherited descriptor in {variable}: {error}") from error
+        descriptors.append(descriptor)
+    return tuple(descriptors)
+
+
 def main() -> int:
     try:
         exit_mapping, command = parse_arguments()
@@ -91,8 +110,12 @@ def main() -> int:
         signal.signal(supervised_signal, remember_signal)
 
     try:
-        child = subprocess.Popen(command, start_new_session=True)
-    except OSError as error:
+        child = subprocess.Popen(
+            command,
+            pass_fds=inherited_descriptors(),
+            start_new_session=True,
+        )
+    except (OSError, ValueError) as error:
         print(f"error: cannot launch supervised command: {error}", file=sys.stderr)
         return 126
 

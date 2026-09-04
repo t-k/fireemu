@@ -1,33 +1,109 @@
 #!/usr/bin/env python3
-"""Hold the process-wide Apalache endpoint lock across an authority pass."""
+"""Serialize writers to one canonical Quint evidence target."""
+
+from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
+import pwd
 import stat
 import sys
-import tempfile
+from pathlib import Path
 
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        raise SystemExit("usage: authority-lock COMMAND [ARG ...]")
-    lock_path = os.environ.get(
-        "FIREEMU_QUINT_AUTHORITY_LOCK",
-        os.path.join(tempfile.gettempdir(), "fireemu-quint-apalache-8822.lock"),
-    )
+def canonical_target(value: str) -> Path:
+    target = Path(value)
+    if not target.is_absolute():
+        raise SystemExit("authority evidence target must be absolute")
+    try:
+        resolved = target.resolve(strict=True)
+    except OSError as error:
+        raise SystemExit(f"cannot resolve authority evidence target: {error}") from error
+    if not resolved.is_dir():
+        raise SystemExit("authority evidence target must be a directory")
+    return resolved
+
+
+def lock_directory() -> Path:
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True)
+    directory = home / ".cache/fireemu/quint-authority-locks"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    current = home
+    for component in directory.relative_to(home).parts:
+        current = current / component
+        metadata = current.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o022
+        ):
+            raise SystemExit(f"authority lock directory is not trusted: {current}")
+    os.chmod(directory, 0o700)
+    return directory
+
+
+def lock_path(target: Path) -> Path:
+    identity = hashlib.sha256(os.fsencode(target)).hexdigest()
+    return lock_directory() / f"{identity}.lock"
+
+
+def open_lock(target: Path) -> tuple[int, Path]:
+    path = lock_path(target)
     flags = os.O_CREAT | os.O_RDWR
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    descriptor = os.open(lock_path, flags, 0o600)
+    descriptor = os.open(path, flags, 0o600)
     metadata = os.fstat(descriptor)
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
         os.close(descriptor)
         raise SystemExit("authority lock must be a regular file owned by the current user")
     os.fchmod(descriptor, 0o600)
+    return descriptor, path
+
+
+def validate_lock(target: Path, descriptor_text: str) -> None:
+    try:
+        descriptor = int(descriptor_text)
+        inherited = os.fstat(descriptor)
+    except (ValueError, OSError) as error:
+        raise SystemExit(f"invalid inherited authority lock descriptor: {error}") from error
+    expected_descriptor, _path = open_lock(target)
+    try:
+        expected = os.fstat(expected_descriptor)
+    finally:
+        os.close(expected_descriptor)
+    if (
+        not stat.S_ISREG(inherited.st_mode)
+        or inherited.st_uid != os.getuid()
+        or (inherited.st_dev, inherited.st_ino) != (expected.st_dev, expected.st_ino)
+    ):
+        raise SystemExit(
+            "inherited authority lock descriptor does not own the evidence target lock"
+        )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        raise SystemExit("inherited authority lock descriptor does not hold the lock") from error
+
+
+def main() -> None:
+    if len(sys.argv) == 4 and sys.argv[1] == "--validate":
+        validate_lock(canonical_target(sys.argv[2]), sys.argv[3])
+        return
+    if len(sys.argv) < 4 or sys.argv[1] != "--target":
+        raise SystemExit("usage: authority-lock --target TARGET COMMAND [ARG ...]")
+    target = canonical_target(sys.argv[2])
+    descriptor, _path = open_lock(target)
     fcntl.flock(descriptor, fcntl.LOCK_EX)
     os.set_inheritable(descriptor, True)
+    os.environ.pop("FIREEMU_QUINT_APALACHE_ENDPOINT", None)
+    os.environ.pop("FIREEMU_QUINT_APALACHE_OWNER_PID", None)
+    os.environ.pop("FIREEMU_QUINT_APALACHE_SUPERVISOR_PID", None)
+    os.environ.pop("FIREEMU_QUINT_APALACHE_CAPABILITY_FD", None)
     os.environ["FIREEMU_QUINT_AUTHORITY_LOCK_FD"] = str(descriptor)
-    os.execvp(sys.argv[1], sys.argv[1:])
+    os.environ["FIREEMU_QUINT_AUTHORITY_TARGET"] = str(target)
+    os.execvp(sys.argv[3], sys.argv[3:])
 
 
 if __name__ == "__main__":

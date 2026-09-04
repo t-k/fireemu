@@ -30,6 +30,8 @@ const COMMON_DIGEST_PATHS: &[&str] = &[
     "verification/quint/bin/process-group",
     "verification/quint/bin/quint",
     "verification/quint/bin/authority-lock",
+    "verification/quint/bin/authority-server",
+    "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-verification.sh",

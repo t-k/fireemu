@@ -2,8 +2,10 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -26,7 +28,284 @@ pub const APALACHE_LAUNCHER_SHA256: &str =
 /// Exact release archive used by the fail-closed installer.
 pub const APALACHE_ARCHIVE_URL: &str =
     "https://github.com/apalache-mc/apalache/releases/download/v0.56.1/apalache.tgz";
-const APALACHE_SERVER_ENDPOINT: &str = "127.0.0.1:8822";
+
+/// Loopback Apalache server identity issued by the authority supervisor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedApalacheServer {
+    endpoint: String,
+    _owner_pid: u32,
+}
+
+impl OwnedApalacheServer {
+    /// Validates that explicit CLI metadata matches the active authority supervisor.
+    pub fn from_authority(endpoint: &str, owner_pid: &str) -> Result<Self, String> {
+        let inherited_endpoint = std::env::var("FIREEMU_QUINT_APALACHE_ENDPOINT")
+            .map_err(|_| "runner-owned Apalache endpoint is not inherited".to_owned())?;
+        let inherited_owner_pid = std::env::var("FIREEMU_QUINT_APALACHE_OWNER_PID")
+            .map_err(|_| "runner-owned Apalache owner PID is not inherited".to_owned())?;
+        if endpoint != inherited_endpoint || owner_pid != inherited_owner_pid {
+            return Err("Apalache metadata was not issued by the authority runner".to_owned());
+        }
+        validate_authority_capability(endpoint, owner_pid)?;
+        Self::parse(endpoint, owner_pid)
+    }
+
+    fn from_environment() -> Result<Self, String> {
+        let endpoint = std::env::var("FIREEMU_QUINT_APALACHE_ENDPOINT")
+            .map_err(|_| "runner-owned Apalache endpoint is not inherited".to_owned())?;
+        let owner_pid = std::env::var("FIREEMU_QUINT_APALACHE_OWNER_PID")
+            .map_err(|_| "runner-owned Apalache owner PID is not inherited".to_owned())?;
+        Self::from_authority(&endpoint, &owner_pid)
+    }
+
+    fn parse(endpoint: &str, owner_pid: &str) -> Result<Self, String> {
+        let address = SocketAddr::from_str(endpoint)
+            .map_err(|error| format!("invalid Apalache server endpoint {endpoint:?}: {error}"))?;
+        if address.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || address.port() == 0 {
+            return Err(format!(
+                "Apalache server endpoint must be a non-zero loopback socket: {endpoint:?}"
+            ));
+        }
+        let owner_pid = owner_pid
+            .parse::<u32>()
+            .map_err(|error| format!("invalid Apalache owner PID {owner_pid:?}: {error}"))?;
+        if owner_pid == 0 {
+            return Err("Apalache owner PID must be non-zero".to_owned());
+        }
+        let status = Command::new("/bin/kill")
+            .args(["-0", &owner_pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|error| format!("cannot inspect Apalache owner PID {owner_pid}: {error}"))?;
+        if !status.success() {
+            return Err(format!("Apalache owner PID {owner_pid} is not alive"));
+        }
+        if !process_owns_listener(owner_pid, address)? {
+            return Err(format!(
+                "Apalache owner PID {owner_pid} does not own listener port {}",
+                address.port()
+            ));
+        }
+        Ok(Self {
+            endpoint: address.to_string(),
+            _owner_pid: owner_pid,
+        })
+    }
+
+    #[must_use]
+    fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+}
+
+#[cfg(unix)]
+fn validate_authority_capability(endpoint: &str, owner_pid: &str) -> Result<(), String> {
+    use std::os::unix::fs::FileExt;
+    use std::os::unix::fs::MetadataExt;
+
+    let supervisor_pid = std::env::var("FIREEMU_QUINT_APALACHE_SUPERVISOR_PID")
+        .map_err(|_| "runner-owned Apalache supervisor PID is not inherited".to_owned())?;
+    let supervisor_pid = supervisor_pid
+        .parse::<u32>()
+        .map_err(|error| format!("invalid runner-owned Apalache supervisor PID: {error}"))?;
+    if supervisor_pid == 0
+        || parent_pid(
+            owner_pid
+                .parse::<u32>()
+                .map_err(|error| format!("invalid Apalache owner PID {owner_pid:?}: {error}"))?,
+        )? != supervisor_pid
+    {
+        return Err("Apalache server is not a direct child of the authority supervisor".to_owned());
+    }
+    if !ancestor_pids(std::process::id())?.contains(&supervisor_pid) {
+        return Err("authority supervisor is not an ancestor of this process".to_owned());
+    }
+
+    let descriptor = std::env::var("FIREEMU_QUINT_APALACHE_CAPABILITY_FD")
+        .map_err(|_| "runner-owned Apalache capability is not inherited".to_owned())?
+        .parse::<u32>()
+        .map_err(|error| format!("invalid Apalache capability descriptor: {error}"))?;
+    let descriptor_path = if cfg!(target_os = "linux") {
+        PathBuf::from(format!("/proc/self/fd/{descriptor}"))
+    } else {
+        PathBuf::from(format!("/dev/fd/{descriptor}"))
+    };
+    let file = fs::File::open(&descriptor_path).map_err(|error| {
+        format!("cannot open inherited Apalache capability descriptor: {error}")
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("cannot inspect inherited Apalache capability: {error}"))?;
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::getuid().as_raw()
+        || metadata.mode() & 0o177 != 0
+    {
+        return Err(
+            "inherited Apalache capability is not an owner-readable regular file".to_owned(),
+        );
+    }
+    let mut bytes = [0_u8; 1024];
+    let count = file
+        .read_at(&mut bytes, 0)
+        .map_err(|error| format!("cannot read inherited Apalache capability: {error}"))?;
+    if count == bytes.len() {
+        return Err("inherited Apalache capability is too large".to_owned());
+    }
+    let content = std::str::from_utf8(&bytes[..count])
+        .map_err(|error| format!("inherited Apalache capability is not UTF-8: {error}"))?;
+    let fields = content.lines().collect::<Vec<_>>();
+    if fields.len() != 4
+        || fields[0] != endpoint
+        || fields[1] != owner_pid
+        || fields[2] != supervisor_pid.to_string()
+        || fields[3].len() != 64
+        || !fields[3].bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("inherited Apalache capability does not match the requested server".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_authority_capability(_endpoint: &str, _owner_pid: &str) -> Result<(), String> {
+    Err("Apalache authority capabilities are unsupported on this platform".to_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn parent_pid(pid: u32) -> Result<u32, String> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map_err(|error| format!("cannot inspect process {pid} parent: {error}"))?;
+    let suffix = stat
+        .rsplit_once(") ")
+        .map(|(_, suffix)| suffix)
+        .ok_or_else(|| format!("cannot parse process {pid} status"))?;
+    suffix
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| format!("process {pid} status has no parent PID"))?
+        .parse::<u32>()
+        .map_err(|error| format!("cannot parse process {pid} parent PID: {error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn parent_pid(pid: u32) -> Result<u32, String> {
+    let output = Command::new("/bin/ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .map_err(|error| format!("cannot inspect process {pid} parent: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("cannot inspect process {pid} parent"));
+    }
+    std::str::from_utf8(&output.stdout)
+        .map_err(|error| format!("process {pid} parent is not UTF-8: {error}"))?
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| format!("cannot parse process {pid} parent PID: {error}"))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn parent_pid(_pid: u32) -> Result<u32, String> {
+    Err("process ancestry checks are unsupported on this platform".to_owned())
+}
+
+fn ancestor_pids(mut pid: u32) -> Result<BTreeSet<u32>, String> {
+    let mut ancestors = BTreeSet::new();
+    for _ in 0..128 {
+        let parent = parent_pid(pid)?;
+        if parent == 0 || !ancestors.insert(parent) {
+            return Ok(ancestors);
+        }
+        pid = parent;
+    }
+    Err("process ancestry exceeds the supported depth".to_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn process_owns_listener(owner_pid: u32, address: SocketAddr) -> Result<bool, String> {
+    let descriptors = fs::read_dir(format!("/proc/{owner_pid}/fd"))
+        .map_err(|error| format!("cannot inspect Apalache owner descriptors: {error}"))?;
+    let mut socket_inodes = BTreeSet::new();
+    for descriptor in descriptors {
+        let descriptor = match descriptor {
+            Ok(descriptor) => descriptor,
+            Err(_) => continue,
+        };
+        let target = match fs::read_link(descriptor.path()) {
+            Ok(target) => target,
+            Err(_) => continue,
+        };
+        let target = target.to_string_lossy();
+        if let Some(inode) = target
+            .strip_prefix("socket:[")
+            .and_then(|value| value.strip_suffix(']'))
+        {
+            socket_inodes.insert(inode.to_owned());
+        }
+    }
+    for table_name in ["tcp", "tcp6"] {
+        let table_path = format!("/proc/{owner_pid}/net/{table_name}");
+        let table = match fs::read_to_string(&table_path) {
+            Ok(table) => table,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!("cannot inspect {table_path}: {error}"));
+            }
+        };
+        for line in table.lines().skip(1) {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() < 10 || fields[3] != "0A" || !socket_inodes.contains(fields[9]) {
+                continue;
+            }
+            let Some((hexadecimal_address, hexadecimal_port)) = fields[1].rsplit_once(':') else {
+                continue;
+            };
+            if table_name == "tcp"
+                && hexadecimal_address == "0100007F"
+                && u16::from_str_radix(hexadecimal_port, 16).ok() == Some(address.port())
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn process_owns_listener(owner_pid: u32, address: SocketAddr) -> Result<bool, String> {
+    let output = Command::new("/usr/sbin/lsof")
+        .args([
+            "-nP",
+            "-a",
+            "-p",
+            &owner_pid.to_string(),
+            "-iTCP",
+            "-sTCP:LISTEN",
+            "-Fn",
+        ])
+        .output()
+        .map_err(|error| format!("cannot inspect Apalache listener ownership: {error}"))?;
+    if output.status.code() == Some(1) && output.stderr.is_empty() {
+        return Ok(false);
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "listener ownership inspection failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let expected = format!("n{}:{}", address.ip(), address.port());
+    Ok(output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .any(|line| line == expected.as_bytes()))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_owns_listener(_owner_pid: u32, _address: SocketAddr) -> Result<bool, String> {
+    Err("Apalache listener ownership checks are unsupported on this platform".to_owned())
+}
 
 /// Strict source-mutation manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -119,21 +398,25 @@ fn bound_diagnostic(bytes: &[u8]) -> String {
 }
 
 /// A bounded TLC verification request for one registered Quint model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VerifyRequest {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyRequest<'a> {
     descriptor: &'static ModelDescriptor,
+    server: &'a OwnedApalacheServer,
 }
 
-impl VerifyRequest {
+impl<'a> VerifyRequest<'a> {
     /// Creates a request for a registered model descriptor.
     #[must_use]
-    pub const fn new(descriptor: &'static ModelDescriptor) -> Self {
-        Self { descriptor }
+    pub const fn new(
+        descriptor: &'static ModelDescriptor,
+        server: &'a OwnedApalacheServer,
+    ) -> Self {
+        Self { descriptor, server }
     }
 
     /// Returns the stable Quint 0.32.0 command arguments.
     #[must_use]
-    pub fn arguments(self) -> Vec<String> {
+    pub fn arguments(&self) -> Vec<String> {
         let mut arguments = vec![
             "verify".to_owned(),
             self.descriptor.spec.to_owned(),
@@ -144,7 +427,7 @@ impl VerifyRequest {
             "--apalache-version".to_owned(),
             APALACHE_VERSION.to_owned(),
             "--server-endpoint".to_owned(),
-            APALACHE_SERVER_ENDPOINT.to_owned(),
+            self.server.endpoint().to_owned(),
             "--tlc-config".to_owned(),
             self.descriptor.config.to_owned(),
         ];
@@ -388,6 +671,7 @@ fn has_temporal_counterexample(diagnostic: &str) -> bool {
 pub fn mutate_model(
     repository_root: &Path,
     descriptor: &'static ModelDescriptor,
+    server: &OwnedApalacheServer,
     evidence_path: Option<&Path>,
     cargo_authority: Option<&Path>,
 ) -> Result<Vec<MutationResult>, String> {
@@ -426,7 +710,7 @@ pub fn mutate_model(
             .map_err(|error| format!("cannot write copied TLC config: {error}"))?;
 
         let property = descriptor.property(&mutation.property)?;
-        let arguments = mutation_arguments(descriptor, mutation, property.kind);
+        let arguments = mutation_arguments(descriptor, mutation, property.kind, server);
         let argument_refs = arguments.iter().map(String::as_str).collect::<Vec<_>>();
         let execution_result = execute_quint(&temporary.path, &argument_refs);
         let execution = execution_result?;
@@ -466,9 +750,11 @@ pub fn mutate_event_delivery(
     repository_root: &Path,
     evidence_path: Option<&Path>,
 ) -> Result<Vec<MutationResult>, String> {
+    let server = OwnedApalacheServer::from_environment()?;
     mutate_model(
         repository_root,
         model("EventDelivery").expect("EventDelivery must remain registered"),
+        &server,
         evidence_path,
         None,
     )
@@ -478,6 +764,7 @@ fn mutation_arguments(
     descriptor: &ModelDescriptor,
     mutation: &Mutation,
     property_kind: PropertyKind,
+    server: &OwnedApalacheServer,
 ) -> Vec<String> {
     let mut arguments = vec![
         "verify".to_owned(),
@@ -489,7 +776,7 @@ fn mutation_arguments(
         "--apalache-version".to_owned(),
         APALACHE_VERSION.to_owned(),
         "--server-endpoint".to_owned(),
-        APALACHE_SERVER_ENDPOINT.to_owned(),
+        server.endpoint().to_owned(),
         "--tlc-config".to_owned(),
         descriptor.config.to_owned(),
     ];
@@ -569,6 +856,7 @@ pub fn execute_quint(workdir: &Path, arguments: &[&str]) -> Result<Execution, St
 pub fn verify_model(
     repository_root: &Path,
     descriptor: &'static ModelDescriptor,
+    server: &OwnedApalacheServer,
 ) -> Result<Execution, String> {
     validate_apalache_distribution()?;
     let workdir = repository_root.join("verification/quint");
@@ -585,7 +873,7 @@ pub fn verify_model(
             checker_output.display()
         ));
     }
-    let arguments = VerifyRequest::new(descriptor).arguments();
+    let arguments = VerifyRequest::new(descriptor, server).arguments();
     let argument_refs = arguments.iter().map(String::as_str).collect::<Vec<_>>();
     let execution_result = execute_quint(&workdir, &argument_refs);
     let cleanup_result = cleanup_checker_output(&checker_output);
@@ -647,9 +935,11 @@ pub fn validate_apalache_distribution() -> Result<PathBuf, String> {
 
 /// Compatibility wrapper for the original `EventDelivery` authority API.
 pub fn verify_event_delivery_model(repository_root: &Path) -> Result<Execution, String> {
+    let server = OwnedApalacheServer::from_environment()?;
     verify_model(
         repository_root,
         model("EventDelivery").expect("EventDelivery must remain registered"),
+        &server,
     )
 }
 
@@ -679,11 +969,13 @@ fn cleanup_checker_output(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
     use std::process::Command;
 
     use super::{
         classify_execution, classify_model_mutation_execution, classify_mutation_execution,
-        CheckerOutcome, Execution, MutationOutcome, VerifyRequest,
+        mutation_arguments, CheckerOutcome, Execution, Mutation, MutationOutcome,
+        OwnedApalacheServer, VerifyRequest,
     };
 
     fn execution(code: i32, stdout: &str, stderr: &str) -> Execution {
@@ -699,11 +991,24 @@ mod tests {
         }
     }
 
+    fn owned_test_server() -> (TcpListener, OwnedApalacheServer) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener must bind");
+        let endpoint = listener
+            .local_addr()
+            .expect("test listener must have an address")
+            .to_string();
+        let server = OwnedApalacheServer::parse(&endpoint, &std::process::id().to_string())
+            .expect("loopback server metadata must be valid");
+        (listener, server)
+    }
+
     #[test]
     fn baseline_request_checks_every_registered_property_with_tlc() {
         let descriptor = crate::model::model("EventDelivery").expect("registered model");
+        let (_listener, server) = owned_test_server();
+        let endpoint = server.endpoint().to_owned();
         assert_eq!(
-            VerifyRequest::new(descriptor).arguments(),
+            VerifyRequest::new(descriptor, &server).arguments(),
             [
                 "verify",
                 "specs/EventDelivery.qnt",
@@ -714,7 +1019,7 @@ mod tests {
                 "--apalache-version",
                 "0.56.1",
                 "--server-endpoint",
-                "127.0.0.1:8822",
+                endpoint.as_str(),
                 "--tlc-config",
                 "configs/EventDelivery.json",
                 "--invariants",
@@ -732,6 +1037,62 @@ mod tests {
                 "0",
             ]
         );
+    }
+
+    #[test]
+    fn mutation_request_uses_the_same_runner_owned_endpoint() {
+        let descriptor = crate::model::model("EventDelivery").expect("registered model");
+        let property = descriptor
+            .property("LegalStateTransitions")
+            .expect("registered property");
+        let mutation = Mutation {
+            id: "fixture".to_owned(),
+            property: property.name.to_owned(),
+            operator: "fixture".to_owned(),
+            from: "before".to_owned(),
+            to: "after".to_owned(),
+        };
+        let (_listener, server) = owned_test_server();
+        let arguments = mutation_arguments(descriptor, &mutation, property.kind, &server);
+        let endpoint_index = arguments
+            .iter()
+            .position(|argument| argument == "--server-endpoint")
+            .expect("mutation must declare a server endpoint");
+        assert_eq!(arguments[endpoint_index + 1], server.endpoint());
+    }
+
+    #[test]
+    fn server_metadata_rejects_malformed_non_loopback_and_dead_owners() {
+        let current_pid = std::process::id().to_string();
+        for endpoint in [
+            "localhost:49152",
+            "0.0.0.0:49152",
+            "192.0.2.1:49152",
+            "127.0.0.1:0",
+            "not-an-endpoint",
+        ] {
+            assert!(
+                OwnedApalacheServer::parse(endpoint, &current_pid).is_err(),
+                "endpoint must be rejected: {endpoint}"
+            );
+        }
+        assert!(OwnedApalacheServer::parse("127.0.0.1:49152", "0").is_err());
+        assert!(OwnedApalacheServer::parse("127.0.0.1:49152", "4294967295").is_err());
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fixture listener must bind");
+        let endpoint = listener
+            .local_addr()
+            .expect("fixture listener must have an address")
+            .to_string();
+        let mut non_owner = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("non-owner fixture must launch");
+        let diagnostic = OwnedApalacheServer::parse(&endpoint, &non_owner.id().to_string())
+            .expect_err("an unrelated live process must not own the listener");
+        assert!(diagnostic.contains("does not own listener port"));
+        non_owner.kill().expect("non-owner fixture must stop");
+        non_owner.wait().expect("non-owner fixture must be reaped");
     }
 
     #[test]

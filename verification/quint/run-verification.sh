@@ -6,47 +6,16 @@ repository_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 cd "$repository_root"
 
 authority_lock="$script_dir/bin/authority-lock"
+authority_target="$script_dir/evidence"
 lock_fd=${FIREEMU_QUINT_AUTHORITY_LOCK_FD:-}
 if [ -z "$lock_fd" ]; then
   if [ ! -x "$authority_lock" ]; then
     echo "error: authority lock launcher is not executable" >&2
     exit 2
   fi
-  exec "$authority_lock" "$0" "$@"
+  exec "$authority_lock" --target "$authority_target" "$0" "$@"
 fi
-lock_path=${FIREEMU_QUINT_AUTHORITY_LOCK:-${TMPDIR:-/tmp}/fireemu-quint-apalache-8822.lock}
-python3 - "$lock_fd" "$lock_path" <<'PY'
-import fcntl
-import os
-import stat
-import sys
-
-try:
-    descriptor = int(sys.argv[1])
-    inherited = os.fstat(descriptor)
-except (ValueError, OSError) as error:
-    raise SystemExit(f"error: invalid inherited authority lock descriptor: {error}") from error
-flags = os.O_RDONLY
-if hasattr(os, "O_NOFOLLOW"):
-    flags |= os.O_NOFOLLOW
-expected_descriptor = os.open(sys.argv[2], flags)
-try:
-    expected = os.fstat(expected_descriptor)
-finally:
-    os.close(expected_descriptor)
-if (
-    not stat.S_ISREG(inherited.st_mode)
-    or inherited.st_uid != os.getuid()
-    or (inherited.st_dev, inherited.st_ino) != (expected.st_dev, expected.st_ino)
-):
-    raise SystemExit("error: inherited authority lock descriptor does not own the expected file")
-try:
-    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError as error:
-    raise SystemExit("error: inherited authority lock descriptor does not hold the lock") from error
-PY
-unset FIREEMU_QUINT_AUTHORITY_LOCK_FD
-
+"$authority_lock" --validate "$authority_target" "$lock_fd"
 refresh=0
 case "$#" in
   0) ;;
@@ -75,14 +44,22 @@ if [ ! -f "$apalache_jar" ]; then
   exit 2
 fi
 printf '%s  %s\n' "$APALACHE_JAR_SHA256" "$apalache_jar" | shasum -a 256 -c -
-python3 - <<'PY'
-import socket
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-    probe.settimeout(0.2)
-    if probe.connect_ex(("127.0.0.1", 8822)) == 0:
-        raise SystemExit("error: refusing an already occupied Apalache endpoint 127.0.0.1:8822")
-PY
+server_endpoint=${FIREEMU_QUINT_APALACHE_ENDPOINT:-}
+server_owner_pid=${FIREEMU_QUINT_APALACHE_OWNER_PID:-}
+if [ -z "$server_endpoint" ] && [ -z "$server_owner_pid" ]; then
+  authority_server="$script_dir/bin/authority-server"
+  if [ ! -x "$authority_server" ]; then
+    echo "error: authority server launcher is not executable" >&2
+    exit 2
+  fi
+  exec "$authority_server" "$0" "$@"
+fi
+if [ -z "$server_endpoint" ] || [ -z "$server_owner_pid" ]; then
+  echo "error: incomplete runner-owned Apalache metadata" >&2
+  exit 2
+fi
+unset FIREEMU_QUINT_AUTHORITY_LOCK_FD
 
 passes=${VERIFICATION_PASSES:-1}
 case "$passes" in
@@ -222,9 +199,9 @@ while [ "$pass" -le "$passes" ]; do
     model=${entry%%:*}
     test_target=${entry#*:}
     mutation_evidence="$staged_evidence/$model.json"
-    run_gate "$model-model" cargo run -p fireemu-verification-quint -- verify-model --model "$model"
+    run_gate "$model-model" cargo run -p fireemu-verification-quint -- verify-model --model "$model" --server-endpoint "$server_endpoint" --server-owner-pid "$server_owner_pid"
     run_gate "$model-connect" cargo test -p fireemu-verification-quint --test "$test_target" -- --ignored --test-threads=1
-    run_gate "$model-mutations" cargo run -p fireemu-verification-quint -- mutate-model --model "$model" --evidence "$mutation_evidence" --cargo-authority "$staged_evidence/cargo-authority.json"
+    run_gate "$model-mutations" cargo run -p fireemu-verification-quint -- mutate-model --model "$model" --server-endpoint "$server_endpoint" --server-owner-pid "$server_owner_pid" --evidence "$mutation_evidence" --cargo-authority "$staged_evidence/cargo-authority.json"
     run_gate "$model-evidence" cargo run -p fireemu-verification-quint -- verify-evidence --model "$model" --evidence "$mutation_evidence" --cargo-authority "$staged_evidence/cargo-authority.json"
   done
   run_gate traceability cargo run -p traceability-check -- --quint-evidence-dir "$staged_evidence"

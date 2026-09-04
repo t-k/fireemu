@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""Run one authority command under a runner-owned Apalache server."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import zipfile
+from pathlib import Path
+
+APALACHE_VERSION = "0.56.1"
+READINESS_TIMEOUT_SECONDS = 20.0
+SHUTDOWN_TIMEOUT_SECONDS = 5.0
+MAX_DIAGNOSTIC_BYTES = 16 * 1024
+LOOPBACK_HOST = "127.0.0.1"
+JAVA_INJECTION_VARIABLES = (
+    "APALACHE_JAR",
+    "JVM_ARGS",
+    "JVM_GC_ARGS",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "CLASSPATH",
+    "BASH_ENV",
+    "ENV",
+)
+ROOT = Path(__file__).resolve().parent.parent
+LOOPBACK_AGENT_SOURCE = (
+    ROOT / "java/io/fireemu/verification/LoopbackServerProviderAgent.java"
+)
+
+
+class RequestedSignal(Exception):
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+
+
+def format_status(returncode: int) -> str:
+    if returncode < 0:
+        try:
+            name = signal.Signals(-returncode).name
+        except ValueError:
+            name = str(-returncode)
+        return f"signal={name}"
+    return f"status={returncode}"
+
+
+def linux_listener_endpoints(pid: int) -> set[tuple[str, int]]:
+    descriptor_directory = Path(f"/proc/{pid}/fd")
+    if not descriptor_directory.is_dir():
+        return set()
+    socket_inodes: set[str] = set()
+    for descriptor in descriptor_directory.iterdir():
+        try:
+            target = os.readlink(descriptor)
+        except OSError:
+            continue
+        if target.startswith("socket:[") and target.endswith("]"):
+            socket_inodes.add(target[8:-1])
+
+    endpoints: set[tuple[str, int]] = set()
+    for table_name in ("tcp", "tcp6"):
+        table = Path(f"/proc/{pid}/net/{table_name}")
+        try:
+            lines = table.read_text(encoding="ascii").splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            fields = line.split()
+            if len(fields) < 10 or fields[3] != "0A" or fields[9] not in socket_inodes:
+                continue
+            address, hexadecimal_port = fields[1].rsplit(":", 1)
+            port = int(hexadecimal_port, 16)
+            if table_name == "tcp" and len(address) == 8:
+                host = socket.inet_ntoa(bytes.fromhex(address)[::-1])
+            else:
+                host = f"{table_name}:{address}"
+            endpoints.add((host, port))
+    return endpoints
+
+
+def lsof_listener_endpoints(pid: int) -> set[tuple[str, int]]:
+    try:
+        result = subprocess.run(
+            [
+                "/usr/sbin/lsof",
+                "-nP",
+                "-a",
+                "-p",
+                str(pid),
+                "-iTCP",
+                "-sTCP:LISTEN",
+                "-Fn",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(f"cannot inspect owned server listeners with lsof: {error}") from error
+    if result.returncode not in (0, 1) or (result.returncode == 1 and result.stderr):
+        diagnostic = result.stderr.strip() or "no diagnostic"
+        raise RuntimeError(
+            f"listener inspection failed with status {result.returncode}: {diagnostic}"
+        )
+    endpoints: set[tuple[str, int]] = set()
+    for line in result.stdout.splitlines():
+        if not line.startswith("n"):
+            continue
+        endpoint = line[1:].removesuffix(" (LISTEN)")
+        try:
+            host, port_text = endpoint.rsplit(":", 1)
+            endpoints.add((host.removeprefix("[").removesuffix("]"), int(port_text)))
+        except (IndexError, ValueError):
+            continue
+    return endpoints
+
+
+def listener_endpoints(pid: int) -> set[tuple[str, int]]:
+    if sys.platform.startswith("linux"):
+        return linux_listener_endpoints(pid)
+    return lsof_listener_endpoints(pid)
+
+
+def resolved_executable(name: str) -> Path:
+    candidate = shutil.which(name)
+    if candidate is None:
+        raise RuntimeError(f"required executable is unavailable: {name}")
+    try:
+        resolved = Path(candidate).resolve(strict=True)
+        metadata = resolved.stat()
+    except OSError as error:
+        raise RuntimeError(f"cannot resolve required executable {name}: {error}") from error
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise RuntimeError(f"required executable is not executable: {resolved}")
+    if metadata.st_uid != 0 or metadata.st_mode & 0o022:
+        raise RuntimeError(f"required executable is not trusted: {resolved}")
+    return resolved
+
+
+def clean_java_environment(temporary: Path, java: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    for variable in JAVA_INJECTION_VARIABLES:
+        environment.pop(variable, None)
+    runtime_bin = temporary / "runtime-bin"
+    runtime_bin.mkdir(mode=0o700)
+    (runtime_bin / "java").symlink_to(java)
+    environment["PATH"] = os.pathsep.join(
+        [str(runtime_bin), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    )
+    environment["TMPDIR"] = str(temporary)
+    return environment
+
+
+def build_loopback_agent(
+    temporary: Path,
+    apalache_jar: Path,
+    javac: Path,
+    environment: dict[str, str],
+) -> Path:
+    if not LOOPBACK_AGENT_SOURCE.is_file():
+        raise RuntimeError(f"loopback agent source is missing: {LOOPBACK_AGENT_SOURCE}")
+    classes = temporary / "agent-classes"
+    classes.mkdir(mode=0o700)
+    result = subprocess.run(
+        [
+            str(javac),
+            "-cp",
+            str(apalache_jar),
+            "-d",
+            str(classes),
+            str(LOOPBACK_AGENT_SOURCE),
+        ],
+        cwd=temporary,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        diagnostic = (result.stderr or result.stdout).strip()
+        raise RuntimeError(
+            f"cannot compile loopback server provider agent: {diagnostic or 'no diagnostic'}"
+        )
+    agent_jar = temporary / "loopback-server-provider-agent.jar"
+    with zipfile.ZipFile(agent_jar, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "META-INF/MANIFEST.MF",
+            "Manifest-Version: 1.0\r\n"
+            "Premain-Class: io.fireemu.verification.LoopbackServerProviderAgent\r\n\r\n",
+        )
+        for class_file in sorted(classes.rglob("*.class")):
+            archive.write(class_file, class_file.relative_to(classes).as_posix())
+    return agent_jar
+
+
+def bounded_diagnostic(path: Path) -> str:
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        return f"cannot read server diagnostic: {error}"
+    if len(data) > MAX_DIAGNOSTIC_BYTES:
+        data = data[:MAX_DIAGNOSTIC_BYTES] + b"\n...[truncated]"
+    return data.decode("utf-8", errors="replace")
+
+
+def wait_until_ready(process: subprocess.Popen[bytes], pending_signal: list[int]) -> int:
+    deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if pending_signal:
+            raise RequestedSignal(pending_signal[0])
+        returncode = process.poll()
+        if returncode is not None:
+            raise RuntimeError(
+                f"Apalache server exited before readiness ({format_status(returncode)})"
+            )
+        endpoints = listener_endpoints(process.pid)
+        if len(endpoints) > 1:
+            raise RuntimeError(
+                f"owned Apalache process has multiple listeners: {sorted(endpoints)}"
+            )
+        if endpoints:
+            host, port = next(iter(endpoints))
+            if host != LOOPBACK_HOST:
+                raise RuntimeError(
+                    f"owned Apalache process is not loopback-bound: {host}:{port}"
+                )
+            if port == 0:
+                raise RuntimeError("owned Apalache process reported invalid port 0")
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    return port
+            except OSError:
+                pass
+        time.sleep(0.05)
+    raise RuntimeError(
+        f"Apalache server did not become ready within {READINESS_TIMEOUT_SECONDS:.0f}s"
+    )
+
+
+def process_group_exists(group_id: int) -> bool:
+    try:
+        os.killpg(group_id, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def terminate_group(process: subprocess.Popen[bytes], requested_signal: int) -> None:
+    group_id = process.pid
+    try:
+        os.killpg(group_id, requested_signal)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + SHUTDOWN_TIMEOUT_SECONDS
+    while time.monotonic() < deadline and process_group_exists(group_id):
+        process.poll()
+        time.sleep(0.05)
+    if not process_group_exists(group_id):
+        process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+        return
+    try:
+        os.killpg(group_id, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: authority-server COMMAND [ARG ...]")
+    ownership_variables = (
+        "FIREEMU_QUINT_APALACHE_ENDPOINT",
+        "FIREEMU_QUINT_APALACHE_OWNER_PID",
+        "FIREEMU_QUINT_APALACHE_SUPERVISOR_PID",
+        "FIREEMU_QUINT_APALACHE_CAPABILITY_FD",
+    )
+    if any(os.environ.get(variable) for variable in ownership_variables):
+        raise SystemExit("refusing caller-supplied Apalache ownership metadata")
+
+    quint_home = os.environ.get("QUINT_HOME")
+    if not quint_home:
+        raise SystemExit("QUINT_HOME is required")
+    launcher = (
+        Path(quint_home)
+        / f"apalache-dist-{APALACHE_VERSION}"
+        / "apalache/bin/apalache-mc"
+    )
+    if not launcher.is_file() or not os.access(launcher, os.X_OK):
+        raise SystemExit(f"pinned Apalache launcher is not executable: {launcher}")
+    apalache_jar = launcher.parent.parent / "lib/apalache.jar"
+    if not apalache_jar.is_file():
+        raise SystemExit(f"pinned Apalache JAR is missing: {apalache_jar}")
+
+    pending_signal: list[int] = []
+
+    def record_signal(signum: int, _frame: object) -> None:
+        if not pending_signal:
+            pending_signal.append(signum)
+
+    for handled in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(handled, record_signal)
+
+    with tempfile.TemporaryDirectory(prefix="fireemu-quint-apalache-") as temporary:
+        temporary_path = Path(temporary)
+        output_path = temporary_path / "stdout.log"
+        error_path = temporary_path / "stderr.log"
+        java = resolved_executable("java")
+        javac = resolved_executable("javac")
+        server_environment = clean_java_environment(temporary_path, java)
+        agent_jar = build_loopback_agent(
+            temporary_path, apalache_jar, javac, server_environment
+        )
+        server_environment["APALACHE_JAR"] = str(apalache_jar)
+        server_environment["JVM_ARGS"] = f"-javaagent:{agent_jar}"
+        server_environment["JVM_GC_ARGS"] = (
+            "-XX:+UseG1GC -XX:G1PeriodicGCInterval=600000 "
+            "-XX:+G1PeriodicGCInvokesConcurrent"
+        )
+        with output_path.open("wb") as server_stdout, error_path.open("wb") as server_stderr:
+            server = subprocess.Popen(
+                [str(launcher), "server", "--port=0"],
+                cwd=temporary,
+                env=server_environment,
+                stdout=server_stdout,
+                stderr=server_stderr,
+                start_new_session=True,
+            )
+            command: subprocess.Popen[bytes] | None = None
+            try:
+                port = wait_until_ready(server, pending_signal)
+                endpoint = f"127.0.0.1:{port}"
+                command_environment = os.environ.copy()
+                for variable in ownership_variables:
+                    command_environment.pop(variable, None)
+                command_environment["FIREEMU_QUINT_APALACHE_ENDPOINT"] = endpoint
+                command_environment["FIREEMU_QUINT_APALACHE_OWNER_PID"] = str(server.pid)
+                command_environment["FIREEMU_QUINT_APALACHE_SUPERVISOR_PID"] = str(
+                    os.getpid()
+                )
+                capability_path = temporary_path / "authority.capability"
+                capability_descriptor = os.open(
+                    capability_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
+                )
+                capability = (
+                    f"{endpoint}\n{server.pid}\n{os.getpid()}\n"
+                    f"{os.urandom(32).hex()}\n"
+                ).encode("ascii")
+                os.write(capability_descriptor, capability)
+                os.fsync(capability_descriptor)
+                os.fchmod(capability_descriptor, 0o400)
+                os.set_inheritable(capability_descriptor, True)
+                command_environment["FIREEMU_QUINT_APALACHE_CAPABILITY_FD"] = str(
+                    capability_descriptor
+                )
+                inherited_lock = command_environment.get(
+                    "FIREEMU_QUINT_AUTHORITY_LOCK_FD"
+                )
+                pass_descriptors = [capability_descriptor]
+                if inherited_lock:
+                    try:
+                        lock_descriptor = int(inherited_lock)
+                        os.fstat(lock_descriptor)
+                    except (ValueError, OSError) as error:
+                        raise RuntimeError(
+                            f"invalid inherited authority lock descriptor: {error}"
+                        ) from error
+                    pass_descriptors.append(lock_descriptor)
+                try:
+                    command = subprocess.Popen(
+                        sys.argv[1:],
+                        env=command_environment,
+                        pass_fds=tuple(pass_descriptors),
+                        start_new_session=True,
+                    )
+                    while True:
+                        if pending_signal:
+                            received = pending_signal[0]
+                            terminate_group(command, received)
+                            terminate_group(server, received)
+                            return 128 + received
+                        server_status = server.poll()
+                        command_status = command.poll()
+                        if server_status is not None:
+                            terminate_group(command, signal.SIGTERM)
+                            server_stdout.flush()
+                            server_stderr.flush()
+                            print(
+                                "error: owned Apalache server exited during authority pass "
+                                f"({format_status(server_status)})",
+                                file=sys.stderr,
+                            )
+                            diagnostic = bounded_diagnostic(error_path)
+                            if diagnostic:
+                                print(diagnostic, file=sys.stderr)
+                            return 2
+                        if command_status is not None:
+                            terminate_group(command, signal.SIGTERM)
+                            server_status = server.poll()
+                            if server_status is not None:
+                                server_stdout.flush()
+                                server_stderr.flush()
+                                print(
+                                    "error: owned Apalache server exited during authority pass "
+                                    f"({format_status(server_status)})",
+                                    file=sys.stderr,
+                                )
+                                diagnostic = bounded_diagnostic(error_path)
+                                if diagnostic:
+                                    print(diagnostic, file=sys.stderr)
+                                return 2
+                            return command_status
+                        time.sleep(0.05)
+                finally:
+                    os.close(capability_descriptor)
+            except RequestedSignal as requested:
+                if command is not None:
+                    terminate_group(command, requested.signum)
+                terminate_group(server, requested.signum)
+                return 128 + requested.signum
+            except (OSError, RuntimeError) as error:
+                server_stdout.flush()
+                server_stderr.flush()
+                print(f"error: {error}", file=sys.stderr)
+                diagnostic = bounded_diagnostic(error_path)
+                if diagnostic:
+                    print(diagnostic, file=sys.stderr)
+                if command is not None:
+                    terminate_group(command, signal.SIGTERM)
+                return 2
+            finally:
+                terminate_group(server, signal.SIGTERM)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(f"error: {error}", file=sys.stderr)
+        raise SystemExit(2) from None

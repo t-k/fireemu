@@ -8,11 +8,11 @@ use fireemu_verification_quint::cargo_authority::{validate_authority_file, write
 use fireemu_verification_quint::evidence::validate_evidence_file_with_cargo_authority;
 use fireemu_verification_quint::model::{model, ModelDescriptor};
 use fireemu_verification_quint::process::{
-    mutate_model as run_mutations, verify_model as run_model,
+    mutate_model as run_mutations, verify_model as run_model, OwnedApalacheServer,
 };
 use fireemu_verification_quint::publication::publish_evidence as publish_evidence_snapshot;
 
-const USAGE: &str = "Usage:\n  fireemu-verification-quint verify-model --model MODEL [--root PATH]\n  fireemu-verification-quint mutate-model --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint verify-evidence --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint cargo-authority [--root PATH] (--write PATH | --check PATH)\n  fireemu-verification-quint publish-evidence --source PATH --target PATH\n";
+const USAGE: &str = "Usage:\n  fireemu-verification-quint verify-model --model MODEL --server-endpoint ENDPOINT --server-owner-pid PID [--root PATH]\n  fireemu-verification-quint mutate-model --model MODEL --server-endpoint ENDPOINT --server-owner-pid PID [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint verify-evidence --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint cargo-authority [--root PATH] (--write PATH | --check PATH)\n  fireemu-verification-quint publish-evidence --source PATH --target PATH\n";
 
 fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
@@ -106,17 +106,28 @@ fn default_root() -> PathBuf {
 }
 
 fn verify_model(arguments: &[String]) -> Result<(), String> {
-    let options = parse_options(arguments, false)?;
-    run_model(&options.root, options.descriptor)?;
+    let options = parse_options(arguments, false, true)?;
+    run_model(
+        &options.root,
+        options.descriptor,
+        options
+            .server
+            .as_ref()
+            .expect("server is required for model verification"),
+    )?;
     println!("{} Quint/TLC model: ok", options.descriptor.name);
     Ok(())
 }
 
 fn mutate_model(arguments: &[String]) -> Result<(), String> {
-    let options = parse_options(arguments, true)?;
+    let options = parse_options(arguments, true, true)?;
     let results = run_mutations(
         &options.root,
         options.descriptor,
+        options
+            .server
+            .as_ref()
+            .expect("server is required for mutation verification"),
         options.evidence.as_deref(),
         options.cargo_authority.as_deref(),
     )?;
@@ -129,7 +140,7 @@ fn mutate_model(arguments: &[String]) -> Result<(), String> {
 }
 
 fn verify_evidence(arguments: &[String]) -> Result<(), String> {
-    let options = parse_options(arguments, true)?;
+    let options = parse_options(arguments, true, false)?;
     let evidence = options.evidence.unwrap_or_else(|| {
         options.root.join(format!(
             "verification/quint/evidence/{}.json",
@@ -157,13 +168,20 @@ struct CommandOptions {
     root: PathBuf,
     evidence: Option<PathBuf>,
     cargo_authority: Option<PathBuf>,
+    server: Option<OwnedApalacheServer>,
 }
 
-fn parse_options(arguments: &[String], accepts_evidence: bool) -> Result<CommandOptions, String> {
+fn parse_options(
+    arguments: &[String],
+    accepts_evidence: bool,
+    requires_server: bool,
+) -> Result<CommandOptions, String> {
     let mut model_name = None;
     let mut root = None;
     let mut evidence = None;
     let mut cargo_authority = None;
+    let mut server_endpoint = None;
+    let mut server_owner_pid = None;
     let mut index = 0;
     while index < arguments.len() {
         let flag = &arguments[index];
@@ -179,7 +197,14 @@ fn parse_options(arguments: &[String], accepts_evidence: bool) -> Result<Command
             "--cargo-authority" if accepts_evidence && cargo_authority.is_none() => {
                 cargo_authority = Some(PathBuf::from(value));
             }
-            "--model" | "--root" | "--evidence" | "--cargo-authority" => {
+            "--server-endpoint" if requires_server && server_endpoint.is_none() => {
+                server_endpoint = Some(value.as_str());
+            }
+            "--server-owner-pid" if requires_server && server_owner_pid.is_none() => {
+                server_owner_pid = Some(value.as_str());
+            }
+            "--model" | "--root" | "--evidence" | "--cargo-authority" | "--server-endpoint"
+            | "--server-owner-pid" => {
                 return Err(format!("repeated or unsupported flag {flag:?}"));
             }
             _ => return Err(format!("unknown flag {flag:?}")),
@@ -188,10 +213,20 @@ fn parse_options(arguments: &[String], accepts_evidence: bool) -> Result<Command
     }
     let model_name = model_name.ok_or_else(|| "missing required --model MODEL".to_owned())?;
     let descriptor = model(model_name)?;
+    let server = if requires_server {
+        let endpoint = server_endpoint
+            .ok_or_else(|| "missing required --server-endpoint ENDPOINT".to_owned())?;
+        let owner_pid =
+            server_owner_pid.ok_or_else(|| "missing required --server-owner-pid PID".to_owned())?;
+        Some(OwnedApalacheServer::from_authority(endpoint, owner_pid)?)
+    } else {
+        None
+    };
     Ok(CommandOptions {
         descriptor,
         root: root.unwrap_or_else(default_root),
         evidence,
         cargo_authority,
+        server,
     })
 }

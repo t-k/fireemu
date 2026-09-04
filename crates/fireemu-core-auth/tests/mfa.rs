@@ -1,7 +1,7 @@
 //! TOTP enrollment and sign-in state machine on the virtual clock (INV-AUTH-001..003).
 
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims, CustomClaimsError};
-use fireemu_core_auth::mfa::{MfaError, TotpPolicy};
+use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, TotpPolicy};
 use fireemu_core_auth::store::{AuthStore, NewUser, SecondFactorAssertion};
 use fireemu_core_auth::totp::totp_at;
 use fireemu_core_types::determinism::SplitMix64;
@@ -49,6 +49,42 @@ fn enrollment_then_sign_in_with_a_valid_code() {
         s.finalize_mfa_sign_in(&uid, &pending, code, later).unwrap();
     assert_eq!(assertion.sign_in_second_factor, "totp");
     assert_eq!(assertion.second_factor_identifier, factor.mfa_enrollment_id);
+}
+
+#[test]
+fn pending_sign_in_provenance_is_redacted_and_consumed_with_the_credential() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("claims@example.com"), t0())
+        .unwrap();
+    let material = s.start_totp_enrollment(&uid, t0()).unwrap();
+    let secret = material.secret_for_test().to_vec();
+    let code = totp_at(&secret, &s.policy().params(), t0());
+    s.finalize_totp_enrollment(&uid, &material.session_id, code, t0())
+        .unwrap();
+    let attributes = ClaimValue::Map(std::collections::BTreeMap::from([(
+        "private-marker".to_owned(),
+        ClaimValue::String("must-not-appear-in-debug".to_owned()),
+    )]));
+    let context = PendingSignInContext::new(
+        Some("oidc.corp".to_owned()),
+        false,
+        Some(attributes.clone()),
+    );
+    let later = t0().checked_add(secs(90)).unwrap();
+    let pending = s
+        .start_mfa_sign_in_with_context(&uid, later, context)
+        .unwrap();
+    let stored = s.pending_sign_in_context(&pending).unwrap();
+    assert_eq!(stored.sign_in_provider(), Some("oidc.corp"));
+    assert_eq!(stored.sign_in_attributes(), Some(&attributes));
+    let debug = format!("{stored:?}");
+    assert!(debug.contains("[redacted]"));
+    assert!(!debug.contains("must-not-appear-in-debug"));
+
+    let code = totp_at(&secret, &s.policy().params(), later);
+    s.finalize_mfa_sign_in(&uid, &pending, code, later).unwrap();
+    assert!(s.pending_sign_in_context(&pending).is_none());
 }
 
 #[test]

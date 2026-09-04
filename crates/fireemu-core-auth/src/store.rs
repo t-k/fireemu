@@ -17,7 +17,8 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use crate::claims::{CustomClaims, FirebaseClaims, IdTokenClaims};
 use crate::mfa::{
     match_code, CodeMatch, EnrolledFactor, MfaError, MfaState, PendingEnrollment, PendingSignIn,
-    PhoneFactor, TotpEnrollmentMaterial, TotpFactor, TotpPolicy, TotpSecret, MAX_FACTORS_PER_USER,
+    PendingSignInContext, PhoneFactor, TotpEnrollmentMaterial, TotpFactor, TotpPolicy, TotpSecret,
+    MAX_FACTORS_PER_USER,
 };
 
 /// ID token lifetime (`AUTH-LIMIT-ID-TOKEN-TTL-SECONDS`).
@@ -2458,6 +2459,17 @@ impl AuthStore {
         uid: &LocalId,
         now: LogicalInstant,
     ) -> Result<PendingSignInId, MfaError> {
+        self.start_mfa_sign_in_with_context(uid, now, PendingSignInContext::default())
+    }
+
+    /// Starts the second-factor step while retaining the first-factor provenance needed by
+    /// token issuance and Blocking Auth after verification.
+    pub fn start_mfa_sign_in_with_context(
+        &mut self,
+        uid: &LocalId,
+        now: LogicalInstant,
+        context: PendingSignInContext,
+    ) -> Result<PendingSignInId, MfaError> {
         self.sweep_transient_credentials(now);
         let pending_id = self.next_id("signin-");
         let user = self
@@ -2474,9 +2486,13 @@ impl AuthStore {
         if user.mfa.pending_count() >= crate::mfa::MAX_PENDING_PER_USER {
             return Err(MfaError::TooManyPending);
         }
-        user.mfa
-            .pending_sign_ins_mut()
-            .insert(pending_id.clone(), PendingSignIn { started_at: now });
+        user.mfa.pending_sign_ins_mut().insert(
+            pending_id.clone(),
+            PendingSignIn {
+                started_at: now,
+                context,
+            },
+        );
         Arc::make_mut(&mut self.pending_sign_in_owners).insert(pending_id.clone(), uid.clone());
         self.pending_user_ids.insert(uid.clone());
         Ok(PendingSignInId(pending_id))
@@ -2491,6 +2507,20 @@ impl AuthStore {
             .get(owner)
             .filter(|u| u.mfa.has_pending_sign_in(&pending.0))
             .map(|u| u.local_id.clone())
+    }
+
+    /// First-factor provenance owned by a live pending credential.
+    #[must_use]
+    pub fn pending_sign_in_context(
+        &self,
+        pending: &PendingSignInId,
+    ) -> Option<&PendingSignInContext> {
+        let owner = self.pending_sign_in_owners.get(&pending.0)?;
+        self.users
+            .get(owner)?
+            .mfa
+            .pending_sign_in(&pending.0)
+            .map(|pending| &pending.context)
     }
 
     /// Completes the second-factor step.

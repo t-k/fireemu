@@ -23,7 +23,7 @@ use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_auth::base32;
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
-use fireemu_core_auth::mfa::MfaError;
+use fireemu_core_auth::mfa::{MfaError, PendingSignInContext};
 use fireemu_core_auth::store::{
     AuthError, AuthStore, FederatedIdentity, LocalId, NewUser, OobRequestType, PendingSignInId,
     RoutedStoreInstall, SecondFactorAssertion, VerificationPurpose,
@@ -267,7 +267,7 @@ impl BlockingFunctionFailure {
 }
 
 /// Identity-provider credentials exposed to a Blocking Auth handler for the current request.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct AuthBlockingCredential {
     /// SAML attributes or OIDC claims. Other providers leave this absent.
     pub claims: Option<Value>,
@@ -277,8 +277,18 @@ pub struct AuthBlockingCredential {
     pub sign_in_method: String,
 }
 
+impl core::fmt::Debug for AuthBlockingCredential {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthBlockingCredential")
+            .field("claims", &self.claims.as_ref().map(|_| "[redacted]"))
+            .field("provider_id", &self.provider_id)
+            .field("sign_in_method", &self.sign_in_method)
+            .finish()
+    }
+}
+
 /// Provider profile exposed to a Blocking Auth handler for the current request.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct AuthBlockingAdditionalUserInfo {
     /// Provider ID for the sign-in.
     pub provider_id: String,
@@ -288,8 +298,18 @@ pub struct AuthBlockingAdditionalUserInfo {
     pub is_new_user: bool,
 }
 
+impl core::fmt::Debug for AuthBlockingAdditionalUserInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthBlockingAdditionalUserInfo")
+            .field("provider_id", &self.provider_id)
+            .field("profile", &self.profile.as_ref().map(|_| "[redacted]"))
+            .field("is_new_user", &self.is_new_user)
+            .finish()
+    }
+}
+
 /// Per-request context supplied to a Blocking Auth handler.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 pub struct AuthBlockingContext {
     /// Provider credential for an identity-provider sign-in.
     pub credential: Option<AuthBlockingCredential>,
@@ -297,6 +317,16 @@ pub struct AuthBlockingContext {
     pub additional_user_info: Option<AuthBlockingAdditionalUserInfo>,
     /// Provider-backed sign-in method used to suffix the event type.
     pub sign_in_method: Option<String>,
+}
+
+impl core::fmt::Debug for AuthBlockingContext {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthBlockingContext")
+            .field("credential", &self.credential)
+            .field("additional_user_info", &self.additional_user_info)
+            .field("sign_in_method", &self.sign_in_method)
+            .finish()
+    }
 }
 
 /// Synchronous bridge invoked before an Auth create or sign-in commit.
@@ -1059,15 +1089,50 @@ fn blocking_truthy(value: Option<&Value>) -> bool {
     }
 }
 
+const BLOCKING_CLAIMS_MAX_CHARACTERS: usize = 1_000;
+
 fn blocking_claims(value: Option<&Value>, field: &str) -> Result<CustomClaims, String> {
     let Some(value @ Value::Object(_)) = value else {
         return Err(format!(
             "BLOCKING_FUNCTION_ERROR_RESPONSE : ((Response has malformed {field}.))"
         ));
     };
-    CustomClaims::parse_attributes(&value.to_string()).map_err(|error| {
+    let claims = CustomClaims::parse_attributes(&value.to_string()).map_err(|error| {
         format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid {field}: {error}.))")
-    })
+    })?;
+    if claims.canonical_json().encode_utf16().count() > BLOCKING_CLAIMS_MAX_CHARACTERS {
+        return Err(format!(
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : ((The {field} payload should not exceed {BLOCKING_CLAIMS_MAX_CHARACTERS} characters.))"
+        ));
+    }
+    Ok(claims)
+}
+
+fn validate_combined_blocking_claims(
+    custom_claims: Option<&CustomClaims>,
+    session_claims: Option<&CustomClaims>,
+) -> Result<(), String> {
+    let (Some(custom_claims), Some(session_claims)) = (custom_claims, session_claims) else {
+        return Ok(());
+    };
+    let mut combined = custom_claims.clone();
+    for (name, value) in session_claims.entries() {
+        combined.insert(name, value.clone()).map_err(|error| {
+            format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid sessionClaims: {error}.))")
+        })?;
+    }
+    if combined.canonical_json().encode_utf16().count() > BLOCKING_CLAIMS_MAX_CHARACTERS {
+        return Err(format!(
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : ((The customClaims and sessionClaims payloads should not exceed {BLOCKING_CLAIMS_MAX_CHARACTERS} characters combined.))"
+        ));
+    }
+    Ok(())
+}
+
+fn claim_value_to_json(value: &ClaimValue) -> Option<Value> {
+    let mut encoded = String::new();
+    value.write_canonical_json(&mut encoded);
+    serde_json::from_str(&encoded).ok()
 }
 
 fn apply_blocking_response(
@@ -1124,6 +1189,7 @@ fn apply_blocking_response(
             _ => {}
         }
     }
+    validate_combined_blocking_claims(custom_claims.as_ref(), session_claims.as_ref())?;
     if let Some(claims) = custom_claims {
         store.set_custom_claims(uid, claims).map_err(|error| {
             format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid customClaims: {error}.))")
@@ -1135,7 +1201,31 @@ fn apply_blocking_response(
 fn blocking_context(
     response: &JsonResponse,
     event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    pending: Option<&PendingSignInContext>,
 ) -> AuthBlockingContext {
+    if let Some(pending) = pending {
+        let Some(provider_id) = pending
+            .sign_in_provider()
+            .filter(|provider| provider.starts_with("saml.") || provider.starts_with("oidc."))
+        else {
+            return AuthBlockingContext::default();
+        };
+        let claims = pending.sign_in_attributes().and_then(claim_value_to_json);
+        let credential = claims.clone().map(|claims| AuthBlockingCredential {
+            claims: Some(claims),
+            provider_id: provider_id.to_owned(),
+            sign_in_method: provider_id.to_owned(),
+        });
+        return AuthBlockingContext {
+            credential,
+            additional_user_info: Some(AuthBlockingAdditionalUserInfo {
+                provider_id: provider_id.to_owned(),
+                profile: claims,
+                is_new_user: pending.is_new_user(),
+            }),
+            sign_in_method: Some(provider_id.to_owned()),
+        };
+    }
     let Some(provider_id) = response.body.get("providerId").and_then(Value::as_str) else {
         return AuthBlockingContext::default();
     };
@@ -1178,6 +1268,16 @@ fn dispatch_with_blocking_hook(
     headers: &RequestHeaders,
     at: LogicalInstant,
 ) -> JsonResponse {
+    let pending_continuation = (handler == routes::Handler::MfaSignInFinalize)
+        .then(|| str_field(body, "mfaPendingCredential"))
+        .flatten()
+        .and_then(PendingSignInId::parse)
+        .and_then(|pending| {
+            Some((
+                store.pending_sign_in_user(&pending)?,
+                store.pending_sign_in_context(&pending)?.clone(),
+            ))
+        });
     let mut candidate = store.clone();
     let response = dispatch(
         handler,
@@ -1206,7 +1306,8 @@ fn dispatch_with_blocking_hook(
     let uid = uid_text
         .as_deref()
         .and_then(|uid| candidate.user_by_id(uid))
-        .map(|user| user.local_id.clone());
+        .map(|user| user.local_id.clone())
+        .or_else(|| pending_continuation.as_ref().map(|(uid, _)| uid.clone()));
     let speculative_uid = uid.clone();
     let is_new = is_authentication
         && uid_text.as_deref().is_some_and(|uid| {
@@ -1232,6 +1333,7 @@ fn dispatch_with_blocking_hook(
                     let context = blocking_context(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                        None,
                     );
                     match blocking.invoke_for_with_context(
                         &project,
@@ -1272,6 +1374,7 @@ fn dispatch_with_blocking_hook(
                     let context = blocking_context(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                        pending_continuation.as_ref().map(|(_, context)| context),
                     );
                     match blocking.invoke_for_with_context(
                         &project,
@@ -1341,7 +1444,12 @@ fn dispatch_with_blocking_hook(
             .get("localId")
             .and_then(Value::as_str)
             .and_then(|uid| committed.user_by_id(uid))
-            .map(|user| user.local_id.clone());
+            .map(|user| user.local_id.clone())
+            .or_else(|| {
+                (handler == routes::Handler::MfaSignInFinalize)
+                    .then(|| speculative_uid.clone())
+                    .flatten()
+            });
         if is_authentication && uid != speculative_uid {
             return error(
                 400,
@@ -1447,12 +1555,18 @@ fn dispatch_with_blocking_hook(
                     Err(refusal) => return refusal,
                 };
                 for field in ["idToken", "refreshToken", "expiresIn", "email"] {
-                    committed_response.body[field] = tokens[field].clone();
+                    if committed_response.body.get(field).is_some() {
+                        committed_response.body[field] = tokens[field].clone();
+                    }
                 }
                 if let Some(user) = committed.user(&uid) {
-                    committed_response.body["displayName"] = json!(user.display_name);
-                    committed_response.body["photoUrl"] = json!(user.photo_url);
-                    if handler != routes::Handler::SignUp {
+                    if committed_response.body.get("displayName").is_some() {
+                        committed_response.body["displayName"] = json!(user.display_name);
+                    }
+                    if committed_response.body.get("photoUrl").is_some() {
+                        committed_response.body["photoUrl"] = json!(user.photo_url);
+                    }
+                    if committed_response.body.get("emailVerified").is_some() {
                         committed_response.body["emailVerified"] = json!(user.email_verified);
                     }
                 }
@@ -2574,7 +2688,18 @@ fn finish_sign_in_with_attributes(
     if !factors.is_empty() {
         // Second factor required: no ID token yet, only a pending credential.
         let email = store.user(uid).and_then(|u| u.email.clone());
-        return match store.start_mfa_sign_in(uid, at) {
+        let sign_in_provider = provider
+            .as_ref()
+            .map(|provider| provider.id().to_owned())
+            .or_else(|| store.user(uid).map(|user| user.provider.id().to_owned()));
+        let is_new_user = extra
+            .iter()
+            .find(|(field, _)| *field == "isNewUser")
+            .and_then(|(_, value)| value.as_bool())
+            .unwrap_or(false);
+        let context =
+            PendingSignInContext::new(sign_in_provider, is_new_user, sign_in_attributes.cloned());
+        return match store.start_mfa_sign_in_with_context(uid, at, context) {
             Ok(pending) => {
                 let mut body = json!({"mfaPendingCredential": pending.as_str(), "mfaInfo": factors, "localId": uid.as_str(), "email": email});
                 for (k, v) in extra {
@@ -4165,8 +4290,22 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
     };
     let pending_id = PendingSignInId::parse(pending)
         .unwrap_or_else(|| PendingSignInId::parse("").expect("empty id parses"));
+    let first_factor = store.pending_sign_in_context(&pending_id).cloned();
     match store.finalize_mfa_sign_in(&uid, &pending_id, code, at) {
-        Ok(assertion) => match issue_tokens(store, &uid, Some(&assertion), at) {
+        Ok(assertion) => match issue_tokens_with_sign_in_attributes(
+            store,
+            &uid,
+            Some(&assertion),
+            at,
+            None,
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_provider)
+                .map(provider_from_id),
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_attributes),
+        ) {
             Ok(tokens) => token_only_response(&tokens, false),
             Err(r) => r,
         },
@@ -5280,8 +5419,22 @@ fn finalize_phone_sign_in(
     if pending_id.as_str() != pending {
         return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
     }
+    let first_factor = store.pending_sign_in_context(&pending_id).cloned();
     match store.finalize_phone_mfa_sign_in(&uid, &pending_id, &enrollment_id, at) {
-        Ok(assertion) => match issue_tokens(store, &uid, Some(&assertion), at) {
+        Ok(assertion) => match issue_tokens_with_sign_in_attributes(
+            store,
+            &uid,
+            Some(&assertion),
+            at,
+            None,
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_provider)
+                .map(provider_from_id),
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_attributes),
+        ) {
             Ok(tokens) => token_only_response(&tokens, false),
             Err(r) => r,
         },

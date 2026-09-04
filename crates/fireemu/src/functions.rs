@@ -2502,8 +2502,8 @@ fn blocking_auth_context_json(
     timestamp: &str,
 ) -> serde_json::Value {
     let event_type = request.sign_in_method.as_ref().map_or_else(
-        || event.as_str().to_owned(),
-        |method| format!("{}:{method}", event.as_str()),
+        || event.event_type().to_owned(),
+        |method| format!("{}:{method}", event.event_type()),
     );
     let mut context = serde_json::json!({
         "eventId": event_id,
@@ -3176,7 +3176,7 @@ mod tests {
             value,
             json!({
                 "eventId": "event-1",
-                "eventType": "beforeSignIn:oidc.corp",
+                "eventType": "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
                 "resource": {
                     "service": "identitytoolkit.googleapis.com",
                     "name": "projects/demo-app/tenants/customer"

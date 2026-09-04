@@ -297,7 +297,7 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
                     "phoneNumber": null
                 }]
             },
-            "context": {"eventType": "beforeCreate"}
+            "context": {"eventType": "providers/cloud.auth/eventTypes/user.beforeCreate"}
         }
     })
     .to_string();
@@ -309,6 +309,33 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
             "{function}"
         );
         assert_eq!(response["userRecord"]["updateMask"], "displayName");
+    }
+    let sign_in_body = body.replace(
+        "providers/cloud.auth/eventTypes/user.beforeCreate",
+        "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
+    );
+    let (status, response) = invoke_blocking_runner(port, "fxBeforeSignInContext", &sign_in_body);
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["userRecord"]["sessionClaims"]["contextObserved"],
+        true
+    );
+    let (status, response) = invoke_blocking_runner(port, "fxSessionClaimsAtLimit", &sign_in_body);
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["userRecord"]["sessionClaims"]
+            .to_string()
+            .encode_utf16()
+            .count(),
+        1000
+    );
+    for function in ["fxSessionClaimsOverLimit", "fxCombinedClaimsOverLimit"] {
+        let (status, response) = invoke_blocking_runner(port, function, &sign_in_body);
+        assert_eq!(status, 400, "{function}: {response}");
+        assert_eq!(
+            response["error"]["status"], "INVALID_ARGUMENT",
+            "{function}"
+        );
     }
     for (function, status, canonical, message) in [
         (

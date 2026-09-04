@@ -10,6 +10,7 @@ use fireemu_adapter_http::identity_toolkit::{
 use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
+use fireemu_core_auth::{base32, totp::totp_at};
 use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
@@ -34,6 +35,24 @@ impl AuthBlockingHook for PassThroughBlockingHook {
 
 struct FilteringIdpBlockingHook {
     contexts: Arc<Mutex<Vec<(BlockingAuthEvent, AuthBlockingContext)>>>,
+}
+
+struct FixedBeforeSignInHook {
+    response: Value,
+}
+
+impl AuthBlockingHook for FixedBeforeSignInHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(if event == BlockingAuthEvent::BeforeSignIn {
+            self.response.clone()
+        } else {
+            json!({})
+        })
+    }
 }
 
 impl AuthBlockingHook for FilteringIdpBlockingHook {
@@ -2000,6 +2019,230 @@ fn blocking_auth_receives_saml_attribute_context() {
         assert_eq!(credential.provider_id, "saml.corp");
         assert_eq!(credential.claims.as_ref(), Some(&attributes));
     }
+}
+
+#[test]
+fn federated_mfa_finalize_preserves_attributes_and_invokes_blocking_auth_once() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "federated-mfa@example.com",
+            "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15550007777", "displayName": "security key"}]
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [created["localId"]]}),
+    );
+    let enrollment_id = lookup["users"][0]["mfaInfo"][0]["mfaEnrollmentId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+        contexts: Arc::clone(&contexts),
+    }));
+    let oidc = json!({
+        "sub": "oidc-mfa",
+        "email": "federated-mfa@example.com",
+        "email_verified": true,
+        "roles": ["operator", "discarded"]
+    });
+
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=oidc.corp&id_token={}", percent(&oidc.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("idToken").is_none());
+    assert!(contexts.lock().unwrap().is_empty());
+    let credential = pending["mfaPendingCredential"].as_str().unwrap().to_owned();
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": credential, "mfaEnrollmentId": enrollment_id, "phoneSignInInfo": {"recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["code"]
+        .as_str()
+        .unwrap();
+    let (status, signed) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": code}}),
+    );
+
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(
+        signed
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["idToken", "refreshToken"]
+    );
+    let token = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(token["firebase"]["sign_in_provider"], "oidc.corp");
+    assert_eq!(token["firebase"]["sign_in_attributes"], oidc);
+    assert_eq!(token["selectedRole"], "operator");
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].0, BlockingAuthEvent::BeforeSignIn);
+    let context = &recorded[0].1;
+    let debug = format!("{context:?}");
+    assert!(!debug.contains("operator"));
+    assert!(debug.contains("[redacted]"));
+    assert_eq!(context.sign_in_method.as_deref(), Some("oidc.corp"));
+    assert_eq!(
+        context
+            .credential
+            .as_ref()
+            .and_then(|credential| credential.claims.as_ref()),
+        Some(&oidc)
+    );
+}
+
+#[test]
+fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut s = state();
+    s.totp_extension_enabled = true;
+    let user = sign_up(&s, "federated-totp@example.com");
+    verify_email(&s, user["localId"].as_str().unwrap());
+    let (status, enrollment) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": user["idToken"], "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(status, 200, "{enrollment}");
+    let secret = base32::decode(
+        enrollment["totpSessionInfo"]["sharedSecretKey"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let first = LogicalInstant::from_unix_seconds(1_788_004_860);
+    let code = totp_at(&secret, &TotpPolicy::default().params(), first);
+    let (status, enrolled) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({
+            "idToken": user["idToken"],
+            "totpVerificationInfo": {
+                "sessionInfo": enrollment["totpSessionInfo"]["sessionInfo"],
+                "verificationCode": code
+            }
+        }),
+    );
+    assert_eq!(status, 200, "{enrolled}");
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(30))
+        .unwrap();
+    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+        contexts: Arc::clone(&contexts),
+    }));
+    let oidc = json!({
+        "sub": "oidc-totp",
+        "email": "federated-totp@example.com",
+        "email_verified": true,
+        "roles": ["auditor"]
+    });
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=oidc.corp&id_token={}", percent(&oidc.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(contexts.lock().unwrap().is_empty());
+    let second = first
+        .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(30))
+        .unwrap();
+    let code = totp_at(&secret, &TotpPolicy::default().params(), second);
+    let (status, signed) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({
+            "mfaPendingCredential": pending["mfaPendingCredential"],
+            "totpVerificationInfo": {"verificationCode": code}
+        }),
+    );
+
+    assert_eq!(status, 200, "{signed}");
+    let token = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(token["firebase"]["sign_in_provider"], "oidc.corp");
+    assert_eq!(token["firebase"]["sign_in_attributes"], oidc);
+    assert_eq!(token["selectedRole"], "auditor");
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].0, BlockingAuthEvent::BeforeSignIn);
+    assert_eq!(
+        recorded[0]
+            .1
+            .credential
+            .as_ref()
+            .and_then(|credential| credential.claims.as_ref()),
+        Some(&oidc)
+    );
+}
+
+#[test]
+fn blocking_auth_enforces_the_functions_sdk_claim_payload_boundaries() {
+    fn sign_in(response: Value) -> (u16, Value) {
+        let mut s = state();
+        sign_up(&s, "claim-limit@example.com");
+        s.blocking = Some(Arc::new(FixedBeforeSignInHook { response }));
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "claim-limit@example.com", "password": "hunter22"}),
+        )
+    }
+
+    let exactly_one_thousand = json!({"value": "a".repeat(988)});
+    assert_eq!(
+        exactly_one_thousand.to_string().encode_utf16().count(),
+        1000
+    );
+    let (status, allowed) = sign_in(json!({
+        "userRecord": {"updateMask": "sessionClaims", "sessionClaims": exactly_one_thousand}
+    }));
+    assert_eq!(status, 200, "{allowed}");
+
+    let over_in_utf16 = json!({"value": "😀".repeat(495)});
+    assert!(over_in_utf16.to_string().chars().count() <= 1000);
+    assert!(over_in_utf16.to_string().encode_utf16().count() > 1000);
+    let (status, refused) = sign_in(json!({
+        "userRecord": {"updateMask": "sessionClaims", "sessionClaims": over_in_utf16}
+    }));
+    assert_eq!(status, 400, "{refused}");
+
+    let (status, refused) = sign_in(json!({
+        "userRecord": {
+            "updateMask": "customClaims,sessionClaims",
+            "customClaims": {"custom": "a".repeat(600)},
+            "sessionClaims": {"session": "b".repeat(600)}
+        }
+    }));
+    assert_eq!(status, 400, "{refused}");
+
+    let (status, refused) = sign_in(json!({
+        "userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"sub": "reserved"}}
+    }));
+    assert_eq!(status, 400, "{refused}");
 }
 
 #[test]

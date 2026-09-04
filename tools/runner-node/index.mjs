@@ -16,6 +16,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
+import { blockingResult } from "./blocking-response.mjs";
 
 const frameWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = (chunk, encoding, cb) => process.stderr.write(chunk, encoding, cb);
@@ -410,29 +411,6 @@ function callableAppCheck(instrumentation, fn) {
     enforceAppCheck: observed?.enforceAppCheck === true,
     consumeAppCheckToken: observed ? observed.consumeAppCheckToken : "undetermined",
   };
-}
-
-function blockingResult(value) {
-  if (!value || typeof value !== "object") return {};
-  if (value.userRecord) return value;
-  const userRecord = {};
-  const updateMask = [];
-  for (const [publicName, wireName] of [
-    ["displayName", "displayName"],
-    ["photoURL", "photoUrl"],
-    ["disabled", "disabled"],
-    ["emailVerified", "emailVerified"],
-    ["customClaims", "customClaims"],
-    ["sessionClaims", "sessionClaims"],
-  ]) {
-    if (Object.prototype.hasOwnProperty.call(value, publicName)) {
-      userRecord[wireName] = value[publicName];
-      updateMask.push(wireName);
-    }
-  }
-  return updateMask.length > 0
-    ? { userRecord: { ...userRecord, updateMask: updateMask.join(",") } }
-    : {};
 }
 
 function describe(name, fn, instrumentation) {
@@ -856,7 +834,11 @@ async function makeHttpServer(functions, manifest) {
         const context = req.body?.data?.context || {};
         return isV1(fn) ? fn.run(user, context) : fn.run({ ...context, data: user });
       })
-        .then((value) => res.status(200).json(blockingResult(value)))
+        .then((value) =>
+          res
+            .status(200)
+            .json(blockingResult(value, spec.trigger.eventType, HttpsErrors[0])),
+        )
         .catch((e) => {
           log("error", `${spec.name}: ${e?.stack || e}`);
           const failure = blockingFailure(e, HttpsErrors);

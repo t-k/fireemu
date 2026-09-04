@@ -77,11 +77,86 @@ pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_"
 
 const LOG_CAPACITY: usize = 1_000;
 
+/// One retained runner line with the metadata needed by the official Logging stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunnerLog {
+    display: String,
+    level: String,
+    message: String,
+    function: Option<String>,
+    user: bool,
+}
+
+impl RunnerLog {
+    fn raw(message: impl Into<String>) -> Self {
+        let message = message.into();
+        Self {
+            display: message.clone(),
+            level: "info".to_owned(),
+            message,
+            function: None,
+            user: false,
+        }
+    }
+
+    fn structured(
+        level: impl Into<String>,
+        message: impl Into<String>,
+        invocation_id: Option<&str>,
+        function: Option<&str>,
+        user: bool,
+    ) -> Self {
+        let level = level.into();
+        let message = message.into();
+        let display = invocation_id.map_or_else(
+            || format!("{level} {message}"),
+            |id| format!("{level} {id} {message}"),
+        );
+        Self {
+            display,
+            level,
+            message,
+            function: function.map(str::to_owned),
+            user,
+        }
+    }
+
+    /// Existing text form consumed by the fireemu UI and stderr diagnostics.
+    #[must_use]
+    pub fn display(&self) -> &str {
+        &self.display
+    }
+
+    /// Severity reported by the runner.
+    #[must_use]
+    pub fn level(&self) -> &str {
+        &self.level
+    }
+
+    /// Message without the display-only level and invocation prefix.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Function that owned the invocation, when the runner could attribute it.
+    #[must_use]
+    pub fn function(&self) -> Option<&str> {
+        self.function.as_deref()
+    }
+
+    /// Whether this is function user output rather than a runner diagnostic.
+    #[must_use]
+    pub const fn is_user(&self) -> bool {
+        self.user
+    }
+}
+
 /// A cursor-based view of the runner log buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogSlice {
     /// Retained lines newer than the requested cursor.
-    pub lines: Vec<String>,
+    pub lines: Vec<RunnerLog>,
     /// Cursor to pass to the next call.
     pub next_seq: u64,
     /// Whether lines preceding this slice have been evicted.
@@ -90,13 +165,13 @@ pub struct LogSlice {
 
 #[derive(Debug, Default)]
 struct LogBuffer {
-    lines: VecDeque<String>,
+    lines: VecDeque<RunnerLog>,
     first_seq: u64,
     next_seq: u64,
 }
 
 impl LogBuffer {
-    fn push(&mut self, line: String) {
+    fn push(&mut self, line: RunnerLog) {
         self.lines.push_back(line);
         self.next_seq = self.next_seq.saturating_add(1);
         if self.lines.len() > LOG_CAPACITY {
@@ -340,7 +415,7 @@ impl Runner {
                 while let Ok(Some(line)) = lines.next_line().await {
                     eprintln!("{label} {line}");
                     if let Ok(mut l) = logs.lock() {
-                        l.push(line);
+                        l.push(RunnerLog::raw(line));
                     }
                 }
             });
@@ -412,13 +487,16 @@ impl Runner {
                                 frame.get("level").and_then(Value::as_str).unwrap_or("info");
                             let message =
                                 frame.get("message").and_then(Value::as_str).unwrap_or("");
-                            let line = match frame.get("invocationId").and_then(Value::as_str) {
-                                Some(id) => format!("{level} {id} {message}"),
-                                None => format!("{level} {message}"),
-                            };
-                            eprintln!("{label} {line}");
+                            let log = RunnerLog::structured(
+                                level,
+                                message,
+                                frame.get("invocationId").and_then(Value::as_str),
+                                frame.get("functionName").and_then(Value::as_str),
+                                frame.get("user").and_then(Value::as_bool) == Some(true),
+                            );
+                            eprintln!("{label} {}", log.display());
                             if let Ok(mut l) = logs.lock() {
-                                l.push(line);
+                                l.push(log);
                             }
                         }
                         _ => {}
@@ -633,7 +711,7 @@ fn kill_process_group(pid: Option<u32>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogBuffer, LOG_CAPACITY};
+    use super::{LogBuffer, RunnerLog, LOG_CAPACITY};
 
     #[cfg(unix)]
     #[tokio::test]
@@ -695,20 +773,23 @@ mod tests {
     fn log_buffer_evicts_old_lines_and_keeps_a_monotonic_cursor() {
         let mut logs = LogBuffer::default();
         for index in 0..LOG_CAPACITY + 2 {
-            logs.push(format!("line-{index}"));
+            logs.push(RunnerLog::raw(format!("line-{index}")));
         }
 
         let snapshot = logs.since(None);
         assert!(snapshot.truncated);
         assert_eq!(snapshot.lines.len(), LOG_CAPACITY);
-        assert_eq!(snapshot.lines.first().map(String::as_str), Some("line-2"));
+        assert_eq!(
+            snapshot.lines.first().map(RunnerLog::display),
+            Some("line-2")
+        );
         assert_eq!(snapshot.next_seq, (LOG_CAPACITY + 2) as u64);
 
         let cursor = snapshot.next_seq;
-        logs.push("later".to_owned());
+        logs.push(RunnerLog::raw("later"));
         let delta = logs.since(Some(cursor));
         assert!(!delta.truncated);
-        assert_eq!(delta.lines, ["later"]);
+        assert_eq!(delta.lines[0].display(), "later");
         assert_eq!(delta.next_seq, cursor + 1);
     }
 
@@ -717,13 +798,30 @@ mod tests {
         let mut logs = LogBuffer::default();
         assert!(!logs.since(None).truncated);
         for index in 0..=LOG_CAPACITY {
-            logs.push(format!("line-{index}"));
+            logs.push(RunnerLog::raw(format!("line-{index}")));
         }
 
         assert!(!logs.since(Some(1)).truncated);
         let delta = logs.since(Some(0));
         assert!(delta.truncated);
-        assert_eq!(delta.lines.first().map(String::as_str), Some("line-1"));
+        assert_eq!(delta.lines.first().map(RunnerLog::display), Some("line-1"));
         assert_eq!(delta.next_seq, (LOG_CAPACITY + 1) as u64);
+    }
+
+    #[test]
+    fn structured_runner_logs_keep_wire_metadata_separate_from_the_ui_line() {
+        let log = RunnerLog::structured(
+            "warning",
+            "payment delayed",
+            Some("inv-7"),
+            Some("settlePayment"),
+            true,
+        );
+
+        assert_eq!(log.display(), "warning inv-7 payment delayed");
+        assert_eq!(log.level(), "warning");
+        assert_eq!(log.message(), "payment delayed");
+        assert_eq!(log.function(), Some("settlePayment"));
+        assert!(log.is_user());
     }
 }

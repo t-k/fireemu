@@ -148,7 +148,14 @@ while True:
         sys.exit(3)
     if "slow" in name:
         continue
-    send({"type": "log", "level": "info", "message": f"invoked {name}", "invocationId": msg["invocationId"]})
+    send({
+        "type": "log",
+        "level": "info",
+        "message": f"invoked {name}",
+        "invocationId": msg["invocationId"],
+        "functionName": name,
+        "user": True,
+    })
     if "fail" in name:
         send({"type": "result", "invocationId": msg["invocationId"], "ok": False, "error": f"{name} failed"})
     else:

@@ -14,7 +14,8 @@
 //!
 //! `data.metadata.level` / `data.metadata.message` override the top-level `level` / `message`;
 //! `EmulatorLogger.forEmulator(name)` tags `data.metadata.emulator.name`, `forFunction(name)`
-//! adds `data.metadata.function.name`, and function user output is type `USER` at level `info`.
+//! adds `data.metadata.function.name`, and function user output is type `USER` while retaining
+//! the production severity.
 //! On connect a client first receives the whole history, then live frames. There is no
 //! request/response, no filtering and no authentication.
 //!

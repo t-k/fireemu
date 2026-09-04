@@ -733,17 +733,16 @@
     "precision": "boundary-conformance",
     "implemented": [
       "each log line is one WebSocket text frame {\"level\": <lowercase>, \"data\": <merged splat objects with metadata>, \"timestamp\": <ms since epoch on the virtual clock>, \"message\": <text, VT/control characters stripped>}, as loggingEmulator.js WebSocketTransport.log produces",
-      "data.metadata.emulator.name tags the emulator (EmulatorLogger.forEmulator) and data.metadata.function.name tags the function (forFunction); function user output is type USER forced to level info",
+      "data.metadata.emulator.name tags the emulator (EmulatorLogger.forEmulator) and data.metadata.function.name tags the function (forFunction); function user output is type USER while retaining the production severity instead of the official emulator's forced info level",
       "on connect a client is sent the whole retained history and then live frames, with no request/response, no filtering and no authentication",
       "the RFC 6455 handshake (Sec-WebSocket-Accept = base64(SHA-1(key + magic))), masked client frames, ping/pong and a clean close",
-      "the functions runner's log lines are fed into the bus tagged emulator=functions, and each emulator's own lifecycle line is tagged with emulator=<name>"
+      "every current Node codebase runner feeds its log lines into the bus tagged emulator=functions; invocation-scoped console and firebase-functions/logger output also carries data.metadata.function.name without crossing concurrent function contexts, individual runner log messages are bounded on a UTF-8 boundary at Cloud Logging's documented 256 KiB LogEntry maximum, and each emulator's own lifecycle line is tagged with emulator=<name>"
     ],
     "unimplemented": [
-      "function-name tagging of runner lines: a runner line carries an invocation id and codebase label, but not a function name",
       "differential verification of the official Emulator UI's Logs page consuming the stream end to end (a browser matrix); the primary evidence is a Rust client that connects to the bound port and asserts the handshake and a functions log frame"
     ],
     "notes": [
-      "divergences from the official emulator, all recorded on the logging surface: the handshake is loopback-only (the official server has none), the retained history is bounded to 1000 frames (the official one is unbounded in memory), and control-character stripping also drops lone C0/DEL bytes, not only ANSI sequences"
+      "divergences from the official emulator, all recorded on the logging surface: the handshake is loopback-only (the official server has none), the retained history is bounded to 1000 frames (the official one is unbounded in memory), function USER logs retain production severity instead of being forced to info, and control-character stripping also drops lone C0/DEL bytes, not only ANSI sequences"
     ]
   },
   "DATA-1": {

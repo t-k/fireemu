@@ -24,6 +24,95 @@ use std::time::Duration;
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
 
+#[tokio::test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+async fn concurrent_real_sdk_logs_keep_their_function_identity() {
+    let runner_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
+    let source = fixture("log-metadata");
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command: vec![
+            "node".to_owned(),
+            runner_script.display().to_string(),
+            "--source".to_owned(),
+            source.display().to_string(),
+            "--codebase".to_owned(),
+            "default".to_owned(),
+        ],
+        cwd: None,
+        env: vec![("GCLOUD_PROJECT".to_owned(), "demo-logs".to_owned())],
+        hello_timeout: Duration::from_secs(20),
+    })
+    .await
+    .unwrap();
+    let request = |function: &str, invocation_id: &str| {
+        serde_json::json!({
+            "type": "invoke",
+            "invocationId": invocation_id,
+            "function": function,
+            "entryPoint": function,
+            "trigger": "schedule",
+            "event": {"data": {}}
+        })
+    };
+
+    let (alpha, beta) = tokio::join!(
+        runner.invoke(request("alpha", "alpha-1"), Duration::from_secs(5)),
+        runner.invoke(request("beta", "beta-1"), Duration::from_secs(5)),
+    );
+    assert_eq!(
+        alpha.outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(
+        beta.outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    let oversized = runner
+        .invoke(request("oversized", "oversized-1"), Duration::from_secs(5))
+        .await;
+    assert_eq!(
+        oversized.outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    let after_oversized = runner
+        .invoke(request("beta", "beta-2"), Duration::from_secs(5))
+        .await;
+    assert_eq!(
+        after_oversized.outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    let logs = runner.logs_since(None);
+    for (message, function, level, user) in [
+        ("alpha start", "alpha", "info", true),
+        ("alpha structured", "alpha", "warn", true),
+        ("alpha done", "alpha", "error", true),
+        ("beta start", "beta", "info", true),
+        ("beta done", "beta", "info", true),
+    ] {
+        let line = logs
+            .lines
+            .iter()
+            .find(|line| line.message().contains(message))
+            .unwrap_or_else(|| panic!("missing log {message:?}"));
+        assert_eq!(line.function(), Some(function), "{message}");
+        assert_eq!(line.level(), level, "{message}");
+        assert_eq!(line.is_user(), user, "{message}");
+    }
+    let bounded = logs
+        .lines
+        .iter()
+        .find(|line| line.display().starts_with("info oversized-1"))
+        .expect("the oversized log is retained without stopping the runner");
+    assert!(bounded.message().ends_with("... [truncated]"));
+    assert!(bounded.message().len() <= 256 * 1024);
+    assert!(logs
+        .lines
+        .iter()
+        .any(|line| line.display() == "info beta-2 beta start"));
+    runner.shutdown().await;
+}
+
 /// The fixture codebases live beside the smoke's functions project so that Node resolves
 /// `firebase-functions` through `tools/sdk-smoke/node_modules`.
 fn fixture(name: &str) -> PathBuf {

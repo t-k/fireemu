@@ -132,7 +132,7 @@ The following is a product-level summary, not a claim that every API and edge ca
 | Cloud Storage for Firebase | Firebase and JSON object APIs, resumable uploads, generations, listing, and Security Rules |
 | Cloud Functions for Firebase | v2 HTTP, callable, Firestore, Storage, and scheduled functions through the bundled Node.js runner |
 | Cloud Pub/Sub | The documented gRPC subset used by the supported Functions flows |
-| Emulator logging | The EmulatorLog WebSocket with bounded local history |
+| Emulator logging | The EmulatorLog WebSocket with bounded local history and per-function Node log attribution |
 | Firebase App Check | A fireemu-specific local implementation; this is not an official Emulator Suite parity claim |
 | Emulator UI | A fireemu UI for supported data and controls; official UI workflow parity is not claimed |
 

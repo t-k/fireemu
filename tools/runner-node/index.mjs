@@ -17,6 +17,7 @@ import { createServer } from "node:http";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
 import { blockingResult } from "./blocking-response.mjs";
+import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
 
 const frameWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = (chunk, encoding, cb) => process.stderr.write(chunk, encoding, cb);
@@ -94,9 +95,21 @@ function send(msg) {
   frameWrite(payload);
 }
 
-function log(level, message, invocationId) {
-  send({ type: "log", level, message: String(message), invocationId });
+function log(level, message, invocationId, functionName, user = false) {
+  send({
+    type: "log",
+    level,
+    message: boundLogMessage(message),
+    invocationId,
+    functionName,
+    user,
+  });
 }
+
+const invocationLogger = createInvocationLogger((entry) =>
+  log(entry.level, entry.message, entry.invocationId, entry.functionName, entry.user),
+);
+invocationLogger.install();
 
 function parseArgs(argv) {
   const out = { source: process.cwd(), codebase: "default" };
@@ -134,7 +147,7 @@ function setFunctionIdentity(spec) {
   process.env.K_SERVICE = spec?.name ?? "";
 }
 
-function withFunctionEnvironment(spec, task) {
+function withFunctionEnvironment(spec, task, invocationId) {
   const run = async () => {
     setFunctionIdentity(spec);
     const saved = new Map();
@@ -149,7 +162,7 @@ function withFunctionEnvironment(spec, task) {
       if (localSecrets.has(name)) process.env[name] = localSecrets.get(name);
     }
     try {
-      return await task();
+      return await invocationLogger.run({ functionName: spec?.name, invocationId }, task);
     } finally {
       for (const [name, value] of saved) {
         if (value === undefined) delete process.env[name];
@@ -245,10 +258,7 @@ function platformOptions(ep) {
     (ep.platform === "gcfv2" ? discoveredGlobalOptions.preserveExternalChanges : undefined);
   if (preserveExternalChanges != null)
     options.preserveExternalChanges = Boolean(preserveExternalChanges);
-  const availableMemoryMb = resolvedNonNegativeInteger(
-    ep.availableMemoryMb,
-    "availableMemoryMb",
-  );
+  const availableMemoryMb = resolvedNonNegativeInteger(ep.availableMemoryMb, "availableMemoryMb");
   if (availableMemoryMb !== undefined) options.availableMemoryMb = availableMemoryMb;
   const minInstances = resolvedNonNegativeInteger(ep.minInstances, "minInstances");
   if (minInstances !== undefined) options.minInstances = minInstances;
@@ -835,12 +845,10 @@ async function makeHttpServer(functions, manifest) {
         return isV1(fn) ? fn.run(user, context) : fn.run({ ...context, data: user });
       })
         .then((value) =>
-          res
-            .status(200)
-            .json(blockingResult(value, spec.trigger.eventType, HttpsErrors[0])),
+          res.status(200).json(blockingResult(value, spec.trigger.eventType, HttpsErrors[0])),
         )
         .catch((e) => {
-          log("error", `${spec.name}: ${e?.stack || e}`);
+          log("error", `${spec.name}: ${e?.stack || e}`, undefined, spec.name);
           const failure = blockingFailure(e, HttpsErrors);
           res.status(failure.status).json({
             error: { status: failure.canonicalName, message: failure.message },
@@ -857,7 +865,7 @@ async function makeHttpServer(functions, manifest) {
         });
       }
     }).catch((e) => {
-      log("error", `${spec.name}: ${e?.stack || e}`);
+      log("error", `${spec.name}: ${e?.stack || e}`, undefined, spec.name);
       if (!res.headersSent) res.status(500).send("internal error");
       next();
     });
@@ -873,36 +881,40 @@ async function invoke(functions, manifest, msg) {
   const fn = functions.get(msg.entryPoint) || functions.get(msg.function);
   if (!fn) throw new Error(`unknown function ${msg.function}`);
   const spec = manifest.functions.find((f) => f.name === msg.function);
-  await withFunctionEnvironment(spec, async () => {
-    if (isV1(fn)) {
-      const context = v1Context(msg);
-      let data = msg.event.data;
-      if (msg.trigger === "schedule") data = {};
-      // v1 `topic().onPublish(message, context)`: the message itself is the data.
-      if (msg.trigger === "pubsub") data = msg.event.data.message;
-      await fn(data, context);
-      return;
-    }
-    switch (msg.trigger) {
-      case "schedule": {
-        const run = fn.run || fn;
-        await run(msg.event.data);
+  await withFunctionEnvironment(
+    spec,
+    async () => {
+      if (isV1(fn)) {
+        const context = v1Context(msg);
+        let data = msg.event.data;
+        if (msg.trigger === "schedule") data = {};
+        // v1 `topic().onPublish(message, context)`: the message itself is the data.
+        if (msg.trigger === "pubsub") data = msg.event.data.message;
+        await fn(data, context);
         return;
       }
-      case "firestore":
-      case "storage":
-      case "pubsub":
-      // A custom event reaches the handler as the CloudEvent itself, exactly as the official
-      // Eventarc emulator POSTs it to the functions emulator.
-      case "eventarc":
-        await fn(msg.event);
-        return;
-      case "auth":
-        throw new Error("Auth user events are delivered to v1 auth.user() handlers only");
-      default:
-        throw new Error(`unsupported trigger ${msg.trigger}`);
-    }
-  });
+      switch (msg.trigger) {
+        case "schedule": {
+          const run = fn.run || fn;
+          await run(msg.event.data);
+          return;
+        }
+        case "firestore":
+        case "storage":
+        case "pubsub":
+        // A custom event reaches the handler as the CloudEvent itself, exactly as the official
+        // Eventarc emulator POSTs it to the functions emulator.
+        case "eventarc":
+          await fn(msg.event);
+          return;
+        case "auth":
+          throw new Error("Auth user events are delivered to v1 auth.user() handlers only");
+        default:
+          throw new Error(`unsupported trigger ${msg.trigger}`);
+      }
+    },
+    msg.invocationId,
+  );
 }
 
 function readFrames(onFrame, onEnd) {
@@ -1041,7 +1053,7 @@ async function main() {
       invoke(functions, manifest, msg)
         .then(() => send({ type: "result", invocationId: msg.invocationId, ok: true }))
         .catch((e) => {
-          log("error", `${msg.function}: ${e?.stack || e}`, msg.invocationId);
+          log("error", `${msg.function}: ${e?.stack || e}`, msg.invocationId, msg.function);
           send({
             type: "result",
             invocationId: msg.invocationId,

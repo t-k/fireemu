@@ -179,7 +179,11 @@ fn initial_function_logs(
     runtime: &fireemu_adapter_functions::runtime::FunctionsRuntime,
 ) -> (Vec<String>, Option<u64>) {
     let snapshot = runtime.runner().logs_since(None);
-    let mut lines = snapshot.lines;
+    let mut lines = snapshot
+        .lines
+        .iter()
+        .map(|line| line.display().to_owned())
+        .collect::<Vec<_>>();
     if snapshot.truncated {
         lines.insert(0, LOG_TRUNCATION_MARKER.to_owned());
     }
@@ -247,7 +251,11 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
             }
             for line in log_slice.lines {
                 sent_something = true;
-                if tx.send(event("log", &json!({"line": line}))).await.is_err() {
+                if tx
+                    .send(event("log", &json!({"line": line.display()})))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }

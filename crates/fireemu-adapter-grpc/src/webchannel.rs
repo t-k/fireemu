@@ -27,8 +27,10 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::hash::{BuildHasher, Hasher};
+use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -43,7 +45,7 @@ use crate::rest::json::{
     write_response_to_json, JsonError,
 };
 use crate::rest::{error_response, RestState};
-use crate::streams::{listen_stream, write_stream, StreamContext};
+use crate::streams::{listen_stream_observed, write_stream, ListenObserver, StreamContext};
 
 /// Sessions without an attached back channel and without requests longer than this are
 /// closed.
@@ -62,6 +64,12 @@ pub const MAX_SESSIONS: usize = 256;
 pub const MAX_QUEUED_ARRAYS: usize = 4096;
 /// Maximum maps per forward request and maximum gap of buffered map ids.
 const MAX_MAPS_PER_REQUEST: u64 = 1000;
+/// Maximum completed target lifetimes retained solely for diagnostics.
+const MAX_TRACE_COMPLETED_TARGETS: usize = 256;
+/// Maximum diagnostic events emitted by one admitted channel session.
+const MAX_TRACE_EVENTS_PER_SESSION: u64 = 4096;
+/// Diagnostic messages wait in a bounded queue and are dropped rather than blocking protocol work.
+const TRACE_QUEUE_CAPACITY: usize = 1024;
 
 fn trace_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -71,6 +79,7 @@ fn trace_enabled() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TraceEvent {
     RequestReceived {
+        session: u64,
         kind: StreamKind,
         method: &'static str,
         rid: TraceRid,
@@ -136,6 +145,9 @@ enum TraceEvent {
     Overflow {
         session: u64,
     },
+    SessionTraceLimitReached {
+        session: u64,
+    },
     ListenRequest {
         session: u64,
         action: &'static str,
@@ -191,6 +203,7 @@ fn format_targets(targets: &[(i32, Option<u64>)]) -> String {
 fn format_trace_event(event: &TraceEvent) -> String {
     match event {
         TraceEvent::RequestReceived {
+            session,
             kind,
             method,
             rid,
@@ -198,7 +211,7 @@ fn format_trace_event(event: &TraceEvent) -> String {
             ci,
             body_bytes,
         } => format!(
-            "request kind={kind:?} method={method} rid={} aid={} ci={} body_bytes={body_bytes}",
+            "session={session} request kind={kind:?} method={method} rid={} aid={} ci={} body_bytes={body_bytes}",
             format_rid(*rid),
             aid.map_or_else(|| "missing".to_owned(), |value| value.to_string()),
             ci.map_or_else(|| "missing".to_owned(), |value| value.to_string())
@@ -273,6 +286,9 @@ fn format_trace_event(event: &TraceEvent) -> String {
             "session={session} maps offset={offset} declared={declared} accepted={accepted} duplicates={duplicates} buffered={buffered} next_expected={next_expected}"
         ),
         TraceEvent::Overflow { session } => format!("session={session} overflow"),
+        TraceEvent::SessionTraceLimitReached { session } => {
+            format!("session={session} trace=limit-reached")
+        }
         TraceEvent::ListenRequest {
             session,
             action,
@@ -293,11 +309,32 @@ fn format_trace_event(event: &TraceEvent) -> String {
     }
 }
 
-/// Redacted tracing: generated numeric identifiers, counts and sizes only. The typed event API
-/// cannot accept channel capabilities, credentials, project names or message bodies.
+fn trace_sender() -> Option<&'static SyncSender<String>> {
+    static SENDER: OnceLock<SyncSender<String>> = OnceLock::new();
+    if !trace_enabled() {
+        return None;
+    }
+    Some(SENDER.get_or_init(|| {
+        let (sender, receiver) = sync_channel::<String>(TRACE_QUEUE_CAPACITY);
+        let _ = std::thread::Builder::new()
+            .name("webchannel-trace".to_owned())
+            .spawn(move || {
+                let stderr = std::io::stderr();
+                let mut stderr = stderr.lock();
+                while let Ok(line) = receiver.recv() {
+                    let _ = writeln!(stderr, "[webchannel] {line}");
+                }
+            });
+        sender
+    }))
+}
+
+/// Redacted tracing: generated numeric identifiers, counts and sizes only. Formatting happens
+/// after protocol locks are released, and a full or disconnected sink drops the event.
 fn trace(event: &TraceEvent) {
-    if trace_enabled() {
-        eprintln!("[webchannel] {}", format_trace_event(event));
+    let Some(sender) = trace_sender() else { return };
+    match sender.try_send(format_trace_event(event)) {
+        Ok(()) | Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {}
     }
 }
 
@@ -311,24 +348,65 @@ fn trace_rid(params: &BTreeMap<String, String>) -> TraceRid {
     }
 }
 
+fn trace_request(session: &Session, request: &ChannelRequest) {
+    let method = match request.method.as_str() {
+        "GET" => "GET",
+        "POST" => "POST",
+        _ => "OTHER",
+    };
+    session.trace_event(&TraceEvent::RequestReceived {
+        session: session.trace_id,
+        kind: request.kind,
+        method,
+        rid: trace_rid(&request.params),
+        aid: request
+            .params
+            .get("AID")
+            .and_then(|value| value.parse().ok()),
+        ci: request
+            .params
+            .get("CI")
+            .and_then(|value| value.parse().ok()),
+        body_bytes: request.body.len(),
+    });
+}
+
 #[derive(Default)]
 struct ListenTraceState {
     next_lifetime: u64,
     active: BTreeMap<i32, u64>,
-    latest: BTreeMap<i32, u64>,
+    completed: BTreeMap<i32, u64>,
+    completed_order: VecDeque<i32>,
 }
 
 impl ListenTraceState {
     fn request_add(&mut self, target: i32) -> u64 {
         self.next_lifetime = self.next_lifetime.saturating_add(1);
         let lifetime = self.next_lifetime;
+        self.completed.remove(&target);
+        self.completed_order
+            .retain(|completed| *completed != target);
         self.active.insert(target, lifetime);
-        self.latest.insert(target, lifetime);
         lifetime
     }
 
     fn request_remove(&mut self, target: i32) -> Option<u64> {
-        self.active.remove(&target)
+        let lifetime = self.active.remove(&target)?;
+        self.remember_completed(target, lifetime);
+        Some(lifetime)
+    }
+
+    fn remember_completed(&mut self, target: i32, lifetime: u64) {
+        self.completed.remove(&target);
+        self.completed_order
+            .retain(|completed| *completed != target);
+        self.completed.insert(target, lifetime);
+        self.completed_order.push_back(target);
+        while self.completed_order.len() > MAX_TRACE_COMPLETED_TARGETS {
+            if let Some(evicted) = self.completed_order.pop_front() {
+                self.completed.remove(&evicted);
+            }
+        }
     }
 
     fn active_lifetime(&self, target: i32) -> Option<u64> {
@@ -337,10 +415,10 @@ impl ListenTraceState {
 
     fn latest_lifetime(&self, target: i32) -> Option<u64> {
         self.active_lifetime(target)
-            .or_else(|| self.latest.get(&target).copied())
+            .or_else(|| self.completed.get(&target).copied())
     }
 
-    fn response_event(&self, session: u64, response: &pb::ListenResponse) -> TraceEvent {
+    fn response_event(&mut self, session: u64, response: &pb::ListenResponse) -> TraceEvent {
         use pb::listen_response::ResponseType as Response;
         let (kind, mut target_ids) = match response.response_type.as_ref() {
             Some(Response::TargetChange(change)) => {
@@ -370,51 +448,93 @@ impl ListenTraceState {
         };
         target_ids.sort_unstable();
         target_ids.dedup();
+        let targets = target_ids
+            .iter()
+            .map(|target| (*target, self.latest_lifetime(*target)))
+            .collect();
+        if kind == "target_remove" {
+            for target in target_ids {
+                let _ = self.request_remove(target);
+            }
+        }
         TraceEvent::ListenResponse {
             session,
             kind,
-            targets: target_ids
-                .into_iter()
-                .map(|target| (target, self.latest_lifetime(target)))
-                .collect(),
+            targets,
         }
+    }
+
+    fn exchange_events(
+        &mut self,
+        session: u64,
+        request: Option<&pb::ListenRequest>,
+        responses: &[pb::ListenResponse],
+        event_limit: usize,
+    ) -> Vec<TraceEvent> {
+        let mut events = Vec::with_capacity(responses.len().saturating_add(1).min(event_limit));
+        if let Some(request) = request {
+            match request.target_change.as_ref() {
+                Some(pb::listen_request::TargetChange::AddTarget(target)) => {
+                    let accepted = responses.iter().any(|response| {
+                        matches!(
+                            response.response_type.as_ref(),
+                            Some(pb::listen_response::ResponseType::TargetChange(change))
+                                if change.target_change_type
+                                    == pb::target_change::TargetChangeType::Add as i32
+                                    && change.target_ids.contains(&target.target_id)
+                        )
+                    });
+                    let lifetime = accepted.then(|| self.request_add(target.target_id));
+                    if events.len() < event_limit {
+                        events.push(TraceEvent::ListenRequest {
+                            session,
+                            action: "add",
+                            target: target.target_id,
+                            lifetime,
+                        });
+                    }
+                }
+                Some(pb::listen_request::TargetChange::RemoveTarget(target)) => {
+                    let lifetime = self.request_remove(*target);
+                    if events.len() < event_limit {
+                        events.push(TraceEvent::ListenRequest {
+                            session,
+                            action: "remove",
+                            target: *target,
+                            lifetime,
+                        });
+                    }
+                }
+                None => {}
+            }
+        }
+        for response in responses {
+            let event = self.response_event(session, response);
+            if events.len() < event_limit {
+                events.push(event);
+            }
+        }
+        events
     }
 }
 
-fn trace_listen_request(
-    state: Option<&Arc<Mutex<ListenTraceState>>>,
-    session: u64,
-    request: &pb::ListenRequest,
-) {
-    let Some(state) = state else { return };
-    let Ok(mut state) = state.lock() else { return };
-    let (action, target, lifetime) = match request.target_change.as_ref() {
-        Some(pb::listen_request::TargetChange::AddTarget(target)) => (
-            "add",
-            target.target_id,
-            Some(state.request_add(target.target_id)),
-        ),
-        Some(pb::listen_request::TargetChange::RemoveTarget(target)) => {
-            ("remove", *target, state.request_remove(*target))
-        }
-        None => return,
-    };
-    trace(&TraceEvent::ListenRequest {
-        session,
-        action,
-        target,
-        lifetime,
-    });
+struct WebchannelListenObserver {
+    session: Arc<Session>,
+    state: Mutex<ListenTraceState>,
 }
 
-fn trace_listen_response(
-    state: Option<&Arc<Mutex<ListenTraceState>>>,
-    session: u64,
-    response: &pb::ListenResponse,
-) {
-    let Some(state) = state else { return };
-    if let Ok(state) = state.lock() {
-        trace(&state.response_event(session, response));
+impl ListenObserver for WebchannelListenObserver {
+    fn exchange(&self, request: Option<&pb::ListenRequest>, responses: &[pb::ListenResponse]) {
+        let event_limit = self.session.trace_event_capacity();
+        let events = match self.state.lock() {
+            Ok(mut state) => {
+                state.exchange_events(self.session.trace_id, request, responses, event_limit)
+            }
+            Err(_) => return,
+        };
+        for event in events {
+            self.session.trace_event(&event);
+        }
     }
 }
 
@@ -497,6 +617,8 @@ struct Session {
     sid: String,
     /// Process-local diagnostic identifier. Unlike `sid`, this is not a channel capability.
     trace_id: u64,
+    /// Per-session diagnostic budget. Protocol work continues after this counter is exhausted.
+    trace_events: AtomicU64,
     kind: StreamKind,
     /// Origin the session was opened from (`None` for non-browser clients).
     origin: Option<String>,
@@ -597,6 +719,32 @@ struct ChannelApp {
 }
 
 impl Session {
+    fn trace_event_capacity(&self) -> usize {
+        let emitted = self.trace_events.load(Ordering::Relaxed);
+        let capacity = MAX_TRACE_EVENTS_PER_SESSION
+            .saturating_sub(emitted)
+            .saturating_add(u64::from(emitted <= MAX_TRACE_EVENTS_PER_SESSION));
+        usize::try_from(capacity).unwrap_or(usize::MAX)
+    }
+
+    fn trace_event(&self, event: &TraceEvent) {
+        if !trace_enabled() {
+            return;
+        }
+        let slot =
+            self.trace_events
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |emitted| {
+                    (emitted <= MAX_TRACE_EVENTS_PER_SESSION).then_some(emitted + 1)
+                });
+        match slot {
+            Ok(emitted) if emitted < MAX_TRACE_EVENTS_PER_SESSION => trace(event),
+            Ok(_) => trace(&TraceEvent::SessionTraceLimitReached {
+                session: self.trace_id,
+            }),
+            Err(_) => {}
+        }
+    }
+
     fn replace_backchannel(&self, cancel: oneshot::Sender<()>) -> Result<u64, ()> {
         let mut owner = self.backchannel_owner.lock().map_err(|_| ())?;
         owner.generation = owner.generation.checked_add(1).ok_or(())?;
@@ -639,7 +787,7 @@ impl Session {
             }
             Err(_) => (true, None, None, 0),
         };
-        trace(&TraceEvent::ArrayGenerated {
+        self.trace_event(&TraceEvent::ArrayGenerated {
             session: self.trace_id,
             aid,
             bytes,
@@ -674,7 +822,7 @@ impl Session {
         } else {
             (None, None, 0)
         };
-        trace(&TraceEvent::ArrayAcknowledged {
+        self.trace_event(&TraceEvent::ArrayAcknowledged {
             session: self.trace_id,
             aid,
             queued_first,
@@ -876,24 +1024,27 @@ impl Hub {
 
     /// Closes and forgets sessions that are idle without a live back channel.
     fn purge_idle(&self) {
-        let Ok(mut sessions) = self.sessions.lock() else {
-            return;
+        let gone = {
+            let Ok(mut sessions) = self.sessions.lock() else {
+                return;
+            };
+            let mut gone = Vec::new();
+            sessions.retain(|sid, s| {
+                let idle = s
+                    .last_seen
+                    .lock()
+                    .is_ok_and(|t| t.elapsed() >= SESSION_IDLE_TTL);
+                let live = s.backchannel_attached();
+                let keep = (!idle || live) && !s.is_closed();
+                if !keep {
+                    gone.push((sid.clone(), s.clone()));
+                }
+                keep
+            });
+            gone
         };
-        let mut gone = Vec::new();
-        sessions.retain(|sid, s| {
-            let idle = s
-                .last_seen
-                .lock()
-                .is_ok_and(|t| t.elapsed() >= SESSION_IDLE_TTL);
-            let live = s.backchannel_attached();
-            let keep = (!idle || live) && !s.is_closed();
-            if !keep {
-                gone.push((sid.clone(), s.clone()));
-            }
-            keep
-        });
         for (_sid, s) in gone {
-            trace(&TraceEvent::SessionPurged {
+            s.trace_event(&TraceEvent::SessionPurged {
                 session: s.trace_id,
             });
             s.close();
@@ -926,19 +1077,6 @@ impl Hub {
     /// Handles one HTTP request of the channel endpoint.
     pub fn handle(&self, req: &ChannelRequest) -> ChannelResponse {
         self.purge_idle();
-        let method = match req.method.as_str() {
-            "GET" => "GET",
-            "POST" => "POST",
-            _ => "OTHER",
-        };
-        trace(&TraceEvent::RequestReceived {
-            kind: req.kind,
-            method,
-            rid: trace_rid(&req.params),
-            aid: req.params.get("AID").and_then(|value| value.parse().ok()),
-            ci: req.params.get("CI").and_then(|value| value.parse().ok()),
-            body_bytes: req.body.len(),
-        });
         if let Some(origin) = &req.origin {
             if !origin_is_local(origin) {
                 return text_response(403, "Forbidden origin".to_owned());
@@ -1093,6 +1231,7 @@ impl Hub {
         let session = Arc::new(Session {
             sid: sid.clone(),
             trace_id: next_trace_session_id(),
+            trace_events: AtomicU64::new(0),
             kind: req.kind,
             origin: req.origin.clone(),
             inbound: Mutex::new(Some(inbound_tx)),
@@ -1109,10 +1248,6 @@ impl Hub {
             app_check: bound,
             closed: AtomicBool::new(false),
         });
-        trace(&TraceEvent::SessionOpened {
-            session: session.trace_id,
-            kind: session.kind,
-        });
         {
             let Ok(mut sessions) = self.sessions.lock() else {
                 return text_response(500, "session registry poisoned".to_owned());
@@ -1122,6 +1257,11 @@ impl Hub {
             }
             sessions.insert(sid.clone(), session.clone());
         }
+        session.trace_event(&TraceEvent::SessionOpened {
+            session: session.trace_id,
+            kind: session.kind,
+        });
+        trace_request(&session, req);
         let ctx = StreamContext {
             local: self.state.local.clone(),
             gateway: self.state.gateway.clone(),
@@ -1164,6 +1304,7 @@ impl Hub {
         if let Err(response) = self.check_replacement(req, &session, &form) {
             return response;
         }
+        trace_request(&session, req);
         if let Some(aid) = req.params.get("AID").and_then(|a| a.parse::<u64>().ok()) {
             if let Err(e) = session.acknowledge(aid) {
                 return error_chunk(&e);
@@ -1187,6 +1328,7 @@ impl Hub {
         if let Err(response) = self.check_replacement(req, &session, &BTreeMap::new()) {
             return response;
         }
+        trace_request(&session, req);
         let acked = req
             .params
             .get("AID")
@@ -1206,7 +1348,7 @@ impl Hub {
         let Ok(generation) = session.replace_backchannel(cancel_tx) else {
             return text_response(500, "session lock poisoned".to_owned());
         };
-        trace(&TraceEvent::BackchannelStarted {
+        session.trace_event(&TraceEvent::BackchannelStarted {
             session: session.trace_id,
             generation,
             rid: trace_rid(&req.params),
@@ -1229,7 +1371,7 @@ impl Hub {
                 &mut cancelled,
             )
             .await;
-            trace(&TraceEvent::BackchannelEnded {
+            session.trace_event(&TraceEvent::BackchannelEnded {
                 session: session.trace_id,
                 generation,
                 outcome,
@@ -1254,14 +1396,16 @@ fn commit_backchannel_chunk(
     permit: mpsc::Permit<'_, Result<bytes::Bytes, Status>>,
     body: bytes::Bytes,
 ) -> bool {
-    let Ok(owner) = session.backchannel_owner.lock() else {
-        return false;
-    };
-    if owner.generation != generation {
-        return false;
+    {
+        let Ok(owner) = session.backchannel_owner.lock() else {
+            return false;
+        };
+        if owner.generation != generation {
+            return false;
+        }
+        permit.send(Ok(body));
     }
-    permit.send(Ok(body));
-    trace(&TraceEvent::BackchannelCommitted {
+    session.trace_event(&TraceEvent::BackchannelCommitted {
         session: session.trace_id,
         generation,
         last_aid,
@@ -1311,7 +1455,7 @@ async fn backchannel_loop(
         let pending = session.pending_chunk_after(*cursor);
         if let Some((last, count, text)) = &pending {
             let first = last.saturating_sub(*count as u64).saturating_add(1);
-            trace(&TraceEvent::BackchannelQueued {
+            session.trace_event(&TraceEvent::BackchannelQueued {
                 session: session.trace_id,
                 generation,
                 first_aid: first,
@@ -1429,7 +1573,7 @@ fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result
         maps.1.remove(&done);
         maps.0 = done + 1;
     }
-    trace(&TraceEvent::ForwardMaps {
+    let event = TraceEvent::ForwardMaps {
         session: session.trace_id,
         offset: ofs,
         declared: count,
@@ -1437,7 +1581,9 @@ fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result
         duplicates,
         buffered: maps.1.len(),
         next_expected: maps.0,
-    });
+    };
+    drop(maps);
+    session.trace_event(&event);
     Ok(())
 }
 
@@ -1461,7 +1607,7 @@ fn spawn_stream(
                 }
             };
             if pushed.is_err() {
-                trace(&TraceEvent::Overflow {
+                pump_session.trace_event(&TraceEvent::Overflow {
                     session: pump_session.trace_id,
                 });
                 break;
@@ -1471,36 +1617,28 @@ fn spawn_stream(
     });
     match kind {
         StreamKind::Listen => {
-            let trace_state =
-                trace_enabled().then(|| Arc::new(Mutex::new(ListenTraceState::default())));
-            let request_trace_state = trace_state.clone();
-            let trace_session = session.trace_id;
             let inbound = MappedStream {
                 inner: ReceiverStream::new(inbound_rx),
                 f: move |r: Result<Value, Status>| {
                     r.and_then(|v| listen_request_from_json(&v).map_err(|e| bad_json(&e)))
-                        .inspect(|request| {
-                            trace_listen_request(
-                                request_trace_state.as_ref(),
-                                trace_session,
-                                request,
-                            );
-                        })
                 },
             };
             let (tx, mut rx) = mpsc::channel::<Result<pb::ListenResponse, Status>>(256);
             tokio::spawn(async move {
                 while let Some(item) = rx.recv().await {
-                    let forwarded = item.map(|response| {
-                        trace_listen_response(trace_state.as_ref(), trace_session, &response);
-                        listen_response_to_json(&response)
-                    });
+                    let forwarded = item.map(|response| listen_response_to_json(&response));
                     if out_tx.send(forwarded).await.is_err() {
                         break;
                     }
                 }
             });
-            tokio::spawn(listen_stream(ctx, inbound, tx));
+            let observer = trace_enabled().then(|| {
+                Arc::new(WebchannelListenObserver {
+                    session: session.clone(),
+                    state: Mutex::new(ListenTraceState::default()),
+                }) as Arc<dyn ListenObserver>
+            });
+            tokio::spawn(listen_stream_observed(ctx, inbound, tx, observer));
         }
         StreamKind::Write => {
             let inbound = MappedStream {
@@ -1609,6 +1747,89 @@ mod tests {
     }
 
     #[test]
+    fn listen_trace_bounds_completed_target_history() {
+        let mut trace = ListenTraceState::default();
+        let newest = i32::try_from(MAX_TRACE_COMPLETED_TARGETS).expect("small trace cap") + 17;
+        for target in 1..=newest {
+            let lifetime = trace.request_add(target);
+            assert_eq!(trace.request_remove(target), Some(lifetime));
+        }
+
+        assert!(trace.completed.len() <= MAX_TRACE_COMPLETED_TARGETS);
+        assert_eq!(trace.latest_lifetime(1), None);
+        assert!(trace.latest_lifetime(newest).is_some());
+    }
+
+    #[test]
+    fn listen_trace_records_only_accepted_adds_and_keeps_pipelined_lifetimes_distinct() {
+        let add = |target_id| pb::ListenRequest {
+            target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
+                target_id,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let remove = |target_id| pb::ListenRequest {
+            target_change: Some(pb::listen_request::TargetChange::RemoveTarget(target_id)),
+            ..Default::default()
+        };
+        let response = |kind, target_id| pb::ListenResponse {
+            response_type: Some(pb::listen_response::ResponseType::TargetChange(
+                pb::TargetChange {
+                    target_change_type: kind as i32,
+                    target_ids: vec![target_id],
+                    ..Default::default()
+                },
+            )),
+        };
+        let mut trace = ListenTraceState::default();
+
+        let rejected = trace.exchange_events(
+            1,
+            Some(&add(7)),
+            &[response(pb::target_change::TargetChangeType::Remove, 7)],
+            usize::MAX,
+        );
+        assert_eq!(trace.latest_lifetime(7), None);
+        assert!(format_trace_event(&rejected[0]).ends_with("target=7@unknown"));
+
+        let first = trace.exchange_events(
+            1,
+            Some(&add(9)),
+            &[response(pb::target_change::TargetChangeType::Add, 9)],
+            usize::MAX,
+        );
+        let removed = trace.exchange_events(
+            1,
+            Some(&remove(9)),
+            &[response(pb::target_change::TargetChangeType::Remove, 9)],
+            usize::MAX,
+        );
+        let replacement = trace.exchange_events(
+            1,
+            Some(&add(9)),
+            &[response(pb::target_change::TargetChangeType::Add, 9)],
+            usize::MAX,
+        );
+
+        assert!(format_trace_event(&first[0]).ends_with("target=9@1"));
+        assert!(format_trace_event(&removed[0]).ends_with("target=9@1"));
+        assert!(format_trace_event(&replacement[0]).ends_with("target=9@2"));
+
+        let bounded = trace.exchange_events(
+            1,
+            None,
+            &[
+                response(pb::target_change::TargetChangeType::NoChange, 9),
+                response(pb::target_change::TargetChangeType::Current, 9),
+                response(pb::target_change::TargetChangeType::Reset, 9),
+            ],
+            2,
+        );
+        assert_eq!(bounded.len(), 2);
+    }
+
+    #[test]
     fn listen_response_trace_contains_only_response_shape_and_target_lifetimes() {
         let mut trace = ListenTraceState::default();
         let lifetime = trace.request_add(9);
@@ -1644,6 +1865,7 @@ mod tests {
         let session = Session {
             sid: "session-one".to_owned(),
             trace_id: 1,
+            trace_events: AtomicU64::new(0),
             kind: StreamKind::Listen,
             origin: None,
             inbound: Mutex::new(Some(inbound)),
@@ -1678,6 +1900,7 @@ mod tests {
         let session = Session {
             sid: "session-one".to_owned(),
             trace_id: 1,
+            trace_events: AtomicU64::new(0),
             kind: StreamKind::Listen,
             origin: None,
             inbound: Mutex::new(Some(inbound)),
@@ -1720,6 +1943,7 @@ mod tests {
         let session = Session {
             sid: "session-one".to_owned(),
             trace_id: 1,
+            trace_events: AtomicU64::new(0),
             kind: StreamKind::Listen,
             origin: None,
             inbound: Mutex::new(Some(inbound)),

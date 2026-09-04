@@ -133,6 +133,15 @@ fn exec(source: &Path, config: Option<&Path>) -> Output {
 }
 
 fn exec_command(source: &Path, config: Option<&Path>, command: &[&str]) -> Output {
+    exec_command_with_logging_port(source, config, command, 0)
+}
+
+fn exec_command_with_logging_port(
+    source: &Path,
+    config: Option<&Path>,
+    command: &[&str],
+    logging_port: u16,
+) -> Output {
     let mut args: Vec<String> = vec!["exec".into()];
     for a in [
         "--firestore-port",
@@ -143,8 +152,6 @@ fn exec_command(source: &Path, config: Option<&Path>, command: &[&str]) -> Outpu
         "0",
         "--functions-port",
         "0",
-        "--logging-port",
-        "0",
         "--ui-port",
         "0",
         "--hub-port",
@@ -152,6 +159,8 @@ fn exec_command(source: &Path, config: Option<&Path>, command: &[&str]) -> Outpu
     ] {
         args.push(a.into());
     }
+    args.push("--logging-port".into());
+    args.push(logging_port.to_string());
     if let Some(config) = config {
         args.push("--config".into());
         args.push(config.display().to_string());
@@ -169,6 +178,40 @@ fn exec_command(source: &Path, config: Option<&Path>, command: &[&str]) -> Outpu
 
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn a_real_node_invocation_reaches_the_logging_websocket_with_function_metadata() {
+    let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/sdk-smoke/functions-project/logging-e2e.mjs");
+    let probe = probe.display().to_string();
+    for attempt in 0..3 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let logging_port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let out = exec_command_with_logging_port(
+            &fixture("log-metadata"),
+            None,
+            &["node", &probe],
+            logging_port,
+        );
+        if out.status.success() {
+            return;
+        }
+        let error = stderr(&out);
+        let bind_collision = error.contains(&format!(
+            "error: bind 127.0.0.1:{logging_port}: Address already in use"
+        ));
+        if bind_collision && attempt < 2 {
+            continue;
+        }
+        panic!(
+            "stdout:\n{}\nstderr:\n{error}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+    unreachable!("the final failed attempt panics");
 }
 
 fn invoke_blocking_runner(port: u16, function: &str, body: &str) -> (u16, serde_json::Value) {

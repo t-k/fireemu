@@ -1803,6 +1803,7 @@
           ],
           "evidence": {
             "tests": [
+              "a_real_node_invocation_reaches_the_logging_websocket_with_function_metadata",
               "concurrent_real_sdk_logs_keep_their_function_identity",
               "runner_log_frames_preserve_function_and_user_metadata"
             ],

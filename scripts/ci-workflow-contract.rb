@@ -15,6 +15,9 @@ jobs = workflow.fetch("jobs")
 %w[lint test verify pr].each do |job|
   assert(jobs.key?(job), "CI workflow is missing the #{job} job")
 end
+%w[lint test].each do |job|
+  assert(jobs.fetch(job).dig("env", "CARGO_TARGET_DIR") == "target/normal", "#{job} must build in target/normal")
+end
 
 terminal = jobs.fetch("pr")
 assert(Array(terminal.fetch("needs")).sort == %w[lint test verify], "pr must depend on lint, test, and verify")
@@ -37,15 +40,25 @@ test_cache = test_caches.first
 assert(lint_cache&.dig("with", "shared-key") == "pr-normal", "lint must restore the shared normal cache")
 assert(test_cache&.dig("with", "shared-key") == "pr-normal", "test must restore the shared normal cache")
 assert(lint_cache.dig("with", "save-if").to_s == "false", "lint must not race the normal cache writer")
-assert(test_cache.dig("with", "save-if").to_s.include?("refs/heads/main"), "test must be the main-branch normal cache writer")
+assert(test_cache.dig("with", "save-if") == "${{ github.ref == 'refs/heads/main' }}", "test must be the main-branch normal cache writer")
 assert(lint_cache.dig("with", "workspaces") == ". -> target/normal", "lint must cache only target/normal")
 assert(test_cache.dig("with", "workspaces") == ". -> target/normal", "test must cache only target/normal")
+assert(lint_cache.dig("with", "cache-bin") == "false", "lint must not cache installed tools")
+assert(test_cache.dig("with", "cache-bin") == "false", "test must not cache installed tools")
 
 verify_caches = cache_steps.call("verify")
 assert(verify_caches.length == 1, "verify must have exactly one Rust cache")
 loom_cache = verify_caches.find { |step| step.dig("with", "shared-key") == "pr-loom" }
 assert(loom_cache, "verify must own a Loom cache")
 assert(loom_cache.dig("with", "workspaces") == ". -> target/loom", "the Loom cache must contain only target/loom")
+assert(loom_cache.dig("with", "save-if") == "${{ github.ref == 'refs/heads/main' }}", "verify must be the main-branch Loom cache writer")
+assert(loom_cache.dig("with", "cache-bin") == "false", "verify must not cache installed tools")
+assert(loom_cache.dig("env", "RUSTFLAGS") == "--cfg loom -D warnings", "the Loom cache key must bind the Loom compiler mode")
+
+loom_step = jobs.fetch("verify").fetch("steps").find { |step| step["name"] == "loom scenarios" }
+assert(loom_step, "verify must run the Loom scenarios")
+assert(loom_step.fetch("run") == "cargo test -p fireemu-verification-loom --release --target-dir target/loom", "the Loom command must execute the tests in target/loom")
+assert(loom_step.dig("env", "RUSTFLAGS") == "--cfg loom -D warnings", "the Loom command must compile all scenarios and deny warnings")
 
 runs = %w[lint test verify].flat_map do |job|
   jobs.fetch(job).fetch("steps").map { |step| step["run"] }.compact

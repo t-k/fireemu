@@ -70,7 +70,8 @@ const MAX_TRACE_COMPLETED_TARGETS: usize = 256;
 const MAX_TRACE_EVENTS_PER_SESSION: u64 = 4096;
 /// Diagnostic messages wait in a bounded queue and are dropped rather than blocking protocol work.
 const TRACE_QUEUE_CAPACITY: usize = 1024;
-/// Process-wide trace budget for one rolling one-second window.
+/// Process-wide trace budget for each fixed one-second interval. Crossing an interval boundary
+/// can burst at most twice this count; the bounded sink still drops excess queued events.
 const MAX_TRACE_EVENTS_PER_SECOND: u64 = 2048;
 
 fn trace_enabled() -> bool {

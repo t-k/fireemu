@@ -303,6 +303,12 @@ if environment_file:
             "CLASSPATH",
             "BASH_ENV",
             "ENV",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_AUDIT",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
         ):
             handle.write(f"{name}={os.environ.get(name, '')}\n")
 
@@ -908,8 +914,9 @@ fn authority_server_uses_a_loopback_provider_with_the_pinned_launcher() {
         fs::read_to_string(authority_server_path()).expect("authority supervisor must exist");
     assert!(supervisor.contains("-javaagent:"));
     assert!(supervisor.contains("APALACHE_JAR"));
-    assert!(supervisor.contains("JAVA_TOOL_OPTIONS"));
-    assert!(supervisor.contains("JDK_JAVA_OPTIONS"));
+    assert!(supervisor.contains("environment = {"));
+    assert!(supervisor.contains("FIXTURE_OBSERVABILITY_VARIABLES"));
+    assert!(!supervisor.contains("JAVA_INJECTION_VARIABLES"));
 }
 
 #[cfg(unix)]
@@ -1026,6 +1033,12 @@ fn authority_pass_owns_a_dynamic_loopback_endpoint_when_legacy_8822_is_occupied(
         .env("CLASSPATH", "/tmp/unreviewed-classes")
         .env("BASH_ENV", "/tmp/unreviewed-bash-env")
         .env("ENV", "/tmp/unreviewed-shell-env")
+        .env("LD_PRELOAD", "/tmp/unreviewed-native.so")
+        .env("LD_LIBRARY_PATH", "/tmp/unreviewed-native-libraries")
+        .env("LD_AUDIT", "/tmp/unreviewed-audit.so")
+        .env("DYLD_INSERT_LIBRARIES", "/tmp/unreviewed-native.dylib")
+        .env("DYLD_LIBRARY_PATH", "/tmp/unreviewed-native-libraries")
+        .env("DYLD_FRAMEWORK_PATH", "/tmp/unreviewed-frameworks")
         .env(
             "PATH",
             std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(
@@ -1095,6 +1108,12 @@ fn authority_pass_owns_a_dynamic_loopback_endpoint_when_legacy_8822_is_occupied(
         "CLASSPATH",
         "BASH_ENV",
         "ENV",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "LD_AUDIT",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
     ] {
         assert!(
             server_environment.contains(&format!("{variable}=\n")),

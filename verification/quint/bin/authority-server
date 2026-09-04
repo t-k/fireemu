@@ -19,16 +19,9 @@ READINESS_TIMEOUT_SECONDS = 20.0
 SHUTDOWN_TIMEOUT_SECONDS = 5.0
 MAX_DIAGNOSTIC_BYTES = 16 * 1024
 LOOPBACK_HOST = "127.0.0.1"
-JAVA_INJECTION_VARIABLES = (
-    "APALACHE_JAR",
-    "JVM_ARGS",
-    "JVM_GC_ARGS",
-    "JAVA_TOOL_OPTIONS",
-    "_JAVA_OPTIONS",
-    "JDK_JAVA_OPTIONS",
-    "CLASSPATH",
-    "BASH_ENV",
-    "ENV",
+FIXTURE_OBSERVABILITY_VARIABLES = (
+    "APALACHE_SERVER_ENV_FILE",
+    "APALACHE_SERVER_PID_FILE",
 )
 ROOT = Path(__file__).resolve().parent.parent
 LOOPBACK_AGENT_SOURCE = (
@@ -104,7 +97,9 @@ def lsof_listener_endpoints(pid: int) -> set[tuple[str, int]]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError(f"cannot inspect owned server listeners with lsof: {error}") from error
+        raise RuntimeError(
+            f"cannot inspect owned server listeners with lsof: {error}"
+        ) from error
     if result.returncode not in (0, 1) or (result.returncode == 1 and result.stderr):
         diagnostic = result.stderr.strip() or "no diagnostic"
         raise RuntimeError(
@@ -137,25 +132,45 @@ def resolved_executable(name: str) -> Path:
         resolved = Path(candidate).resolve(strict=True)
         metadata = resolved.stat()
     except OSError as error:
-        raise RuntimeError(f"cannot resolve required executable {name}: {error}") from error
+        raise RuntimeError(
+            f"cannot resolve required executable {name}: {error}"
+        ) from error
     if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise RuntimeError(f"required executable is not executable: {resolved}")
     if metadata.st_uid != 0 or metadata.st_mode & 0o022:
         raise RuntimeError(f"required executable is not trusted: {resolved}")
+    current_groups = set(os.getgroups()) | {os.getgid()}
+    for ancestor in resolved.parents:
+        try:
+            ancestor_metadata = ancestor.stat()
+        except OSError as error:
+            raise RuntimeError(
+                f"cannot inspect required executable ancestor {ancestor}: {error}"
+            ) from error
+        writable_by_caller = bool(ancestor_metadata.st_mode & 0o002) or (
+            ancestor_metadata.st_gid in current_groups
+            and bool(ancestor_metadata.st_mode & 0o020)
+        )
+        if ancestor_metadata.st_uid != 0 or writable_by_caller:
+            raise RuntimeError(
+                f"required executable has an untrusted ancestor: {ancestor}"
+            )
     return resolved
 
 
 def clean_java_environment(temporary: Path, java: Path) -> dict[str, str]:
-    environment = os.environ.copy()
-    for variable in JAVA_INJECTION_VARIABLES:
-        environment.pop(variable, None)
     runtime_bin = temporary / "runtime-bin"
     runtime_bin.mkdir(mode=0o700)
     (runtime_bin / "java").symlink_to(java)
-    environment["PATH"] = os.pathsep.join(
-        [str(runtime_bin), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-    )
-    environment["TMPDIR"] = str(temporary)
+    environment = {
+        "PATH": os.pathsep.join(
+            [str(runtime_bin), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        ),
+        "TMPDIR": str(temporary),
+    }
+    for variable in FIXTURE_OBSERVABILITY_VARIABLES:
+        if value := os.environ.get(variable):
+            environment[variable] = value
     return environment
 
 
@@ -212,7 +227,9 @@ def bounded_diagnostic(path: Path) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def wait_until_ready(process: subprocess.Popen[bytes], pending_signal: list[int]) -> int:
+def wait_until_ready(
+    process: subprocess.Popen[bytes], pending_signal: list[int]
+) -> int:
     deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if pending_signal:
@@ -274,6 +291,11 @@ def terminate_group(process: subprocess.Popen[bytes], requested_signal: int) -> 
     except ProcessLookupError:
         pass
     process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + SHUTDOWN_TIMEOUT_SECONDS
+    while time.monotonic() < deadline and process_group_exists(group_id):
+        time.sleep(0.05)
+    if process_group_exists(group_id):
+        raise RuntimeError(f"process group {group_id} survived SIGKILL")
 
 
 def main() -> int:
@@ -327,7 +349,10 @@ def main() -> int:
             "-XX:+UseG1GC -XX:G1PeriodicGCInterval=600000 "
             "-XX:+G1PeriodicGCInvokesConcurrent"
         )
-        with output_path.open("wb") as server_stdout, error_path.open("wb") as server_stderr:
+        with (
+            output_path.open("wb") as server_stdout,
+            error_path.open("wb") as server_stderr,
+        ):
             server = subprocess.Popen(
                 [str(launcher), "server", "--port=0"],
                 cwd=temporary,
@@ -344,7 +369,9 @@ def main() -> int:
                 for variable in ownership_variables:
                     command_environment.pop(variable, None)
                 command_environment["FIREEMU_QUINT_APALACHE_ENDPOINT"] = endpoint
-                command_environment["FIREEMU_QUINT_APALACHE_OWNER_PID"] = str(server.pid)
+                command_environment["FIREEMU_QUINT_APALACHE_OWNER_PID"] = str(
+                    server.pid
+                )
                 command_environment["FIREEMU_QUINT_APALACHE_SUPERVISOR_PID"] = str(
                     os.getpid()
                 )
@@ -353,8 +380,7 @@ def main() -> int:
                     capability_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
                 )
                 capability = (
-                    f"{endpoint}\n{server.pid}\n{os.getpid()}\n"
-                    f"{os.urandom(32).hex()}\n"
+                    f"{endpoint}\n{server.pid}\n{os.getpid()}\n{os.urandom(32).hex()}\n"
                 ).encode("ascii")
                 os.write(capability_descriptor, capability)
                 os.fsync(capability_descriptor)

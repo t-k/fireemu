@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 
-
 GRACE_SECONDS = 2.0
 POLL_SECONDS = 0.01
 INHERITED_DESCRIPTOR_VARIABLES = (

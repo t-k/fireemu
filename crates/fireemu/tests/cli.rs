@@ -123,6 +123,13 @@ fn emulators_exec_accepts_the_official_positional_shell_script() {
     let out = run(&args);
 
     assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+
+    let mut args: Vec<&str> = vec!["emulators:exec", "exit 7"];
+    args.extend_from_slice(&PORTS);
+
+    let out = run(&args);
+
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
 }
 
 #[test]

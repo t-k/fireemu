@@ -1077,17 +1077,37 @@ fn own_process_group() -> bool {
 }
 
 #[cfg(unix)]
-fn shell_child_command(script: &str) -> (tokio::process::Command, &'static str) {
+fn shell_child_command(script: &str) -> (tokio::process::Command, String) {
     let mut command = tokio::process::Command::new("/bin/sh");
     command.args(["-c", script]);
-    (command, "/bin/sh")
+    (command, "/bin/sh".to_owned())
 }
 
 #[cfg(windows)]
-fn shell_child_command(script: &str) -> (tokio::process::Command, &'static str) {
-    let mut command = tokio::process::Command::new("cmd.exe");
-    command.args(["/D", "/S", "/C", script]);
-    (command, "cmd.exe")
+fn shell_child_command(script: &str) -> (tokio::process::Command, String) {
+    use std::os::windows::process::CommandExt as _;
+
+    let shell = std::env::var_os("ComSpec")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "cmd.exe".into());
+    let mut command = tokio::process::Command::new(&shell);
+    let is_cmd = std::path::Path::new(&shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("cmd") || name.eq_ignore_ascii_case("cmd.exe")
+        });
+    if is_cmd {
+        command
+            .as_std_mut()
+            .raw_arg("/d")
+            .raw_arg("/s")
+            .raw_arg("/c")
+            .raw_arg(format!("\"{script}\""));
+    } else {
+        command.args(["-c", script]);
+    }
+    (command, shell.to_string_lossy().into_owned())
 }
 
 fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::process::Child, String> {
@@ -1098,7 +1118,7 @@ fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::proce
                 .ok_or("exec needs a command after --")?;
             let mut cmd = tokio::process::Command::new(program);
             cmd.args(args);
-            (cmd, program.as_str())
+            (cmd, program.clone())
         }
         ExecCommand::Shell(script) => shell_child_command(script),
     };

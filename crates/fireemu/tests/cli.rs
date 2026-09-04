@@ -132,6 +132,17 @@ fn emulators_exec_accepts_the_official_positional_shell_script() {
     assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
 }
 
+#[cfg(unix)]
+#[test]
+fn explicit_exec_argv_does_not_shell_expand_metacharacters() {
+    let out = exec_with(
+        &[],
+        &["sh", "-c", "test \"$1\" = '$HOME;*'", "fireemu", "$HOME;*"],
+    );
+
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
 #[test]
 fn init_noninteractive_defaults_to_strict_and_detects_firebase_json() {
     let dir = scratch("init-default");

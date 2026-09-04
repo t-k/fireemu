@@ -50,6 +50,8 @@ use crate::streams::{listen_stream_observed, write_stream, ListenObserver, Strea
 /// Sessions without an attached back channel and without requests longer than this are
 /// closed.
 const SESSION_IDLE_TTL: Duration = Duration::from_secs(120);
+/// A terminal array cannot retain an abandoned session indefinitely.
+const TERMINAL_DELIVERY_TTL: Duration = Duration::from_secs(120);
 /// Default long-polling wait (`TO` overrides it, bounded).
 const LONG_POLL_WAIT: Duration = Duration::from_secs(30);
 /// Upper bound on `TO`.
@@ -654,6 +656,8 @@ pub enum ChannelResponse {
     },
 }
 
+type SessionRegistry = Mutex<HashMap<String, Arc<Session>>>;
+
 struct Session {
     sid: String,
     /// Process-local diagnostic identifier. Unlike `sid`, this is not a channel capability.
@@ -667,8 +671,7 @@ struct Session {
     /// task ends.
     inbound: Mutex<Option<mpsc::Sender<Result<Value, Status>>>>,
     /// Arrays produced by the stream, not yet acknowledged: `(array id, json text)`.
-    outbound: Mutex<VecDeque<(u64, String)>>,
-    next_aid: AtomicU64,
+    delivery: Mutex<DeliveryState>,
     /// The response allowed to commit the next chunk. Replacement and the final generation
     /// check before enqueue share this lock, so a superseded response cannot win between a
     /// generation check and delivery.
@@ -684,8 +687,25 @@ struct Session {
     /// nothing binds it: the service is `off` or `unenforced`, or the opening request
     /// presented a privileged credential instead of an App Check token.
     app_check: Option<ChannelApp>,
-    /// The stream ended (error already queued) or the session was closed.
-    closed: AtomicBool,
+    /// Weak access lets the terminal deadline remove only this exact session registration.
+    registry: std::sync::Weak<SessionRegistry>,
+    /// The transport is no longer available for any request.
+    terminated: AtomicBool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StreamEnd {
+    ended_at: Instant,
+    terminal_aid: u64,
+}
+
+#[derive(Debug, Default)]
+struct DeliveryState {
+    outbound: VecDeque<(u64, String)>,
+    next_aid: u64,
+    committed_aid: u64,
+    acknowledged_aid: u64,
+    stream_end: Option<StreamEnd>,
 }
 
 struct BackchannelOwner {
@@ -788,6 +808,9 @@ impl Session {
 
     fn replace_backchannel(&self, cancel: oneshot::Sender<()>) -> Result<u64, ()> {
         let mut owner = self.backchannel_owner.lock().map_err(|_| ())?;
+        if self.terminated.load(Ordering::SeqCst) {
+            return Err(());
+        }
         owner.generation = owner.generation.checked_add(1).ok_or(())?;
         if let Some(previous) = owner.cancel.replace(cancel) {
             let _ = previous.send(());
@@ -813,20 +836,23 @@ impl Session {
     }
 
     fn push(&self, payload: &Value) -> Result<u64, ()> {
-        let aid = self.next_aid.fetch_add(1, Ordering::SeqCst) + 1;
-        let text = json!([aid, payload]).to_string();
-        let bytes = text.len();
-        let (overflow, queued_first, queued_last, queued_count) = match self.outbound.lock() {
-            Ok(mut q) => {
-                q.push_back((aid, text));
-                (
-                    q.len() > MAX_QUEUED_ARRAYS,
-                    q.front().map(|(id, _)| *id),
-                    q.back().map(|(id, _)| *id),
-                    q.len(),
-                )
-            }
-            Err(_) => (true, None, None, 0),
+        let (aid, bytes, overflow, queued_first, queued_last, queued_count) = {
+            let Ok(mut delivery) = self.delivery.lock() else {
+                return Err(());
+            };
+            delivery.next_aid = delivery.next_aid.checked_add(1).ok_or(())?;
+            let aid = delivery.next_aid;
+            let text = json!([aid, payload]).to_string();
+            let bytes = text.len();
+            delivery.outbound.push_back((aid, text));
+            (
+                aid,
+                bytes,
+                delivery.outbound.len() > MAX_QUEUED_ARRAYS,
+                delivery.outbound.front().map(|(id, _)| *id),
+                delivery.outbound.back().map(|(id, _)| *id),
+                delivery.outbound.len(),
+            )
         };
         self.trace_event(&TraceEvent::ArrayGenerated {
             session: self.trace_id,
@@ -846,22 +872,42 @@ impl Session {
     }
 
     fn acknowledge(&self, aid: u64) -> Result<(), Status> {
-        if aid > self.last_aid() {
-            return Err(Status::invalid_argument(
-                "AID acknowledges an array that was never sent",
-            ));
-        }
-        let (queued_first, queued_last, queued_count) = if let Ok(mut q) = self.outbound.lock() {
-            while q.front().is_some_and(|(id, _)| *id <= aid) {
-                q.pop_front();
+        let (queued_first, queued_last, queued_count, terminal_acknowledged, cancelled) = {
+            let mut owner = self
+                .backchannel_owner
+                .lock()
+                .map_err(|_| Status::internal("session lock poisoned"))?;
+            let mut delivery = self
+                .delivery
+                .lock()
+                .map_err(|_| Status::internal("session lock poisoned"))?;
+            if aid > delivery.committed_aid {
+                return Err(Status::invalid_argument(
+                    "AID acknowledges an array that was not committed",
+                ));
             }
+            while delivery.outbound.front().is_some_and(|(id, _)| *id <= aid) {
+                delivery.outbound.pop_front();
+            }
+            delivery.acknowledged_aid = delivery.acknowledged_aid.max(aid);
+            let terminal_acknowledged = delivery
+                .stream_end
+                .is_some_and(|ended| delivery.acknowledged_aid >= ended.terminal_aid);
+            let cancelled = if terminal_acknowledged {
+                owner.generation = owner.generation.saturating_add(1);
+                self.terminated.store(true, Ordering::SeqCst);
+                delivery.outbound.clear();
+                owner.cancel.take()
+            } else {
+                None
+            };
             (
-                q.front().map(|(id, _)| *id),
-                q.back().map(|(id, _)| *id),
-                q.len(),
+                delivery.outbound.front().map(|(id, _)| *id),
+                delivery.outbound.back().map(|(id, _)| *id),
+                delivery.outbound.len(),
+                terminal_acknowledged,
+                cancelled,
             )
-        } else {
-            (None, None, 0)
         };
         self.trace_event(&TraceEvent::ArrayAcknowledged {
             session: self.trace_id,
@@ -870,13 +916,26 @@ impl Session {
             queued_last,
             queued_count,
         });
+        if terminal_acknowledged {
+            if let Some(cancel) = cancelled {
+                let _ = cancel.send(());
+            }
+            if let Ok(mut inbound) = self.inbound.lock() {
+                inbound.take();
+            }
+            if let Ok(mut maps) = self.maps.lock() {
+                maps.1.clear();
+            }
+            self.notify.notify_waiters();
+            self.notify.notify_one();
+        }
         Ok(())
     }
 
     /// Serializes unacknowledged arrays after `aid` without cloning the retained strings.
     fn pending_chunk_after(&self, aid: u64) -> Option<(u64, usize, String)> {
-        let queue = self.outbound.lock().ok()?;
-        let pending = queue.iter().skip_while(|(id, _)| *id <= aid);
+        let delivery = self.delivery.lock().ok()?;
+        let pending = delivery.outbound.iter().skip_while(|(id, _)| *id <= aid);
         let mut body = String::new();
         body.push('[');
         let mut last = None;
@@ -894,7 +953,7 @@ impl Session {
     }
 
     fn last_aid(&self) -> u64 {
-        self.next_aid.load(Ordering::SeqCst)
+        self.delivery.lock().map_or(0, |delivery| delivery.next_aid)
     }
 
     fn touch(&self) {
@@ -903,26 +962,115 @@ impl Session {
         }
     }
 
-    fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::SeqCst)
+    fn is_stream_ended(&self) -> bool {
+        self.delivery
+            .lock()
+            .is_ok_and(|delivery| delivery.stream_end.is_some())
     }
 
-    /// Ends the session: the stream task sees EOF; the attached back channel delivers what
-    /// is still queued (a stream error, typically) and then exits.
-    fn close(&self) {
-        self.closed.store(true, Ordering::SeqCst);
+    fn is_terminated(&self) -> bool {
+        self.terminated.load(Ordering::SeqCst)
+    }
+
+    fn terminal_delivery_expired(&self) -> bool {
+        self.delivery.lock().map_or(true, |delivery| {
+            delivery
+                .stream_end
+                .is_some_and(|ended| ended.ended_at.elapsed() >= TERMINAL_DELIVERY_TTL)
+        })
+    }
+
+    fn terminal_acknowledged(&self) -> bool {
+        self.delivery.lock().is_ok_and(|delivery| {
+            delivery
+                .stream_end
+                .is_some_and(|ended| delivery.acknowledged_aid >= ended.terminal_aid)
+        })
+    }
+
+    /// Ends the application stream while preserving its final numbered array for delivery.
+    fn end_stream(self: &Arc<Self>) {
+        let _terminal_acknowledged = self.backchannel_owner.lock().ok().and_then(|mut owner| {
+            let mut delivery = self.delivery.lock().ok()?;
+            let terminal_aid = delivery.next_aid;
+            delivery.stream_end.get_or_insert(StreamEnd {
+                ended_at: Instant::now(),
+                terminal_aid,
+            });
+            let acknowledged = delivery
+                .stream_end
+                .is_some_and(|ended| delivery.acknowledged_aid >= ended.terminal_aid);
+            if acknowledged && owner.cancel.is_none() {
+                owner.generation = owner.generation.saturating_add(1);
+                self.terminated.store(true, Ordering::SeqCst);
+                delivery.outbound.clear();
+            }
+            Some(acknowledged)
+        });
         if let Ok(mut inbound) = self.inbound.lock() {
             inbound.take();
+        }
+        if let Ok(mut maps) = self.maps.lock() {
+            maps.1.clear();
+        }
+        if !self.is_terminated() {
+            schedule_terminal_expiry(self, TERMINAL_DELIVERY_TTL);
+        }
+        self.notify.notify_waiters();
+        self.notify.notify_one();
+    }
+
+    /// Permanently ends both the application stream and the `WebChannel` transport.
+    fn terminate(&self) {
+        if let Ok(mut owner) = self.backchannel_owner.lock() {
+            owner.generation = owner.generation.saturating_add(1);
+            self.terminated.store(true, Ordering::SeqCst);
+            if let Some(cancel) = owner.cancel.take() {
+                let _ = cancel.send(());
+            }
+        } else {
+            self.terminated.store(true, Ordering::SeqCst);
+        }
+        if let Ok(mut inbound) = self.inbound.lock() {
+            inbound.take();
+        }
+        if let Ok(mut delivery) = self.delivery.lock() {
+            delivery.outbound.clear();
+        }
+        if let Ok(mut maps) = self.maps.lock() {
+            maps.1.clear();
         }
         self.notify.notify_waiters();
         self.notify.notify_one();
     }
 }
 
+fn schedule_terminal_expiry(session: &Arc<Session>, delay: Duration) {
+    let session = Arc::downgrade(session);
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        if let Some(session) = session.upgrade() {
+            if session.terminal_delivery_expired() {
+                session.terminate();
+                if let Some(registry) = session.registry.upgrade() {
+                    if let Ok(mut sessions) = registry.lock() {
+                        let registered = sessions
+                            .get(&session.sid)
+                            .is_some_and(|candidate| Arc::ptr_eq(candidate, &session));
+                        if registered {
+                            sessions.remove(&session.sid);
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// Session registry shared by every connection.
 pub struct Hub {
     state: Arc<RestState>,
-    sessions: Mutex<HashMap<String, Arc<Session>>>,
+    sessions: Arc<SessionRegistry>,
 }
 
 /// One parsed `WebChannel` HTTP request.
@@ -1059,7 +1207,7 @@ impl Hub {
     pub fn new(state: Arc<RestState>) -> Self {
         Self {
             state,
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1076,7 +1224,12 @@ impl Hub {
                     .lock()
                     .is_ok_and(|t| t.elapsed() >= SESSION_IDLE_TTL);
                 let live = s.backchannel_attached();
-                let keep = (!idle || live) && !s.is_closed();
+                let keep = !s.is_terminated()
+                    && if s.is_stream_ended() {
+                        !s.terminal_delivery_expired()
+                    } else {
+                        !idle || live
+                    };
                 if !keep {
                     gone.push((sid.clone(), s.clone()));
                 }
@@ -1088,7 +1241,7 @@ impl Hub {
             s.trace_event(&TraceEvent::SessionPurged {
                 session: s.trace_id,
             });
-            s.close();
+            s.terminate();
         }
     }
 
@@ -1098,7 +1251,7 @@ impl Hub {
             .lock()
             .ok()
             .and_then(|m| m.get(sid).cloned())
-            .filter(|s| !s.is_closed())
+            .filter(|s| !s.is_terminated())
             .ok_or_else(unknown_session)?;
         // A session answers only the origin and stream kind that opened it.
         if s.kind != req.kind || s.origin != req.origin {
@@ -1111,7 +1264,7 @@ impl Hub {
     fn remove(&self, sid: &str) {
         let removed = self.sessions.lock().ok().and_then(|mut m| m.remove(sid));
         if let Some(s) = removed {
-            s.close();
+            s.terminate();
         }
     }
 
@@ -1276,8 +1429,7 @@ impl Hub {
             kind: req.kind,
             origin: req.origin.clone(),
             inbound: Mutex::new(Some(inbound_tx)),
-            outbound: Mutex::new(VecDeque::new()),
-            next_aid: AtomicU64::new(0),
+            delivery: Mutex::new(DeliveryState::default()),
             backchannel_owner: Mutex::new(BackchannelOwner {
                 generation: 0,
                 cancel: None,
@@ -1287,7 +1439,8 @@ impl Hub {
             maps: Mutex::new((0, BTreeMap::new())),
             project: project.clone(),
             app_check: bound,
-            closed: AtomicBool::new(false),
+            registry: Arc::downgrade(&self.sessions),
+            terminated: AtomicBool::new(false),
         });
         {
             let Ok(mut sessions) = self.sessions.lock() else {
@@ -1351,8 +1504,10 @@ impl Hub {
                 return error_chunk(&e);
             }
         }
-        if let Err(e) = session_deliver(&session, &form) {
-            return error_chunk(&e);
+        if !session.is_stream_ended() {
+            if let Err(e) = session_deliver(&session, &form) {
+                return error_chunk(&e);
+            }
         }
         let attached = u64::from(session.backchannel_attached());
         let text = json!([attached, session.last_aid(), 0]).to_string();
@@ -1378,6 +1533,10 @@ impl Hub {
         if let Err(e) = session.acknowledge(acked) {
             return error_chunk(&e);
         }
+        if session.is_terminated() {
+            let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
+            return text_response(200, chunk(&noop));
+        }
         let long_poll = req.params.get("CI").map(String::as_str) == Some("1");
         let wait = req
             .params
@@ -1387,6 +1546,10 @@ impl Hub {
             .clamp(Duration::from_secs(1), LONG_POLL_MAX);
         let (cancel_tx, mut cancelled) = oneshot::channel();
         let Ok(generation) = session.replace_backchannel(cancel_tx) else {
+            if session.is_terminated() {
+                let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
+                return text_response(200, chunk(&noop));
+            }
             return text_response(500, "session lock poisoned".to_owned());
         };
         session.trace_event(&TraceEvent::BackchannelStarted {
@@ -1437,14 +1600,25 @@ fn commit_backchannel_chunk(
     permit: mpsc::Permit<'_, Result<bytes::Bytes, Status>>,
     body: bytes::Bytes,
 ) -> bool {
-    {
+    let committed = {
         let Ok(owner) = session.backchannel_owner.lock() else {
             return false;
         };
-        if owner.generation != generation {
+        if owner.generation != generation || session.is_terminated() {
+            return false;
+        }
+        let Ok(mut delivery) = session.delivery.lock() else {
+            return false;
+        };
+        if last_aid > delivery.next_aid {
             return false;
         }
         permit.send(Ok(body));
+        delivery.committed_aid = delivery.committed_aid.max(last_aid);
+        true
+    };
+    if !committed {
+        return false;
     }
     session.trace_event(&TraceEvent::BackchannelCommitted {
         session: session.trace_id,
@@ -1522,13 +1696,35 @@ async fn backchannel_loop(
                 return "long poll batch";
             }
         }
-        if session.is_closed() && pending.is_none() {
-            return "session closed";
+        if session.is_stream_ended()
+            && session.terminal_acknowledged()
+            && !session.is_terminated()
+            && pending.is_none()
+        {
+            let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
+            if let Err(outcome) = send_backchannel_chunk(
+                session,
+                generation,
+                session.last_aid(),
+                tx,
+                cancelled,
+                bytes::Bytes::from(chunk(&noop)),
+            )
+            .await
+            {
+                return outcome;
+            }
+            session.terminate();
+            return "session ended";
+        }
+        if session.is_terminated() && pending.is_none() {
+            return "session ended";
         }
         let idle = if long_poll { wait } else { KEEPALIVE };
         let waited = tokio::select! {
             biased;
             _ = &mut *cancelled => return "superseded",
+            () = tx.closed() => return "receiver gone",
             waited = tokio::time::timeout(idle, session.notify.notified()) => waited,
         };
         if session
@@ -1566,7 +1762,7 @@ async fn backchannel_loop(
 /// Delivers the `reqN___data__` maps of a form body to the session's stream in map-id
 /// order: retries are ignored, out-of-order maps are buffered, and the cursor advances only
 /// after a map was parsed and enqueued.
-fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result<(), Status> {
+fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result<bool, Status> {
     let count: u64 = form.get("count").and_then(|c| c.parse().ok()).unwrap_or(0);
     let ofs: u64 = form.get("ofs").and_then(|c| c.parse().ok()).unwrap_or(0);
     if count > MAX_MAPS_PER_REQUEST {
@@ -1604,11 +1800,20 @@ fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result
             .lock()
             .map_err(|_| Status::internal("session lock poisoned"))?;
         let Some(sender) = inbound.as_ref() else {
-            return Err(Status::unavailable("the stream has ended"));
+            maps.1.clear();
+            return Ok(false);
         };
-        sender
-            .try_send(Ok(value))
-            .map_err(|_| Status::unavailable("stream is not accepting messages"))?;
+        match sender.try_send(Ok(value)) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                drop(inbound);
+                maps.1.clear();
+                return Ok(false);
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                return Err(Status::unavailable("stream is not accepting messages"));
+            }
+        }
         drop(inbound);
         let done = maps.0;
         maps.1.remove(&done);
@@ -1625,7 +1830,7 @@ fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result
     };
     drop(maps);
     session.trace_event(&event);
-    Ok(())
+    Ok(true)
 }
 
 fn spawn_stream(
@@ -1654,7 +1859,7 @@ fn spawn_stream(
                 break;
             }
         }
-        pump_session.close();
+        pump_session.end_stream();
     });
     match kind {
         StreamKind::Listen => {
@@ -1925,12 +2130,16 @@ mod tests {
             kind: StreamKind::Listen,
             origin: None,
             inbound: Mutex::new(Some(inbound)),
-            outbound: Mutex::new(VecDeque::from([
-                (1, "[1,[\"first\"]]".to_owned()),
-                (2, "[2,[\"second\"]]".to_owned()),
-                (3, "[3,[\"third\"]]".to_owned()),
-            ])),
-            next_aid: AtomicU64::new(3),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([
+                    (1, "[1,[\"first\"]]".to_owned()),
+                    (2, "[2,[\"second\"]]".to_owned()),
+                    (3, "[3,[\"third\"]]".to_owned()),
+                ]),
+                next_aid: 3,
+                committed_aid: 3,
+                ..DeliveryState::default()
+            }),
             backchannel_owner: Mutex::new(BackchannelOwner {
                 generation: 0,
                 cancel: None,
@@ -1940,7 +2149,8 @@ mod tests {
             maps: Mutex::new((0, BTreeMap::new())),
             project: "demo-app".to_owned(),
             app_check: None,
-            closed: AtomicBool::new(false),
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
         };
 
         assert_eq!(
@@ -1948,6 +2158,334 @@ mod tests {
             Some((3, 2, "[[2,[\"second\"]],[3,[\"third\"]]]".to_owned()))
         );
         assert_eq!(session.pending_chunk_after(3), None);
+    }
+
+    #[tokio::test]
+    async fn terminal_delivery_deadline_is_independent_of_request_activity() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let registry = Arc::new(Mutex::new(HashMap::new()));
+        let session = Arc::new(Session {
+            sid: "terminal-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(2, "[2,[{\"error\":{}}]]".to_owned())]),
+                next_aid: 2,
+                committed_aid: 2,
+                acknowledged_aid: 0,
+                stream_end: Some(StreamEnd {
+                    ended_at: Instant::now()
+                        .checked_sub(TERMINAL_DELIVERY_TTL)
+                        .expect("test instant must support the terminal TTL"),
+                    terminal_aid: 2,
+                }),
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((2, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: Arc::downgrade(&registry),
+            terminated: AtomicBool::new(false),
+        });
+        registry
+            .lock()
+            .unwrap()
+            .insert(session.sid.clone(), session.clone());
+
+        session.touch();
+        assert!(session.terminal_delivery_expired());
+        assert!(!session.is_terminated());
+        schedule_terminal_expiry(&session, Duration::ZERO);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !session.is_terminated() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the deadline task must terminate an abandoned session");
+        assert!(session.delivery.lock().unwrap().outbound.is_empty());
+        assert!(!registry.lock().unwrap().contains_key(&session.sid));
+    }
+
+    #[test]
+    fn stream_end_observes_an_acknowledgement_that_won_the_race() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Arc::new(Session {
+            sid: "ack-first-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(2, "[2,[{\"error\":{}}]]".to_owned())]),
+                next_aid: 2,
+                committed_aid: 2,
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((2, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        });
+
+        session.acknowledge(2).unwrap();
+        assert!(!session.is_terminated());
+        session.end_stream();
+        assert!(session.is_terminated());
+        assert!(session.delivery.lock().unwrap().outbound.is_empty());
+    }
+
+    #[tokio::test]
+    async fn acknowledged_stream_end_frames_the_attached_backchannel_before_termination() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Arc::new(Session {
+            sid: "ack-owner-end-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(2, "[2,[{\"error\":{}}]]".to_owned())]),
+                next_aid: 2,
+                committed_aid: 2,
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((2, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        });
+
+        session.acknowledge(2).unwrap();
+        let (cancel, mut cancelled) = oneshot::channel();
+        let generation = session.replace_backchannel(cancel).unwrap();
+        session.end_stream();
+        assert!(!session.is_terminated());
+
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut cursor = 2;
+        let outcome = backchannel_loop(
+            &session,
+            generation,
+            true,
+            Duration::from_secs(1),
+            &tx,
+            &mut cursor,
+            &mut cancelled,
+        )
+        .await;
+
+        assert_eq!(outcome, "session ended");
+        assert_eq!(
+            rx.recv().await.unwrap().unwrap(),
+            bytes::Bytes::from_static(b"14\n[[2,[\"noop\"]]]")
+        );
+        assert!(session.is_terminated());
+        assert!(!session.backchannel_attached());
+    }
+
+    #[tokio::test]
+    async fn unacknowledged_streaming_terminal_array_replays_after_response_loss() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let terminal = "[1,[{\"error\":{\"status\":\"PERMISSION_DENIED\"}}]]";
+        let session = Arc::new(Session {
+            sid: "unacknowledged-stream-end".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(1, terminal.to_owned())]),
+                next_aid: 1,
+                stream_end: Some(StreamEnd {
+                    ended_at: Instant::now(),
+                    terminal_aid: 1,
+                }),
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 1,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((1, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        });
+        let (tx, mut rx) = mpsc::channel(1);
+        let (_cancel, mut cancelled) = oneshot::channel();
+        let first_session = session.clone();
+        let first = tokio::spawn(async move {
+            let mut cursor = 0;
+            backchannel_loop(
+                &first_session,
+                1,
+                false,
+                Duration::from_secs(1),
+                &tx,
+                &mut cursor,
+                &mut cancelled,
+            )
+            .await
+        });
+
+        let committed = rx.recv().await.unwrap().unwrap();
+        drop(rx);
+        assert_eq!(first.await.unwrap(), "receiver gone");
+        assert!(!session.is_terminated());
+        assert!(!session.terminal_acknowledged());
+        assert!(session.delivery.lock().unwrap().outbound.len() == 1);
+
+        let (cancel, mut cancelled) = oneshot::channel();
+        let generation = session.replace_backchannel(cancel).unwrap();
+        let (replay_tx, mut replay_rx) = mpsc::channel(1);
+        let mut replay_cursor = 0;
+        assert_eq!(
+            backchannel_loop(
+                &session,
+                generation,
+                true,
+                Duration::from_secs(1),
+                &replay_tx,
+                &mut replay_cursor,
+                &mut cancelled,
+            )
+            .await,
+            "long poll batch"
+        );
+        assert_eq!(replay_rx.recv().await.unwrap().unwrap(), committed);
+        assert!(!session.is_terminated());
+    }
+
+    #[test]
+    fn acknowledgement_cannot_remove_an_uncommitted_array() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "uncommitted-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(2, "[2,[{\"error\":{}}]]".to_owned())]),
+                next_aid: 2,
+                committed_aid: 1,
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((2, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        };
+
+        assert_eq!(
+            session.acknowledge(2).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+        assert_eq!(session.delivery.lock().unwrap().outbound.len(), 1);
+    }
+
+    #[test]
+    fn a_terminated_session_cannot_acquire_a_new_backchannel_owner() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "terminated-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState::default()),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        };
+        session.terminate();
+        let (cancel, _cancelled) = oneshot::channel();
+
+        assert!(session.replace_backchannel(cancel).is_err());
+        assert!(!session.backchannel_attached());
+    }
+
+    #[test]
+    fn a_closed_inbound_stream_absorbs_late_maps_without_buffering_them() {
+        let (inbound, inbound_rx) = mpsc::channel(1);
+        drop(inbound_rx);
+        let session = Session {
+            sid: "closed-inbound-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState::default()),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        };
+        let body = BTreeMap::from([
+            ("count".to_owned(), "1".to_owned()),
+            ("ofs".to_owned(), "0".to_owned()),
+            (
+                "req0___data__".to_owned(),
+                json!({"database": "projects/demo-app/databases/(default)"}).to_string(),
+            ),
+        ]);
+
+        assert!(!session_deliver(&session, &body).unwrap());
+        assert!(session.maps.lock().unwrap().1.is_empty());
     }
 
     #[tokio::test]
@@ -1960,8 +2498,11 @@ mod tests {
             kind: StreamKind::Listen,
             origin: None,
             inbound: Mutex::new(Some(inbound)),
-            outbound: Mutex::new(VecDeque::from([(1, "[1,[{\"current\":true}]]".to_owned())])),
-            next_aid: AtomicU64::new(1),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(1, "[1,[{\"current\":true}]]".to_owned())]),
+                next_aid: 1,
+                ..DeliveryState::default()
+            }),
             backchannel_owner: Mutex::new(BackchannelOwner {
                 generation: 2,
                 cancel: None,
@@ -1971,7 +2512,8 @@ mod tests {
             maps: Mutex::new((0, BTreeMap::new())),
             project: "demo-app".to_owned(),
             app_check: None,
-            closed: AtomicBool::new(false),
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
         };
         let (tx, mut rx) = mpsc::channel(1);
         let (_cancel_tx, mut cancelled) = oneshot::channel();
@@ -1994,6 +2536,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn termination_invalidates_a_reserved_backchannel_commit() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "terminating-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(1, "[1,[{\"error\":{}}]]".to_owned())]),
+                next_aid: 1,
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 1,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((1, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        let permit = tx.reserve().await.unwrap();
+
+        session.terminate();
+
+        assert!(!commit_backchannel_chunk(
+            &session,
+            1,
+            1,
+            permit,
+            bytes::Bytes::from_static(b"terminal"),
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn replacement_and_delivery_commit_have_one_linearization_point() {
         let (inbound, _inbound_rx) = mpsc::channel(1);
         let session = Session {
@@ -2003,8 +2587,10 @@ mod tests {
             kind: StreamKind::Listen,
             origin: None,
             inbound: Mutex::new(Some(inbound)),
-            outbound: Mutex::new(VecDeque::new()),
-            next_aid: AtomicU64::new(1),
+            delivery: Mutex::new(DeliveryState {
+                next_aid: 1,
+                ..DeliveryState::default()
+            }),
             backchannel_owner: Mutex::new(BackchannelOwner {
                 generation: 1,
                 cancel: None,
@@ -2014,7 +2600,8 @@ mod tests {
             maps: Mutex::new((0, BTreeMap::new())),
             project: "demo-app".to_owned(),
             app_check: None,
-            closed: AtomicBool::new(false),
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
         };
         let (tx, mut rx) = mpsc::channel(1);
         let old_permit = tx.reserve().await.unwrap();

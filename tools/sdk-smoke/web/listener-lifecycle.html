@@ -17,25 +17,69 @@
       (() => {
         const ledger = [];
         let maximumConnectedForms = 0;
+        let maximumConnectedRouteTrees = 0;
+        let writeSessionOpeningCount = 0;
+        let animationFrame;
+        let active = true;
+        const ancestry = (node) => {
+          const path = [];
+          for (let current = node; current; current = current.parentElement) {
+            path.push(current.id ? `${current.tagName.toLowerCase()}#${current.id}` : current.tagName.toLowerCase());
+          }
+          return path;
+        };
         const sample = (event) => {
           const forms = document.querySelectorAll("[data-setting-form]");
+          const routeTrees = document.querySelectorAll("[data-route-tree]");
+          const headings = Array.from(document.querySelectorAll("h1"), (node) => ({
+            text: node.textContent,
+            ancestry: ancestry(node),
+          }));
           maximumConnectedForms = Math.max(maximumConnectedForms, forms.length);
+          maximumConnectedRouteTrees = Math.max(maximumConnectedRouteTrees, routeTrees.length);
           ledger.push({
             event,
             connectedForms: forms.length,
-            routeTrees: Array.from(document.querySelectorAll("[data-route-tree]"), (node) =>
-              node.getAttribute("data-route-tree"),
-            ),
+            routeTrees: Array.from(routeTrees, (node) => node.getAttribute("data-route-tree")),
+            headings,
           });
         };
         sample("initial-html");
+        const initialHtml = ledger[0];
         const observer = new MutationObserver(() => sample("dom-mutation"));
         observer.observe(document.documentElement, { childList: true, subtree: true });
+        const sampleFrame = () => {
+          if (!active) return;
+          const forms = document.querySelectorAll("[data-setting-form]").length;
+          const routeTrees = document.querySelectorAll("[data-route-tree]").length;
+          maximumConnectedForms = Math.max(maximumConnectedForms, forms);
+          maximumConnectedRouteTrees = Math.max(maximumConnectedRouteTrees, routeTrees);
+          animationFrame = requestAnimationFrame(sampleFrame);
+        };
+        animationFrame = requestAnimationFrame(sampleFrame);
+        performance.setResourceTimingBufferSize(2_000);
+        const resourceObserver = new PerformanceObserver((entries) => {
+          for (const entry of entries.getEntries()) {
+            const url = new URL(entry.name);
+            if (!url.pathname.endsWith("/google.firestore.v1.Firestore/Write/channel")) continue;
+            const sid = url.searchParams.get("SID");
+            if (sid === null || sid === "null") writeSessionOpeningCount += 1;
+          }
+        });
+        resourceObserver.observe({ type: "resource" });
         window.__listenerLifecycle = {
           ledger,
-          observer,
+          initialHtml,
           sample,
           maximumConnectedForms: () => maximumConnectedForms,
+          maximumConnectedRouteTrees: () => maximumConnectedRouteTrees,
+          writeSessionOpeningCount: () => writeSessionOpeningCount,
+          disconnect: () => {
+            active = false;
+            cancelAnimationFrame(animationFrame);
+            observer.disconnect();
+            resourceObserver.disconnect();
+          },
         };
       })();
     </script>

@@ -260,8 +260,12 @@ fn send_map(hub: &Hub, sid: &str, rid: &str, aid: u64, offset: u64, data: &str) 
 }
 
 async fn read_long_poll(hub: &Hub, sid: &str, aid: u64) -> Value {
-    let ChannelResponse::Stream { mut body, .. } = hub.handle(&ChannelRequest {
-        kind: StreamKind::Listen,
+    read_long_poll_kind(hub, StreamKind::Listen, sid, aid).await
+}
+
+async fn read_long_poll_kind(hub: &Hub, kind: StreamKind, sid: &str, aid: u64) -> Value {
+    let response = hub.handle(&ChannelRequest {
+        kind,
         method: "GET".to_owned(),
         params: params(&[
             ("SID", sid),
@@ -275,8 +279,10 @@ async fn read_long_poll(hub: &Hub, sid: &str, aid: u64) -> Value {
         app_check: Vec::new(),
         origin: None,
         body: String::new(),
-    }) else {
-        panic!("expected a streamed back channel");
+    });
+    let ChannelResponse::Stream { mut body, .. } = response else {
+        let (status, _, body) = full(response);
+        panic!("expected a streamed back channel, got HTTP {status}: {body}");
     };
     let chunk = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
         .await
@@ -287,6 +293,25 @@ async fn read_long_poll(hub: &Hub, sid: &str, aid: u64) -> Value {
     let parsed = chunks(std::str::from_utf8(&chunk).unwrap());
     assert_eq!(parsed.len(), 1);
     parsed.into_iter().next().unwrap()
+}
+
+fn open_write_session(hub: &Hub) -> String {
+    let request = json!({"database": DB}).to_string();
+    let (status, headers, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &request)]),
+    }));
+    assert_eq!(status, 200);
+    headers
+        .iter()
+        .find(|(name, _)| *name == "x-http-session-id")
+        .map(|(_, value)| value.clone())
+        .expect("write handshake must return a session ID")
 }
 
 fn last_array_id(batch: &Value) -> u64 {
@@ -323,6 +348,283 @@ async fn an_unacknowledged_committed_batch_is_replayed_with_the_same_array_ids()
         .map(|array| array[0].as_u64().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(ids, (1..=ids.len() as u64).collect::<Vec<_>>());
+}
+
+async fn deny_one_write(hub: &Hub) -> (String, u64, String) {
+    let sid = open_write_session(hub);
+    let handshake = read_long_poll_kind(hub, StreamKind::Write, &sid, 0).await;
+    let handshake_aid = last_array_id(&handshake);
+    let stream_token = response_payloads(&handshake)[0]["streamToken"]
+        .as_str()
+        .expect("write handshake must return a stream token");
+    let denied_write = json!({
+        "streamToken": stream_token,
+        "writes": [{
+            "update": {
+                "name": format!("{DB}/documents/closed/a"),
+                "fields": {"value": {"integerValue": "1"}}
+            }
+        }]
+    })
+    .to_string();
+    let (status, _, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "POST".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "2"),
+            ("AID", &handshake_aid.to_string()),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[
+            ("count", "1"),
+            ("ofs", "1"),
+            ("req0___data__", &denied_write),
+        ]),
+    }));
+    assert_eq!(status, 200);
+    (sid, handshake_aid, denied_write)
+}
+
+async fn wait_for_terminal_aid_without_backchannel(
+    hub: &Hub,
+    sid: &str,
+    handshake_aid: u64,
+) -> u64 {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let (status, _, body) = full(hub.handle(&ChannelRequest {
+                kind: StreamKind::Write,
+                method: "POST".to_owned(),
+                params: params(&[
+                    ("SID", sid),
+                    ("RID", "terminal-probe"),
+                    ("AID", &handshake_aid.to_string()),
+                ]),
+                authorization: None,
+                app_check: Vec::new(),
+                origin: None,
+                body: form(&[("count", "0"), ("ofs", "2")]),
+            }));
+            assert_eq!(status, 200, "terminal probe failed: {body}");
+            let acknowledgement = chunks(&body);
+            let aid = acknowledgement[0][1]
+                .as_u64()
+                .expect("forward acknowledgement must include the last generated AID");
+            if aid > handshake_aid {
+                break aid;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("terminal array was not queued without a backchannel")
+}
+
+fn send_write_map(
+    hub: &Hub,
+    sid: &str,
+    rid: &str,
+    aid: u64,
+    offset: u64,
+    message: &str,
+) -> (u16, String) {
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "POST".to_owned(),
+        params: params(&[("SID", sid), ("RID", rid), ("AID", &aid.to_string())]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[
+            ("count", "1"),
+            ("ofs", &offset.to_string()),
+            ("req0___data__", message),
+        ]),
+    }));
+    (status, body)
+}
+
+#[tokio::test]
+async fn rules_denied_write_terminal_error_survives_until_client_acknowledgement() {
+    let (hub, local) = hub_and_local(
+        Some(
+            "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /closed/{id} { allow read, write: if false; } match /allowed/{id} { allow read, write: if true; } } }",
+        ),
+        TokenAcceptance::Verified,
+    );
+    let (sid, handshake_aid, _denied_write) = deny_one_write(&hub).await;
+    let denied_aid = wait_for_terminal_aid_without_backchannel(&hub, &sid, handshake_aid).await;
+
+    let pipelined_write = json!({
+        "writes": [{
+            "update": {
+                "name": format!("{DB}/documents/allowed/pipelined"),
+                "fields": {"value": {"integerValue": "1"}}
+            }
+        }]
+    })
+    .to_string();
+    let (status, body) = send_write_map(&hub, &sid, "3", handshake_aid, 2, &pipelined_write);
+    assert_eq!(
+        status, 200,
+        "a terminal RPC result must not become an HTTP transport failure: {body}"
+    );
+    assert_eq!(chunks(&body)[0][1], denied_aid);
+
+    let denied = read_long_poll_kind(&hub, StreamKind::Write, &sid, handshake_aid).await;
+    let denied_aid = last_array_id(&denied);
+    assert_eq!(
+        response_payloads(&denied)[0]["error"]["status"],
+        "PERMISSION_DENIED",
+        "unexpected write result: {denied}"
+    );
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "GET".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "wrong-origin"),
+            ("AID", &handshake_aid.to_string()),
+            ("CI", "1"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: Some("http://localhost:5173".to_owned()),
+        body: String::new(),
+    }));
+    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
+    assert_eq!(
+        read_long_poll_kind(&hub, StreamKind::Write, &sid, handshake_aid).await,
+        denied,
+        "HTTP response commitment must not acknowledge the terminal array"
+    );
+
+    assert_eq!(
+        local
+            .get_document(
+                &pb::GetDocumentRequest {
+                    name: format!("{DB}/documents/allowed/pipelined"),
+                    ..Default::default()
+                },
+                &fireemu_adapter_grpc::rules::allow_all_reads,
+            )
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound,
+        "a map sent after stream termination must not mutate Firestore"
+    );
+
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "POST".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "4"),
+            ("AID", &denied_aid.to_string()),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "0"), ("ofs", "2")]),
+    }));
+    assert_eq!(status, 200, "terminal acknowledgement failed: {body}");
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "POST".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "5"),
+            ("AID", &denied_aid.to_string()),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "0"), ("ofs", "2")]),
+    }));
+    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
+}
+
+#[tokio::test]
+async fn terminal_backchannel_ack_returns_a_framed_end_without_reattaching() {
+    let hub = hub(Some(
+        "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /closed/{id} { allow read, write: if false; } } }",
+    ));
+    let (sid, handshake_aid, _write) = deny_one_write(&hub).await;
+    wait_for_terminal_aid_without_backchannel(&hub, &sid, handshake_aid).await;
+    let denied = read_long_poll_kind(&hub, StreamKind::Write, &sid, handshake_aid).await;
+    let denied_aid = last_array_id(&denied);
+
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "GET".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "terminal-ack"),
+            ("AID", &denied_aid.to_string()),
+            ("CI", "1"),
+            ("TYPE", "xmlhttp"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: String::new(),
+    }));
+    assert_eq!(status, 200);
+    assert_eq!(chunks(&body), vec![json!([[denied_aid, ["noop"]]])]);
+
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "GET".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "after-terminal-ack"),
+            ("AID", &denied_aid.to_string()),
+            ("CI", "1"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: String::new(),
+    }));
+    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
+}
+
+#[tokio::test]
+async fn explicit_terminate_releases_an_unacknowledged_terminal_session() {
+    let hub = hub(Some(
+        "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /closed/{id} { allow read, write: if false; } } }",
+    ));
+    let (sid, handshake_aid, _write) = deny_one_write(&hub).await;
+    wait_for_terminal_aid_without_backchannel(&hub, &sid, handshake_aid).await;
+    let denied = read_long_poll_kind(&hub, StreamKind::Write, &sid, handshake_aid).await;
+    assert_eq!(
+        response_payloads(&denied)[0]["error"]["status"],
+        "PERMISSION_DENIED"
+    );
+
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "GET".to_owned(),
+        params: params(&[("SID", &sid), ("TYPE", "terminate")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: String::new(),
+    }));
+    assert_eq!((status, body.as_str()), (200, ""));
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Write,
+        method: "POST".to_owned(),
+        params: params(&[("SID", &sid), ("RID", "3"), ("AID", "1")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "0"), ("ofs", "2")]),
+    }));
+    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
 }
 
 #[tokio::test]

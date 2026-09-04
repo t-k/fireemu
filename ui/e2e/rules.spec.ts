@@ -51,6 +51,12 @@ test.describe("Rules", () => {
     request,
   }) => {
     await api(request, "PUT", "control/v1/rules", { source: RULES });
+    await gotoApp(page, "/rules");
+    // The first requests query enables the bounded trace ring. Open the UI before producing
+    // the decisions whose traces this scenario expects to inspect.
+    await expect(
+      page.getByText("No request has been decided against the loaded rules yet."),
+    ).toBeVisible();
     // One read the rules allow and one write they deny, decided by the ruleset just loaded.
     expect((await asClient("GET", "documents/traced/a")).status).toBe(404);
     expect(
@@ -58,7 +64,6 @@ test.describe("Rules", () => {
         .status,
     ).toBe(403);
 
-    await gotoApp(page, "/rules");
     await page.getByTestId("rules-requests-refresh").click();
     const rows = page.getByTestId("rules-requests").locator("tbody tr");
     await expect(rows).toHaveCount(2);

@@ -1585,7 +1585,7 @@
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/schema/firebase-config.json"
       ],
       "issues": [
-        "docs.local/issues/open/match-firebase-cli-config-and-emulator-hub.md",
+        "docs.local/issues/closed/match-firebase-cli-config-and-emulator-hub.md",
         "docs.local/issues/closed/support-official-import-and-export-artifacts.md"
       ],
       "notes": [],
@@ -1726,7 +1726,7 @@
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/src/emulator/types.ts"
       ],
       "issues": [
-        "docs.local/issues/open/match-firebase-cli-config-and-emulator-hub.md"
+        "docs.local/issues/closed/match-firebase-cli-config-and-emulator-hub.md"
       ],
       "notes": [],
       "gaps": [
@@ -1786,13 +1786,11 @@
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/src/emulator/types.ts"
       ],
       "issues": [
-        "docs.local/issues/open/match-firebase-cli-config-and-emulator-hub.md",
+        "docs.local/issues/closed/match-firebase-cli-config-and-emulator-hub.md",
         "docs.local/issues/open/match-emulator-suite-ui-workflows.md"
       ],
       "notes": [],
-      "gaps": [
-        "end-to-end differential verification of the official Emulator UI's Logs page consuming the stream (a browser matrix); the primary evidence is a Rust client asserting the handshake and a functions log frame"
-      ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
       "claims": [
         {
@@ -1812,7 +1810,8 @@
             ],
             "integration": [
               "crates/fireemu-adapter-logging/tests/websocket_client.rs",
-              "crates/fireemu/tests/functions_discovery.rs"
+              "crates/fireemu/tests/functions_discovery.rs",
+              "ui/e2e/official-logging.spec.ts"
             ],
             "conformance": []
           },

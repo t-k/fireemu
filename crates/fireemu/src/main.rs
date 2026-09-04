@@ -3,6 +3,7 @@
 //! ```text
 //! fireemu init [options]
 //! fireemu up | emulators:start   [options]
+//! fireemu exec | emulators:exec  [options] "shell script"
 //! fireemu exec | emulators:exec  [options] -- <command...>
 //! fireemu emulators:export <dir> [options]
 //! fireemu doctor
@@ -58,13 +59,15 @@ use fireemu_core_auth::store::AuthStore;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::time::LogicalInstant;
+#[cfg(windows)]
+use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommandWrap};
 
 use crate::config::{RuntimeConfig, Selection};
 
 const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
+    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
     ExitCode::from(2)
 }
 
@@ -186,8 +189,15 @@ impl std::fmt::Debug for RedactedRuntimeConfig<'_> {
 
 /// What `exec` runs once the services are up.
 struct ExecPlan {
-    /// Program and arguments.
-    command: Vec<String>,
+    /// Direct argv or the official CLI's positional shell script.
+    command: ExecCommand,
+}
+
+enum ExecCommand {
+    /// The fireemu extension that preserves an exact program and argv.
+    Argv(Vec<String>),
+    /// The official `emulators:exec <script>` form.
+    Shell(String),
 }
 
 /// Everything the option parser produced.
@@ -244,7 +254,8 @@ fn main() -> ExitCode {
             Err(e) => fail(&e),
         },
         Some("up" | "emulators:start") => match parse_options(&args[1..], OptionContext::Start) {
-            Ok(options) => daemon::run(options, None),
+            Ok((options, None)) => daemon::run(options, None),
+            Ok((_, Some(_))) => unreachable!("start does not accept a positional argument"),
             Err(e) => fail(&e),
         },
         Some("exec" | "emulators:exec") => match parse_exec(&args[1..]) {
@@ -259,7 +270,7 @@ fn main() -> ExitCode {
         // The manifest describes the behaviour of one profile, so the command takes the same
         // options the daemon does and reports the profile they resolve to.
         Some("capabilities") => match parse_options(&args[1..], OptionContext::Start) {
-            Ok(options) => {
+            Ok((options, None)) => {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&control::capabilities_manifest(
@@ -269,6 +280,7 @@ fn main() -> ExitCode {
                 );
                 ExitCode::SUCCESS
             }
+            Ok((_, Some(_))) => unreachable!("capabilities does not accept a positional argument"),
             Err(e) => fail(&e),
         },
         _ => usage(),
@@ -408,18 +420,37 @@ fn post_json(
     Ok((status, body.to_owned()))
 }
 
-/// `exec [options] -- <command...>`.
+/// `exec [options] <script>` or `exec [options] -- <command...>`.
 fn parse_exec(args: &[String]) -> Result<(Options, ExecPlan), CliError> {
-    let split = args
-        .iter()
-        .position(|a| a == "--")
-        .ok_or_else(|| CliError::usage("exec needs `-- <command...>` after its options"))?;
-    let command = args[split + 1..].to_vec();
-    if command.is_empty() {
-        return Err(CliError::usage("exec needs a command after --"));
+    if let Some(split) = args.iter().position(|arg| arg == "--") {
+        let command = args[split + 1..].to_vec();
+        if command.is_empty() {
+            return Err(CliError::usage("exec needs a command after --"));
+        }
+        let (options, positional) = parse_options(&args[..split], OptionContext::Exec)?;
+        if positional.is_some() {
+            return Err(CliError::usage(
+                "exec cannot combine a positional shell script with `-- <command...>`",
+            ));
+        }
+        return Ok((
+            options,
+            ExecPlan {
+                command: ExecCommand::Argv(command),
+            },
+        ));
     }
-    let options = parse_options(&args[..split], OptionContext::Exec)?;
-    Ok((options, ExecPlan { command }))
+
+    let (options, script) = parse_options(args, OptionContext::Exec)?;
+    let script = script.ok_or_else(|| {
+        CliError::usage("exec needs a positional shell script or `-- <command...>`")
+    })?;
+    Ok((
+        options,
+        ExecPlan {
+            command: ExecCommand::Shell(script),
+        },
+    ))
 }
 
 /// Replaces the port of a `host:port` address, keeping the configured host.
@@ -448,6 +479,8 @@ fn optional_value(args: &[String], i: usize) -> Option<&String> {
 /// The parsed command line, before it is applied to a configuration.
 #[derive(Default)]
 struct RawOptions {
+    /// The official `emulators:exec <script>` positional argument.
+    positional_script: Option<String>,
     config_path: Option<PathBuf>,
     firebase_json: Option<PathBuf>,
     project: Option<String>,
@@ -612,6 +645,14 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
                 raw.export_on_exit = Some(dir);
                 i += step;
             }
+            other if context == OptionContext::Exec && !other.starts_with('-') => {
+                if raw.positional_script.replace(other.to_owned()).is_some() {
+                    return Err(CliError::usage(
+                        "emulators:exec takes exactly one positional shell script",
+                    ));
+                }
+                i += 1;
+            }
             other => return Err(CliError::usage(format!("unknown argument {other}"))),
         }
     }
@@ -702,8 +743,12 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
 }
 
-fn parse_options(args: &[String], context: OptionContext) -> Result<Options, CliError> {
+fn parse_options(
+    args: &[String],
+    context: OptionContext,
+) -> Result<(Options, Option<String>), CliError> {
     let raw = parse_raw_options(args, context)?;
+    let positional_script = raw.positional_script.clone();
     let only = raw.only.clone().unwrap_or_default();
     // `--config` carries either the canonical configuration or a firebase.json.
     let (mut cfg, firebase_from_config) = match &raw.config_path {
@@ -796,13 +841,16 @@ fn parse_options(args: &[String], context: OptionContext) -> Result<Options, Cli
             )));
         }
     }
-    Ok(Options {
-        cfg,
-        only,
-        verbosity: raw.verbosity,
-        import: raw.import,
-        export_on_exit,
-    })
+    Ok((
+        Options {
+            cfg,
+            only,
+            verbosity: raw.verbosity,
+            import: raw.import,
+            export_on_exit,
+        },
+        positional_script,
+    ))
 }
 
 /// Resolves `--export-on-exit` against `--import` and refuses a target that would replace
@@ -1016,18 +1064,65 @@ const OWNED_VARIABLES: [&str; 14] = [
 /// The command runs in its own process group when the supervisor is not on a terminal
 /// (CI, a script), so a signal reaches its whole tree; on a terminal it stays in the
 /// foreground group so it keeps the terminal and receives Ctrl-C itself.
+#[cfg(not(windows))]
 fn own_process_group() -> bool {
     use std::io::IsTerminal as _;
     !std::io::stdin().is_terminal()
 }
 
-fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::process::Child, String> {
-    let (program, args) = plan
-        .command
-        .split_first()
-        .ok_or("exec needs a command after --")?;
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(args).kill_on_drop(true);
+#[cfg(unix)]
+fn shell_child_command(script: &str) -> (tokio::process::Command, String) {
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command.args(["-c", script]);
+    (command, "/bin/sh".to_owned())
+}
+
+#[cfg(windows)]
+fn shell_child_command(script: &str) -> (tokio::process::Command, String) {
+    use std::os::windows::process::CommandExt as _;
+
+    let shell = std::env::var_os("ComSpec")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "cmd.exe".into());
+    let mut command = tokio::process::Command::new(&shell);
+    let is_cmd = std::path::Path::new(&shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("cmd") || name.eq_ignore_ascii_case("cmd.exe")
+        });
+    if is_cmd {
+        command
+            .as_std_mut()
+            .raw_arg("/d")
+            .raw_arg("/s")
+            .raw_arg("/c")
+            .raw_arg(format!("\"{script}\""));
+    } else {
+        command.args(["-c", script]);
+    }
+    (command, shell.to_string_lossy().into_owned())
+}
+
+#[cfg(not(windows))]
+type ExecChild = tokio::process::Child;
+
+#[cfg(windows)]
+type ExecChild = Box<dyn TokioChildWrapper>;
+
+fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<ExecChild, String> {
+    let (mut cmd, program) = match &plan.command {
+        ExecCommand::Argv(command) => {
+            let (program, args) = command
+                .split_first()
+                .ok_or("exec needs a command after --")?;
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.args(args);
+            (cmd, program.clone())
+        }
+        ExecCommand::Shell(script) => shell_child_command(script),
+    };
+    cmd.kill_on_drop(true);
     for name in OWNED_VARIABLES {
         cmd.env_remove(name);
     }
@@ -1036,13 +1131,35 @@ fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::proce
     if own_process_group() {
         cmd.process_group(0);
     }
-    cmd.spawn()
-        .map_err(|e| format!("cannot start {program}: {e}"))
+    #[cfg(not(windows))]
+    {
+        cmd.spawn()
+            .map_err(|e| format!("cannot start {program}: {e}"))
+    }
+    #[cfg(windows)]
+    {
+        let mut wrapped = TokioCommandWrap::from(cmd);
+        wrapped.wrap(JobObject).wrap(KillOnDrop);
+        wrapped
+            .spawn()
+            .map_err(|e| format!("cannot start {program}: {e}"))
+    }
+}
+
+#[cfg(not(windows))]
+fn child_id(child: &ExecChild) -> Option<u32> {
+    child.id()
+}
+
+#[cfg(windows)]
+fn child_id(child: &ExecChild) -> Option<u32> {
+    child.id()
 }
 
 /// Sends `signal` to the command (`pid` as spawned: `Child::id` is gone once the child was
 /// reaped, but its group may still hold a background job): to its process group when it
 /// leads one, else to it.
+#[cfg(not(windows))]
 fn signal_child(pid: u32, signal: &str) {
     #[cfg(unix)]
     {
@@ -1071,20 +1188,53 @@ fn signal_child(pid: u32, signal: &str) {
 }
 
 /// Waits for the command when there is one; never resolves otherwise.
-async fn wait_child(
-    child: Option<&mut tokio::process::Child>,
-) -> std::io::Result<std::process::ExitStatus> {
+async fn wait_child(child: Option<&mut ExecChild>) -> std::io::Result<std::process::ExitStatus> {
     match child {
+        #[cfg(not(windows))]
         Some(child) => child.wait().await,
+        // Waiting through JobObjectChild also waits for every descendant. Observe only the
+        // command leader here, then terminate and drain the job after retaining its status.
+        #[cfg(windows)]
+        Some(child) => child.inner_mut().wait().await,
         None => std::future::pending().await,
     }
+}
+
+/// Removes descendants left behind by a command that has already exited. On Unix this only
+/// addresses the process group fireemu created; an interactive child PID is never signalled
+/// after it has been reaped. On Windows the stable Job Object handle avoids PID reuse entirely.
+#[cfg(not(windows))]
+fn sweep_child_tree(child: &mut ExecChild, pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = child;
+        if own_process_group() {
+            signal_child(pid, "-KILL");
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (child, pid);
+    }
+}
+
+#[cfg(windows)]
+async fn sweep_child_tree(child: &mut ExecChild, pid: u32) {
+    let _ = pid;
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Box::into_pin(child.wait()),
+    )
+    .await;
 }
 
 /// Stops the command after the supervisor received `signal` (`-INT` / `-TERM`): the signal
 /// is forwarded with its identity (through `kill(1)`; the crate forbids unsafe code) unless
 /// the terminal already delivered it to the command's own group, then SIGKILL to the whole
 /// group after ten seconds. Returns the status the command reported.
-async fn stop_child(child: &mut tokio::process::Child, pid: u32, signal: &str) -> i32 {
+#[cfg(not(windows))]
+async fn stop_child(child: &mut ExecChild, pid: u32, signal: &str) -> i32 {
     let terminal_delivered = signal == "-INT" && !own_process_group();
     if !terminal_delivered {
         signal_child(pid, signal);
@@ -1092,13 +1242,27 @@ async fn stop_child(child: &mut tokio::process::Child, pid: u32, signal: &str) -
     if let Ok(Ok(status)) =
         tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await
     {
-        signal_child(pid, "-KILL");
+        if own_process_group() {
+            signal_child(pid, "-KILL");
+        }
         exit_code(status)
     } else {
         signal_child(pid, "-KILL");
         let _ = child.kill().await;
         137
     }
+}
+
+#[cfg(windows)]
+async fn stop_child(child: &mut ExecChild, pid: u32, signal: &str) -> i32 {
+    let _ = (pid, signal);
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Box::into_pin(child.wait()),
+    )
+    .await;
+    137
 }
 
 /// The command's exit code, `128 + signal` when a signal ended it.

@@ -113,6 +113,68 @@ fn the_official_command_names_are_aliases_of_the_short_ones() {
     assert!(stderr(&out).contains("usage: fireemu"));
 }
 
+#[cfg(unix)]
+#[test]
+fn emulators_exec_accepts_the_official_positional_shell_script() {
+    let mut args: Vec<&str> = vec!["emulators:exec"];
+    args.extend_from_slice(&PORTS);
+    args.push("exit 7");
+
+    let out = run(&args);
+
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+
+    let mut args: Vec<&str> = vec!["emulators:exec", "exit 7"];
+    args.extend_from_slice(&PORTS);
+
+    let out = run(&args);
+
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_exec_argv_does_not_shell_expand_metacharacters() {
+    let out = exec_with(
+        &[],
+        &["sh", "-c", "test \"$1\" = '$HOME;*'", "fireemu", "$HOME;*"],
+    );
+
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_does_not_copy_command_secrets_or_control_text_into_its_log() {
+    const SECRET: &str = "FIREEMU_EXEC_INLINE_SECRET_7bf32d";
+
+    let mut args: Vec<&str> = vec![
+        "emulators:exec",
+        "true # FIREEMU_EXEC_INLINE_SECRET_7bf32d\n# forged-log-line",
+    ];
+    args.extend_from_slice(&PORTS);
+    let positional = run(&args);
+    assert!(positional.status.success(), "{}", stderr(&positional));
+    assert!(!String::from_utf8_lossy(&positional.stdout).contains(SECRET));
+    assert!(!stderr(&positional).contains(SECRET));
+    assert!(!String::from_utf8_lossy(&positional.stdout).contains("forged-log-line"));
+
+    let explicit = exec_with(
+        &[],
+        &[
+            "sh",
+            "-c",
+            "test \"$1\" = \"$2\"",
+            "fireemu",
+            SECRET,
+            SECRET,
+        ],
+    );
+    assert!(explicit.status.success(), "{}", stderr(&explicit));
+    assert!(!String::from_utf8_lossy(&explicit.stdout).contains(SECRET));
+    assert!(!stderr(&explicit).contains(SECRET));
+}
+
 #[test]
 fn init_noninteractive_defaults_to_strict_and_detects_firebase_json() {
     let dir = scratch("init-default");

@@ -46,5 +46,8 @@ zeroize = "1"
 [target.'cfg(target_os = "macos")'.dependencies]
 exacl = "0.13"
 
+[target.'cfg(windows)'.dependencies]
+process-wrap = { version = "8.2.1", default-features = false, features = ["job-object", "kill-on-drop", "tokio1"] }
+
 [lints]
 workspace = true

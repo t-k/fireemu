@@ -523,7 +523,7 @@ const MIN_INSPECT_PORT: u16 = 1024;
 fn inspect_port_arg(raw: &str) -> Result<u16, CliError> {
     let invalid = || {
         CliError::usage(format!(
-            "{raw:?} is not a valid port for debugging, please pass an integer between 1024 and 65535"
+            "{raw:?} is not a valid port for debugging, please pass an integer between 1024 and 65535 or true for a dynamic port."
         ))
     };
     let port = raw.parse::<u16>().map_err(|_| invalid())?;

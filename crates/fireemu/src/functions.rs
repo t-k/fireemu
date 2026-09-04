@@ -1856,6 +1856,12 @@ pub async fn start(
         return Err("functions.source is not configured".to_owned());
     }
     validate_functions_codebase_budget(&codebases)?;
+    if codebases.len() > 1 && cfg.functions_inspect_port.is_some() {
+        return Err(
+            "Cannot debug on a single port with multiple codebases. Use --inspect-functions=true to assign dynamic ports to each codebase"
+                .to_owned(),
+        );
+    }
     if codebases.len() > 1 && cfg.functions_manifest.is_some() {
         return Err(format!(
             "functions.manifest replaces discovery for one codebase, and this run loads {} \

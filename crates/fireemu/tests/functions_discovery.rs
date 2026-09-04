@@ -293,6 +293,26 @@ fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds()
     unreachable!("the final failed attempt asserts");
 }
 
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn inspect_functions_refuses_to_start_when_the_requested_port_is_occupied() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let inspector_port = listener.local_addr().unwrap().port();
+    let out =
+        exec_command_with_inspector_port(&fixture("inspect-sequential"), &["true"], inspector_port);
+    let error = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{error}");
+    assert!(
+        error.contains(&format!(
+            "requested debugger port {inspector_port} is not active"
+        )),
+        "{error}"
+    );
+    drop(listener);
+    std::net::TcpListener::bind(("127.0.0.1", inspector_port))
+        .unwrap_or_else(|cause| panic!("runner retained the occupied inspector port: {cause}"));
+}
+
 fn invoke_blocking_runner(port: u16, function: &str, body: &str) -> (u16, serde_json::Value) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     write!(

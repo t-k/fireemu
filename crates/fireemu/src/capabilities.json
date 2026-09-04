@@ -737,13 +737,13 @@
       "data.metadata.emulator.name tags the emulator (EmulatorLogger.forEmulator) and data.metadata.function.name tags the function (forFunction); function user output is type USER while retaining the production severity instead of the official emulator's forced info level",
       "on connect a client is sent the whole retained history and then live frames, with no request/response, no filtering and no authentication",
       "the RFC 6455 handshake (Sec-WebSocket-Accept = base64(SHA-1(key + magic))), masked client frames, ping/pong and a clean close",
-      "every current Node codebase runner feeds its log lines into the bus tagged emulator=functions; invocation-scoped console and firebase-functions/logger output also carries data.metadata.function.name without crossing concurrent function contexts, individual runner log entries have a conservative UTF-8-safe 256 KiB source cap and a 64-level structured-data depth cap, and each emulator's own lifecycle line is tagged with emulator=<name>"
+      "every current Node codebase runner feeds its log lines into the bus tagged emulator=functions; invocation-scoped console and firebase-functions/logger output also carries data.metadata.function.name without crossing concurrent function contexts, individual runner log entries have a conservative UTF-8-safe 256 KiB source cap and a 64-level structured-data depth cap, unpaired UTF-16 surrogates fall back to protocol-safe plain text, and each emulator's own lifecycle line is tagged with emulator=<name>"
     ],
     "unimplemented": [
       "differential verification of the official Emulator UI's Logs page consuming the stream end to end (a browser matrix); the primary evidence is a Rust client that connects to the bound port and asserts the handshake and a functions log frame"
     ],
     "notes": [
-      "divergences from the official emulator, all recorded on the logging surface: the handshake is loopback-only (the official server has none), the retained history is bounded to 1000 frames (the official one is unbounded in memory), individual runner log entries have conservative 256 KiB source and 64-level depth caps, user metadata is nested under data.metadata.user when trusted attribution is present, function USER logs retain production severity instead of being forced to info, and control-character stripping also drops lone C0/DEL bytes, not only ANSI sequences"
+      "divergences from the official emulator, all recorded on the logging surface: the handshake is loopback-only (the official server has none), the retained history is bounded to 1000 frames (the official one is unbounded in memory), individual runner log entries have conservative 256 KiB source and 64-level depth caps, user metadata is nested under data.metadata.user when trusted attribution is present, function USER logs retain production severity instead of being forced to info, and control-character stripping also drops lone C0/DEL bytes from messages and structured field keys/string values, not only ANSI sequences"
     ]
   },
   "DATA-1": {

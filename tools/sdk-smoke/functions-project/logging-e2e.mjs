@@ -94,8 +94,8 @@ try {
     "content-type": "application/json",
   };
   const controlSignal = AbortSignal.timeout(10_000);
-  const [alphaRun, betaRun] = await Promise.all(
-    ["alpha", "beta"].map((name) =>
+  const [alphaRun, betaRun, invalidUnicodeRun] = await Promise.all(
+    ["alpha", "beta", "invalidUnicode"].map((name) =>
       fetch(`${control}sessions/default/functions/${name}:run`, {
         method: "POST",
         headers,
@@ -106,6 +106,7 @@ try {
   );
   assert.equal(alphaRun.status, 200);
   assert.equal(betaRun.status, 200);
+  assert.equal(invalidUnicodeRun.status, 200);
   const idle = await fetch(`${control}sessions/default:awaitIdle`, {
     method: "POST",
     headers,
@@ -134,6 +135,11 @@ try {
   assert.equal(betaFrame.data.metadata.emulator.name, "functions");
   assert.equal(betaFrame.data.metadata.function.name, "beta");
   assert.equal(betaFrame.data.metadata.type, "USER");
+
+  const unicodeFrame = await waitFor((frame) => frame.message === "unicode survived");
+  assert.equal(unicodeFrame.level, "info");
+  assert.equal(unicodeFrame.data.metadata.function.name, "invalidUnicode");
+  assert.equal(unicodeFrame.data.metadata.type, "USER");
 } finally {
   clearTimeout(frameTimeout);
   socket.destroy();

@@ -1827,7 +1827,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "control-character stripping drops lone C0/DEL bytes as well as ANSI escape sequences, where Node's stripVTControlCharacters removes only the escape sequences",
+              "behaviour": "control-character stripping drops lone C0/DEL bytes from messages and structured field keys/string values as well as ANSI escape sequences, where Node's stripVTControlCharacters removes only the escape sequences",
               "precision": "documented-divergence"
             },
             {
@@ -1839,7 +1839,7 @@
               "precision": "conservative"
             },
             {
-              "behaviour": "structured runner entries deeper than 64 levels are retained as bounded plain text rather than recursively decoded, and a user metadata field is nested under data.metadata.user whenever trusted attribution is present",
+              "behaviour": "structured runner entries deeper than 64 levels or containing an unpaired UTF-16 surrogate are retained as bounded protocol-safe plain text rather than recursively decoded, and a user metadata field is nested under data.metadata.user whenever trusted attribution is present",
               "precision": "conservative"
             }
           ],

@@ -37,13 +37,31 @@ export function boundLogMessage(value, maxBytes = MAX_LOG_MESSAGE_BYTES) {
   return `${bytes.subarray(0, end).toString("utf8")}${TRUNCATION_MARKER}`;
 }
 
-function isWithinStructuredDepth(root) {
+function hasUnpairedSurrogate(text) {
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSafeStructuredValue(root) {
   const pending = [{ value: root, depth: 1 }];
   while (pending.length > 0) {
     const { value, depth } = pending.pop();
     if (depth > MAX_STRUCTURED_LOG_DEPTH) return false;
+    if (typeof value === "string" && hasUnpairedSurrogate(value)) return false;
     if (value && typeof value === "object") {
-      for (const child of Object.values(value)) pending.push({ value: child, depth: depth + 1 });
+      for (const [key, child] of Object.entries(value)) {
+        if (hasUnpairedSurrogate(key)) return false;
+        pending.push({ value: child, depth: depth + 1 });
+      }
     }
   }
   return true;
@@ -56,7 +74,7 @@ function structuredEntry(message, fallbackLevel) {
       return { level: fallbackLevel, message };
     }
     const severity = typeof parsed?.severity === "string" ? parsed.severity.toUpperCase() : "";
-    if (!STRUCTURED_SEVERITIES.has(severity) || !isWithinStructuredDepth(parsed)) {
+    if (!STRUCTURED_SEVERITIES.has(severity) || !isSafeStructuredValue(parsed)) {
       return { level: fallbackLevel, message };
     }
     const { severity: _severity, message: structuredMessage, ...fields } = parsed;

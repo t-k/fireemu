@@ -90,7 +90,7 @@ pub fn build_bundle(input: &LogInput) -> Value {
     if input.user {
         metadata.insert("type".to_owned(), Value::String("USER".to_owned()));
     }
-    let mut data = input.fields.clone();
+    let mut data = sanitize_fields(&input.fields);
     if !metadata.is_empty() {
         if let Some(user_metadata) = data.remove("metadata") {
             metadata.insert("user".to_owned(), user_metadata);
@@ -103,6 +103,22 @@ pub fn build_bundle(input: &LogInput) -> Value {
         "timestamp": input.timestamp_ms,
         "message": strip_control(&input.message),
     })
+}
+
+fn sanitize_fields(fields: &Map<String, Value>) -> Map<String, Value> {
+    fields
+        .iter()
+        .map(|(key, value)| (strip_control(key), sanitize_field_value(value)))
+        .collect()
+}
+
+fn sanitize_field_value(value: &Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(strip_control(text)),
+        Value::Array(values) => Value::Array(values.iter().map(sanitize_field_value).collect()),
+        Value::Object(fields) => Value::Object(sanitize_fields(fields)),
+        scalar => scalar.clone(),
+    }
 }
 
 /// The exact text of one server frame's payload: [`build_bundle`] serialised.
@@ -376,6 +392,20 @@ mod tests {
         assert_eq!(b["data"]["metadata"]["emulator"]["name"], "functions");
         assert_eq!(b["data"]["metadata"]["function"]["name"], "settlePayment");
         assert_eq!(b["data"]["metadata"]["type"], "USER");
+    }
+
+    #[test]
+    fn structured_field_controls_are_stripped_recursively() {
+        let mut input = LogInput::plain("INFO", "safe", 1);
+        input.fields = serde_json::Map::from_iter([(
+            "la\u{0}bels".to_owned(),
+            json!({"ne\u{1b}[31msted": ["a\u{7}b", {"de\u{7}ep": "c\u{7f}d"}]}),
+        )]);
+
+        let b = build_bundle(&input);
+        assert_eq!(b["data"]["labels"]["nested"][0], "ab");
+        assert_eq!(b["data"]["labels"]["nested"][1]["deep"], "cd");
+        assert!(!bundle_text(&input).contains('\u{1b}'));
     }
 
     #[test]

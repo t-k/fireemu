@@ -174,6 +174,9 @@ test("non-structured and unsafe JSON stays bounded plain output", () => {
     target.log(
       JSON.stringify({ severity: "WARNING", message: "too large", detail: "x".repeat(300_000) }),
     );
+    target.log('{"severity":"WARNING","message":"bad surrogate","value":"\\ud800"}');
+    target.log('{"severity":"WARNING","message":"bad key","\\udfff":"value"}');
+    target.log('{"severity":"NOTICE","message":"paired","value":"\\ud83d\\ude80"}');
   });
   restore();
 
@@ -192,4 +195,10 @@ test("non-structured and unsafe JSON stays bounded plain output", () => {
   assert.equal(emitted[5].fields, undefined);
   assert.ok(Buffer.byteLength(emitted[5].message, "utf8") <= 256 * 1024);
   assert.ok(emitted[5].message.endsWith("... [truncated]"));
+  assert.equal(emitted[6].level, "info");
+  assert.equal(emitted[6].fields, undefined);
+  assert.equal(emitted[7].level, "info");
+  assert.equal(emitted[7].fields, undefined);
+  assert.equal(emitted[8].level, "notice");
+  assert.deepEqual(emitted[8].fields, { value: "🚀" });
 });

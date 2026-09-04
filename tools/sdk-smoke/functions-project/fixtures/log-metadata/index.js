@@ -20,6 +20,11 @@ exports.beta = onSchedule("every 5 minutes", async () => {
   console.log("beta done");
 });
 
+exports.invalidUnicode = onSchedule("every 5 minutes", async () => {
+  logger.info("invalid unicode", { invalid: "\ud800" });
+  console.log("unicode survived");
+});
+
 exports.oversized = onSchedule("every 5 minutes", async () => {
   console.log("界".repeat(400_000));
 });

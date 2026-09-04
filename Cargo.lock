@@ -518,6 +518,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "process-wrap",
  "rustix",
  "serde_json",
  "tokio",

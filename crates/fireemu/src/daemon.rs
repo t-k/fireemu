@@ -25,10 +25,9 @@ use super::{
     app_check_state, bind_listeners, child_environment, clock_millis, control, control_state,
     exit_code, functions, hub, hub_emulators, import_export, load_rules, load_storage_rules,
     logical_system_time, print_banner, print_rules_status, random_secret, runtime_thread_counts,
-    service_admission, session_rsa_cache, signal_child, spawn_child,
-    start_firestore_config_reload_supervisors, stop_child, storage_state, terminate_signal, ui,
-    wait_child, BoundAddrs, ExecPlan, Exporter, Listeners, Options, RedactedRuntimeConfig,
-    RuntimeConfig, Selection, Verbosity,
+    service_admission, session_rsa_cache, spawn_child, start_firestore_config_reload_supervisors,
+    stop_child, storage_state, terminate_signal, ui, wait_child, BoundAddrs, ExecPlan, Exporter,
+    Listeners, Options, RedactedRuntimeConfig, RuntimeConfig, Selection, Verbosity,
 };
 
 struct BoundStartup {
@@ -714,13 +713,13 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
                 &storage_admin_capability,
             );
             if !quiet {
-                println!("  running: {}", plan.command);
+                println!("  running command");
             }
             Some(spawn_child(plan, &env)?)
         }
         None => None,
     };
-    let child_pid = child.as_ref().and_then(tokio::process::Child::id);
+    let child_pid = child.as_ref().and_then(super::child_id);
     let mut terminated = false;
     let outcome = tokio::select! {
         r = grpc => Err(format!("gRPC server stopped: {r:?}")),
@@ -755,8 +754,11 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         pump.abort();
     }
     let code = match (&outcome, child.as_mut(), child_pid) {
-        (Ok(Some(code)), _, Some(pid)) => {
-            signal_child(pid, "-KILL");
+        (Ok(Some(code)), Some(child), Some(pid)) => {
+            #[cfg(not(windows))]
+            super::sweep_child_tree(child, pid);
+            #[cfg(windows)]
+            super::sweep_child_tree(child, pid).await;
             *code
         }
         (Ok(Some(code)), _, None) => *code,

@@ -59,6 +59,8 @@ use fireemu_core_auth::store::AuthStore;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::time::LogicalInstant;
+#[cfg(windows)]
+use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommandWrap};
 
 use crate::config::{RuntimeConfig, Selection};
 
@@ -196,15 +198,6 @@ enum ExecCommand {
     Argv(Vec<String>),
     /// The official `emulators:exec <script>` form.
     Shell(String),
-}
-
-impl std::fmt::Display for ExecCommand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Argv(command) => f.write_str(&command.join(" ")),
-            Self::Shell(script) => f.write_str(script),
-        }
-    }
 }
 
 /// Everything the option parser produced.
@@ -1071,6 +1064,7 @@ const OWNED_VARIABLES: [&str; 14] = [
 /// The command runs in its own process group when the supervisor is not on a terminal
 /// (CI, a script), so a signal reaches its whole tree; on a terminal it stays in the
 /// foreground group so it keeps the terminal and receives Ctrl-C itself.
+#[cfg(not(windows))]
 fn own_process_group() -> bool {
     use std::io::IsTerminal as _;
     !std::io::stdin().is_terminal()
@@ -1110,7 +1104,13 @@ fn shell_child_command(script: &str) -> (tokio::process::Command, String) {
     (command, shell.to_string_lossy().into_owned())
 }
 
-fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::process::Child, String> {
+#[cfg(not(windows))]
+type ExecChild = tokio::process::Child;
+
+#[cfg(windows)]
+type ExecChild = Box<dyn TokioChildWrapper>;
+
+fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<ExecChild, String> {
     let (mut cmd, program) = match &plan.command {
         ExecCommand::Argv(command) => {
             let (program, args) = command
@@ -1131,13 +1131,35 @@ fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::proce
     if own_process_group() {
         cmd.process_group(0);
     }
-    cmd.spawn()
-        .map_err(|e| format!("cannot start {program}: {e}"))
+    #[cfg(not(windows))]
+    {
+        cmd.spawn()
+            .map_err(|e| format!("cannot start {program}: {e}"))
+    }
+    #[cfg(windows)]
+    {
+        let mut wrapped = TokioCommandWrap::from(cmd);
+        wrapped.wrap(JobObject).wrap(KillOnDrop);
+        wrapped
+            .spawn()
+            .map_err(|e| format!("cannot start {program}: {e}"))
+    }
+}
+
+#[cfg(not(windows))]
+fn child_id(child: &ExecChild) -> Option<u32> {
+    child.id()
+}
+
+#[cfg(windows)]
+fn child_id(child: &ExecChild) -> Option<u32> {
+    child.id()
 }
 
 /// Sends `signal` to the command (`pid` as spawned: `Child::id` is gone once the child was
 /// reaped, but its group may still hold a background job): to its process group when it
 /// leads one, else to it.
+#[cfg(not(windows))]
 fn signal_child(pid: u32, signal: &str) {
     #[cfg(unix)]
     {
@@ -1166,20 +1188,53 @@ fn signal_child(pid: u32, signal: &str) {
 }
 
 /// Waits for the command when there is one; never resolves otherwise.
-async fn wait_child(
-    child: Option<&mut tokio::process::Child>,
-) -> std::io::Result<std::process::ExitStatus> {
+async fn wait_child(child: Option<&mut ExecChild>) -> std::io::Result<std::process::ExitStatus> {
     match child {
+        #[cfg(not(windows))]
         Some(child) => child.wait().await,
+        // Waiting through JobObjectChild also waits for every descendant. Observe only the
+        // command leader here, then terminate and drain the job after retaining its status.
+        #[cfg(windows)]
+        Some(child) => child.inner_mut().wait().await,
         None => std::future::pending().await,
     }
+}
+
+/// Removes descendants left behind by a command that has already exited. On Unix this only
+/// addresses the process group fireemu created; an interactive child PID is never signalled
+/// after it has been reaped. On Windows the stable Job Object handle avoids PID reuse entirely.
+#[cfg(not(windows))]
+fn sweep_child_tree(child: &mut ExecChild, pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = child;
+        if own_process_group() {
+            signal_child(pid, "-KILL");
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (child, pid);
+    }
+}
+
+#[cfg(windows)]
+async fn sweep_child_tree(child: &mut ExecChild, pid: u32) {
+    let _ = pid;
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Box::into_pin(child.wait()),
+    )
+    .await;
 }
 
 /// Stops the command after the supervisor received `signal` (`-INT` / `-TERM`): the signal
 /// is forwarded with its identity (through `kill(1)`; the crate forbids unsafe code) unless
 /// the terminal already delivered it to the command's own group, then SIGKILL to the whole
 /// group after ten seconds. Returns the status the command reported.
-async fn stop_child(child: &mut tokio::process::Child, pid: u32, signal: &str) -> i32 {
+#[cfg(not(windows))]
+async fn stop_child(child: &mut ExecChild, pid: u32, signal: &str) -> i32 {
     let terminal_delivered = signal == "-INT" && !own_process_group();
     if !terminal_delivered {
         signal_child(pid, signal);
@@ -1187,13 +1242,27 @@ async fn stop_child(child: &mut tokio::process::Child, pid: u32, signal: &str) -
     if let Ok(Ok(status)) =
         tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await
     {
-        signal_child(pid, "-KILL");
+        if own_process_group() {
+            signal_child(pid, "-KILL");
+        }
         exit_code(status)
     } else {
         signal_child(pid, "-KILL");
         let _ = child.kill().await;
         137
     }
+}
+
+#[cfg(windows)]
+async fn stop_child(child: &mut ExecChild, pid: u32, signal: &str) -> i32 {
+    let _ = (pid, signal);
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Box::into_pin(child.wait()),
+    )
+    .await;
+    137
 }
 
 /// The command's exit code, `128 + signal` when a signal ended it.

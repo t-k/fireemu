@@ -362,6 +362,7 @@
     "notes": [
       "needs functions.source (or --functions <dir>) and the bundled Node runner; the codebase must have express installed (a dependency of firebase-functions)",
       "the real Firebase Web SDK .stream() acceptance test covers ordinary onCall and onCallGenkit chunks, final results, HttpsError after a chunk, non-streaming sendChunk, downstream cancellation, and admission release",
+      "streaming accepts only an absent or identity Content-Encoding because the production 10 MiB quota is measured on uncompressed response data; refusing an encoded local runner response prevents compressed data from bypassing the limit",
       "conformance: functions/callable-error-envelope, functions/callable-auth-context, functions/http-routing-cors-and-timeouts (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
       "callable preflights vary on every request field used for admission (Origin, method, requested headers, Fetch Metadata site and mode), while the official emulator varies only on Origin and requested headers; the extra members keep a shared cache from replaying an admitted response for a request the proxy would refuse",
       "a non-loopback Origin is refused with 403 rather than reflected: the official emulator runs its runtime with enableCors and answers any origin on the internet",

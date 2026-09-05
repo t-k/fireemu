@@ -349,7 +349,16 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
             })?;
             snapshot.databases.insert(key.clone(), state);
         }
-        endpoints.backend.restore_databases(snapshot.databases);
+        endpoints
+            .backend
+            .restore_databases(snapshot.databases)
+            .map_err(|error| {
+                ArtifactError::new(
+                    "firestore",
+                    PathBuf::from(FIRESTORE_PATH),
+                    error.to_string(),
+                )
+            })?;
     }
 
     if let Some(auth) = prepared.auth.take() {

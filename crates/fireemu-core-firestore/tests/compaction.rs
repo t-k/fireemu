@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
-    CommitVersion, FirestoreError, FirestoreState, Write, WriteOp, READ_TIME_RETENTION_SECONDS,
+    CommitVersion, FirestoreError, FirestoreState, HistoryLimits, Write, WriteOp,
+    READ_TIME_RETENTION_SECONDS,
 };
 use fireemu_core_firestore::value::Value;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
@@ -19,6 +20,112 @@ fn path(p: &str) -> DocumentPath {
         p,
     )
     .unwrap()
+}
+
+#[test]
+fn fixed_clock_unique_path_churn_is_refused_at_the_database_history_budget() {
+    let mut state = FirestoreState::with_history_limits(HistoryLimits {
+        max_bytes: u64::MAX,
+        max_versions: 4,
+    });
+
+    state.commit(&[set("docs/a", &[])], None, t(0)).unwrap();
+    state.commit(&[delete("docs/a")], None, t(0)).unwrap();
+    state.commit(&[set("docs/b", &[])], None, t(0)).unwrap();
+    state.commit(&[delete("docs/b")], None, t(0)).unwrap();
+    let before = state.history_usage();
+
+    let error = state.commit(&[set("docs/c", &[])], None, t(0)).unwrap_err();
+
+    assert!(matches!(error, FirestoreError::HistoryCapacity(_)));
+    assert_eq!(state.history_usage(), before);
+    assert!(state.get(&path("docs/c")).is_none());
+    assert_eq!(state.retained_versions(), 4);
+}
+
+#[test]
+fn history_capacity_recovers_after_retention_roots_expire() {
+    let mut state = FirestoreState::with_history_limits(HistoryLimits {
+        max_bytes: u64::MAX,
+        max_versions: 3,
+    });
+    state.commit(&[set("docs/a", &[])], None, t(0)).unwrap();
+    let transaction = state.begin_transaction(true, t(0)).unwrap();
+    state.commit(&[set("docs/b", &[])], None, t(0)).unwrap();
+    state.commit(&[delete("docs/b")], None, t(0)).unwrap();
+
+    assert!(matches!(
+        state.commit(&[set("docs/c", &[])], None, t(0)),
+        Err(FirestoreError::HistoryCapacity(_))
+    ));
+    assert!(state
+        .get_in_transaction(&transaction, &path("docs/a"))
+        .unwrap()
+        .is_some());
+
+    state.rollback(&transaction).unwrap();
+    state.compact(t(READ_TIME_RETENTION_SECONDS + 1));
+    state
+        .commit(
+            &[set("docs/c", &[])],
+            None,
+            t(READ_TIME_RETENTION_SECONDS + 1),
+        )
+        .unwrap();
+    assert!(state.history_usage().versions <= 3);
+}
+
+#[test]
+fn history_byte_budget_refuses_a_multi_write_commit_whole() {
+    let first = set("docs/a", &[("v", Value::String("payload".repeat(8)))]);
+    let mut probe = FirestoreState::new();
+    probe
+        .commit(std::slice::from_ref(&first), None, t(0))
+        .unwrap();
+    let exact_first_commit_bytes = probe.history_usage().total_bytes;
+    let mut state = FirestoreState::with_history_limits(HistoryLimits {
+        max_bytes: exact_first_commit_bytes,
+        max_versions: u64::MAX,
+    });
+    state.commit(&[first], None, t(0)).unwrap();
+    let before = state.history_usage();
+
+    let error = state
+        .commit(
+            &[
+                set("docs/b", &[("v", Value::String("one".into()))]),
+                set("docs/c", &[("v", Value::String("two".into()))]),
+            ],
+            None,
+            t(0),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        FirestoreError::HistoryCapacity(ref capacity) if capacity.dimension == "bytes"
+    ));
+    assert_eq!(state.history_usage(), before);
+    assert!(state.get(&path("docs/b")).is_none());
+    assert!(state.get(&path("docs/c")).is_none());
+}
+
+#[test]
+fn a_noop_succeeds_when_the_history_budget_is_full() {
+    let write = set("docs/a", &[("v", Value::Integer(1))]);
+    let mut state = FirestoreState::with_history_limits(HistoryLimits {
+        max_bytes: u64::MAX,
+        max_versions: 1,
+    });
+    state
+        .commit(std::slice::from_ref(&write), None, t(0))
+        .unwrap();
+    let before = state.history_usage();
+
+    let result = state.commit(&[write], None, t(0)).unwrap();
+
+    assert!(result.changes.is_empty());
+    assert_eq!(state.history_usage(), before);
 }
 
 fn fields(entries: &[(&str, Value)]) -> BTreeMap<String, Value> {

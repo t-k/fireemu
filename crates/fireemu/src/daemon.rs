@@ -943,6 +943,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let tenancy: fireemu_core_session::tenancy::SharedTenancy = Arc::new(RwLock::new(
             fireemu_core_session::tenancy::Tenancy::new(&cfg.auth_project),
         ));
+        backend.set_tenancy(tenancy.clone());
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,
             SplitMix64::new(cfg.seed ^ 0xA0),

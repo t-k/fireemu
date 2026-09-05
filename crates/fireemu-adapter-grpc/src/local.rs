@@ -24,7 +24,8 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
     Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreError,
-    FirestoreState, ListedDocument, Precondition, QueryStats, TransactionId, Write, WriteOp,
+    FirestoreState, HistoryCapacityError, HistoryProjection, HistoryUsage, ListedDocument,
+    Precondition, QueryStats, TransactionId, Write, WriteOp,
 };
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
@@ -137,6 +138,7 @@ impl DatabaseHandle {
     fn detach(&self) {
         if let Ok(mut cell) = self.0.cell.write() {
             cell.detached = true;
+            cell.state = FirestoreState::new();
         }
     }
 }
@@ -153,6 +155,10 @@ pub struct LocalBackend {
     /// Capacity retention root for databases created by this backend. Pinned-clock runs use
     /// the bounded default; wall-clock parity runs rely on the one-hour time root alone.
     history_version_limit: usize,
+    /// Aggregate retained-history admission shared by every database.
+    history_budget: Arc<Mutex<HistoryBudgetLedger>>,
+    /// Resolves registered projects to their session budget owner.
+    tenancy: Mutex<Option<fireemu_core_session::tenancy::SharedTenancy>>,
     /// The database catalog. Locked only to locate, create or retire an entry: an
     /// operation clones the entry's handle and releases this lock before it runs.
     databases: Mutex<BTreeMap<(String, String), Arc<DatabaseEntry>>>,
@@ -176,6 +182,194 @@ pub struct LocalBackend {
     /// reordered, and `await-idle` sees the event as soon as the write returns.
     change_sink: Mutex<Option<ChangeSink>>,
     change_admission: Mutex<Option<Arc<dyn AtomicChangeSink>>>,
+}
+
+/// Aggregate logical MVCC limits. Per-session limits combine every project/database owned by
+/// one session; global limits combine the complete backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryBudgetLimits {
+    /// Logical bytes owned by one session.
+    pub session_bytes: u64,
+    /// Versions owned by one session.
+    pub session_versions: u64,
+    /// Logical bytes owned by the backend.
+    pub global_bytes: u64,
+    /// Versions owned by the backend.
+    pub global_versions: u64,
+}
+
+impl Default for HistoryBudgetLimits {
+    fn default() -> Self {
+        Self {
+            session_bytes: 1 << 30,
+            session_versions: 1_000_000,
+            global_bytes: 4 << 30,
+            global_versions: 4_000_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum HistoryBudgetOwner {
+    Default,
+    Project(String),
+}
+
+#[derive(Debug, Clone)]
+struct HistoryCharge {
+    owner: HistoryBudgetOwner,
+    usage: HistoryUsage,
+}
+
+#[derive(Debug)]
+struct PendingHistoryCharge {
+    key: (String, String),
+    charge: HistoryCharge,
+}
+
+#[derive(Debug)]
+struct HistoryBudgetLedger {
+    limits: HistoryBudgetLimits,
+    committed: BTreeMap<(String, String), HistoryCharge>,
+    pending: BTreeMap<u64, PendingHistoryCharge>,
+    next_reservation: u64,
+}
+
+impl HistoryBudgetLedger {
+    fn new(limits: HistoryBudgetLimits) -> Self {
+        Self {
+            limits,
+            committed: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            next_reservation: 0,
+        }
+    }
+
+    fn effective(&self) -> BTreeMap<(String, String), HistoryCharge> {
+        let mut effective = self.committed.clone();
+        for pending in self.pending.values() {
+            effective.insert(pending.key.clone(), pending.charge.clone());
+        }
+        effective
+    }
+
+    fn reserve(
+        &mut self,
+        key: (String, String),
+        owner: HistoryBudgetOwner,
+        usage: HistoryUsage,
+    ) -> Result<u64, FirestoreError> {
+        let mut effective = self.effective();
+        effective.insert(
+            key.clone(),
+            HistoryCharge {
+                owner: owner.clone(),
+                usage,
+            },
+        );
+        self.validate_effective(&effective)?;
+        let id = self.next_reservation;
+        self.next_reservation = self.next_reservation.wrapping_add(1);
+        self.pending.insert(
+            id,
+            PendingHistoryCharge {
+                key,
+                charge: HistoryCharge { owner, usage },
+            },
+        );
+        Ok(id)
+    }
+
+    fn validate_effective(
+        &self,
+        effective: &BTreeMap<(String, String), HistoryCharge>,
+    ) -> Result<(), FirestoreError> {
+        let global = sum_history_usage(effective.values().map(|charge| charge.usage));
+        check_aggregate_history_limit(
+            "global versions",
+            global.versions,
+            self.limits.global_versions,
+        )?;
+        check_aggregate_history_limit(
+            "global bytes",
+            global.total_bytes,
+            self.limits.global_bytes,
+        )?;
+        let owners: std::collections::BTreeSet<HistoryBudgetOwner> = effective
+            .values()
+            .map(|charge| charge.owner.clone())
+            .collect();
+        for owner in owners {
+            let session = sum_history_usage(
+                effective
+                    .values()
+                    .filter(|charge| charge.owner == owner)
+                    .map(|charge| charge.usage),
+            );
+            check_aggregate_history_limit(
+                "session versions",
+                session.versions,
+                self.limits.session_versions,
+            )?;
+            check_aggregate_history_limit(
+                "session bytes",
+                session.total_bytes,
+                self.limits.session_bytes,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn sum_history_usage(usages: impl Iterator<Item = HistoryUsage>) -> HistoryUsage {
+    usages.fold(HistoryUsage::default(), |mut total, usage| {
+        total.total_bytes = total.total_bytes.saturating_add(usage.total_bytes);
+        total.versions = total.versions.saturating_add(usage.versions);
+        total
+    })
+}
+
+fn check_aggregate_history_limit(
+    dimension: &'static str,
+    current: u64,
+    maximum: u64,
+) -> Result<(), FirestoreError> {
+    if current > maximum {
+        Err(FirestoreError::HistoryCapacity(HistoryCapacityError {
+            dimension,
+            current,
+            maximum,
+        }))
+    } else {
+        Ok(())
+    }
+}
+
+struct HistoryReservation {
+    ledger: Arc<Mutex<HistoryBudgetLedger>>,
+    id: u64,
+    committed: bool,
+}
+
+impl HistoryReservation {
+    fn commit(mut self) {
+        if let Ok(mut ledger) = self.ledger.lock() {
+            if let Some(pending) = ledger.pending.remove(&self.id) {
+                ledger.committed.insert(pending.key, pending.charge);
+            }
+        }
+        self.committed = true;
+    }
+}
+
+impl Drop for HistoryReservation {
+    fn drop(&mut self) {
+        if !self.committed {
+            if let Ok(mut ledger) = self.ledger.lock() {
+                ledger.pending.remove(&self.id);
+            }
+        }
+    }
 }
 
 /// Synchronous observer of committed changes (see [`LocalBackend::set_change_sink`]).
@@ -594,6 +788,10 @@ impl LocalBackend {
             wall_clock_write_time: false,
             history_version_limit:
                 fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
+            history_budget: Arc::new(Mutex::new(HistoryBudgetLedger::new(
+                HistoryBudgetLimits::default(),
+            ))),
+            tenancy: Mutex::new(None),
             databases: Mutex::new(BTreeMap::new()),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
@@ -625,6 +823,57 @@ impl LocalBackend {
             max_versions_per_path
         };
         self
+    }
+
+    /// Overrides aggregate history limits for deterministic tests and embedders.
+    #[must_use]
+    pub fn with_history_budget_limits(mut self, limits: HistoryBudgetLimits) -> Self {
+        self.history_budget = Arc::new(Mutex::new(HistoryBudgetLedger::new(limits)));
+        self
+    }
+
+    /// Shares the session ownership registry used by control-plane registration.
+    pub fn set_tenancy(&self, tenancy: fireemu_core_session::tenancy::SharedTenancy) {
+        if let Ok(mut slot) = self.tenancy.lock() {
+            *slot = Some(tenancy);
+        }
+    }
+
+    fn history_owner(&self, project: &str) -> HistoryBudgetOwner {
+        let tenancy = self.tenancy.lock().ok().and_then(|slot| slot.clone());
+        tenancy
+            .and_then(|tenancy| {
+                tenancy.read().ok().map(|tenancy| {
+                    if tenancy.is_registered(project) {
+                        HistoryBudgetOwner::Project(project.to_owned())
+                    } else {
+                        HistoryBudgetOwner::Default
+                    }
+                })
+            })
+            .unwrap_or(HistoryBudgetOwner::Default)
+    }
+
+    fn reserve_history(
+        &self,
+        parent: &Parent,
+        projection: HistoryProjection,
+    ) -> Result<HistoryReservation, FirestoreError> {
+        let owner = self.history_owner(parent.project.as_str());
+        let mut ledger = self.history_budget.lock().map_err(|_| {
+            FirestoreError::HistoryCapacity(HistoryCapacityError {
+                dimension: "ledger unavailable",
+                current: 1,
+                maximum: 0,
+            })
+        })?;
+        let id = ledger.reserve(database_key(parent), owner, projection.after)?;
+        drop(ledger);
+        Ok(HistoryReservation {
+            ledger: self.history_budget.clone(),
+            id,
+            committed: false,
+        })
     }
 
     /// The session's admission barrier (share it with every other mutable surface).
@@ -716,13 +965,19 @@ impl LocalBackend {
             }
             Err(_) => Vec::new(),
         };
-        removed
+        let keys: Vec<(String, String)> = removed
             .into_iter()
             .map(|(key, handle)| {
                 handle.detach();
                 key
             })
-            .collect()
+            .collect();
+        if let Ok(mut ledger) = self.history_budget.lock() {
+            for key in &keys {
+                ledger.committed.remove(key);
+            }
+        }
+        keys
     }
 
     fn announce_wipe(&self, databases: Vec<(String, String)>) {
@@ -770,12 +1025,26 @@ impl LocalBackend {
     pub fn compact_all(&self, now: fireemu_core_types::time::LogicalInstant) {
         let scope =
             fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
-        for (_, handle) in self.handles_of(&scope) {
-            let _ = handle.with(|state| {
+        for (key, handle) in self.handles_of(&scope) {
+            let usage = handle.with(|state| {
                 state.compact(now);
-                Ok(())
+                Ok(state.history_usage())
             });
+            if let (Ok(usage), Ok(mut ledger)) = (usage, self.history_budget.lock()) {
+                if let Some(charge) = ledger.committed.get_mut(&key) {
+                    charge.usage = usage;
+                }
+            }
         }
+    }
+
+    /// Aggregate logical Firestore history retained by the backend.
+    #[must_use]
+    pub fn history_usage(&self) -> HistoryUsage {
+        self.history_budget
+            .lock()
+            .map(|ledger| sum_history_usage(ledger.committed.values().map(|charge| charge.usage)))
+            .unwrap_or_default()
     }
 
     /// Copies the databases `scope` owns, each under its own lock.
@@ -817,14 +1086,17 @@ impl LocalBackend {
 
     /// Replaces every database with `databases` (the default session's restore): a new
     /// epoch, and the streams opened before it end like on a reset.
-    pub fn restore_databases(&self, databases: BTreeMap<(String, String), FirestoreState>) {
+    pub fn restore_databases(
+        &self,
+        databases: BTreeMap<(String, String), FirestoreState>,
+    ) -> Result<(), Status> {
         self.restore_scope(
             &fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new()),
             &FirestoreSnapshot {
                 databases,
                 ids: None,
             },
-        );
+        )
     }
 
     /// Replaces the databases `scope` owns with the snapshot's (the others stay). The
@@ -834,7 +1106,38 @@ impl LocalBackend {
         &self,
         scope: &fireemu_core_session::tenancy::Scope,
         snapshot: &FirestoreSnapshot,
-    ) {
+    ) -> Result<(), Status> {
+        let restored_charges: BTreeMap<(String, String), HistoryCharge> = snapshot
+            .databases
+            .iter()
+            .filter(|(key, _)| scope.owns_project(&key.0))
+            .map(|(key, state)| {
+                (
+                    key.clone(),
+                    HistoryCharge {
+                        owner: self.history_owner(&key.0),
+                        usage: state.history_usage(),
+                    },
+                )
+            })
+            .collect();
+        {
+            let ledger = self
+                .history_budget
+                .lock()
+                .map_err(|_| Status::unavailable("Firestore history budget is unavailable"))?;
+            if !ledger.pending.is_empty() {
+                return Err(Status::unavailable(
+                    "Firestore history reservations are still in flight",
+                ));
+            }
+            let mut effective = ledger.committed.clone();
+            effective.retain(|(project, _), _| !scope.owns_project(project));
+            effective.extend(restored_charges.clone());
+            ledger
+                .validate_effective(&effective)
+                .map_err(|error| status_from_error(&error))?;
+        }
         if scope.is_default() {
             self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -862,8 +1165,15 @@ impl LocalBackend {
                 *rng = ids.clone();
             }
         }
+        if let Ok(mut ledger) = self.history_budget.lock() {
+            ledger
+                .committed
+                .retain(|(project, _), _| !scope.owns_project(project));
+            ledger.committed.extend(restored_charges);
+        }
         self.bump_generations(&touched);
         self.announce_wipe(touched);
+        Ok(())
     }
 
     /// Drops every database (session reset). Listen streams observe the wipe as deletes.
@@ -994,8 +1304,9 @@ impl LocalBackend {
             .lock()
             .map_err(|_| Status::unavailable("Functions event admission is unavailable"))?
             .clone();
-        let (result, (event, publication)) = db
-            .commit_with_admission(writes, transaction, now, |result| {
+        let (result, (event, publication, history)) = db
+            .commit_with_history_admission(writes, transaction, now, |result, projection| {
+                let history = self.reserve_history(parent, projection)?;
                 let event = CommitEvent {
                     actor,
                     project: parent.project.as_str().to_owned(),
@@ -1008,9 +1319,10 @@ impl LocalBackend {
                     || Ok(Box::new(NoopCommitPublication) as Box<dyn CommitPublication>),
                     |sink| sink.reserve(&event).map_err(FirestoreError::EventAdmission),
                 )?;
-                Ok((event, publication))
+                Ok((event, publication, history))
             })
             .map_err(|error| status_from_error(&error))?;
+        history.commit();
         publication.publish();
         self.publish_committed(&event, &result);
         Ok(result)

@@ -51,8 +51,9 @@ impl SnapshotHook for Firestore {
         let snapshot = part
             .downcast_ref::<FirestoreSnapshot>()
             .ok_or_else(|| wrong_shape(self.name()))?;
-        self.0.restore_scope(scope, snapshot);
-        Ok(())
+        self.0
+            .restore_scope(scope, snapshot)
+            .map_err(|error| TransitionFailure::new(self.name(), error.to_string()))
     }
     fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
         part.downcast_ref::<FirestoreSnapshot>()

@@ -5,10 +5,13 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_grpc::gateway::Gateway;
-use fireemu_adapter_grpc::local::{AtomicChangeSink, CommitPublication, LocalBackend};
+use fireemu_adapter_grpc::local::{
+    AtomicChangeSink, CommitPublication, HistoryBudgetLimits, LocalBackend,
+};
 use fireemu_adapter_grpc::rules::ReadCheck;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_firestore::field_path::FieldPath;
@@ -17,6 +20,7 @@ use fireemu_core_firestore::index::{
     PlanningContext,
 };
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::tenancy::Tenancy;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::ids::CollectionId;
@@ -31,13 +35,195 @@ use tokio_stream::StreamExt;
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
+fn history_budget_write(project: &str, database: &str, document: &str) -> pb::CommitRequest {
+    pb::CommitRequest {
+        database: format!("projects/{project}/databases/{database}"),
+        writes: vec![pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("projects/{project}/databases/{database}/documents/items/{document}"),
+                fields: [("v".to_owned(), i(1))].into_iter().collect(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+fn history_budget_backend(session_versions: u64, global_versions: u64) -> LocalBackend {
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    LocalBackend::new(
+        gateway,
+        Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ))),
+        7,
+    )
+    .with_history_budget_limits(HistoryBudgetLimits {
+        session_bytes: u64::MAX,
+        session_versions,
+        global_bytes: u64::MAX,
+        global_versions,
+    })
+}
+
+#[test]
+fn unregistered_projects_and_named_databases_share_the_default_session_history_budget() {
+    let backend = history_budget_backend(1, 10);
+    let tenancy = Arc::new(RwLock::new(Tenancy::new("demo-a")));
+    tenancy
+        .write()
+        .unwrap()
+        .register("demo-b", &[], &[])
+        .unwrap();
+    backend.set_tenancy(tenancy);
+
+    backend
+        .commit_with(
+            &history_budget_write("demo-a", "(default)", "a"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    let refused = backend
+        .commit_with(
+            &history_budget_write("demo-c", "analytics", "c"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::ResourceExhausted);
+
+    backend
+        .commit_with(
+            &history_budget_write("demo-b", "analytics", "b"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    assert_eq!(backend.history_usage().versions, 2);
+}
+
+#[test]
+fn reset_refunds_aggregate_history_capacity() {
+    let backend = history_budget_backend(1, 1);
+    backend
+        .commit_with(
+            &history_budget_write("demo-a", "(default)", "a"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    assert_eq!(backend.history_usage().versions, 1);
+    let refused = backend
+        .commit_with(
+            &history_budget_write("demo-c", "analytics", "c"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::ResourceExhausted);
+
+    backend.reset();
+    assert_eq!(backend.history_usage().versions, 0);
+    backend
+        .commit_with(
+            &history_budget_write("demo-c", "analytics", "c"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+}
+
+#[test]
+fn an_over_budget_restore_is_all_or_nothing() {
+    use fireemu_core_session::tenancy::Scope;
+
+    let source = history_budget_backend(10, 10);
+    for document in ["a", "b"] {
+        source
+            .commit_with(
+                &history_budget_write("demo-a", "(default)", document),
+                &fireemu_adapter_grpc::rules::allow_all,
+            )
+            .unwrap();
+    }
+    let scope = Scope::AllExcept(std::collections::BTreeSet::new());
+    let snapshot = source.snapshot_scope(&scope);
+    let target = history_budget_backend(1, 1);
+    target
+        .commit_with(
+            &history_budget_write("demo-a", "(default)", "original"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    let before = target.snapshot_scope(&scope);
+
+    let error = target.restore_scope(&scope, &snapshot).unwrap_err();
+
+    assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+    let names = |snapshot: &fireemu_adapter_grpc::local::FirestoreSnapshot| {
+        snapshot
+            .databases
+            .values()
+            .flat_map(|state| {
+                state
+                    .documents()
+                    .into_iter()
+                    .map(|document| document.path.resource_name())
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&target.snapshot_scope(&scope)), names(&before));
+    assert_eq!(target.history_usage().versions, 1);
+}
+
 struct RejectEveryCommit;
 
 struct AcceptEveryCommit;
 struct AcceptedPublication;
 
+struct CountReservations(Arc<AtomicUsize>);
+
 impl CommitPublication for AcceptedPublication {
     fn publish(self: Box<Self>) {}
+}
+
+impl AtomicChangeSink for CountReservations {
+    fn reserve(
+        &self,
+        _event: &CommitEvent,
+    ) -> Result<Box<dyn CommitPublication>, fireemu_core_types::admission::EventAdmissionError>
+    {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(AcceptedPublication))
+    }
+}
+
+#[test]
+fn history_refusal_precedes_functions_event_reservation() {
+    let backend = history_budget_backend(1, 1);
+    backend
+        .commit_with(
+            &history_budget_write("demo-a", "(default)", "a"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    let reservations = Arc::new(AtomicUsize::new(0));
+    backend.set_atomic_change_sink(Arc::new(CountReservations(reservations.clone())));
+
+    let refused = backend
+        .commit_with(
+            &history_budget_write("demo-a", "analytics", "b"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap_err();
+
+    assert_eq!(refused.code(), tonic::Code::ResourceExhausted);
+    assert_eq!(reservations.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.history_usage().versions, 1);
 }
 
 impl AtomicChangeSink for AcceptEveryCommit {
@@ -2083,13 +2269,15 @@ async fn clock_maintenance_compacts_an_idle_database_without_another_commit() {
 async fn wall_clock_restores_keep_the_time_window_without_the_pinned_clock_cap() {
     let (mut client, _clock, backend, handle) =
         start_with_backend_and_policy(true, IndexValidationPolicy::Conservative).await;
-    backend.restore_databases(std::collections::BTreeMap::from([(
-        (
-            "demo-app".to_owned(),
-            fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
-        ),
-        fireemu_core_firestore::store::FirestoreState::new(),
-    )]));
+    backend
+        .restore_databases(std::collections::BTreeMap::from([(
+            (
+                "demo-app".to_owned(),
+                fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
+            ),
+            fireemu_core_firestore::store::FirestoreState::new(),
+        )]))
+        .unwrap();
     for value in 0..=fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH {
         client
             .commit(pb::CommitRequest {
@@ -2400,7 +2588,7 @@ async fn database_snapshots_restore_documents_and_start_a_new_epoch() {
     backend.commit(&write("snap/a", 2)).unwrap();
     backend.commit(&write("snap/b", 1)).unwrap();
     let epoch = backend.epoch();
-    backend.restore_databases(taken);
+    backend.restore_databases(taken).unwrap();
     assert_eq!(backend.epoch(), epoch + 1, "a restore is a new epoch");
     let get = |name: &str| pb::GetDocumentRequest {
         name: format!("projects/demo-app/databases/(default)/documents/{name}"),
@@ -2812,7 +3000,9 @@ async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
     assert_eq!(snapshot.databases.len(), 1);
     assert!(snapshot.ids.is_none());
     backend.reset_scope(&Scope::Project("demo-b".to_owned()));
-    backend.restore_scope(&Scope::Project("demo-b".to_owned()), &snapshot);
+    backend
+        .restore_scope(&Scope::Project("demo-b".to_owned()), &snapshot)
+        .unwrap();
     assert_eq!(count("demo-b"), 4);
     assert!(backend
         .snapshot_scope(&Scope::AllExcept(std::collections::BTreeSet::new()))
@@ -3162,7 +3352,9 @@ fn a_reset_or_restore_detaches_retained_database_handles() {
         .commit_with(&lock_test_commit("demo-detach", "items/b"), &allow_all)
         .unwrap();
     let snapshot = backend.snapshot_scope(&Scope::Project("demo-detach".to_owned()));
-    backend.restore_scope(&Scope::Project("demo-detach".to_owned()), &snapshot);
+    backend
+        .restore_scope(&Scope::Project("demo-detach".to_owned()), &snapshot)
+        .unwrap();
     assert!(fresh.is_detached());
     assert_eq!(
         fresh.with(|_| Ok(())).unwrap_err().code(),
@@ -3249,7 +3441,7 @@ fn capture_and_restore_stay_atomic_under_the_barrier() {
     let snapshot = backend.snapshot_scope(&everything);
     assert_eq!(snapshot.databases.len(), 2);
     backend.reset();
-    backend.restore_scope(&everything, &snapshot);
+    backend.restore_scope(&everything, &snapshot).unwrap();
     drop(exclusive);
 
     assert_eq!(finished.recv_timeout(PATIENCE), Ok(true));

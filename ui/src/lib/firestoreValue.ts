@@ -306,23 +306,34 @@ export const parseFields = (
   fields: EditableField[],
   documentsRoot: string,
 ): Result<Record<string, FsValue>, { field: string; message: string }> => {
-  const out: Record<string, FsValue> = {};
+  const seen = new Set<string>();
+  const entries: [string, FsValue][] = [];
   for (const f of fields) {
     if (!validFieldName(f.name)) {
       return err({ field: f.name, message: "a field needs a name without control characters" });
     }
-    if (f.name in out) {
+    if (seen.has(f.name)) {
       return err({ field: f.name, message: "declared twice" });
     }
+    seen.add(f.name);
     if (f.original !== undefined && f.dirty !== true && typeOf(f.original) === f.type) {
-      out[f.name] = f.original;
+      entries.push([f.name, f.original]);
       continue;
     }
     const value = parseField(f.type, f.text, documentsRoot, f.numberKind);
     if (value.isErr()) {
       return err({ field: f.name, message: value.error });
     }
-    out[f.name] = value.value;
+    entries.push([f.name, value.value]);
+  }
+  const out: Record<string, FsValue> = {};
+  for (const [name, value] of entries) {
+    Object.defineProperty(out, name, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return ok(out);
 };

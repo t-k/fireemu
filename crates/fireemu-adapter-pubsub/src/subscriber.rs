@@ -78,10 +78,12 @@ impl Subscriber for SubscriberService {
         let sub = request.into_inner();
         let config = subscription_from_proto(&sub).map_err(|e| status(&e))?;
         let name = config.name.clone();
+        let topic = config.topic.clone();
         self.handle
             .state()
             .create_subscription(config)
             .map_err(|e| status(&e))?;
+        self.handle.schedule_push(&topic);
         Ok(Response::new(self.subscription_proto(&name)?))
     }
 
@@ -114,6 +116,8 @@ impl Subscriber for SubscriberService {
                 .map_err(|e| status(&e))?;
         }
         if let Some(push_config) = sub.push_config {
+            crate::push::validate_endpoint(&push_config.push_endpoint)
+                .map_err(Status::invalid_argument)?;
             self.handle
                 .state()
                 .update_push_config(
@@ -124,6 +128,14 @@ impl Subscriber for SubscriberService {
                 )
                 .map_err(|e| status(&e))?;
         }
+        let topic = self
+            .handle
+            .state()
+            .subscription_config(&name)
+            .map_err(|e| status(&e))?
+            .topic
+            .clone();
+        self.handle.schedule_push(&topic);
         Ok(Response::new(self.subscription_proto(&name)?))
     }
 
@@ -285,10 +297,19 @@ impl Subscriber for SubscriberService {
         let push_endpoint = req
             .push_config
             .map_or_else(String::new, |config| config.push_endpoint);
+        crate::push::validate_endpoint(&push_endpoint).map_err(Status::invalid_argument)?;
         self.handle
             .state()
             .update_push_config(&name, PushConfig { push_endpoint })
             .map_err(|e| status(&e))?;
+        let topic = self
+            .handle
+            .state()
+            .subscription_config(&name)
+            .map_err(|e| status(&e))?
+            .topic
+            .clone();
+        self.handle.schedule_push(&topic);
         Ok(Response::new(()))
     }
 

@@ -260,6 +260,24 @@ impl PubSubState {
             .collect()
     }
 
+    /// Returns push-enabled subscriptions attached to a topic.
+    #[must_use]
+    pub fn push_subscriptions(&self, topic: &TopicName) -> Vec<(SubscriptionName, String)> {
+        self.topic_subs
+            .get(&topic.to_full())
+            .into_iter()
+            .flatten()
+            .filter_map(|key| self.subscriptions.get(key))
+            .filter(|subscription| subscription.config().is_push())
+            .map(|subscription| {
+                (
+                    subscription.config().name.clone(),
+                    subscription.config().push_config.push_endpoint.clone(),
+                )
+            })
+            .collect()
+    }
+
     /// Deletes a subscription.
     pub fn delete_subscription(&mut self, name: &SubscriptionName) -> Result<()> {
         let key = name.to_full();

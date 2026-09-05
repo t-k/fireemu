@@ -127,13 +127,13 @@ pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionCon
             .as_ref()
             .map_or(LogicalDuration::ZERO, duration_from_proto),
     });
-    let push_config = PushConfig {
-        push_endpoint: sub
-            .push_config
-            .as_ref()
-            .map(|p| p.push_endpoint.clone())
-            .unwrap_or_default(),
-    };
+    let push_endpoint = sub
+        .push_config
+        .as_ref()
+        .map(|p| p.push_endpoint.clone())
+        .unwrap_or_default();
+    crate::push::validate_endpoint(&push_endpoint).map_err(PubSubError::invalid_argument)?;
+    let push_config = PushConfig { push_endpoint };
     Ok(SubscriptionConfig {
         name,
         topic,

@@ -20,14 +20,17 @@
 
 mod convert;
 mod publisher;
+mod push;
 mod subscriber;
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_pubsub::PubSubState;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::time::LogicalInstant;
+use tokio::sync::Notify;
 
 use fireemu_proto_pubsub::google::pubsub::v1::publisher_server::PublisherServer;
 use fireemu_proto_pubsub::google::pubsub::v1::subscriber_server::SubscriberServer;
@@ -37,6 +40,8 @@ pub use subscriber::SubscriberService;
 
 /// Maximum gRPC message size accepted or produced (10 MiB), matching Pub/Sub's message bound.
 pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_PUSH_WORKERS: usize = 256;
+const MAX_PUSH_ATTEMPTS: usize = 3;
 
 /// A message handed to the functions bridge for topic-trigger delivery.
 #[derive(Debug, Clone)]
@@ -61,6 +66,8 @@ pub struct PubSubHandle {
     state: Arc<Mutex<PubSubState>>,
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
+    push_workers: Arc<Mutex<BTreeSet<String>>>,
+    push_notify: Arc<Notify>,
 }
 
 impl PubSubHandle {
@@ -75,6 +82,8 @@ impl PubSubHandle {
             state,
             clock,
             bridge,
+            push_workers: Arc::new(Mutex::new(BTreeSet::new())),
+            push_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -95,6 +104,125 @@ impl PubSubHandle {
                 bridge.deliver(topic, messages);
             }
         }
+    }
+
+    /// Starts at most one bounded push worker per subscription. Pull and push share the same
+    /// core delivery state, so a successful push acknowledges the same record a pull would see.
+    fn schedule_push(&self, topic: &fireemu_core_pubsub::TopicName) {
+        self.push_notify.notify_waiters();
+        let subscriptions = self.state().push_subscriptions(topic);
+        for (subscription, endpoint) in subscriptions {
+            let key = subscription.to_full();
+            let claimed = {
+                let mut workers = self.push_workers.lock().expect("push worker lock");
+                if workers.len() >= MAX_PUSH_WORKERS {
+                    false
+                } else {
+                    workers.insert(key.clone())
+                }
+            };
+            if !claimed {
+                continue;
+            }
+            let handle = self.clone();
+            tokio::spawn(async move {
+                handle.run_push_worker(subscription, endpoint).await;
+                handle
+                    .push_workers
+                    .lock()
+                    .expect("push worker lock")
+                    .remove(&key);
+                handle.push_notify.notify_waiters();
+            });
+        }
+    }
+
+    async fn run_push_worker(
+        &self,
+        subscription: fireemu_core_pubsub::SubscriptionName,
+        endpoint: String,
+    ) {
+        loop {
+            let now = self.now();
+            let received = {
+                self.state()
+                    .pull(&subscription, 100, now)
+                    .unwrap_or_default()
+            };
+            if received.is_empty() {
+                // A publication can race the final empty pull. A short bounded grace period
+                // lets the same worker observe it without leaving a permanent task behind.
+                tokio::select! {
+                    () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {},
+                    () = self.push_notify.notified() => {},
+                }
+                let still_configured = self
+                    .state()
+                    .subscription_config(&subscription)
+                    .is_ok_and(fireemu_core_pubsub::SubscriptionConfig::is_push);
+                if !still_configured {
+                    return;
+                }
+                let retry = self
+                    .state()
+                    .pull(&subscription, 1, self.now())
+                    .unwrap_or_default();
+                if retry.is_empty() {
+                    return;
+                }
+                if !self
+                    .deliver_push_messages(&subscription, &endpoint, retry)
+                    .await
+                {
+                    return;
+                }
+                continue;
+            }
+            if !self
+                .deliver_push_messages(&subscription, &endpoint, received)
+                .await
+            {
+                return;
+            }
+        }
+    }
+
+    async fn deliver_push_messages(
+        &self,
+        subscription: &fireemu_core_pubsub::SubscriptionName,
+        endpoint: &str,
+        received: Vec<fireemu_core_pubsub::ReceivedMessage>,
+    ) -> bool {
+        for (index, message) in received.iter().enumerate() {
+            let mut delivered = false;
+            for attempt in 0..MAX_PUSH_ATTEMPTS {
+                if push::deliver(endpoint, subscription, message).await.is_ok() {
+                    delivered = true;
+                    break;
+                }
+                if attempt + 1 < MAX_PUSH_ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+            if delivered {
+                let _ = self
+                    .state()
+                    .acknowledge(subscription, std::slice::from_ref(&message.ack_id));
+                continue;
+            }
+            let now = self.now();
+            let mut state = self.state();
+            for remaining in &received[index..] {
+                let _ = state.modify_ack_deadline(
+                    subscription,
+                    std::slice::from_ref(&remaining.ack_id),
+                    0,
+                    now,
+                );
+            }
+            return false;
+        }
+        true
     }
 }
 

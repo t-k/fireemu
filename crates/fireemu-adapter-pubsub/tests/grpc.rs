@@ -2,7 +2,10 @@
 //! ack / filter / redelivery against a served adapter on a loopback port.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use fireemu_adapter_pubsub::{serve_pubsub, PubSubHandle};
 use fireemu_core_pubsub::PubSubState;
@@ -61,6 +64,78 @@ fn msg(data: &[u8]) -> pb::PubsubMessage {
         data: data.to_vec(),
         ..Default::default()
     }
+}
+
+type PushSink = (
+    String,
+    Arc<Mutex<Vec<Vec<u8>>>>,
+    Arc<AtomicBool>,
+    thread::JoinHandle<()>,
+);
+
+fn push_sink(status: u16) -> PushSink {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let received = bodies.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let should_stop = stop.clone();
+    let worker = thread::spawn(move || {
+        while !should_stop.load(Ordering::Acquire) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                thread::sleep(std::time::Duration::from_millis(2));
+                continue;
+            };
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let body_start = loop {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break None;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break Some(index + 4);
+                }
+            };
+            let Some(body_start) = body_start else {
+                continue;
+            };
+            let content_length = request
+                .windows(b"content-length:".len())
+                .position(|window| window.eq_ignore_ascii_case(b"content-length:"))
+                .and_then(|index| {
+                    let line = request[index..].split(|byte| *byte == b'\n').next()?;
+                    std::str::from_utf8(line)
+                        .ok()?
+                        .split(':')
+                        .nth(1)?
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                })
+                .unwrap_or_default();
+            while request.len() < body_start.saturating_add(content_length) {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+            }
+            if request.len() >= body_start.saturating_add(content_length) {
+                received
+                    .lock()
+                    .unwrap()
+                    .push(request[body_start..body_start + content_length].to_vec());
+            }
+            let response =
+                format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://{address}/push"), bodies, stop, worker)
 }
 
 #[tokio::test]
@@ -492,4 +567,64 @@ async fn snapshot_lifecycle_replays_backlog_and_post_creation_messages() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test]
+async fn push_subscription_delivers_json_and_acknowledges_the_message() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink(204);
+    let topic = "projects/demo-app/topics/push";
+    let subscription = "projects/demo-app/subscriptions/push";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"push-me")],
+    })
+    .await
+    .unwrap();
+
+    for _ in 0..100 {
+        if !bodies.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let pushed = bodies.lock().unwrap().clone();
+    assert_eq!(pushed.len(), 1);
+    let body = String::from_utf8(pushed[0].clone()).unwrap();
+    assert!(body.contains("\"data\":\"cHVzaC1tZQ==\""));
+    assert!(body.contains(subscription));
+
+    let pulled = subc
+        .pull(pb::PullRequest {
+            subscription: subscription.to_owned(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert!(pulled.is_empty());
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
 }

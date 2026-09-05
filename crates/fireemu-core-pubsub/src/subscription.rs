@@ -26,6 +26,10 @@ pub const MAX_ACK_DEADLINE_SECONDS: u32 = 600;
 pub const MIN_DEAD_LETTER_ATTEMPTS: u32 = 5;
 /// Inclusive maximum `max_delivery_attempts` for a dead-letter policy.
 pub const MAX_DEAD_LETTER_ATTEMPTS: u32 = 100;
+/// Default retry minimum backoff when a policy omits the field.
+pub const DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS: i64 = 10;
+/// Default and maximum retry maximum backoff.
+pub const MAX_RETRY_BACKOFF_SECONDS: i64 = 600;
 /// Upper bound on the number of retained entries a single subscription keeps in memory.
 pub const MAX_RETAINED_PER_SUB: usize = 100_000;
 /// Upper bound on message bytes retained by one subscription.
@@ -98,9 +102,14 @@ impl SubscriptionConfig {
             }
         }
         if let Some(rp) = &self.retry_policy {
-            if rp.minimum_backoff.as_nanos() < 0 || rp.maximum_backoff.as_nanos() < 0 {
+            let maximum = LogicalDuration::from_seconds(MAX_RETRY_BACKOFF_SECONDS);
+            if rp.minimum_backoff.as_nanos() < 0
+                || rp.maximum_backoff.as_nanos() < 0
+                || rp.minimum_backoff > maximum
+                || rp.maximum_backoff > maximum
+            {
                 return Err(PubSubError::invalid_argument(
-                    "retry policy backoff must not be negative",
+                    "retry policy backoff must be between 0 and 600 seconds",
                 ));
             }
             if rp.minimum_backoff > rp.maximum_backoff {
@@ -208,6 +217,12 @@ impl SubscriptionState {
     /// Sets the push configuration (used by `ModifyPushConfig`).
     pub fn set_push_config(&mut self, push: PushConfig) {
         self.config.push_config = push;
+    }
+
+    /// Permanently detaches this subscription from a deleted topic incarnation.
+    pub fn mark_topic_deleted(&mut self) {
+        self.config.topic = TopicName::parse(crate::name::DELETED_TOPIC)
+            .expect("the deleted-topic sentinel is always valid");
     }
 
     fn message_bytes(stored: &StoredMessage) -> usize {

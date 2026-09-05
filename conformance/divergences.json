@@ -162,6 +162,10 @@
       "documents": "README.md, \"Pub/Sub\"; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
       "reason": "After a subscription is seeked to a timestamp before a message was published, fireemu redelivers that message even though it was already acknowledged and the subscription did not set retainAckedMessages. fireemu retains acked messages for seek unconditionally; the official emulator retains them only when retainAckedMessages is true, so it does not replay here. This is a fireemu superset: a seek never sees fewer messages than the official emulator returns."
     },
+    "pubsub-probe/rest-resource-wire#snapshotPut": {
+      "documents": "vendored google/pubsub/v1/pubsub.proto Snapshot.labels; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The production Snapshot resource includes the labels supplied to CreateSnapshot in its response. fireemu preserves and returns those labels; the pinned official emulator accepts the labels but omits them from the response."
+    },
     "storage-probe/fb-resumable-upload#upload-with-wrong-offset": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
       "reason": "fireemu checks X-Goog-Upload-Offset against the bytes already received and refuses a mismatch with 400, as production does. The official emulator never reads the offset: it appends whatever arrives, so a chunk sent with a wrong offset was measured to commit a corrupt object."

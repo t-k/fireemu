@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
+use fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS;
 use fireemu_core_pubsub::{PushConfig, SubscriptionName};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::subscriber_server::Subscriber;
@@ -105,29 +106,59 @@ impl Subscriber for SubscriberService {
             .subscription
             .ok_or_else(|| Status::invalid_argument("update requires a subscription"))?;
         let name = SubscriptionName::parse(&sub.name).map_err(|e| status(&e))?;
-        // The emulator supports a limited set of updates; fireemu applies the ack deadline and
-        // the push configuration and leaves the rest unchanged.
-        if sub.ack_deadline_seconds != 0 {
-            let secs = u32::try_from(sub.ack_deadline_seconds)
-                .map_err(|_| Status::invalid_argument("ackDeadlineSeconds must be positive"))?;
-            self.handle
-                .state()
-                .update_ack_deadline(&name, secs)
-                .map_err(|e| status(&e))?;
+        let paths = req
+            .update_mask
+            .ok_or_else(|| Status::invalid_argument("update_mask is required"))?
+            .paths;
+        if paths.is_empty() {
+            return Err(Status::invalid_argument("update_mask must not be empty"));
         }
-        if let Some(push_config) = sub.push_config {
-            crate::push::validate_endpoint(&push_config.push_endpoint)
-                .map_err(Status::invalid_argument)?;
-            self.handle
-                .state()
-                .update_push_config(
-                    &name,
-                    PushConfig {
-                        push_endpoint: push_config.push_endpoint,
-                    },
-                )
-                .map_err(|e| status(&e))?;
+        for path in &paths {
+            match path.as_str() {
+                "ack_deadline_seconds" | "push_config" => {}
+                "dead_letter_policy" | "retry_policy" | "filter" | "enable_message_ordering" => {
+                    return Err(Status::unimplemented(format!(
+                        "updating {path} is not supported by the Pub/Sub emulator"
+                    )))
+                }
+                _ => {
+                    return Err(Status::invalid_argument(format!(
+                        "unknown update_mask path {path}"
+                    )))
+                }
+            }
         }
+        let ack_deadline_seconds = paths
+            .iter()
+            .any(|path| path == "ack_deadline_seconds")
+            .then(|| {
+                if sub.ack_deadline_seconds == 0 {
+                    Ok(DEFAULT_ACK_DEADLINE_SECONDS)
+                } else {
+                    u32::try_from(sub.ack_deadline_seconds).map_err(|_| {
+                        Status::invalid_argument("ackDeadlineSeconds must be positive")
+                    })
+                }
+            })
+            .transpose()?;
+        let push_config = paths
+            .iter()
+            .any(|path| path == "push_config")
+            .then(|| {
+                let endpoint = sub
+                    .push_config
+                    .as_ref()
+                    .map_or_else(String::new, |config| config.push_endpoint.clone());
+                crate::push::validate_endpoint(&endpoint).map_err(Status::invalid_argument)?;
+                Ok::<_, Status>(PushConfig {
+                    push_endpoint: endpoint,
+                })
+            })
+            .transpose()?;
+        self.handle
+            .state()
+            .update_subscription(&name, ack_deadline_seconds, push_config)
+            .map_err(|e| status(&e))?;
         let topic = self
             .handle
             .state()

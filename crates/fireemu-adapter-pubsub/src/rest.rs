@@ -10,12 +10,15 @@ use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use fireemu_core_pubsub::subscription::{PushConfig, DEFAULT_ACK_DEADLINE_SECONDS};
+use fireemu_core_pubsub::subscription::{
+    DeadLetterPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
+    DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS,
+};
 use fireemu_core_pubsub::{
     Code, Filter, PubSubError, PubSubState, PubsubMessage, ReceivedMessage, Snapshot,
     StoredMessage, SubscriptionConfig, SubscriptionName, TopicName,
 };
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
 
 use crate::{BridgeMessage, PubSubHandle, MAX_MESSAGE_BYTES};
@@ -50,6 +53,14 @@ impl RestError {
         Self {
             status: StatusCode::NOT_FOUND,
             code: "NOT_FOUND",
+            message: message.into(),
+        }
+    }
+
+    fn unimplemented(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_IMPLEMENTED,
+            code: "UNIMPLEMENTED",
             message: message.into(),
         }
     }
@@ -162,7 +173,28 @@ fn dispatch_topic(
     let (topic_id, operation) = split_operation(parts);
     let topic = TopicName::new(project, topic_id).map_err(RestError::from_core)?;
     match (method, operation) {
-        (&Method::POST, None) => {
+        (&Method::PUT, None) => {
+            let object = body
+                .as_object()
+                .ok_or_else(|| RestError::invalid("topic must be an object"))?;
+            for key in object.keys() {
+                match key.as_str() {
+                    "name" | "labels" => {}
+                    _ => {
+                        return Err(RestError::unimplemented(format!(
+                            "topic.{key} is not supported by the Pub/Sub emulator"
+                        )))
+                    }
+                }
+            }
+            if let Some(name) = object.get("name") {
+                let name = name
+                    .as_str()
+                    .ok_or_else(|| RestError::invalid("topic.name must be a string"))?;
+                if name != topic.to_full() {
+                    return Err(RestError::invalid("topic.name must match the request path"));
+                }
+            }
             let labels = object_strings(body, "labels")?;
             let mut state = handle.state();
             state
@@ -224,7 +256,7 @@ fn dispatch_subscription(
     let subscription =
         SubscriptionName::new(project, subscription_id).map_err(RestError::from_core)?;
     match (method, operation) {
-        (&Method::POST, None) => create_subscription(subscription, body, handle),
+        (&Method::PUT, None) => create_subscription(subscription, body, handle),
         (&Method::GET, None) => get_subscription(subscription, handle),
         (&Method::PATCH, None) => update_subscription(subscription, body, handle),
         (&Method::DELETE, None) => {
@@ -274,7 +306,27 @@ fn dispatch_snapshot(
     let (snapshot_id, operation) = split_operation(parts);
     let name = format!("projects/{project}/snapshots/{snapshot_id}");
     match (method, operation) {
-        (&Method::POST, None) => {
+        (&Method::PUT, None) => {
+            let object = body
+                .as_object()
+                .ok_or_else(|| RestError::invalid("snapshot request must be an object"))?;
+            for key in object.keys() {
+                if !matches!(key.as_str(), "name" | "subscription" | "labels") {
+                    return Err(RestError::unimplemented(format!(
+                        "snapshot.{key} is not supported by the Pub/Sub emulator"
+                    )));
+                }
+            }
+            if let Some(body_name) = object.get("name") {
+                let body_name = body_name
+                    .as_str()
+                    .ok_or_else(|| RestError::invalid("snapshot.name must be a string"))?;
+                if body_name != name {
+                    return Err(RestError::invalid(
+                        "snapshot.name must match the request path",
+                    ));
+                }
+            }
             let subscription = string_field(body, "subscription")?;
             let subscription =
                 SubscriptionName::parse(subscription).map_err(RestError::from_core)?;
@@ -345,39 +397,79 @@ fn create_subscription(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let topic = TopicName::parse(string_field(body, "topic")?).map_err(RestError::from_core)?;
-    if topic.project() != subscription.project() {
-        return Err(RestError::invalid(
-            "subscription and topic must belong to the same project",
-        ));
+    let object = body
+        .as_object()
+        .ok_or_else(|| RestError::invalid("subscription must be an object"))?;
+    for key in object.keys() {
+        match key.as_str() {
+            "name"
+            | "topic"
+            | "ackDeadlineSeconds"
+            | "enableMessageOrdering"
+            | "filter"
+            | "deadLetterPolicy"
+            | "retryPolicy"
+            | "pushConfig" => {}
+            _ => {
+                return Err(RestError::unimplemented(format!(
+                    "subscription.{key} is not supported by the Pub/Sub emulator"
+                )))
+            }
+        }
     }
-    let ack_deadline_seconds = body
-        .get("ackDeadlineSeconds")
-        .map(parse_u32)
+    if let Some(name) = object.get("name") {
+        let name = name
+            .as_str()
+            .ok_or_else(|| RestError::invalid("subscription.name must be a string"))?;
+        if name != subscription.to_full() {
+            return Err(RestError::invalid(
+                "subscription.name must match the request path",
+            ));
+        }
+    }
+    let topic = TopicName::parse(string_field(body, "topic")?).map_err(RestError::from_core)?;
+    let ack_deadline_seconds = parse_ack_deadline(body.get("ackDeadlineSeconds"))?;
+    let filter_source = body
+        .get("filter")
+        .map(|filter| {
+            filter
+                .as_str()
+                .ok_or_else(|| RestError::invalid("filter must be a string"))
+        })
         .transpose()?
-        .unwrap_or(DEFAULT_ACK_DEADLINE_SECONDS);
-    let filter = Filter::parse(body.get("filter").and_then(Value::as_str).unwrap_or(""))
-        .map_err(RestError::from_core)?;
-    let push_endpoint = body
+        .unwrap_or_default();
+    let filter = Filter::parse(filter_source).map_err(RestError::from_core)?;
+    let enable_message_ordering = body
+        .get("enableMessageOrdering")
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| RestError::invalid("enableMessageOrdering must be a boolean"))
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let push_config = body
         .get("pushConfig")
-        .and_then(Value::as_object)
-        .and_then(|config| config.get("pushEndpoint"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    crate::push::validate_endpoint(&push_endpoint).map_err(RestError::invalid)?;
+        .map(parse_push_config)
+        .transpose()?
+        .unwrap_or_default();
+    let dead_letter_policy = body
+        .get("deadLetterPolicy")
+        .map(parse_dead_letter_policy)
+        .transpose()?;
+    let retry_policy = body
+        .get("retryPolicy")
+        .map(parse_retry_policy)
+        .transpose()?;
     let config = SubscriptionConfig {
         name: subscription.clone(),
         topic: topic.clone(),
         ack_deadline_seconds,
-        enable_message_ordering: body
-            .get("enableMessageOrdering")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        enable_message_ordering,
         filter,
-        dead_letter_policy: None,
-        retry_policy: None,
-        push_config: PushConfig { push_endpoint },
+        dead_letter_policy,
+        retry_policy,
+        push_config,
     };
     let mut state = handle.state();
     state
@@ -411,52 +503,63 @@ fn update_subscription(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let ack_deadline_seconds = body.get("ackDeadlineSeconds").map(parse_u32).transpose()?;
-    let push_config = body
-        .get("pushConfig")
-        .map(|push_config| {
-            let push_config = push_config
-                .as_object()
-                .ok_or_else(|| RestError::invalid("pushConfig must be an object"))?;
-            let endpoint = push_config
-                .get("pushEndpoint")
-                .map(|endpoint| {
-                    endpoint.as_str().ok_or_else(|| {
-                        RestError::invalid("pushConfig.pushEndpoint must be a string")
-                    })
-                })
-                .transpose()?
-                .unwrap_or_default()
-                .to_owned();
-            crate::push::validate_endpoint(&endpoint).map_err(RestError::invalid)?;
-            Ok(PushConfig {
-                push_endpoint: endpoint,
-            })
-        })
+    let update = body
+        .get("subscription")
+        .and_then(Value::as_object)
+        .ok_or_else(|| RestError::invalid("update requires a subscription object"))?;
+    if let Some(name) = update.get("name") {
+        let name = name
+            .as_str()
+            .ok_or_else(|| RestError::invalid("subscription.name must be a string"))?;
+        if name != subscription.to_full() {
+            return Err(RestError::invalid(
+                "subscription.name must match the request path",
+            ));
+        }
+    }
+    let update_mask = body
+        .get("updateMask")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RestError::invalid("updateMask must be a comma-separated string"))?;
+    if update_mask.is_empty() {
+        return Err(RestError::invalid("updateMask must not be empty"));
+    }
+    let paths = update_mask.split(',').collect::<Vec<_>>();
+    for path in &paths {
+        match *path {
+            "ackDeadlineSeconds" | "pushConfig" => {}
+            "deadLetterPolicy" | "retryPolicy" | "filter" | "enableMessageOrdering" => {
+                return Err(RestError::unimplemented(format!(
+                    "updating {path} is not supported by the Pub/Sub emulator"
+                )))
+            }
+            _ => {
+                return Err(RestError::invalid(format!(
+                    "unknown updateMask path {path}"
+                )))
+            }
+        }
+    }
+    let ack_deadline_seconds = paths
+        .contains(&"ackDeadlineSeconds")
+        .then(|| parse_ack_deadline(update.get("ackDeadlineSeconds")))
         .transpose()?;
+    let push_config = if paths.contains(&"pushConfig") {
+        Some(
+            update
+                .get("pushConfig")
+                .map(parse_push_config)
+                .transpose()?
+                .unwrap_or_default(),
+        )
+    } else {
+        None
+    };
     let (topic, response) = {
         let mut state = handle.state();
-        let mut candidate = state
-            .subscription_config(&subscription)
-            .map_err(RestError::from_core)?
-            .clone();
-        if let Some(seconds) = ack_deadline_seconds {
-            candidate.ack_deadline_seconds = seconds;
-        }
-        if let Some(push_config) = &push_config {
-            candidate.push_config = push_config.clone();
-        }
-        candidate.validate().map_err(RestError::from_core)?;
-        if let Some(seconds) = ack_deadline_seconds {
-            state
-                .update_ack_deadline(&subscription, seconds)
-                .map_err(RestError::from_core)?;
-        }
-        if let Some(push_config) = push_config {
-            state
-                .update_push_config(&subscription, push_config)
-                .map_err(RestError::from_core)?;
-        }
+        state
+            .update_subscription(&subscription, ack_deadline_seconds, push_config)
+            .map_err(RestError::from_core)?;
         let config = state
             .subscription_config(&subscription)
             .map_err(RestError::from_core)?
@@ -465,6 +568,131 @@ fn update_subscription(
     };
     handle.schedule_push(&topic);
     Ok((StatusCode::OK, response))
+}
+
+fn parse_push_config(value: &Value) -> Result<PushConfig, RestError> {
+    let push_config = value
+        .as_object()
+        .ok_or_else(|| RestError::invalid("pushConfig must be an object"))?;
+    for key in push_config.keys() {
+        if key != "pushEndpoint" {
+            return Err(RestError::unimplemented(format!(
+                "pushConfig.{key} is not supported by the Pub/Sub emulator"
+            )));
+        }
+    }
+    let endpoint = push_config
+        .get("pushEndpoint")
+        .map(|endpoint| {
+            endpoint
+                .as_str()
+                .ok_or_else(|| RestError::invalid("pushConfig.pushEndpoint must be a string"))
+        })
+        .transpose()?
+        .unwrap_or_default()
+        .to_owned();
+    crate::push::validate_endpoint(&endpoint).map_err(RestError::invalid)?;
+    Ok(PushConfig {
+        push_endpoint: endpoint,
+    })
+}
+
+fn parse_ack_deadline(value: Option<&Value>) -> Result<u32, RestError> {
+    let seconds = value.map(parse_u32).transpose()?.unwrap_or_default();
+    Ok(if seconds == 0 {
+        DEFAULT_ACK_DEADLINE_SECONDS
+    } else {
+        seconds
+    })
+}
+
+fn parse_dead_letter_policy(value: &Value) -> Result<DeadLetterPolicy, RestError> {
+    let policy = value
+        .as_object()
+        .ok_or_else(|| RestError::invalid("deadLetterPolicy must be an object"))?;
+    for key in policy.keys() {
+        if !matches!(key.as_str(), "deadLetterTopic" | "maxDeliveryAttempts") {
+            return Err(RestError::invalid(format!(
+                "unknown deadLetterPolicy field {key}"
+            )));
+        }
+    }
+    Ok(DeadLetterPolicy {
+        dead_letter_topic: TopicName::parse(string_field(value, "deadLetterTopic")?)
+            .map_err(RestError::from_core)?,
+        max_delivery_attempts: match policy
+            .get("maxDeliveryAttempts")
+            .map(parse_u32)
+            .transpose()?
+            .unwrap_or_default()
+        {
+            0 => fireemu_core_pubsub::subscription::MIN_DEAD_LETTER_ATTEMPTS,
+            attempts => attempts,
+        },
+    })
+}
+
+fn parse_retry_policy(value: &Value) -> Result<RetryPolicy, RestError> {
+    let policy = value
+        .as_object()
+        .ok_or_else(|| RestError::invalid("retryPolicy must be an object"))?;
+    for key in policy.keys() {
+        if !matches!(key.as_str(), "minimumBackoff" | "maximumBackoff") {
+            return Err(RestError::invalid(format!(
+                "unknown retryPolicy field {key}"
+            )));
+        }
+    }
+    Ok(RetryPolicy {
+        minimum_backoff: policy
+            .get("minimumBackoff")
+            .map(parse_duration)
+            .transpose()?
+            .unwrap_or_else(|| {
+                LogicalDuration::from_seconds(DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS)
+            }),
+        maximum_backoff: policy
+            .get("maximumBackoff")
+            .map(parse_duration)
+            .transpose()?
+            .unwrap_or_else(|| LogicalDuration::from_seconds(MAX_RETRY_BACKOFF_SECONDS)),
+    })
+}
+
+fn parse_duration(value: &Value) -> Result<LogicalDuration, RestError> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| RestError::invalid("duration must be a string"))?;
+    let number = raw
+        .strip_suffix('s')
+        .ok_or_else(|| RestError::invalid("duration must end in s"))?;
+    let has_fraction = number.contains('.');
+    let (seconds, fraction) = number.split_once('.').map_or((number, ""), |parts| parts);
+    if seconds.is_empty()
+        || !seconds.bytes().all(|byte| byte.is_ascii_digit())
+        || (has_fraction && fraction.is_empty())
+        || fraction.len() > 9
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(RestError::invalid(
+            "duration must be a non-negative protobuf duration",
+        ));
+    }
+    let seconds = seconds
+        .parse::<i128>()
+        .map_err(|_| RestError::invalid("duration seconds are out of range"))?;
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        format!("{fraction:0<9}")
+            .parse::<i128>()
+            .map_err(|_| RestError::invalid("duration fraction is invalid"))?
+    };
+    seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|nanos| nanos.checked_add(fraction))
+        .map(LogicalDuration::from_nanos)
+        .ok_or_else(|| RestError::invalid("duration is out of range"))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -658,7 +886,39 @@ fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value 
     if !config.push_config.push_endpoint.is_empty() {
         value["pushConfig"] = json!({"pushEndpoint": config.push_config.push_endpoint});
     }
+    if !config.filter.as_str().is_empty() {
+        value["filter"] = json!(config.filter.as_str());
+    }
+    if let Some(policy) = &config.dead_letter_policy {
+        value["deadLetterPolicy"] = json!({
+            "deadLetterTopic": policy.dead_letter_topic.to_full(),
+            "maxDeliveryAttempts": policy.max_delivery_attempts,
+        });
+    }
+    if let Some(policy) = config.retry_policy {
+        value["retryPolicy"] = json!({
+            "minimumBackoff": duration_json(policy.minimum_backoff),
+            "maximumBackoff": duration_json(policy.maximum_backoff),
+        });
+    }
     value
+}
+
+fn duration_json(duration: LogicalDuration) -> String {
+    let nanos = duration.as_nanos();
+    let seconds = nanos.div_euclid(1_000_000_000);
+    let fraction = nanos.rem_euclid(1_000_000_000);
+    if fraction == 0 {
+        return format!("{seconds}s");
+    }
+    let (divisor, width) = if fraction % 1_000_000 == 0 {
+        (1_000_000, 3)
+    } else if fraction % 1_000 == 0 {
+        (1_000, 6)
+    } else {
+        (1, 9)
+    };
+    format!("{seconds}.{:0width$}s", fraction / divisor)
 }
 
 fn snapshot_json(snapshot: &Snapshot) -> Value {

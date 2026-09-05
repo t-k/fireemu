@@ -9,6 +9,19 @@ real `@google-cloud/pubsub` client against the official emulator and against fir
 rows gate against the recorded fireemu value, and `debt` rows are open mismatches that gate
 nothing until they are ruled on.
 
+## rest
+
+parity: 5 &middot; documented-divergence: 1
+
+| program | step | status |
+| --- | --- | --- |
+| `rest-resource-wire` | `topicPut` | parity |
+| `rest-resource-wire` | `topicPost` | parity |
+| `rest-resource-wire` | `subscriptionPut` | parity |
+| `rest-resource-wire` | `subscriptionPatch` | parity |
+| `rest-resource-wire` | `snapshotPut` | documented-divergence |
+| `rest-resource-wire` | `snapshotPost` | parity |
+
 ## topics
 
 parity: 7

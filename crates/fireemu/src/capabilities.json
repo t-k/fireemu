@@ -335,6 +335,7 @@
     "precision": "boundary-conformance",
     "implemented": [
       "the google.pubsub.v1 Publisher and Subscriber services over gRPC on the loopback port PUBSUB_EMULATOR_HOST names (default 8085): CreateTopic / GetTopic / ListTopics / ListTopicSubscriptions / DeleteTopic, CreateSubscription / GetSubscription / UpdateSubscription / ListSubscriptions / DeleteSubscription, Publish, Pull, StreamingPull, Acknowledge, ModifyAckDeadline and Seek (to a timestamp)",
+      "REST/JSON on the same port for the implemented topic, subscription, snapshot, publish, pull, acknowledge, modify-ack-deadline and seek operations; resource creation follows the annotated PUT routes, subscription FieldMask updates validate every selected value before one atomic broker update, and supported retry, dead-letter, filter and ordering fields round-trip between REST and gRPC",
       "topic and subscription state: publish fans a message out to every subscription whose filter admits it; a subscription reports _deleted-topic_ once its topic is deleted",
       "delivery semantics: ack ids and message ids assigned deterministically under the daemon seed, ack deadlines and redelivery of unacked messages on the virtual clock, nack (ModifyAckDeadline 0) for immediate redelivery, ordering keys that hold a key's later messages until the earlier one is acked, subscription filters over attributes (equality, inequality, existence, hasPrefix, NOT/AND/OR), dead-letter forwarding after maxDeliveryAttempts, and seek-to-timestamp replay",
       "Pub/Sub-native subscription snapshots: CreateSnapshot / GetSnapshot / ListSnapshots / ListTopicSnapshots / UpdateSnapshot / DeleteSnapshot and seek-to-snapshot preserve the captured acknowledgement boundary with a bounded seven-day local lifetime",
@@ -344,12 +345,12 @@
     ],
     "unimplemented": [
       "UpdateTopic: reported UNIMPLEMENTED, as the official emulator does not support it either",
-      "REST/JSON transcoding on the port: the active wire surface is gRPC-only, which is what the @google-cloud/pubsub and firebase-admin clients speak",
+      "REST UpdateTopic and UpdateSnapshot, and subscription updates outside ackDeadlineSeconds and pushConfig",
       "schemas (Avro or protobuf) and BigQuery / Cloud Storage subscription delivery"
     ],
     "notes": [
-      "conformance: the pubsub-probe records 22 parity steps and 1 documented divergence against the official pubsub-emulator 0.8.35 (conformance/pubsub-matrix.json, conformance/PUBSUB-MATRIX.md, conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
-      "the one documented divergence is a superset: fireemu retains acknowledged messages for seek even when retainAckedMessages is false, so a seek never returns fewer messages than the official emulator (conformance divergences.json pubsub-probe/seek-to-time#replayed)",
+      "conformance: the pubsub-probe records 27 parity steps and 2 documented divergences against the official pubsub-emulator 0.8.35 (conformance/pubsub-matrix.json, conformance/PUBSUB-MATRIX.md, conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
+      "the documented divergences follow the production contract where the fixed official emulator differs: fireemu retains acknowledged messages for seek even when retainAckedMessages is false, and CreateSnapshot returns supplied labels (conformance divergences.json)",
       "ack deadlines and redelivery run on the virtual clock, so a test advances time with the control clock rather than sleeping, and await-idle stays deterministic",
       "the Pub/Sub broker state lives for the daemon's lifetime and is not yet wiped by a session reset or captured by a fireemu session snapshot; Pub/Sub-native snapshots are scoped to broker subscription acknowledgement state"
     ]

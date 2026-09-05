@@ -37,6 +37,77 @@ function normalize(messages) {
 
 export const PROGRAMS = [
   {
+    id: "rest-resource-wire",
+    area: "rest",
+    async run(ctx) {
+      const steps = {};
+      const { project } = ctx;
+      const topic = `/v1/projects/${project}/topics/rest-wire`;
+      const deadTopic = `/v1/projects/${project}/topics/rest-dead`;
+      const subscription = `/v1/projects/${project}/subscriptions/rest-wire`;
+      const snapshot = `/v1/projects/${project}/snapshots/rest-wire`;
+      const createdTopic = await ctx.rest("PUT", topic, { labels: { source: "rest" } });
+      steps.topicPut = {
+        status: createdTopic.status,
+        name: createdTopic.body.name?.split("/").at(-1),
+        label: createdTopic.body.labels?.source,
+      };
+      steps.topicPost = {
+        rejected:
+          (await ctx.rest("POST", `/v1/projects/${project}/topics/wrong-verb`)).status >= 400,
+      };
+      await ctx.rest("PUT", deadTopic);
+      const createdSubscription = await ctx.rest("PUT", subscription, {
+        topic: `projects/${project}/topics/rest-wire`,
+        ackDeadlineSeconds: 20,
+        enableMessageOrdering: true,
+        filter: 'attributes.kind = "kept"',
+        deadLetterPolicy: {
+          deadLetterTopic: `projects/${project}/topics/rest-dead`,
+          maxDeliveryAttempts: 5,
+        },
+        retryPolicy: { minimumBackoff: "1.500s", maximumBackoff: "3s" },
+      });
+      steps.subscriptionPut = {
+        status: createdSubscription.status,
+        ackDeadlineSeconds: createdSubscription.body.ackDeadlineSeconds,
+        filter: createdSubscription.body.filter,
+        deadLetterAttempts: createdSubscription.body.deadLetterPolicy?.maxDeliveryAttempts,
+        minimumBackoff: createdSubscription.body.retryPolicy?.minimumBackoff,
+      };
+      const updated = await ctx.rest("PATCH", subscription, {
+        subscription: {
+          name: `projects/${project}/subscriptions/rest-wire`,
+          ackDeadlineSeconds: 30,
+        },
+        updateMask: "ackDeadlineSeconds",
+      });
+      steps.subscriptionPatch = {
+        status: updated.status,
+        ackDeadlineSeconds: updated.body.ackDeadlineSeconds,
+        filter: updated.body.filter,
+      };
+      const createdSnapshot = await ctx.rest("PUT", snapshot, {
+        subscription: `projects/${project}/subscriptions/rest-wire`,
+        labels: { source: "rest" },
+      });
+      steps.snapshotPut = {
+        status: createdSnapshot.status,
+        name: createdSnapshot.body.name?.split("/").at(-1),
+        label: createdSnapshot.body.labels?.source,
+      };
+      steps.snapshotPost = {
+        rejected:
+          (
+            await ctx.rest("POST", `/v1/projects/${project}/snapshots/wrong-verb`, {
+              subscription: `projects/${project}/subscriptions/rest-wire`,
+            })
+          ).status >= 400,
+      };
+      return steps;
+    },
+  },
+  {
     id: "topics-lifecycle",
     area: "topics",
     async run(ctx) {

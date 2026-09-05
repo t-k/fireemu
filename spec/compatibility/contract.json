@@ -1913,7 +1913,7 @@
         "supportedByFunctions"
       ],
       "state": "claimed",
-      "decision": "Active supported surface. The google.pubsub.v1 wire emulator is served over gRPC on port 8085; parity is claimed for the documented subset the official Pub/Sub emulator implements.",
+      "decision": "Active supported surface. The google.pubsub.v1 wire emulator is served over gRPC and REST/JSON on port 8085; parity is claimed for the documented subset the official Pub/Sub emulator implements.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite",
         "https://cloud.google.com/pubsub/docs/emulator",
@@ -1925,7 +1925,7 @@
       "notes": [
         "Pub/Sub snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / ListTopicSnapshots / UpdateSnapshot / DeleteSnapshot and seek-to-snapshot) are implemented over the shared broker state, and validated by the adapter lifecycle test",
         "push delivery is implemented for loopback HTTP endpoints with bounded workers, acknowledgement on 2xx, finite retry and nack on failure; remote, HTTPS and redirect endpoints are refused as a local safety boundary",
-        "REST/JSON transcoding on the Pub/Sub port is not implemented; the pinned client and downloadable emulator evidence for this baseline use the gRPC google.pubsub.v1 surface",
+        "REST/JSON transcoding on the Pub/Sub port implements the documented topic, subscription, snapshot, publish, pull, acknowledge, modify-ack-deadline and seek subset over the same broker state as gRPC; unsupported fields and update-mask paths are diagnosed explicitly",
         "Avro/protobuf schema management and BigQuery / Cloud Storage subscription delivery remain outside the active implementation; the official emulator's documented unsupported delivery limitations are preserved"
       ],
       "gaps": [],
@@ -1933,7 +1933,7 @@
       "claims": [
         {
           "id": "PUBSUB-CLAIM-WIRE",
-          "statement": "The google.pubsub.v1 wire emulator on port 8085 is served over gRPC: a real @google-cloud/pubsub or firebase-admin client creates, gets, lists and deletes topics and subscriptions, publishes, pulls (unary and streaming), acknowledges, extends and nacks ack deadlines, and seeks to a timestamp, with ordering keys, subscription filters and dead-letter forwarding; and a message published through the client protocol reaches subscribed onMessagePublished (v2) and topic().onPublish (v1) Cloud Functions.",
+          "statement": "The google.pubsub.v1 wire emulator on port 8085 is served over gRPC and its documented REST/JSON subset: a real @google-cloud/pubsub or firebase-admin client creates, gets, lists and deletes topics and subscriptions, publishes, pulls (unary and streaming), acknowledges, extends and nacks ack deadlines, and seeks to a timestamp, with ordering keys, subscription filters and dead-letter forwarding; REST uses the annotated PUT resource routes and atomic FieldMask subscription updates; and a message published through the client protocol reaches subscribed onMessagePublished (v2) and topic().onPublish (v1) Cloud Functions.",
           "capabilities": [
             {
               "id": "PUBSUB-WIRE-1",
@@ -1944,7 +1944,9 @@
             "tests": [
               "publish_pull_ack_round_trip",
               "redelivery_after_ack_deadline_on_virtual_clock",
-              "streaming_pull_delivers_and_acks"
+              "streaming_pull_delivers_and_acks",
+              "rest_put_routes_preserve_every_supported_subscription_field",
+              "rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields"
             ],
             "integration": [
               "crates/fireemu-adapter-pubsub/tests/grpc.rs",

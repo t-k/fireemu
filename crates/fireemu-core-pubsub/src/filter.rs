@@ -31,6 +31,7 @@ const MAX_DEPTH: usize = 64;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Filter {
     root: Option<Expr>,
+    source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,7 +49,10 @@ impl Filter {
     /// The always-true filter (no `filter` set on the subscription).
     #[must_use]
     pub fn always() -> Self {
-        Self { root: None }
+        Self {
+            root: None,
+            source: String::new(),
+        }
     }
 
     /// Parses a filter expression. An empty or whitespace-only string is [`Filter::always`].
@@ -77,7 +81,16 @@ impl Filter {
                 "unexpected trailing tokens in filter",
             ));
         }
-        Ok(Self { root: Some(expr) })
+        Ok(Self {
+            root: Some(expr),
+            source: input.to_owned(),
+        })
+    }
+
+    /// Returns the validated wire expression retained for API round trips.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.source
     }
 
     /// Whether the filter matches a message's attribute set.

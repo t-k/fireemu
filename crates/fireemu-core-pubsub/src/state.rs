@@ -123,10 +123,15 @@ impl PubSubState {
         for subscription in subscriptions {
             let _ = self.delete_subscription(&subscription);
         }
-        self.topics
-            .retain(|_, entry| entry.name.project() != project);
-        self.topic_subs
-            .retain(|topic, _| TopicName::parse(topic).is_ok_and(|name| name.project() != project));
+        let topics = self
+            .topics
+            .values()
+            .filter(|entry| entry.name.project() == project)
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>();
+        for topic in topics {
+            let _ = self.delete_topic(&topic);
+        }
         let snapshots = self
             .snapshots
             .values()
@@ -192,7 +197,11 @@ impl PubSubState {
         if self.topics.remove(&key).is_none() {
             return Err(PubSubError::not_found(format!("topic {key} not found")));
         }
-        self.topic_subs.remove(&key);
+        for subscription in self.topic_subs.remove(&key).unwrap_or_default() {
+            if let Some(state) = self.subscriptions.get_mut(&subscription) {
+                state.mark_topic_deleted();
+            }
+        }
         Ok(())
     }
 
@@ -223,9 +232,12 @@ impl PubSubState {
             )));
         }
         if let Some(dl) = &config.dead_letter_policy {
-            // A dead-letter topic that does not exist is accepted by the service (messages are
-            // simply dropped when forwarded), so we do not reject it here.
-            let _ = dl;
+            let dead_letter_topic = dl.dead_letter_topic.to_full();
+            if !self.topics.contains_key(&dead_letter_topic) {
+                return Err(PubSubError::not_found(format!(
+                    "dead-letter topic {dead_letter_topic} not found"
+                )));
+            }
         }
         if self.subscriptions.len() >= MAX_SUBSCRIPTIONS {
             return Err(PubSubError::resource_exhausted(format!(
@@ -331,6 +343,32 @@ impl PubSubState {
     ) -> Result<()> {
         let subscription = self.sub_mut(name)?;
         subscription.set_push_config(push_config);
+        Ok(())
+    }
+
+    /// Atomically applies the mutable subscription fields supported by the emulator.
+    pub fn update_subscription(
+        &mut self,
+        name: &SubscriptionName,
+        ack_deadline_seconds: Option<u32>,
+        push_config: Option<PushConfig>,
+    ) -> Result<()> {
+        let mut candidate = self.subscription_config(name)?.clone();
+        if let Some(seconds) = ack_deadline_seconds {
+            candidate.ack_deadline_seconds = seconds;
+        }
+        if let Some(push_config) = &push_config {
+            candidate.push_config = push_config.clone();
+        }
+        candidate.validate()?;
+
+        let subscription = self.sub_mut(name)?;
+        if let Some(seconds) = ack_deadline_seconds {
+            subscription.set_ack_deadline(seconds);
+        }
+        if let Some(push_config) = push_config {
+            subscription.set_push_config(push_config);
+        }
         Ok(())
     }
 
@@ -899,6 +937,10 @@ mod tests {
                 .create_subscription(sub_cfg(project, "orders-sub", "orders", Filter::always()))
                 .unwrap();
         }
+        let cross_project = SubscriptionName::new("demo-b", "cross-sub").unwrap();
+        let mut cross_project_config = sub_cfg("demo-b", "cross-sub", "orders", Filter::always());
+        cross_project_config.topic = topic("demo-a", "orders");
+        state.create_subscription(cross_project_config).unwrap();
 
         state.clear_project("demo-a");
 
@@ -910,6 +952,24 @@ mod tests {
         assert!(state
             .subscription_config(&SubscriptionName::new("demo-b", "orders-sub").unwrap())
             .is_ok());
+        assert_eq!(state.reported_topic(&cross_project).unwrap(), DELETED_TOPIC);
+
+        let recreated = topic("demo-a", "orders");
+        state
+            .create_topic(recreated.clone(), BTreeMap::new())
+            .unwrap();
+        assert_eq!(state.reported_topic(&cross_project).unwrap(), DELETED_TOPIC);
+        state
+            .publish(
+                &recreated,
+                vec![data(b"new topic incarnation")],
+                LogicalInstant::from_unix_seconds(1),
+            )
+            .unwrap();
+        assert!(state
+            .pull(&cross_project, 10, LogicalInstant::from_unix_seconds(1))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -934,6 +994,33 @@ mod tests {
                 .code(),
             crate::error::Code::NotFound
         );
+    }
+
+    #[test]
+    fn rejected_subscription_update_does_not_publish_any_candidate_field() {
+        let mut state = PubSubState::new(1);
+        state
+            .create_topic(topic("p1", "top-a"), BTreeMap::new())
+            .unwrap();
+        let subscription = SubscriptionName::new("p1", "sub-a").unwrap();
+        state
+            .create_subscription(sub_cfg("p1", "sub-a", "top-a", Filter::always()))
+            .unwrap();
+
+        let error = state
+            .update_subscription(
+                &subscription,
+                Some(1),
+                Some(PushConfig {
+                    push_endpoint: "http://127.0.0.1:8080/candidate".to_owned(),
+                }),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code(), crate::error::Code::InvalidArgument);
+        let config = state.subscription_config(&subscription).unwrap();
+        assert_eq!(config.ack_deadline_seconds, DEFAULT_ACK_DEADLINE_SECONDS);
+        assert_eq!(config.push_config, PushConfig::default());
     }
 
     #[test]
@@ -969,15 +1056,26 @@ mod tests {
     #[test]
     fn deleting_topic_leaves_subscription_with_sentinel() {
         let mut s = PubSubState::new(1);
-        s.create_topic(topic("p", "top-a"), BTreeMap::new())
-            .unwrap();
+        let topic = topic("p", "top-a");
+        let subscription = SubscriptionName::new("p", "sub-a").unwrap();
+        s.create_topic(topic.clone(), BTreeMap::new()).unwrap();
         s.create_subscription(sub_cfg("p", "sub-a", "top-a", Filter::always()))
             .unwrap();
-        s.delete_topic(&topic("p", "top-a")).unwrap();
-        let reported = s
-            .reported_topic(&SubscriptionName::new("p", "sub-a").unwrap())
-            .unwrap();
-        assert_eq!(reported, DELETED_TOPIC);
+        s.delete_topic(&topic).unwrap();
+        assert_eq!(s.reported_topic(&subscription).unwrap(), DELETED_TOPIC);
+
+        s.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+        assert_eq!(s.reported_topic(&subscription).unwrap(), DELETED_TOPIC);
+        s.publish(
+            &topic,
+            vec![data(b"belongs only to the recreated topic")],
+            LogicalInstant::from_unix_seconds(1),
+        )
+        .unwrap();
+        assert!(s
+            .pull(&subscription, 10, LogicalInstant::from_unix_seconds(1))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! The runner child process: spawn, handshake, invocations with real-time timeouts, logs.
 
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -78,6 +79,7 @@ pub const INHERITED_ENV: &[&str] = &[
 pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_"];
 
 const LOG_CAPACITY: usize = 1_000;
+static RUNNER_SANDBOX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// One retained runner line with the metadata needed by the official Logging stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,6 +232,7 @@ pub struct Runner {
     logs: Arc<Mutex<LogBuffer>>,
     label: String,
     alive: Arc<AtomicBool>,
+    credential_sandbox: Mutex<Option<PathBuf>>,
 }
 
 #[cfg(not(windows))]
@@ -258,22 +261,65 @@ async fn kill_child(child: &mut RunnerChild) -> std::io::Result<()> {
     Box::into_pin(child.kill()).await
 }
 
+/// Creates an exclusive directory used to block the standard gcloud credential lookup.
+fn create_credential_sandbox() -> Result<PathBuf, String> {
+    let base = std::env::temp_dir();
+    for _ in 0..32 {
+        let sequence = RUNNER_SANDBOX_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = base.join(format!("fireemu-runner-{}-{sequence}", std::process::id()));
+        match std::fs::create_dir(&root) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                        .map_err(|error| {
+                            let _ = std::fs::remove_dir_all(&root);
+                            format!("cannot protect Functions runner credential sandbox: {error}")
+                        })?;
+                }
+                let config = root.join("gcloud-empty");
+                std::fs::create_dir(&config).map_err(|error| {
+                    let _ = std::fs::remove_dir_all(&root);
+                    format!("cannot create Functions runner gcloud sandbox: {error}")
+                })?;
+                return Ok(root);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot create Functions runner credential sandbox: {error}"
+                ));
+            }
+        }
+    }
+    Err("cannot allocate an exclusive Functions runner credential sandbox".to_owned())
+}
+
 /// The environment of a runner child: the inherited allowlist, then `extra` (emulator
 /// endpoints and project settings).
-#[must_use]
-pub fn child_env(extra: &[(String, String)]) -> Vec<(String, String)> {
+fn child_env(extra: &[(String, String)]) -> Result<(Vec<(String, String)>, PathBuf), String> {
     let mut env: Vec<(String, String)> = std::env::vars()
         .filter(|(k, _)| {
             INHERITED_ENV.contains(&k.as_str())
                 || INHERITED_ENV_PREFIXES.iter().any(|p| k.starts_with(p))
         })
         .collect();
+    let isolated = create_credential_sandbox()?;
     // `HOME` has to stay (the version-manager shims need it), so Application Default
     // Credentials are blocked explicitly: the well-known file lookup goes through
-    // `CLOUDSDK_CONFIG` (an empty directory) and `GOOGLE_APPLICATION_CREDENTIALS` names a
-    // file that does not exist.
-    let isolated = std::env::temp_dir().join("fireemu-runner");
-    let _ = std::fs::create_dir_all(isolated.join("gcloud-empty"));
+    // `CLOUDSDK_CONFIG` (an exclusive empty directory) and `GOOGLE_APPLICATION_CREDENTIALS`
+    // names a file that does not exist. Caller-provided credential paths are discarded below.
+    env.extend(
+        extra
+            .iter()
+            .filter(|(key, _)| {
+                key != "FIREBASE_TOKEN"
+                    && key != "GOOGLE_APPLICATION_CREDENTIALS"
+                    && !key.starts_with("CLOUDSDK_")
+            })
+            .cloned(),
+    );
     env.push((
         "CLOUDSDK_CONFIG".to_owned(),
         isolated.join("gcloud-empty").to_string_lossy().into_owned(),
@@ -285,8 +331,15 @@ pub fn child_env(extra: &[(String, String)]) -> Vec<(String, String)> {
             .to_string_lossy()
             .into_owned(),
     ));
-    env.extend(extra.iter().cloned());
-    env
+    Ok((env, isolated))
+}
+
+fn remove_credential_sandbox(sandbox: &Mutex<Option<PathBuf>>) {
+    if let Ok(mut sandbox) = sandbox.lock() {
+        if let Some(path) = sandbox.take() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
 }
 
 /// Result of an invocation plus, after a timeout, the channel on which the handler's late
@@ -314,6 +367,7 @@ impl Runner {
     /// into the reset state). Waiters learn it through the reader task's exit.
     pub fn kill_now(&self) {
         self.alive.store(false, Ordering::SeqCst);
+        remove_credential_sandbox(&self.credential_sandbox);
         if let Ok(mut slot) = self.child.try_lock() {
             if let Some(mut child) = slot.take() {
                 let _ = child.start_kill();
@@ -357,7 +411,9 @@ impl Runner {
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        for (k, v) in child_env(env) {
+        let (child_environment, credential_sandbox) = child_env(env)?;
+        let credential_sandbox_guard = CredentialSandboxGuard(Some(credential_sandbox));
+        for (k, v) in child_environment {
             cmd.env(k, v);
         }
         #[cfg(not(windows))]
@@ -556,6 +612,7 @@ impl Runner {
         };
         #[cfg(unix)]
         process_group_guard.disarm();
+        let credential_sandbox = credential_sandbox_guard.into_path();
         Ok(Self {
             child: AsyncMutex::new(Some(child)),
             stdin: AsyncMutex::new(Some(stdin)),
@@ -564,6 +621,7 @@ impl Runner {
             logs,
             label,
             alive,
+            credential_sandbox: Mutex::new(Some(credential_sandbox)),
         })
     }
 
@@ -723,6 +781,29 @@ impl Runner {
             let _ = tokio::time::timeout(Duration::from_secs(2), wait_child(&mut child)).await;
         }
         eprintln!("{} stopped", self.label);
+        remove_credential_sandbox(&self.credential_sandbox);
+    }
+}
+
+struct CredentialSandboxGuard(Option<PathBuf>);
+
+impl CredentialSandboxGuard {
+    fn into_path(mut self) -> PathBuf {
+        self.0.take().expect("credential sandbox is present")
+    }
+}
+
+impl Drop for CredentialSandboxGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+}
+
+impl Drop for Runner {
+    fn drop(&mut self) {
+        remove_credential_sandbox(&self.credential_sandbox);
     }
 }
 
@@ -767,7 +848,51 @@ fn kill_process_group(pid: Option<u32>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogBuffer, RunnerLog, LOG_CAPACITY};
+    use super::{child_env, LogBuffer, RunnerLog, LOG_CAPACITY};
+
+    fn environment_value<'a>(environment: &'a [(String, String)], name: &str) -> &'a str {
+        environment
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+            .expect("environment variable")
+    }
+
+    #[test]
+    fn child_env_uses_an_exclusive_adc_sandbox_and_ignores_credential_overrides() {
+        let first = child_env(&[
+            (
+                "GOOGLE_APPLICATION_CREDENTIALS".to_owned(),
+                "/attacker/credentials.json".to_owned(),
+            ),
+            ("CLOUDSDK_CONFIG".to_owned(), "/attacker/gcloud".to_owned()),
+            ("FIREBASE_TOKEN".to_owned(), "secret-token".to_owned()),
+        ])
+        .expect("runner credential sandbox");
+        let second = child_env(&[]).expect("runner credential sandbox");
+
+        let first_config = environment_value(&first.0, "CLOUDSDK_CONFIG");
+        let second_config = environment_value(&second.0, "CLOUDSDK_CONFIG");
+        let first_credentials = environment_value(&first.0, "GOOGLE_APPLICATION_CREDENTIALS");
+
+        assert_ne!(first_config, second_config);
+        assert!(std::path::Path::new(first_config).is_dir());
+        assert!(std::path::Path::new(first_credentials)
+            .parent()
+            .is_some_and(std::path::Path::is_dir));
+        assert_ne!(
+            first_credentials, "/attacker/credentials.json",
+            "a caller-supplied credential path must not replace the sandbox"
+        );
+        assert_ne!(first_config, "/attacker/gcloud");
+        assert!(first.0.iter().all(|(key, value)| {
+            !(key == "FIREBASE_TOKEN" || key == "GOOGLE_APPLICATION_CREDENTIALS")
+                || value != "secret-token"
+        }));
+
+        std::fs::remove_dir_all(first.1).expect("first sandbox cleanup");
+        std::fs::remove_dir_all(second.1).expect("second sandbox cleanup");
+    }
 
     #[cfg(unix)]
     #[tokio::test]

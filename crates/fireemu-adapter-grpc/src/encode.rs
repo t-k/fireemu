@@ -289,6 +289,20 @@ pub fn status_from_error(e: &FirestoreError) -> tonic::Status {
             v.maximum.value(),
             v.precision
         )),
+        FirestoreError::EventAdmission(error) => {
+            use fireemu_core_types::admission::EventAdmissionError;
+            match error {
+                EventAdmissionError::Capacity(message) => {
+                    tonic::Status::resource_exhausted(message.clone())
+                }
+                EventAdmissionError::Unavailable(message) => {
+                    tonic::Status::unavailable(message.clone())
+                }
+                EventAdmissionError::InvalidEvent(message) => {
+                    tonic::Status::internal(message.clone())
+                }
+            }
+        }
         FirestoreError::Unimplemented(m) => tonic::Status::unimplemented(m.clone()),
     };
     if let FirestoreError::ResourceExhausted(v) = e {
@@ -303,4 +317,35 @@ pub fn status_from_error(e: &FirestoreError) -> tonic::Status {
 #[must_use]
 pub fn timestamp_to_instant(t: Timestamp) -> LogicalInstant {
     LogicalInstant::from_nanos(i128::from(t.seconds()) * 1_000_000_000 + i128::from(t.nanos()))
+}
+
+#[cfg(test)]
+mod admission_status_tests {
+    use super::status_from_error;
+    use fireemu_core_firestore::store::FirestoreError;
+    use fireemu_core_types::admission::EventAdmissionError;
+
+    #[test]
+    fn event_admission_categories_keep_distinct_grpc_retry_semantics() {
+        let cases = [
+            (
+                EventAdmissionError::Capacity("full".to_owned()),
+                tonic::Code::ResourceExhausted,
+            ),
+            (
+                EventAdmissionError::Unavailable("closing".to_owned()),
+                tonic::Code::Unavailable,
+            ),
+            (
+                EventAdmissionError::InvalidEvent("invalid".to_owned()),
+                tonic::Code::Internal,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(
+                status_from_error(&FirestoreError::EventAdmission(error)).code(),
+                expected
+            );
+        }
+    }
 }

@@ -372,11 +372,11 @@ fn firestore_transaction_metadata_matches_the_optimistic_runtime() {
     assert!(
         semantics["profileValue"]
             .as_str()
-            .is_some_and(|value| value.contains("20 rows")),
-        "the Firestore semantics profile does not publish all 20 divergence rows"
+            .is_some_and(|value| value.contains("17 rows")),
+        "the Firestore semantics profile does not publish all 17 measured divergence rows"
     );
     let semantics_note = text_of(&semantics["note"]).to_ascii_lowercase();
-    for term in ["optimistic", "pessimistic", "five families"] {
+    for term in ["optimistic", "pessimistic", "four families"] {
         assert!(
             semantics_note.contains(term),
             "the Firestore semantics profile does not publish {term}"

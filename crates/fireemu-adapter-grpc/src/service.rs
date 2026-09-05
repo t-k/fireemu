@@ -746,10 +746,9 @@ impl Firestore for GatewayService {
                 &request.get_ref().parent,
                 "CreateDocument",
             )?;
-            let (parent, write) = local.plan_create(request.get_ref())?;
             let guard = self.write_guard(&caller);
             return local
-                .execute_planned_with(&parent, &write, request.get_ref().mask.as_ref(), &*guard)
+                .create_document_with(request.get_ref(), &*guard)
                 .map(Response::new);
         }
         self.client()?.create_document(request.into_inner()).await

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
-use fireemu_adapter_grpc::local::LocalBackend;
+use fireemu_adapter_grpc::local::{AtomicChangeSink, CommitPublication, LocalBackend};
 use fireemu_adapter_grpc::rules::ReadCheck;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_firestore::field_path::FieldPath;
@@ -30,6 +30,39 @@ use tokio_stream::StreamExt;
 
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
+
+struct RejectEveryCommit;
+
+struct AcceptEveryCommit;
+struct AcceptedPublication;
+
+impl CommitPublication for AcceptedPublication {
+    fn publish(self: Box<Self>) {}
+}
+
+impl AtomicChangeSink for AcceptEveryCommit {
+    fn reserve(
+        &self,
+        _event: &CommitEvent,
+    ) -> Result<Box<dyn CommitPublication>, fireemu_core_types::admission::EventAdmissionError>
+    {
+        Ok(Box::new(AcceptedPublication))
+    }
+}
+
+impl AtomicChangeSink for RejectEveryCommit {
+    fn reserve(
+        &self,
+        _event: &CommitEvent,
+    ) -> Result<Box<dyn CommitPublication>, fireemu_core_types::admission::EventAdmissionError>
+    {
+        Err(
+            fireemu_core_types::admission::EventAdmissionError::Capacity(
+                "logical outbox capacity is exhausted".to_owned(),
+            ),
+        )
+    }
+}
 
 fn deny_read(
     _: &fireemu_core_firestore::store::FirestoreState,
@@ -111,6 +144,90 @@ async fn start() -> (
     tokio::task::JoinHandle<()>,
 ) {
     start_with_write_time(false).await
+}
+
+#[tokio::test]
+async fn event_admission_refusal_prevents_firestore_publication() {
+    let (mut client, _clock, backend, server) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    backend.set_atomic_change_sink(Arc::new(RejectEveryCommit));
+    let name = format!("{DOCS}/admission/refused");
+    let error = client
+        .create_document(pb::CreateDocumentRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "admission".to_owned(),
+            document_id: "refused".to_owned(),
+            document: Some(pb::Document {
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+    let missing = client
+        .get_document(pb::GetDocumentRequest {
+            name,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code(), tonic::Code::NotFound);
+
+    let generated_error = client
+        .create_document(pb::CreateDocumentRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "generated".to_owned(),
+            document_id: String::new(),
+            document: Some(pb::Document::default()),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(generated_error.code(), tonic::Code::ResourceExhausted);
+
+    backend.set_atomic_change_sink(Arc::new(AcceptEveryCommit));
+    let accepted = client
+        .create_document(pb::CreateDocumentRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "generated".to_owned(),
+            document_id: String::new(),
+            document: Some(pb::Document::default()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let reference = LocalBackend::new(
+        Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Conservative,
+            },
+            indexes: IndexSet::default(),
+        },
+        Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ))),
+        7,
+    );
+    let (_, expected_write) = reference
+        .plan_create(&pb::CreateDocumentRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "generated".to_owned(),
+            document_id: String::new(),
+            document: Some(pb::Document::default()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        accepted.name,
+        format!("{DOCS}/{}", expected_write.op.path().relative())
+    );
+    server.abort();
+    let _ = server.await;
 }
 
 #[test]

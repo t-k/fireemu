@@ -18,6 +18,7 @@ use fireemu_core_limits::evaluate::{
 };
 use fireemu_core_limits::model::LimitMaximum;
 use fireemu_core_limits::plan::FirestorePlanProfile;
+use fireemu_core_types::admission::EventAdmissionError;
 use fireemu_core_types::hash::Sha256;
 use fireemu_core_types::ids::{CollectionId, DocumentId};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -275,6 +276,8 @@ pub enum FirestoreError {
     Aborted(String),
     /// Limit violated.
     ResourceExhausted(LimitViolation),
+    /// A coupled logical event batch could not be reserved before publication.
+    EventAdmission(EventAdmissionError),
     /// Not implemented.
     Unimplemented(String),
 }
@@ -288,6 +291,7 @@ impl fmt::Display for FirestoreError {
             Self::NotFound(p) => write!(f, "document not found: {p}"),
             Self::Aborted(m) => write!(f, "aborted: {m}"),
             Self::ResourceExhausted(v) => write!(f, "resource exhausted: {v}"),
+            Self::EventAdmission(error) => write!(f, "event admission failed: {error}"),
             Self::Unimplemented(m) => write!(f, "unimplemented: {m}"),
         }
     }
@@ -1975,6 +1979,24 @@ impl FirestoreState {
         transaction: Option<&TransactionId>,
         now: LogicalInstant,
     ) -> Result<CommitResult, FirestoreError> {
+        self.commit_with_admission(writes, transaction, now, |_| Ok(()))
+            .map(|(result, ())| result)
+    }
+
+    /// Applies `writes` only after `admit` reserves every coupled logical event.
+    ///
+    /// The callback sees the exact result while all source changes are still private. Once it
+    /// returns a reservation, publishing the staged source change has no recoverable failure
+    /// branch; the caller can therefore publish that reservation before releasing its database
+    /// lock.
+    #[allow(clippy::too_many_lines)]
+    pub fn commit_with_admission<R>(
+        &mut self,
+        writes: &[Write],
+        transaction: Option<&TransactionId>,
+        now: LogicalInstant,
+        admit: impl FnOnce(&CommitResult) -> Result<R, FirestoreError>,
+    ) -> Result<(CommitResult, R), FirestoreError> {
         if let Some(id) = transaction {
             self.validate_transaction_commit(id, writes, now)?;
         }
@@ -2040,21 +2062,39 @@ impl FirestoreState {
             results.push(result);
         }
 
-        // Publish.
-        let changed: Vec<StagedChange> = staged
+        // Build the exact externally visible result before publishing either side.
+        let staged_changes: Vec<StagedChange> = staged
             .into_iter()
             .filter(|(_, staged)| staged.changed)
             .map(|(path, staged)| (path, staged.before, staged.current))
             .collect();
-        // Every accepted commit consumes a commit time, changed documents or not.
-        self.last_commit_time = Some(commit_time);
-        let mut document_changes = Vec::with_capacity(changed.len());
-        let version = if changed.is_empty() {
+        let version = if staged_changes.is_empty() {
             self.version
         } else {
+            next_version
+        };
+        let published_changes: Arc<[DocumentChange]> = staged_changes
+            .iter()
+            .map(|(path, before, after)| DocumentChange {
+                path: path.clone(),
+                before: before.clone(),
+                after: after.clone(),
+            })
+            .collect();
+        let result = CommitResult {
+            commit_time,
+            write_results: results,
+            version,
+            changes: published_changes,
+        };
+        let reservation = admit(&result)?;
+
+        // Publish. Every accepted commit consumes a commit time, changed documents or not.
+        self.last_commit_time = Some(commit_time);
+        if !staged_changes.is_empty() {
             self.version = next_version;
             self.commit_times.push_back((next_version, commit_time));
-            for (path, before, doc) in changed {
+            for (path, before, doc) in staged_changes {
                 let became_live = before.is_none() && doc.is_some();
                 let became_missing = before.is_some() && doc.is_none();
                 // A second version, or a tombstone, is something a later compaction can drop.
@@ -2067,11 +2107,6 @@ impl FirestoreState {
                 } else if became_missing {
                     self.remove_live_scope_path(&path);
                 }
-                document_changes.push(DocumentChange {
-                    path: path.clone(),
-                    before,
-                    after: doc.clone(),
-                });
                 self.history
                     .entry(path.clone())
                     .or_default()
@@ -2081,20 +2116,14 @@ impl FirestoreState {
                     self.compactable.insert(path);
                 }
             }
-            next_version
-        };
+        }
         if let Some(id) = transaction {
             self.finish_transaction(id, TransactionState::Finished);
         }
         // Retention is owned by the store: every commit drops the history that has fallen
         // out of the read window and is not pinned by an active transaction.
         self.compact(now);
-        Ok(CommitResult {
-            commit_time,
-            write_results: results,
-            version,
-            changes: Arc::from(document_changes),
-        })
+        Ok((result, reservation))
     }
 
     fn check_transform_budget(&self, writes: &[Write]) -> Result<(), FirestoreError> {
@@ -2127,7 +2156,11 @@ impl FirestoreState {
         writes: &[Write],
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
-        self.touch_transaction(id, now)?;
+        let transaction = self.transaction(id)?;
+        if now >= transaction_deadline(transaction) {
+            self.finish_transaction(id, TransactionState::Finished);
+            return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
+        }
         let transaction = self.transaction(id)?;
         if transaction.read_only && !writes.is_empty() {
             return Err(FirestoreError::InvalidArgument(

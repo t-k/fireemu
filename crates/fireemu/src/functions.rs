@@ -1975,10 +1975,9 @@ pub async fn start(
         }
     };
     tokio::spawn(runtime.clone().dispatch_loop());
-    // Commits reach the runtime inside the database critical section: in order, never
-    // dropped, and enqueued before the write returns to its caller.
-    let sink_runtime = runtime.clone();
-    backend.set_change_sink(Arc::new(move |event| sink_runtime.on_commit(event)));
+    // Commits reserve their complete Functions fan-out before the database publishes and
+    // activate that already-built batch before releasing the database critical section.
+    backend.set_atomic_change_sink(Arc::new(FunctionsChangeSink(runtime.clone())));
     start_reload_supervisors(
         &runtime,
         cfg,
@@ -1987,6 +1986,56 @@ pub async fn start(
         callable_trusted_protocol,
     );
     Ok(runtime)
+}
+
+struct FunctionsChangeSink(Arc<FunctionsRuntime>);
+
+struct FunctionsCommitPublication(
+    Option<fireemu_adapter_functions::runtime::EventBatchReservation>,
+);
+
+impl fireemu_adapter_grpc::local::CommitPublication for FunctionsCommitPublication {
+    fn publish(mut self: Box<Self>) {
+        if let Some(reservation) = self.0.take() {
+            reservation.publish();
+        }
+    }
+}
+
+impl fireemu_adapter_grpc::local::AtomicChangeSink for FunctionsChangeSink {
+    fn reserve(
+        &self,
+        event: &fireemu_adapter_grpc::local::CommitEvent,
+    ) -> Result<
+        Box<dyn fireemu_adapter_grpc::local::CommitPublication>,
+        fireemu_core_types::admission::EventAdmissionError,
+    > {
+        self.0
+            .reserve_commit_events(event)
+            .map(|reservation| {
+                Box::new(FunctionsCommitPublication(Some(reservation)))
+                    as Box<dyn fireemu_adapter_grpc::local::CommitPublication>
+            })
+            .map_err(functions_event_admission_error)
+    }
+}
+
+fn functions_event_admission_error(
+    error: fireemu_adapter_functions::runtime::SourceEventAdmissionError,
+) -> fireemu_core_types::admission::EventAdmissionError {
+    use fireemu_adapter_functions::runtime::SourceEventAdmissionError;
+    use fireemu_core_types::admission::EventAdmissionError;
+    match error {
+        SourceEventAdmissionError::Capacity => {
+            EventAdmissionError::Capacity("Functions logical event capacity is exhausted".into())
+        }
+        SourceEventAdmissionError::Unavailable => EventAdmissionError::Unavailable(
+            "Functions logical event admission is unavailable".into(),
+        ),
+        SourceEventAdmissionError::InvalidEvent => EventAdmissionError::InvalidEvent(
+            "Functions trigger produced an invalid logical event".into(),
+        ),
+    }
 }
 
 fn validate_functions_codebase_budget(codebases: &[FunctionsCodebase]) -> Result<(), String> {
@@ -2504,10 +2553,38 @@ fn check_callable_app_check(
 pub fn storage_sink(
     runtime: &Arc<FunctionsRuntime>,
     tenancy: &fireemu_core_session::tenancy::SharedTenancy,
-) -> Arc<dyn Fn(&fireemu_core_storage::store::StorageEvent) + Send + Sync> {
-    let runtime = runtime.clone();
-    let tenancy = tenancy.clone();
-    Arc::new(move |event| {
+) -> fireemu_adapter_http::storage::StorageEventSink {
+    Arc::new(FunctionsStorageSink {
+        runtime: runtime.clone(),
+        tenancy: tenancy.clone(),
+    })
+}
+
+struct FunctionsStorageSink {
+    runtime: Arc<FunctionsRuntime>,
+    tenancy: fireemu_core_session::tenancy::SharedTenancy,
+}
+
+struct FunctionsStoragePublication(
+    Option<fireemu_adapter_functions::runtime::EventBatchReservation>,
+);
+
+impl fireemu_adapter_http::storage::StorageEventPublication for FunctionsStoragePublication {
+    fn publish(mut self: Box<Self>) {
+        if let Some(reservation) = self.0.take() {
+            reservation.publish();
+        }
+    }
+}
+
+impl fireemu_adapter_http::storage::AtomicStorageEventSink for FunctionsStorageSink {
+    fn reserve(
+        &self,
+        event: &fireemu_core_storage::store::StorageEvent,
+    ) -> Result<
+        Box<dyn fireemu_adapter_http::storage::StorageEventPublication>,
+        fireemu_core_types::admission::EventAdmissionError,
+    > {
         use fireemu_core_storage::store::StorageEvent;
         let bucket = match event {
             StorageEvent::Finalized(m)
@@ -2516,13 +2593,27 @@ pub fn storage_sink(
         };
         // The runtime belongs to the default session: other sessions' buckets do not
         // trigger its functions.
-        let owned = tenancy
+        let owned = self
+            .tenancy
             .read()
-            .is_ok_and(|t| t.project_of_bucket(bucket) == runtime.project());
-        if owned {
-            runtime.on_storage_event(event);
-        }
-    })
+            .map_err(|_| {
+                fireemu_core_types::admission::EventAdmissionError::Unavailable(
+                    "Storage tenancy is unavailable during event admission".to_owned(),
+                )
+            })?
+            .project_of_bucket(bucket)
+            == self.runtime.project();
+        let reservation = if owned {
+            Some(
+                self.runtime
+                    .reserve_storage_event(event)
+                    .map_err(functions_event_admission_error)?,
+            )
+        } else {
+            None
+        };
+        Ok(Box::new(FunctionsStoragePublication(reservation)))
+    }
 }
 
 /// The Auth user event observer for `runtime` (called after each Auth request).

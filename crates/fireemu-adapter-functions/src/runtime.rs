@@ -341,6 +341,8 @@ struct Inner {
     outbox: Outbox,
     payloads: BTreeMap<EventId, QueuedPayload>,
     active_event_bytes: usize,
+    reserved_event_records: usize,
+    reserved_event_bytes: usize,
     active_eventarc_records: usize,
     active_eventarc_bytes: usize,
     /// Invocations occupying a slot, keyed by invocation key (`<event>-<attempt>` or
@@ -375,9 +377,119 @@ struct Inner {
 
 struct QueuedPayload {
     function: String,
-    payload: Value,
+    payload: Arc<Value>,
     retained_bytes: usize,
     source: EventSource,
+}
+
+struct PlannedDelivery {
+    event: LogicalEvent,
+    payload: QueuedPayload,
+}
+
+struct DeliveryDraft {
+    function: String,
+    event_type: String,
+    subject: String,
+    time: LogicalInstant,
+    payload: Arc<Value>,
+}
+
+/// A complete, capacity-charged batch of source-trigger deliveries that remains invisible
+/// until its source mutation has been published.
+pub struct EventBatchReservation {
+    runtime: std::sync::Weak<FunctionsRuntime>,
+    epoch: Epoch,
+    deliveries: Option<Vec<PlannedDelivery>>,
+    retained_bytes: usize,
+}
+
+/// Exact logical-event ownership used by atomic source adapters and formal projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceEventAccounting {
+    /// Deliveries charged to source mutations that have not published or cancelled yet.
+    pub reserved_records: usize,
+    /// Published deliveries that still retain their payload in the runtime.
+    pub published_records: usize,
+    /// Session generation that owns both sets.
+    pub epoch: Epoch,
+}
+
+impl EventBatchReservation {
+    /// Publishes every reserved delivery without re-matching triggers, re-serializing payloads,
+    /// or performing another admission decision.
+    pub fn publish(mut self) {
+        let Some(deliveries) = self.deliveries.take() else {
+            return;
+        };
+        if deliveries.is_empty() {
+            return;
+        }
+        let Some(runtime) = self.runtime.upgrade() else {
+            return;
+        };
+        let mut inner = runtime
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.epoch != self.epoch {
+            return;
+        }
+        release_event_reservation(&mut inner, deliveries.len(), self.retained_bytes);
+        for delivery in deliveries {
+            let id = delivery.event.event_id;
+            inner
+                .outbox
+                .enqueue(delivery.event)
+                .unwrap_or_else(|_| unreachable!("a reserved event id is unique"));
+            inner.active_event_bytes = inner
+                .active_event_bytes
+                .saturating_add(delivery.payload.retained_bytes);
+            inner.payloads.insert(id, delivery.payload);
+        }
+        drop(inner);
+        runtime.idle.notify_waiters();
+        runtime.wake.notify_one();
+    }
+}
+
+impl Drop for EventBatchReservation {
+    fn drop(&mut self) {
+        let Some(deliveries) = self.deliveries.take() else {
+            return;
+        };
+        if deliveries.is_empty() {
+            return;
+        }
+        let Some(runtime) = self.runtime.upgrade() else {
+            return;
+        };
+        let mut inner = runtime
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.epoch == self.epoch {
+            release_event_reservation(&mut inner, deliveries.len(), self.retained_bytes);
+        }
+        drop(inner);
+        runtime.idle.notify_waiters();
+    }
+}
+
+fn release_event_reservation(inner: &mut Inner, records: usize, bytes: usize) {
+    inner.reserved_event_records = inner.reserved_event_records.saturating_sub(records);
+    inner.reserved_event_bytes = inner.reserved_event_bytes.saturating_sub(bytes);
+}
+
+/// Why a source mutation could not reserve all of its logical deliveries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceEventAdmissionError {
+    /// The complete fan-out would exceed the bounded logical outbox.
+    Capacity,
+    /// Runtime state is unavailable.
+    Unavailable,
+    /// A generated logical event was invalid.
+    InvalidEvent,
 }
 
 /// A bounded Eventarc publication refusal.
@@ -564,6 +676,10 @@ pub struct FunctionsRuntime {
     trigger_generation: std::sync::atomic::AtomicU64,
     /// Once set, no reload or respawn may install another child process.
     shutting_down: std::sync::atomic::AtomicBool,
+    /// Set only after every source mutation that reserved a logical event batch has either
+    /// published or cancelled it. The dispatcher remains alive during that handoff so a
+    /// successful source write can never publish into an already stopped runtime.
+    dispatch_stopping: std::sync::atomic::AtomicBool,
 }
 
 /// Generation-tagged cleanup for one active task dispatch. Dropping the future because of a
@@ -597,6 +713,14 @@ impl Drop for TaskCompletion {
 }
 
 impl FunctionsRuntime {
+    fn empty_event_reservation(self: &Arc<Self>) -> EventBatchReservation {
+        EventBatchReservation {
+            runtime: Arc::downgrade(self),
+            epoch: Epoch::initial(),
+            deliveries: Some(Vec::new()),
+            retained_bytes: 0,
+        }
+    }
     /// Builds the runtime around a started runner; schedules start counting from the
     /// current virtual time.
     #[must_use]
@@ -734,6 +858,8 @@ impl FunctionsRuntime {
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
                 active_event_bytes: 0,
+                reserved_event_records: 0,
+                reserved_event_bytes: 0,
                 active_eventarc_records: 0,
                 active_eventarc_bytes: 0,
                 running: BTreeMap::new(),
@@ -759,6 +885,7 @@ impl FunctionsRuntime {
             background_triggers: std::sync::atomic::AtomicBool::new(true),
             trigger_generation: std::sync::atomic::AtomicU64::new(0),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
+            dispatch_stopping: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -822,10 +949,25 @@ impl FunctionsRuntime {
             .collect()
     }
 
-    /// Shuts down every current codebase runner concurrently.
-    pub async fn shutdown(&self) {
+    /// Closes admission while allowing already reserved source mutations to finish publishing.
+    pub fn begin_shutdown(&self) {
+        // Reservation admission reads this flag while holding `inner`. Taking the same lock
+        // makes this method's return the linearization boundary: a reservation charged before
+        // it returns is owned and awaited; one attempting afterward observes the closed flag.
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.shutting_down
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(inner);
+        self.wake.notify_one();
+        self.idle.notify_waiters();
+    }
+
+    /// Shuts down every current codebase runner concurrently.
+    pub async fn shutdown(&self) {
+        self.begin_shutdown();
         let mut retired_attempts = {
             let mut attempts = self
                 .task_attempts
@@ -836,6 +978,24 @@ impl FunctionsRuntime {
             }
             std::mem::take(&mut *attempts)
         };
+        loop {
+            let notified = self.idle.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self
+                .inner
+                .lock()
+                .map(|inner| inner.reserved_event_records == 0)
+                .unwrap_or(true)
+            {
+                break;
+            }
+            notified.await;
+        }
+        // Admission is closed and every source mutation has completed its publish/cancel
+        // handoff. Only now may the dispatch loop stop and the runners be terminated.
+        self.dispatch_stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         retired_attempts.shutdown().await;
         // There is exactly one dispatch loop. A stored permit also covers the narrow window
         // between its shutdown check and awaiting the notification.
@@ -1101,7 +1261,7 @@ impl FunctionsRuntime {
                 id,
                 QueuedPayload {
                     function: function.to_owned(),
-                    payload: payload.clone(),
+                    payload: Arc::new(payload.clone()),
                     retained_bytes,
                     source,
                 },
@@ -1147,12 +1307,14 @@ impl FunctionsRuntime {
         let global = inner
             .payloads
             .len()
-            .checked_add(count)
-            .is_some_and(|count| count <= MAX_ACTIVE_EVENT_RECORDS)
+            .checked_add(inner.reserved_event_records)
+            .and_then(|used| used.checked_add(count))
+            .is_some_and(|used| used <= MAX_ACTIVE_EVENT_RECORDS)
             && inner
                 .active_event_bytes
-                .checked_add(bytes)
-                .is_some_and(|bytes| bytes <= MAX_ACTIVE_EVENT_BYTES);
+                .checked_add(inner.reserved_event_bytes)
+                .and_then(|used| used.checked_add(bytes))
+                .is_some_and(|used| used <= MAX_ACTIVE_EVENT_BYTES);
         let source = source != EventSource::Eventarc
             || (inner
                 .active_eventarc_records
@@ -1163,6 +1325,101 @@ impl FunctionsRuntime {
                     .checked_add(bytes)
                     .is_some_and(|bytes| bytes <= MAX_ACTIVE_EVENTARC_BYTES));
         global && source
+    }
+
+    fn reserve_drafts(
+        self: &Arc<Self>,
+        source: EventSource,
+        drafts: Vec<DeliveryDraft>,
+        inner: &mut Inner,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        // The outer source-specific check is a fast path. This check is linearized with the
+        // reservation counters so shutdown cannot close admission between that check and the
+        // capacity charge.
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(SourceEventAdmissionError::Unavailable);
+        }
+        let mut retained_bytes = 0usize;
+        for draft in &drafts {
+            EventType::try_new(&draft.event_type)
+                .map_err(|_| SourceEventAdmissionError::InvalidEvent)?;
+            let bytes = Self::retained_event_bytes(
+                &draft.function,
+                &draft.event_type,
+                &draft.subject,
+                &draft.payload,
+            )
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+            retained_bytes = retained_bytes
+                .checked_add(bytes)
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+        }
+        if !Self::can_admit_events(inner, source, drafts.len(), retained_bytes) {
+            return Err(SourceEventAdmissionError::Capacity);
+        }
+        let delivery_count =
+            u64::try_from(drafts.len()).map_err(|_| SourceEventAdmissionError::Capacity)?;
+        let final_event = inner
+            .next_event
+            .checked_add(delivery_count)
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+        let next_reserved_records = inner
+            .reserved_event_records
+            .checked_add(drafts.len())
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+        let next_reserved_bytes = inner
+            .reserved_event_bytes
+            .checked_add(retained_bytes)
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+
+        let epoch = inner.epoch;
+        let mut next_event = inner.next_event;
+        let mut deliveries = Vec::with_capacity(drafts.len());
+        for draft in drafts {
+            next_event = next_event
+                .checked_add(1)
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            let id = EventId::new(u128::from(next_event));
+            let event_type = EventType::try_new(&draft.event_type)
+                .map_err(|_| SourceEventAdmissionError::InvalidEvent)?;
+            let retained_bytes = Self::retained_event_bytes(
+                &draft.function,
+                &draft.event_type,
+                &draft.subject,
+                &draft.payload,
+            )
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+            deliveries.push(PlannedDelivery {
+                event: LogicalEvent {
+                    event_id: id,
+                    session_id: self.config.session,
+                    epoch,
+                    source,
+                    event_type,
+                    subject: draft.subject,
+                    logical_time: draft.time,
+                    causation_id: None,
+                    correlation_id: CorrelationId::new(u128::from(next_event)),
+                    payload: Vec::new(),
+                },
+                payload: QueuedPayload {
+                    function: draft.function,
+                    payload: draft.payload,
+                    retained_bytes,
+                    source,
+                },
+            });
+        }
+        debug_assert_eq!(next_event, final_event);
+        inner.next_event = final_event;
+        inner.reserved_event_records = next_reserved_records;
+        inner.reserved_event_bytes = next_reserved_bytes;
+        Ok(EventBatchReservation {
+            runtime: Arc::downgrade(self),
+            epoch,
+            deliveries: Some(deliveries),
+            retained_bytes,
+        })
     }
 
     fn remove_payload(inner: &mut Inner, id: EventId) {
@@ -1179,21 +1436,30 @@ impl FunctionsRuntime {
         }
     }
 
-    /// Turns a Firestore commit into document events for every matching trigger.
-    pub fn on_commit(&self, commit: &CommitEvent) {
+    /// Reserves the complete Firestore trigger fan-out before the source commit is published.
+    #[allow(clippy::too_many_lines)]
+    pub fn reserve_commit_events(
+        self: &Arc<Self>,
+        commit: &CommitEvent,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        if commit.project != self.config.project {
+            return Ok(self.empty_event_reservation());
+        }
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(SourceEventAdmissionError::Unavailable);
+        }
         if !self.background_triggers_enabled() {
-            return; // dropped, never held for a later replay
+            return Ok(self.empty_event_reservation());
         }
         let Some(time) = commit.commit_time else {
-            return; // reset
+            return Ok(self.empty_event_reservation());
         };
-        if commit.project != self.config.project {
-            return;
-        }
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
-        let mut enqueued = false;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| SourceEventAdmissionError::Unavailable)?;
+        let mut drafts = Vec::new();
+        let mut draft_bytes = 0usize;
         for change in commit.changes.iter() {
             let Some(kind) = change_kind(change.before.as_deref(), change.after.as_deref()) else {
                 continue;
@@ -1225,7 +1491,12 @@ impl FunctionsRuntime {
                         ..
                     }
                 );
-                let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
+                let next = inner
+                    .next_event
+                    .checked_add(u64::try_from(drafts.len()).unwrap_or(u64::MAX))
+                    .and_then(|next| next.checked_add(1))
+                    .ok_or(SourceEventAdmissionError::Capacity)?;
+                let id = format!("{}-{next}", self.config.session.value());
                 let mut payload = firestore_event(
                     &id,
                     &commit.project,
@@ -1247,28 +1518,58 @@ impl FunctionsRuntime {
                     .and_then(Value::as_str)
                     .unwrap_or(reported.event_type())
                     .to_owned();
-                self.enqueue_delivery(
-                    &mut inner,
-                    EventSource::Firestore,
-                    &m.function.name,
-                    &event_type,
-                    &format!("documents/{relative}"),
-                    time,
-                    &payload,
-                );
-                enqueued = true;
+                let copies = self.delivery_copies(&m.function.name, &event_type);
+                let subject = format!("documents/{relative}");
+                let one_delivery =
+                    Self::retained_event_bytes(&m.function.name, &event_type, &subject, &payload)
+                        .ok_or(SourceEventAdmissionError::Capacity)?;
+                draft_bytes = draft_bytes
+                    .checked_add(
+                        one_delivery
+                            .checked_mul(copies)
+                            .ok_or(SourceEventAdmissionError::Capacity)?,
+                    )
+                    .ok_or(SourceEventAdmissionError::Capacity)?;
+                let draft_count = drafts
+                    .len()
+                    .checked_add(copies)
+                    .ok_or(SourceEventAdmissionError::Capacity)?;
+                if !Self::can_admit_events(&inner, EventSource::Firestore, draft_count, draft_bytes)
+                {
+                    return Err(SourceEventAdmissionError::Capacity);
+                }
+                let payload = Arc::new(payload);
+                for _ in 0..copies {
+                    drafts.push(DeliveryDraft {
+                        function: m.function.name.clone(),
+                        event_type: event_type.clone(),
+                        subject: subject.clone(),
+                        time,
+                        payload: Arc::clone(&payload),
+                    });
+                }
             }
         }
-        drop(inner);
-        if enqueued {
-            self.wake.notify_one();
+        self.reserve_drafts(EventSource::Firestore, drafts, &mut inner)
+    }
+
+    /// Turns a Firestore commit into document events for every matching trigger.
+    pub fn on_commit(self: &Arc<Self>, commit: &CommitEvent) {
+        if let Ok(reservation) = self.reserve_commit_events(commit) {
+            reservation.publish();
         }
     }
 
-    /// Turns a Storage object event into events for every matching trigger.
-    pub fn on_storage_event(&self, event: &StorageEvent) {
+    /// Reserves the complete Storage trigger fan-out before the object mutation is published.
+    pub fn reserve_storage_event(
+        self: &Arc<Self>,
+        event: &StorageEvent,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(SourceEventAdmissionError::Unavailable);
+        }
         if !self.background_triggers_enabled() {
-            return; // dropped, never held for a later replay
+            return Ok(self.empty_event_reservation());
         }
         let (kind, object) = match event {
             StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m),
@@ -1276,30 +1577,60 @@ impl FunctionsRuntime {
             StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m),
         };
         let time = self.now();
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
-        let mut enqueued = false;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| SourceEventAdmissionError::Unavailable)?;
+        let mut drafts = Vec::new();
+        let mut draft_bytes = 0usize;
         for f in
             self.manifest
                 .storage_matches(object.bucket.as_str(), &self.config.default_bucket, kind)
         {
-            let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
+            let next = inner
+                .next_event
+                .checked_add(u64::try_from(drafts.len()).unwrap_or(u64::MAX))
+                .and_then(|next| next.checked_add(1))
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            let id = format!("{}-{next}", self.config.session.value());
             let payload = storage_event(&id, kind, object, time);
-            self.enqueue_delivery(
-                &mut inner,
-                EventSource::Storage,
-                &f.name,
-                kind.event_type(),
-                &format!("objects/{}", object.name.as_str()),
-                time,
-                &payload,
-            );
-            enqueued = true;
+            let event_type = kind.event_type().to_owned();
+            let subject = format!("objects/{}", object.name.as_str());
+            let copies = self.delivery_copies(&f.name, &event_type);
+            let one_delivery = Self::retained_event_bytes(&f.name, &event_type, &subject, &payload)
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            draft_bytes = draft_bytes
+                .checked_add(
+                    one_delivery
+                        .checked_mul(copies)
+                        .ok_or(SourceEventAdmissionError::Capacity)?,
+                )
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            let draft_count = drafts
+                .len()
+                .checked_add(copies)
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            if !Self::can_admit_events(&inner, EventSource::Storage, draft_count, draft_bytes) {
+                return Err(SourceEventAdmissionError::Capacity);
+            }
+            let payload = Arc::new(payload);
+            for _ in 0..copies {
+                drafts.push(DeliveryDraft {
+                    function: f.name.clone(),
+                    event_type: event_type.clone(),
+                    subject: subject.clone(),
+                    time,
+                    payload: Arc::clone(&payload),
+                });
+            }
         }
-        drop(inner);
-        if enqueued {
-            self.wake.notify_one();
+        self.reserve_drafts(EventSource::Storage, drafts, &mut inner)
+    }
+
+    /// Turns a Storage object event into events for every matching trigger.
+    pub fn on_storage_event(self: &Arc<Self>, event: &StorageEvent) {
+        if let Ok(reservation) = self.reserve_storage_event(event) {
+            reservation.publish();
         }
     }
 
@@ -2120,6 +2451,8 @@ impl FunctionsRuntime {
                 inner.outbox.discard_stale(epoch);
                 inner.payloads.clear();
                 inner.active_event_bytes = 0;
+                inner.reserved_event_records = 0;
+                inner.reserved_event_bytes = 0;
                 inner.active_eventarc_records = 0;
                 inner.active_eventarc_bytes = 0;
                 inner.running.clear();
@@ -2319,6 +2652,16 @@ impl FunctionsRuntime {
                     && i.task_scheduler.outstanding() == 0
             })
             .unwrap_or(true)
+    }
+
+    /// Returns the exact source-event ownership projection without payload contents.
+    #[must_use]
+    pub fn source_event_accounting(&self) -> Option<SourceEventAccounting> {
+        self.inner.lock().ok().map(|inner| SourceEventAccounting {
+            reserved_records: inner.reserved_event_records,
+            published_records: inner.payloads.len(),
+            epoch: inner.epoch,
+        })
     }
 
     /// Whether every codebase's runner process is alive (a dead runner leaves that
@@ -3072,7 +3415,10 @@ impl FunctionsRuntime {
             let wake = self.wake.notified();
             tokio::pin!(wake);
             wake.as_mut().enable();
-            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            if self
+                .dispatch_stopping
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
                 break;
             }
             self.dispatch_ready();
@@ -3092,14 +3438,20 @@ impl FunctionsRuntime {
     /// Moves ready Cloud Tasks from their bounded FIFOs into active dispatch slots. Only an
     /// active slot owns a Tokio task; pending bodies remain plain queue entries.
     fn dispatch_tasks_ready(self: &Arc<Self>) -> Option<std::time::Instant> {
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .dispatch_stopping
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return None;
         }
         let mut attempts = self
             .task_attempts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .dispatch_stopping
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return None;
         }
         let (dispatches, next_wake, epoch) = {
@@ -3142,7 +3494,10 @@ impl FunctionsRuntime {
 
     #[allow(clippy::too_many_lines)]
     fn dispatch_ready(self: &Arc<Self>) {
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .dispatch_stopping
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return;
         }
         // The runners snapshotted here are the ones every invocation of this pass goes to: an
@@ -3533,12 +3888,19 @@ impl Drop for Admission {
 
 #[cfg(test)]
 mod task_completion_tests {
-    use super::{FunctionsConfig, FunctionsRuntime, TaskCompletion};
+    use super::{
+        FunctionsConfig, FunctionsRuntime, SourceEventAdmissionError, TaskCompletion,
+        MAX_ACTIVE_EVENT_BYTES,
+    };
     use crate::manifest_json::parse_manifest;
     use crate::runner::{Runner, SpawnSpec};
+    use fireemu_adapter_grpc::local::{Actor, CommitEvent};
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
     use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig, Trigger};
     use fireemu_core_session::clock::VirtualClock;
-    use fireemu_core_types::ids::SessionId;
+    use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    use fireemu_core_types::ids::{DatabaseId, ProjectId, SessionId};
     use fireemu_core_types::time::LogicalInstant;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
@@ -3607,6 +3969,173 @@ mod task_completion_tests {
             1,
         );
         dispatches.remove(0)
+    }
+
+    fn created_commit() -> CommitEvent {
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let path = DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::try_new("(default)").unwrap(),
+            "items/reserved",
+        )
+        .unwrap();
+        CommitEvent {
+            actor: Actor::system(),
+            project: "demo-app".to_owned(),
+            database: "(default)".to_owned(),
+            version: 1,
+            commit_time: Some(now),
+            changes: Arc::from([DocumentChange {
+                path: path.clone(),
+                before: None,
+                after: Some(Arc::new(Document {
+                    path,
+                    fields: std::collections::BTreeMap::default(),
+                    create_time: now,
+                    update_time: now,
+                    version: CommitVersion::from_value(1),
+                })),
+            }]),
+        }
+    }
+
+    #[tokio::test]
+    async fn source_event_reservation_is_all_or_none_and_drop_refunds_capacity() {
+        let runtime = runtime().await;
+        let commit = created_commit();
+        let reservation = runtime.reserve_commit_events(&commit).unwrap();
+        assert_eq!(reservation.deliveries.as_ref().unwrap().len(), 2);
+        let required_bytes = reservation.retained_bytes;
+        drop(reservation);
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.reserved_event_records, 0);
+            assert_eq!(inner.reserved_event_bytes, 0);
+            assert!(inner.payloads.is_empty());
+        }
+
+        let stale = runtime.reserve_commit_events(&commit).unwrap();
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            inner.epoch = inner.epoch.next().unwrap();
+            inner.reserved_event_records = 0;
+            inner.reserved_event_bytes = 0;
+        }
+        let current = runtime.reserve_commit_events(&commit).unwrap();
+        let current_records = current.deliveries.as_ref().unwrap().len();
+        let current_bytes = current.retained_bytes;
+        drop(stale);
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.reserved_event_records, current_records);
+            assert_eq!(inner.reserved_event_bytes, current_bytes);
+        }
+        drop(current);
+
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            inner.active_event_bytes = MAX_ACTIVE_EVENT_BYTES - required_bytes + 1;
+        }
+        let before_id = runtime.inner.lock().unwrap().next_event;
+        assert!(matches!(
+            runtime.reserve_commit_events(&commit),
+            Err(SourceEventAdmissionError::Capacity)
+        ));
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.next_event, before_id);
+            assert_eq!(inner.reserved_event_records, 0);
+            assert_eq!(inner.reserved_event_bytes, 0);
+            assert!(inner.payloads.is_empty());
+        }
+
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            inner.active_event_bytes = MAX_ACTIVE_EVENT_BYTES - required_bytes;
+        }
+        runtime.reserve_commit_events(&commit).unwrap().publish();
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.payloads.len(), 2);
+            assert_eq!(inner.reserved_event_records, 0);
+            assert_eq!(inner.reserved_event_bytes, 0);
+            assert_eq!(inner.active_event_bytes, MAX_ACTIVE_EVENT_BYTES);
+        }
+        runtime.shutdown().await;
+        assert!(matches!(
+            runtime.reserve_commit_events(&commit),
+            Err(SourceEventAdmissionError::Unavailable)
+        ));
+        let mut foreign_commit = commit.clone();
+        foreign_commit.project = "other-project".to_owned();
+        let foreign = runtime.reserve_commit_events(&foreign_commit).unwrap();
+        assert!(foreign.deliveries.as_ref().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_an_owned_source_reservation_to_publish_or_cancel() {
+        async fn assert_handoff(publish: bool) {
+            let runtime = runtime().await;
+            let reservation = runtime.reserve_commit_events(&created_commit()).unwrap();
+            runtime.begin_shutdown();
+            assert!(matches!(
+                runtime.reserve_commit_events(&created_commit()),
+                Err(SourceEventAdmissionError::Unavailable)
+            ));
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            let shutting_down = {
+                let runtime = runtime.clone();
+                tokio::spawn(async move {
+                    entered_tx.send(()).unwrap();
+                    runtime.shutdown().await;
+                })
+            };
+            entered_rx.await.unwrap();
+            tokio::task::yield_now().await;
+            assert!(!shutting_down.is_finished());
+
+            if publish {
+                reservation.publish();
+            } else {
+                drop(reservation);
+            }
+            tokio::time::timeout(Duration::from_secs(5), shutting_down)
+                .await
+                .expect("shutdown finishes after the source handoff")
+                .expect("shutdown task remains healthy");
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.reserved_event_records, 0);
+            assert_eq!(inner.payloads.len(), usize::from(publish) * 2);
+        }
+
+        assert_handoff(true).await;
+        assert_handoff(false).await;
+    }
+
+    #[tokio::test]
+    async fn source_event_reservation_charges_duplicate_fault_fanout() {
+        let runtime = runtime().await;
+        let faults = Arc::new(Mutex::new(FaultState::default()));
+        faults.lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "functions.deliver".to_owned(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::Duplicate { count: 1 },
+            }],
+        });
+        runtime.set_faults(faults);
+
+        let reservation = runtime.reserve_commit_events(&created_commit()).unwrap();
+        assert_eq!(reservation.deliveries.as_ref().unwrap().len(), 4);
+        assert_eq!(runtime.inner.lock().unwrap().reserved_event_records, 4);
+        drop(reservation);
+        assert_eq!(runtime.inner.lock().unwrap().reserved_event_records, 0);
+        runtime.shutdown().await;
     }
 
     async fn assert_cleanup_after(

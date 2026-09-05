@@ -107,6 +107,66 @@ fn create_read_update_delete_with_versions_and_times() {
 }
 
 #[test]
+fn event_admission_refusal_keeps_the_document_version_and_commit_time_private() {
+    let mut state = FirestoreState::new();
+    let before_version = state.current_version();
+    let refusal = state.commit_with_admission(
+        &[set("events/refused", &[("value", Value::Integer(1))])],
+        None,
+        t(0),
+        |result| {
+            assert_eq!(result.changes.len(), 1);
+            assert_eq!(result.version, CommitVersion::from_value(1));
+            Err::<(), _>(FirestoreError::EventAdmission(
+                fireemu_core_types::admission::EventAdmissionError::Capacity(
+                    "outbox full".to_owned(),
+                ),
+            ))
+        },
+    );
+
+    assert!(matches!(refusal, Err(FirestoreError::EventAdmission(_))));
+    assert_eq!(state.current_version(), before_version);
+    assert!(state.get(&path("events/refused")).is_none());
+    let accepted = state
+        .commit(
+            &[set("events/accepted", &[("value", Value::Integer(2))])],
+            None,
+            t(0),
+        )
+        .unwrap();
+    assert_eq!(accepted.version, CommitVersion::from_value(1));
+    assert_eq!(accepted.commit_time, t(0));
+}
+
+#[test]
+fn event_admission_refusal_does_not_extend_a_transaction_lease() {
+    let mut state = FirestoreState::new();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+
+    assert!(matches!(
+        state.commit_with_admission(
+            &[set("events/refused-transaction", &[])],
+            Some(&transaction),
+            t(59),
+            |_| {
+                Err::<(), _>(FirestoreError::EventAdmission(
+                    fireemu_core_types::admission::EventAdmissionError::Capacity(
+                        "outbox full".to_owned(),
+                    ),
+                ))
+            },
+        ),
+        Err(FirestoreError::EventAdmission(_))
+    ));
+    assert!(matches!(
+        state.touch_transaction(&transaction, t(60)),
+        Err(FirestoreError::Aborted(_))
+    ));
+    assert!(state.get(&path("events/refused-transaction")).is_none());
+}
+
+#[test]
 fn preconditions_map_to_the_documented_errors() {
     let mut s = FirestoreState::new();
     let create = Write {

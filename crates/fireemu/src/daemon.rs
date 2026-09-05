@@ -841,12 +841,25 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         }
     }
     if let Some(runtime) = functions_runtime {
+        // Close Functions source admission only after every Firestore and Storage mutation
+        // already admitted through the shared session barrier has published its reservation.
+        // New source requests can enter after this short critical section, but their runtime
+        // reservation fails before the source state changes.
+        close_functions_source_admission(&backend.barrier(), || runtime.begin_shutdown());
         runtime.shutdown().await;
     }
     pubsub.shutdown_push_dispatcher().await;
     servers.abort_all();
     while servers.join_next().await.is_some() {}
     outcome.map(|_| code)
+}
+
+fn close_functions_source_admission(
+    barrier: &fireemu_core_session::barrier::AdmissionBarrier,
+    close: impl FnOnce(),
+) {
+    let _exclusive = barrier.exclusive();
+    close();
 }
 
 fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
@@ -1164,7 +1177,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::function_log_input;
+    use super::{close_functions_source_admission, function_log_input};
     use fireemu_adapter_logging::wire::build_bundle;
 
     #[test]
@@ -1195,5 +1208,24 @@ mod tests {
         assert_eq!(bundle["data"]["metadata"]["type"], "USER");
         assert_eq!(bundle["data"]["trace"], "projects/demo/traces/abc");
         assert_eq!(bundle["data"]["metadata"]["user"]["spoofed"], true);
+    }
+
+    #[test]
+    fn functions_shutdown_waits_for_admitted_source_publication() {
+        let barrier = std::sync::Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        let admitted = barrier.admit();
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        let closing_barrier = barrier.clone();
+        let closer = std::thread::spawn(move || {
+            close_functions_source_admission(&closing_barrier, || closed_tx.send(()).unwrap());
+        });
+
+        assert!(matches!(
+            closed_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        drop(admitted);
+        closed_rx.recv().unwrap();
+        closer.join().unwrap();
     }
 }

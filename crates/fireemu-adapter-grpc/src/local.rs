@@ -23,8 +23,8 @@ use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
-    Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreState,
-    ListedDocument, Precondition, QueryStats, TransactionId, Write, WriteOp,
+    Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreError,
+    FirestoreState, ListedDocument, Precondition, QueryStats, TransactionId, Write, WriteOp,
 };
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
@@ -175,10 +175,32 @@ pub struct LocalBackend {
     /// before the commit's response is returned (event triggers): nothing is lost or
     /// reordered, and `await-idle` sees the event as soon as the write returns.
     change_sink: Mutex<Option<ChangeSink>>,
+    change_admission: Mutex<Option<Arc<dyn AtomicChangeSink>>>,
 }
 
-/// Synchronous observer of commits (see [`LocalBackend::set_change_sink`]).
+/// Synchronous observer of committed changes (see [`LocalBackend::set_change_sink`]).
 pub type ChangeSink = Arc<dyn Fn(&CommitEvent) + Send + Sync>;
+
+/// A complete logical-event reservation for one Firestore commit.
+pub trait CommitPublication: Send {
+    /// Publishes the already admitted event batch after the source state is visible.
+    fn publish(self: Box<Self>);
+}
+
+/// Reserves every logical event a prospective Firestore commit requires.
+pub trait AtomicChangeSink: Send + Sync {
+    /// Returns a complete reservation or refuses before the source state changes.
+    fn reserve(
+        &self,
+        event: &CommitEvent,
+    ) -> Result<Box<dyn CommitPublication>, fireemu_core_types::admission::EventAdmissionError>;
+}
+
+struct NoopCommitPublication;
+
+impl CommitPublication for NoopCommitPublication {
+    fn publish(self: Box<Self>) {}
+}
 
 /// Commit notifications retained for slow Listen and UI subscribers. Lag is recoverable by
 /// reading one current database snapshot, so a small ring bounds retained path metadata.
@@ -580,6 +602,7 @@ impl LocalBackend {
             commits: tokio::sync::broadcast::channel(COMMIT_NOTIFICATION_CAPACITY).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
             change_sink: Mutex::new(None),
+            change_admission: Mutex::new(None),
             barrier: Arc::new(AdmissionBarrier::new()),
         }
     }
@@ -616,6 +639,13 @@ impl LocalBackend {
     /// its own queue.
     pub fn set_change_sink(&self, sink: ChangeSink) {
         if let Ok(mut slot) = self.change_sink.lock() {
+            *slot = Some(sink);
+        }
+    }
+
+    /// Installs the source-publication admission boundary used by a Functions runtime.
+    pub fn set_atomic_change_sink(&self, sink: Arc<dyn AtomicChangeSink>) {
+        if let Ok(mut slot) = self.change_admission.lock() {
             *slot = Some(sink);
         }
     }
@@ -944,20 +974,51 @@ impl LocalBackend {
         });
     }
 
-    fn publish(&self, parent: &Parent, result: &CommitResult) {
-        let actor = PENDING_ACTOR
-            .with(|slot| slot.try_borrow_mut().ok().and_then(|mut s| s.take()))
-            .unwrap_or_else(Actor::system);
-        let event = CommitEvent {
-            actor,
-            project: parent.project.as_str().to_owned(),
-            database: parent.database.as_str().to_owned(),
-            version: result.version.value(),
-            commit_time: Some(result.commit_time),
-            changes: result.changes.clone(),
-        };
+    fn take_commit_actor() -> Actor {
+        PENDING_ACTOR
+            .with(|slot| slot.try_borrow_mut().ok().and_then(|mut slot| slot.take()))
+            .unwrap_or_else(Actor::system)
+    }
+
+    fn commit_with_events(
+        &self,
+        parent: &Parent,
+        db: &mut FirestoreState,
+        writes: &[Write],
+        transaction: Option<&TransactionId>,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<CommitResult, Status> {
+        let actor = Self::take_commit_actor();
+        let sink = self
+            .change_admission
+            .lock()
+            .map_err(|_| Status::unavailable("Functions event admission is unavailable"))?
+            .clone();
+        let (result, (event, publication)) = db
+            .commit_with_admission(writes, transaction, now, |result| {
+                let event = CommitEvent {
+                    actor,
+                    project: parent.project.as_str().to_owned(),
+                    database: parent.database.as_str().to_owned(),
+                    version: result.version.value(),
+                    commit_time: Some(result.commit_time),
+                    changes: result.changes.clone(),
+                };
+                let publication = sink.as_ref().map_or_else(
+                    || Ok(Box::new(NoopCommitPublication) as Box<dyn CommitPublication>),
+                    |sink| sink.reserve(&event).map_err(FirestoreError::EventAdmission),
+                )?;
+                Ok((event, publication))
+            })
+            .map_err(|error| status_from_error(&error))?;
+        publication.publish();
+        self.publish_committed(&event, &result);
+        Ok(result)
+    }
+
+    fn publish_committed(&self, event: &CommitEvent, result: &CommitResult) {
         if let Some(sink) = self.change_sink.lock().ok().and_then(|s| s.clone()) {
-            sink(&event);
+            sink(event);
         }
         let changes = result
             .changes
@@ -972,8 +1033,8 @@ impl LocalBackend {
             })
             .collect::<Arc<[_]>>();
         let _ = self.commits.send(CommitNotification {
-            project: event.project,
-            database: event.database,
+            project: event.project.clone(),
+            database: event.database.clone(),
             version: event.version,
             reset: false,
             changes,
@@ -991,10 +1052,7 @@ impl LocalBackend {
         let now = self.write_time();
         let result = self.with_db(parent, |db| {
             guard(db, writes, now)?;
-            let result = db
-                .commit(writes, None, now)
-                .map_err(|error| status_from_error(&error))?;
-            self.publish(parent, &result);
+            let result = self.commit_with_events(parent, db, writes, None, now)?;
             Ok(result)
         })?;
         Ok(crate::streams::WireCommit::from_result(&result))
@@ -1362,17 +1420,11 @@ impl LocalBackend {
     }
 
     fn auto_id(&self) -> String {
-        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         let mut rng = match self.ids.lock() {
             Ok(r) => r,
             Err(p) => p.into_inner(),
         };
-        (0..20)
-            .map(|_| {
-                let index = usize::try_from(rng.next_below(ALPHABET.len() as u64)).unwrap_or(0);
-                ALPHABET[index] as char
-            })
-            .collect()
+        auto_id_from(&mut rng)
     }
 
     /// Wire token for a transaction: the handle plus a tag binding it to its database, so a
@@ -1784,8 +1836,7 @@ impl LocalBackend {
 
     /// `CreateDocument`.
     pub fn create_document(&self, req: &pb::CreateDocumentRequest) -> Result<pb::Document, Status> {
-        let (parent, write) = self.plan_create(req)?;
-        self.execute_planned(&parent, &write, req.mask.as_ref())
+        self.create_document_with(req, &allow_all)
     }
 
     /// Executes a single planned write and returns the resulting document.
@@ -1813,17 +1864,85 @@ impl LocalBackend {
         let now = self.write_time();
         let doc = self.with_db(parent, |db| {
             guard(db, std::slice::from_ref(write), now)?;
-            let result = db
-                .commit(std::slice::from_ref(write), None, now)
-                .map_err(|error| status_from_error(&error))?;
+            self.commit_with_events(parent, db, std::slice::from_ref(write), None, now)?;
             let doc = db
                 .get(&path)
                 .map(|document| encode_masked(document, mask.as_deref()))
                 .ok_or_else(|| Status::internal("document vanished after commit"))?;
-            self.publish(parent, &result);
             Ok(doc)
         })?;
         Ok(doc)
+    }
+
+    /// Plans, authorizes and publishes a create under one database critical section. An auto-ID
+    /// is serialized with the source commit and restored when any later gate refuses it.
+    pub fn create_document_with(
+        &self,
+        req: &pb::CreateDocumentRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::Document, Status> {
+        let parent = parse_parent(&req.parent).map_err(status)?;
+        let collection = CollectionId::try_new(req.collection_id.as_str())
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let fields = decode_fields(
+            &req.document
+                .as_ref()
+                .map(|document| document.fields.clone())
+                .unwrap_or_default(),
+        )
+        .map_err(status)?;
+        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
+        let now = self.write_time();
+        self.with_db(&parent, |db| {
+            let generated_id = req.document_id.is_empty();
+            let mut rng = generated_id.then(|| {
+                self.ids
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            });
+            let checkpoint = rng.as_deref().cloned();
+            let document_id = if generated_id {
+                auto_id_from(rng.as_deref_mut().expect("generated IDs hold the RNG lock"))
+            } else {
+                req.document_id.clone()
+            };
+            DocumentId::try_new(document_id.as_str())
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            let relative = match &parent.document {
+                Some(path) => format!(
+                    "{}/{}/{}",
+                    path.relative(),
+                    collection.as_str(),
+                    document_id
+                ),
+                None => format!("{}/{}", collection.as_str(), document_id),
+            };
+            let path = DocumentPath::parse(&parent.project, &parent.database, &relative)
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            let write = Write {
+                op: WriteOp::Set {
+                    path: path.clone(),
+                    fields: fields.clone(),
+                    update_mask: None,
+                },
+                precondition: Some(Precondition::Exists(false)),
+                transforms: Vec::new(),
+            };
+            let result = (|| {
+                guard(db, std::slice::from_ref(&write), now)?;
+                self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)?;
+                db.get(&path)
+                    .map(|document| encode_masked(document, mask.as_deref()))
+                    .ok_or_else(|| Status::internal("document vanished after commit"))
+            })();
+            if result.is_err() {
+                if let (Some(rng), Some(checkpoint)) = (rng.as_deref_mut(), checkpoint) {
+                    *rng = checkpoint;
+                }
+            }
+            result
+        })
     }
 
     /// Decodes an `UpdateDocument` request into its write.
@@ -1880,10 +1999,7 @@ impl LocalBackend {
         let now = self.write_time();
         self.with_db(&parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
-            let result = db
-                .commit(std::slice::from_ref(&write), None, now)
-                .map_err(|error| status_from_error(&error))?;
-            self.publish(&parent, &result);
+            self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)?;
             Ok(())
         })
     }
@@ -1965,10 +2081,7 @@ impl LocalBackend {
         let now = self.write_time();
         let result = self.with_db(&parent, |db| {
             guard(db, &writes, now)?;
-            let result = db
-                .commit(&writes, txn.as_ref(), now)
-                .map_err(|error| status_from_error(&error))?;
-            self.publish(&parent, &result);
+            let result = self.commit_with_events(&parent, db, &writes, txn.as_ref(), now)?;
             Ok(result)
         })?;
         Ok(encode_commit(&result))
@@ -2459,15 +2572,13 @@ impl LocalBackend {
                 let now = self.write_time();
                 let outcome = decoded.and_then(|write| {
                     guard(db, std::slice::from_ref(&write), now)?;
-                    db.commit(std::slice::from_ref(&write), None, now)
-                        .map_err(|e| status_from_error(&e))
+                    self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)
                 });
                 match outcome {
                     Ok(result) => {
                         let encoded = encode_commit(&result);
                         // Every successful write is its own commit and is published as such,
                         // in write order, with its own commit time.
-                        self.publish(&parent, &result);
                         write_results
                             .push(encoded.write_results.into_iter().next().unwrap_or_default());
                         statuses.push(fireemu_proto_firestore::google::rpc::Status {
@@ -2570,6 +2681,16 @@ fn database_key(parent: &Parent) -> (String, String) {
         parent.project.as_str().to_owned(),
         parent.database.as_str().to_owned(),
     )
+}
+
+fn auto_id_from(rng: &mut SplitMix64) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    (0..20)
+        .map(|_| {
+            let index = usize::try_from(rng.next_below(ALPHABET.len() as u64)).unwrap_or(0);
+            ALPHABET[index] as char
+        })
+        .collect()
 }
 
 fn database_tag(parent: &Parent) -> u64 {

@@ -6,6 +6,7 @@ use core::fmt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use fireemu_core_types::admission::EventAdmissionError;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
@@ -168,6 +169,12 @@ pub struct PreparedObject {
     bytes: Vec<u8>,
     digests: ObjectDigests,
 }
+
+/// Opaque seeded-RNG checkpoint used by a protocol adapter while it holds the store lock.
+/// Restoring it makes a refused operation observationally equivalent to never minting its
+/// prospective download token.
+#[derive(Clone)]
+pub struct DownloadTokenCheckpoint(SplitMix64);
 
 impl fmt::Debug for PreparedObject {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -391,6 +398,8 @@ pub enum StorageError {
     InvalidImportedIdentity(String),
     /// No further losslessly persisted generation identity can be allocated.
     IdentityExhausted,
+    /// A coupled logical event batch could not be reserved before publication.
+    EventAdmission(EventAdmissionError),
     /// A not-match precondition named the current generation / metageneration (reads answer
     /// `304 Not Modified`, writes `412`).
     NotModified(String),
@@ -414,6 +423,7 @@ impl fmt::Display for StorageError {
             Self::ChecksumMismatch(m) => write!(f, "checksum mismatch: {m}"),
             Self::InvalidImportedIdentity(m) => write!(f, "invalid imported identity: {m}"),
             Self::IdentityExhausted => f.write_str("storage identity space exhausted"),
+            Self::EventAdmission(error) => write!(f, "event admission failed: {error}"),
             Self::NotModified(m) => write!(f, "not modified: {m}"),
         }
     }
@@ -815,9 +825,13 @@ impl StorageState {
     /// (`crypto.randomUUID()` upstream); here it is drawn from the store's seeded RNG, so a
     /// seeded run reproduces its tokens.
     fn token(&mut self) -> String {
+        Self::token_from(&mut self.rng)
+    }
+
+    fn token_from(rng: &mut SplitMix64) -> String {
         let mut bytes = [0u8; 16];
-        bytes[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
-        bytes[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[..8].copy_from_slice(&rng.next_u64().to_be_bytes());
+        bytes[8..].copy_from_slice(&rng.next_u64().to_be_bytes());
         bytes[6] = (bytes[6] & 0x0F) | 0x40;
         bytes[8] = (bytes[8] & 0x3F) | 0x80;
         let h = |r: std::ops::Range<usize>| {
@@ -842,6 +856,17 @@ impl StorageState {
     /// official emulator does).
     pub fn mint_download_token(&mut self) -> String {
         self.token()
+    }
+
+    /// Captures the download-token generator before a prospective mutation.
+    #[must_use]
+    pub fn download_token_checkpoint(&self) -> DownloadTokenCheckpoint {
+        DownloadTokenCheckpoint(self.rng.clone())
+    }
+
+    /// Restores a checkpoint while the caller still owns the same exclusive store lock.
+    pub fn restore_download_token_checkpoint(&mut self, checkpoint: DownloadTokenCheckpoint) {
+        self.rng = checkpoint.0;
     }
 
     /// The generation the next commit will draw, for the `request.resource` a rules
@@ -896,6 +921,32 @@ impl StorageState {
         self.put_prepared(bucket, name, PreparedObject::new(bytes), metadata, pre, now)
     }
 
+    /// Writes bytes only after its finalized event is admitted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_with_admission<R>(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        bytes: Vec<u8>,
+        metadata: NewMetadata,
+        pre: Precondition,
+        now: LogicalInstant,
+        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
+        if bytes.len() as u64 > MAX_OBJECT_BYTES {
+            return Err(StorageError::TooLarge);
+        }
+        self.put_prepared_with_admission(
+            bucket,
+            name,
+            PreparedObject::new(bytes),
+            metadata,
+            pre,
+            now,
+            admit,
+        )
+    }
+
     /// Writes a new generation from bytes already bound to their digests.
     ///
     /// Protocol adapters use this after the same digests have been exposed to Security Rules.
@@ -909,10 +960,52 @@ impl StorageState {
         pre: Precondition,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
+        self.put_prepared_with_admission(bucket, name, prepared, metadata, pre, now, |_| Ok(()))
+            .map(|(metadata, ())| metadata)
+    }
+
+    /// Writes a prepared generation only after its finalized event is admitted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_prepared_with_admission<R>(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        prepared: PreparedObject,
+        metadata: NewMetadata,
+        pre: Precondition,
+        now: LogicalInstant,
+        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
         let PreparedObject { bytes, digests } = prepared;
         if bytes.len() as u64 > MAX_OBJECT_BYTES {
             return Err(StorageError::TooLarge);
         }
+        let (key, meta, next_blob, next_generation) = self.plan_put(
+            bucket,
+            name,
+            bytes.len() as u64,
+            digests,
+            metadata,
+            pre,
+            now,
+        )?;
+        let event = StorageEvent::Finalized(meta.clone());
+        let reservation = admit(&event)?;
+        self.apply_planned_put(key, &meta, next_blob, next_generation, bytes, event);
+        Ok((meta, reservation))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn plan_put(
+        &self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        size: u64,
+        digests: ObjectDigests,
+        metadata: NewMetadata,
+        pre: Precondition,
+        now: LogicalInstant,
+    ) -> Result<((BucketName, ObjectName), ObjectMetadata, u64, u64), StorageError> {
         // Download tokens ride in as the `firebaseStorageDownloadTokens` custom metadata
         // key and are lifted out of it, exactly as the official emulator's
         // `setDownloadTokensFromCustomMetadata` does. A new generation carries only the
@@ -930,15 +1023,13 @@ impl StorageState {
             .checked_add(1)
             .ok_or(StorageError::IdentityExhausted)?;
         let next_generation = self.next_generation_preview()?;
-        self.next_blob = next_blob;
         let blob = BlobId(next_blob);
-        self.next_generation = next_generation;
         let meta = ObjectMetadata {
             bucket: bucket.clone(),
             name: name.clone(),
-            generation: self.next_generation,
+            generation: next_generation,
             metageneration: 1,
-            size: bytes.len() as u64,
+            size,
             content_type: metadata
                 .content_type
                 .unwrap_or_else(|| "application/octet-stream".to_owned()),
@@ -955,12 +1046,26 @@ impl StorageState {
             download_tokens,
             blob,
         };
+        Ok((key, meta, next_blob, next_generation))
+    }
+
+    fn apply_planned_put(
+        &mut self,
+        key: (BucketName, ObjectName),
+        meta: &ObjectMetadata,
+        next_blob: u64,
+        next_generation: u64,
+        bytes: Vec<u8>,
+        event: StorageEvent,
+    ) {
+        let blob = meta.blob;
+        self.next_blob = next_blob;
+        self.next_generation = next_generation;
         if let Some(old) = self.objects.insert(key, meta.clone()) {
             self.blobs.remove(&old.blob);
         }
         self.blobs.insert(blob, Arc::new(bytes));
-        self.events.push(StorageEvent::Finalized(meta.clone()));
-        Ok(meta)
+        self.events.push(event);
     }
 
     /// Updates metadata (bumps the metageneration; the data and generation stay).
@@ -972,9 +1077,23 @@ impl StorageState {
         pre: Precondition,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
+        self.update_metadata_with_admission(bucket, name, patch, pre, now, |_| Ok(()))
+            .map(|(metadata, ())| metadata)
+    }
+
+    /// Updates metadata only after its complete logical event fan-out is admitted.
+    pub fn update_metadata_with_admission<R>(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        patch: &MetadataPatch,
+        pre: Precondition,
+        now: LogicalInstant,
+        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
         let key = (bucket.clone(), name.clone());
         Self::check(self.objects.get(&key), pre)?;
-        let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
+        let meta = self.objects.get(&key).ok_or(StorageError::NotFound)?;
         let mut next = patch.apply(meta);
         // A patch may write `firebaseStorageDownloadTokens`; the key is lifted into the
         // token list (merged with the tokens the object already has), never stored as
@@ -990,10 +1109,12 @@ impl StorageState {
             .filter(|metageneration| *metageneration <= MAX_PERSISTED_IDENTITY)
             .ok_or(StorageError::IdentityExhausted)?;
         next.updated = now;
+        let event = StorageEvent::MetadataUpdated(next.clone());
+        let reservation = admit(&event)?;
+        let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
         *meta = next.clone();
-        self.events
-            .push(StorageEvent::MetadataUpdated(next.clone()));
-        Ok(next)
+        self.events.push(event);
+        Ok((next, reservation))
     }
 
     /// Adds a Firebase download token. A token is a metadata change: the metageneration is
@@ -1005,6 +1126,18 @@ impl StorageState {
         name: &ObjectName,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
+        self.add_download_token_with_admission(bucket, name, now, |_| Ok(()))
+            .map(|(metadata, ())| metadata)
+    }
+
+    /// Adds a download token only after its metadata event is admitted.
+    pub fn add_download_token_with_admission<R>(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        now: LogicalInstant,
+        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
         let key = (bucket.clone(), name.clone());
         let meta = self.objects.get(&key).ok_or(StorageError::NotFound)?;
         // The token-mint route (?create_token=true) has no other size gate, so the count
@@ -1018,15 +1151,18 @@ impl StorageState {
             .checked_add(1)
             .filter(|metageneration| *metageneration <= MAX_PERSISTED_IDENTITY)
             .ok_or(StorageError::IdentityExhausted)?;
-        let token = self.token();
-        let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
-        meta.download_tokens.push(token);
-        meta.metageneration = next_metageneration;
-        meta.updated = now;
-        let updated = meta.clone();
-        self.events
-            .push(StorageEvent::MetadataUpdated(updated.clone()));
-        Ok(updated)
+        let mut next_rng = self.rng.clone();
+        let token = Self::token_from(&mut next_rng);
+        let mut updated = meta.clone();
+        updated.download_tokens.push(token);
+        updated.metageneration = next_metageneration;
+        updated.updated = now;
+        let event = StorageEvent::MetadataUpdated(updated.clone());
+        let reservation = admit(&event)?;
+        self.rng = next_rng;
+        self.objects.insert(key, updated.clone());
+        self.events.push(event);
+        Ok((updated, reservation))
     }
 
     /// Removes a Firebase download token. Removing the last one mints a replacement, any
@@ -1040,10 +1176,23 @@ impl StorageState {
         token: &str,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
+        self.remove_download_token_with_admission(bucket, name, token, now, |_| Ok(()))
+            .map(|(metadata, _)| metadata)
+    }
+
+    /// Removes a download token only after its metadata event is admitted.
+    pub fn remove_download_token_with_admission<R>(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        token: &str,
+        now: LogicalInstant,
+        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, Option<R>), StorageError> {
         let key = (bucket.clone(), name.clone());
         let meta = self.objects.get(&key).ok_or(StorageError::NotFound)?;
         if meta.download_tokens.is_empty() {
-            return Ok(meta.clone());
+            return Ok((meta.clone(), None));
         }
         let replacement_needed = meta
             .download_tokens
@@ -1055,21 +1204,25 @@ impl StorageState {
             .checked_add(bump)
             .filter(|metageneration| *metageneration <= MAX_PERSISTED_IDENTITY)
             .ok_or(StorageError::IdentityExhausted)?;
-        let replacement = replacement_needed.then(|| self.token());
-        let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
-        meta.download_tokens.retain(|t| t != token);
-        if meta.download_tokens.is_empty() {
-            meta.download_tokens
+        let mut next_rng = self.rng.clone();
+        let replacement = replacement_needed.then(|| Self::token_from(&mut next_rng));
+        let mut updated = meta.clone();
+        updated.download_tokens.retain(|t| t != token);
+        if updated.download_tokens.is_empty() {
+            updated
+                .download_tokens
                 .push(replacement.expect("an empty token list requires a replacement"));
             // Upstream's replacement mint is its own (silent) metadata update, so removing
             // the last token moves the metageneration by two while emitting one event.
         }
-        meta.metageneration = next_metageneration;
-        meta.updated = now;
-        let updated = meta.clone();
-        self.events
-            .push(StorageEvent::MetadataUpdated(updated.clone()));
-        Ok(updated)
+        updated.metageneration = next_metageneration;
+        updated.updated = now;
+        let event = StorageEvent::MetadataUpdated(updated.clone());
+        let reservation = admit(&event)?;
+        self.rng = next_rng;
+        self.objects.insert(key, updated.clone());
+        self.events.push(event);
+        Ok((updated, Some(reservation)))
     }
 
     /// Deletes the current generation.
@@ -1079,12 +1232,31 @@ impl StorageState {
         name: &ObjectName,
         pre: Precondition,
     ) -> Result<ObjectMetadata, StorageError> {
+        self.delete_with_admission(bucket, name, pre, |_| Ok(()))
+            .map(|(metadata, ())| metadata)
+    }
+
+    /// Deletes a generation only after its complete logical event fan-out is admitted.
+    pub fn delete_with_admission<R>(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        pre: Precondition,
+        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
         let key = (bucket.clone(), name.clone());
         Self::check(self.objects.get(&key), pre)?;
-        let meta = self.objects.remove(&key).ok_or(StorageError::NotFound)?;
+        let meta = self
+            .objects
+            .get(&key)
+            .cloned()
+            .ok_or(StorageError::NotFound)?;
+        let event = StorageEvent::Deleted(meta.clone());
+        let reservation = admit(&event)?;
+        self.objects.remove(&key);
         self.blobs.remove(&meta.blob);
-        self.events.push(StorageEvent::Deleted(meta.clone()));
-        Ok(meta)
+        self.events.push(event);
+        Ok((meta, reservation))
     }
 
     /// Copies (rewrites) an object: the destination gets a new generation, metadata is
@@ -1097,6 +1269,21 @@ impl StorageState {
         pre: Precondition,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
+        self.copy_with_admission(source, destination, metadata, pre, now, |_| Ok(()))
+            .map(|(metadata, ())| metadata)
+    }
+
+    /// Copies an object only after the destination finalized event is admitted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_with_admission<R>(
+        &mut self,
+        source: (&BucketName, &ObjectName),
+        destination: (&BucketName, &ObjectName),
+        metadata: Option<NewMetadata>,
+        pre: Precondition,
+        now: LogicalInstant,
+        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
         let (dst_bucket, dst_name) = destination;
         let src = self
             .get(source.0, source.1)
@@ -1111,7 +1298,7 @@ impl StorageState {
             cache_control: src.cache_control.clone(),
             custom: src.custom_defined.then(|| src.custom.clone()),
         });
-        self.put(dst_bucket, dst_name, bytes, metadata, pre, now)
+        self.put_with_admission(dst_bucket, dst_name, bytes, metadata, pre, now, admit)
     }
 
     /// Lists objects of `bucket` under `prefix`, bytewise by name, the way the official
@@ -1669,17 +1856,29 @@ impl StorageState {
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
-        let result = self.finalize_upload_inner(id, now);
+        self.finalize_upload_with_admission(id, now, |_| Ok(()))
+            .map(|(metadata, ())| metadata)
+    }
+
+    /// Commits a resumable upload only after its finalized event is admitted.
+    pub fn finalize_upload_with_admission<R>(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
+        let result = self.finalize_upload_with_admission_inner(id, now, admit);
         self.refresh_retained_upload_bytes();
         result
     }
 
-    fn finalize_upload_inner(
+    fn finalize_upload_with_admission_inner<R>(
         &mut self,
         id: &UploadId,
         now: LogicalInstant,
-    ) -> Result<ObjectMetadata, StorageError> {
-        let (bucket, name, metadata, precondition, prepared) = {
+        admit: impl FnOnce(&StorageEvent) -> Result<R, StorageError>,
+    ) -> Result<(ObjectMetadata, R), StorageError> {
+        let (bucket, name, metadata, precondition, digests, size) = {
             let u = self.upload_mut(id, now)?;
             match u.state {
                 UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
@@ -1718,29 +1917,36 @@ impl StorageState {
                 u.name.clone(),
                 u.metadata.clone(),
                 u.precondition,
-                PreparedObject {
-                    bytes: std::mem::take(&mut u.received),
-                    digests: ObjectDigests {
-                        md5: received_md5,
-                        crc32c: received_crc32c,
-                    },
+                ObjectDigests {
+                    md5: received_md5,
+                    crc32c: received_crc32c,
                 },
+                u.received.len() as u64,
             )
         };
-        let meta = match self.put_prepared(&bucket, &name, prepared, metadata, precondition, now) {
-            Ok(m) => m,
-            Err(e) => {
-                if let Some(u) = self.uploads.get_mut(id) {
-                    u.state = UploadState::Aborted;
-                    u.received = Vec::new();
+        let (key, meta, next_blob, next_generation) =
+            match self.plan_put(&bucket, &name, size, digests, metadata, precondition, now) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    if let Some(upload) = self.uploads.get_mut(id) {
+                        upload.state = UploadState::Aborted;
+                        upload.received = Vec::new();
+                    }
+                    return Err(error);
                 }
-                return Err(e);
-            }
-        };
+            };
+        let event = StorageEvent::Finalized(meta.clone());
+        let reservation = admit(&event)?;
+        let bytes = self
+            .uploads
+            .get_mut(id)
+            .map(|upload| std::mem::take(&mut upload.received))
+            .ok_or(StorageError::UploadNotFound)?;
+        self.apply_planned_put(key, &meta, next_blob, next_generation, bytes, event);
         if let Some(u) = self.uploads.get_mut(id) {
             u.state = UploadState::Committed(Box::new(meta.clone()));
         }
-        Ok(meta)
+        Ok((meta, reservation))
     }
 
     /// [`Self::append_upload`] followed by [`Self::finalize_upload`] when `finalize` is set.

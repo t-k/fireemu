@@ -57,7 +57,29 @@ const TOKENS_KEY: &str = "firebaseStorageDownloadTokens";
 const MAX_MULTIPART_BOUNDARY_LEN: usize = 70;
 
 /// Observer of Storage object events (see [`StorageState::events`]).
-pub type StorageEventSink = Arc<dyn Fn(&StorageEvent) + Send + Sync>;
+/// A complete logical-event reservation for one Storage mutation.
+pub trait StorageEventPublication: Send {
+    /// Publishes the already admitted batch after the object state is visible.
+    fn publish(self: Box<Self>);
+}
+
+/// Reserves every logical event a prospective Storage mutation requires.
+pub trait AtomicStorageEventSink: Send + Sync {
+    /// Returns a complete reservation or refuses before object bytes or metadata change.
+    fn reserve(
+        &self,
+        event: &StorageEvent,
+    ) -> Result<Box<dyn StorageEventPublication>, fireemu_core_types::admission::EventAdmissionError>;
+}
+
+/// Shared atomic Storage event sink.
+pub type StorageEventSink = Arc<dyn AtomicStorageEventSink>;
+
+struct NoopStorageEventPublication;
+
+impl StorageEventPublication for NoopStorageEventPublication {
+    fn publish(self: Box<Self>) {}
+}
 
 /// Atomically selected Storage Rules configuration.
 ///
@@ -275,14 +297,175 @@ impl std::ops::DerefMut for StoreGuard<'_> {
     }
 }
 
+impl StoreGuard<'_> {
+    fn reserve_event(
+        sink: Option<&StorageEventSink>,
+        event: &StorageEvent,
+    ) -> Result<Box<dyn StorageEventPublication>, StorageError> {
+        sink.map_or_else(
+            || Ok(Box::new(NoopStorageEventPublication) as Box<dyn StorageEventPublication>),
+            |sink| sink.reserve(event).map_err(StorageError::EventAdmission),
+        )
+    }
+
+    /// Writes prepared object bytes through the source/outbox publication boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_prepared(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        prepared: PreparedObject,
+        metadata: NewMetadata,
+        pre: Precondition,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) = self.guard.put_prepared_with_admission(
+            bucket,
+            name,
+            prepared,
+            metadata,
+            pre,
+            now,
+            |event| Self::reserve_event(sink.as_ref(), event),
+        )?;
+        publication.publish();
+        Ok(metadata)
+    }
+
+    /// Writes object bytes through the source/outbox publication boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub fn put(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        bytes: Vec<u8>,
+        metadata: NewMetadata,
+        pre: Precondition,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) =
+            self.guard
+                .put_with_admission(bucket, name, bytes, metadata, pre, now, |event| {
+                    Self::reserve_event(sink.as_ref(), event)
+                })?;
+        publication.publish();
+        Ok(metadata)
+    }
+
+    /// Updates metadata through the source/outbox publication boundary.
+    pub fn update_metadata(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        patch: &MetadataPatch,
+        pre: Precondition,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) =
+            self.guard
+                .update_metadata_with_admission(bucket, name, patch, pre, now, |event| {
+                    Self::reserve_event(sink.as_ref(), event)
+                })?;
+        publication.publish();
+        Ok(metadata)
+    }
+
+    /// Adds a download token through the source/outbox publication boundary.
+    pub fn add_download_token(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) =
+            self.guard
+                .add_download_token_with_admission(bucket, name, now, |event| {
+                    Self::reserve_event(sink.as_ref(), event)
+                })?;
+        publication.publish();
+        Ok(metadata)
+    }
+
+    /// Removes a download token through the source/outbox publication boundary.
+    pub fn remove_download_token(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        token: &str,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) =
+            self.guard
+                .remove_download_token_with_admission(bucket, name, token, now, |event| {
+                    Self::reserve_event(sink.as_ref(), event)
+                })?;
+        if let Some(publication) = publication {
+            publication.publish();
+        }
+        Ok(metadata)
+    }
+
+    /// Deletes an object through the source/outbox publication boundary.
+    pub fn delete(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        pre: Precondition,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) =
+            self.guard
+                .delete_with_admission(bucket, name, pre, |event| {
+                    Self::reserve_event(sink.as_ref(), event)
+                })?;
+        publication.publish();
+        Ok(metadata)
+    }
+
+    /// Copies an object through the source/outbox publication boundary.
+    pub fn copy(
+        &mut self,
+        source: (&BucketName, &ObjectName),
+        destination: (&BucketName, &ObjectName),
+        metadata: Option<NewMetadata>,
+        pre: Precondition,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) =
+            self.guard
+                .copy_with_admission(source, destination, metadata, pre, now, |event| {
+                    Self::reserve_event(sink.as_ref(), event)
+                })?;
+        publication.publish();
+        Ok(metadata)
+    }
+
+    /// Finalizes a resumable upload through the source/outbox publication boundary.
+    pub fn finalize_upload(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let sink = self.sink.cloned();
+        let (metadata, publication) =
+            self.guard
+                .finalize_upload_with_admission(id, now, |event| {
+                    Self::reserve_event(sink.as_ref(), event)
+                })?;
+        publication.publish();
+        Ok(metadata)
+    }
+}
+
 impl Drop for StoreGuard<'_> {
     fn drop(&mut self) {
-        let events = self.guard.drain_events();
-        if let Some(sink) = self.sink {
-            for event in &events {
-                sink(event);
-            }
-        }
+        let _ = self.guard.drain_events();
     }
 }
 
@@ -743,6 +926,14 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
             "storage identity space exhausted".to_owned(),
             "internalError",
         ),
+        StorageError::EventAdmission(error) => {
+            use fireemu_core_types::admission::EventAdmissionError;
+            match error {
+                EventAdmissionError::Capacity(message) => (429, message, "rateLimitExceeded"),
+                EventAdmissionError::Unavailable(message) => (503, message, "backendError"),
+                EventAdmissionError::InvalidEvent(message) => (500, message, "internalError"),
+            }
+        }
     }
 }
 
@@ -2619,7 +2810,6 @@ fn fb_object_post(
             // document alone.
             let mut meta =
                 new_metadata_from_json(&meta_json, None).map_err(|e| fb_json_error(400, &e))?;
-            inject_download_token(state, &mut meta)?;
             let (expected_md5, expected_crc32c) =
                 declared_hashes(&req, Some(&meta_json)).map_err(|(s, m)| fb_json_error(s, &m))?;
             // Rules run at finalization against the received bytes (as the official
@@ -2629,25 +2819,31 @@ fn fb_object_post(
                 Principal::Anonymous => None,
                 Principal::User(_) => req.header("authorization").map(str::to_owned),
             };
-            let id = state
-                .store()?
-                .begin_upload_with(
-                    &b,
-                    &n,
-                    meta,
-                    Precondition::default(),
-                    UploadOptions {
-                        total: None,
-                        authorization,
-                        // The app the initiation was admitted for: every later request on
-                        // this session must present the same one (spec section 13.2).
-                        admission: admitted.binding(),
-                        expected_md5,
-                        expected_crc32c,
-                    },
-                    now,
-                )
-                .map_err(fb_core_err)?;
+            let mut store = state.store()?;
+            let token_checkpoint = store.download_token_checkpoint();
+            inject_download_token(&mut store, &mut meta);
+            let id = match store.begin_upload_with(
+                &b,
+                &n,
+                meta,
+                Precondition::default(),
+                UploadOptions {
+                    total: None,
+                    authorization,
+                    // The app the initiation was admitted for: every later request on
+                    // this session must present the same one (spec section 13.2).
+                    admission: admitted.binding(),
+                    expected_md5,
+                    expected_crc32c,
+                },
+                now,
+            ) {
+                Ok(id) => id,
+                Err(error) => {
+                    store.restore_download_token_checkpoint(token_checkpoint);
+                    return Err(fb_core_err(error));
+                }
+            };
             let session_url = format!(
                 "http://{host}/v0/b/{}/o?name={}&upload_id={}&upload_protocol=resumable",
                 encode_segment(b.as_str()),
@@ -2676,9 +2872,7 @@ fn fb_object_post(
         let (meta_json, data) =
             parse_multipart(&content_type, body).map_err(|e| html_text(400, &e))?;
         // The data part's own content type is ignored, as upstream ignores it.
-        let mut meta =
-            new_metadata_from_json(&meta_json, None).map_err(|e| fb_json_error(400, &e))?;
-        inject_download_token(state, &mut meta)?;
+        let meta = new_metadata_from_json(&meta_json, None).map_err(|e| fb_json_error(400, &e))?;
         let prepared =
             verify_hashes(&req, Some(&meta_json), data).map_err(|(s, m)| fb_json_error(s, &m))?;
         return fb_commit(state, principal, &b, &n, prepared, meta, now);
@@ -2690,27 +2884,22 @@ fn fb_object_post(
         .map(str::to_owned);
     let body = std::mem::take(&mut req.body);
     let prepared = verify_hashes(&req, None, body).map_err(|(s, m)| fb_json_error(s, &m))?;
-    let mut meta = NewMetadata {
+    let meta = NewMetadata {
         content_type,
         ..NewMetadata::default()
     };
-    inject_download_token(state, &mut meta)?;
     fb_commit(state, principal, &b, &n, prepared, meta, now)
 }
 
 /// The Firebase dialect always defines custom metadata on an upload, injecting a fresh
 /// download token unless the client supplied `firebaseStorageDownloadTokens` itself,
 /// exactly as the official `finalizeOneShotUpload` does before the object is stored.
-fn inject_download_token(
-    state: &StorageState,
-    meta: &mut NewMetadata,
-) -> Result<(), StorageResponse> {
+fn inject_download_token(store: &mut ObjectStore, meta: &mut NewMetadata) {
     let custom = meta.custom.get_or_insert_with(BTreeMap::new);
     if !custom.contains_key(TOKENS_KEY) {
-        let token = state.store()?.mint_download_token();
+        let token = store.mint_download_token();
         custom.insert(TOKENS_KEY.to_owned(), token);
     }
-    Ok(())
 }
 
 /// Commits a Firebase-dialect one-shot upload: rules on the received bytes, then the
@@ -2723,43 +2912,51 @@ fn fb_commit(
     b: &BucketName,
     n: &ObjectName,
     prepared: PreparedObject,
-    meta: NewMetadata,
+    mut meta: NewMetadata,
     now: LogicalInstant,
 ) -> Outcome {
     let mut store = state.store()?;
-    let existing = store.get(b, n).cloned();
-    let method = if existing.is_some() {
-        Method::Update
-    } else {
-        Method::Create
-    };
-    let next_generation = store.next_generation_preview().map_err(fb_core_err)?;
-    let hashes = prepared.digests();
-    state
-        .authorize(
-            principal,
-            method,
-            b,
-            n.as_str(),
-            existing.as_ref().map(storage_rules_value),
-            incoming_rules_value(
+    let token_checkpoint = store.download_token_checkpoint();
+    inject_download_token(&mut store, &mut meta);
+    let result = (|| {
+        let existing = store.get(b, n).cloned();
+        let method = if existing.is_some() {
+            Method::Update
+        } else {
+            Method::Create
+        };
+        let next_generation = store.next_generation_preview().map_err(fb_core_err)?;
+        let hashes = prepared.digests();
+        state
+            .authorize(
+                principal,
+                method,
                 b,
-                n,
-                &meta,
-                prepared.len() as u64,
-                hashes.values(),
-                next_generation,
-                now,
-            ),
-        )
-        .map_err(|denial| denial.with_header("x-goog-upload-status", "final"))?;
-    store
-        .put_prepared(b, n, prepared, meta, Precondition::default(), now)
-        .map_err(fb_core_err)?;
-    let m = store
-        .default_content_disposition_inline(b, n)
-        .map_err(fb_core_err)?;
-    Ok(StorageResponse::json(200, &firebase_json(&m)))
+                n.as_str(),
+                existing.as_ref().map(storage_rules_value),
+                incoming_rules_value(
+                    b,
+                    n,
+                    &meta,
+                    prepared.len() as u64,
+                    hashes.values(),
+                    next_generation,
+                    now,
+                ),
+            )
+            .map_err(|denial| denial.with_header("x-goog-upload-status", "final"))?;
+        store
+            .put_prepared(b, n, prepared, meta, Precondition::default(), now)
+            .map_err(fb_core_err)?;
+        let m = store
+            .default_content_disposition_inline(b, n)
+            .map_err(fb_core_err)?;
+        Ok(StorageResponse::json(200, &firebase_json(&m)))
+    })();
+    if result.is_err() {
+        store.restore_download_token_checkpoint(token_checkpoint);
+    }
+    result
 }
 
 /// A Firebase resumable command on an existing session: query, cancel, upload, finalize.
@@ -2872,7 +3069,7 @@ enum FinalizeError {
 /// terminal: the session remembers it and never publishes.
 fn finalize_resumable(
     state: &StorageState,
-    store: &mut ObjectStore,
+    store: &mut StoreGuard<'_>,
     id: &UploadId,
     req: &StorageRequest,
     now: LogicalInstant,
@@ -3628,8 +3825,10 @@ fn xml_style_get(
 
 #[cfg(test)]
 mod storage_rules_registry_tests {
-    use super::{StorageRulesRegistry, StorageRulesSnapshotMode};
+    use super::{core_err, StorageRulesRegistry, StorageRulesSnapshotMode};
     use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+    use fireemu_core_storage::store::StorageError;
+    use fireemu_core_types::admission::EventAdmissionError;
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -3695,5 +3894,27 @@ mod storage_rules_registry_tests {
         ));
         assert_eq!(loaded.len(), 1);
         assert_eq!(snapshot.retained_bytes(), loaded[0].1.retained_bytes());
+    }
+
+    #[test]
+    fn event_admission_categories_keep_distinct_http_retry_semantics() {
+        assert_eq!(
+            core_err(StorageError::EventAdmission(EventAdmissionError::Capacity(
+                "full".to_owned(),
+            ))),
+            (429, "full".to_owned(), "rateLimitExceeded")
+        );
+        assert_eq!(
+            core_err(StorageError::EventAdmission(
+                EventAdmissionError::Unavailable("closing".to_owned()),
+            )),
+            (503, "closing".to_owned(), "backendError")
+        );
+        assert_eq!(
+            core_err(StorageError::EventAdmission(
+                EventAdmissionError::InvalidEvent("invalid".to_owned()),
+            )),
+            (500, "invalid".to_owned(), "internalError")
+        );
     }
 }

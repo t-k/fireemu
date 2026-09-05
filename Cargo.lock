@@ -849,6 +849,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fireemu-adapter-functions",
+ "fireemu-adapter-grpc",
  "fireemu-core-auth",
  "fireemu-core-events",
  "fireemu-core-export",
@@ -858,12 +859,15 @@ dependencies = [
  "fireemu-core-storage",
  "fireemu-core-types",
  "fireemu-export-publication",
+ "fireemu-proto-firestore",
  "quint-connect",
  "rustix",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]

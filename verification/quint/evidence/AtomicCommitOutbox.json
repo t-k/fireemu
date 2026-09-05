@@ -18,10 +18,14 @@
   },
   "bounds": {
     "Docs": "{d1,d2}",
+    "EventCapacity": "4",
+    "Fanout": "2",
     "MaxVersion": "2"
   },
   "boundInputs": [
     ".github/workflows/quint.yml",
+    "crates/fireemu-adapter-functions/src/runtime.rs",
+    "crates/fireemu-adapter-grpc/src/local.rs",
     "crates/fireemu-core-firestore/src/store.rs",
     "rust-toolchain.toml",
     "verification/quint/apalache.lock.json",
@@ -49,37 +53,43 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "3badb445fa0f0bc42bbaab7ff6e4b4b1eed6875087c37fe052402bd6a801f9f2",
-    "crates/fireemu-core-firestore/src/store.rs": "8179e53697bbb952adf85403fd74bb78d202b929c52a9ab7d7ae5549add8fa55",
+    "crates/fireemu-adapter-functions/src/runtime.rs": "cde2f3b945edbfae688bf3574ecaa93ecba2be4fac0dead9561308c66b949b15",
+    "crates/fireemu-adapter-grpc/src/local.rs": "2223f05faa8f9b7b2f67aec95369fec2461078ef6affc1a0c39da2813b0cd0cd",
+    "crates/fireemu-core-firestore/src/store.rs": "df63613dc5dadf72e10770f194efa48245ea6f73731ed6f5d0feae0369d38249",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
     "verification/quint/bin/install-apalache": "31cdb73b00aa5ee20328f83ccec467f6c9d6b740dc4e5c806269c66347cac150",
     "verification/quint/bin/process-group": "b75c438b3ce254d4d112d2005afc52d94e64a1fc22e0d5d86f5652ef30285b94",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/AtomicCommitOutbox.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "d7538e4083656fbc6762dabbb7e3634be73330148afe5e421290463178279623",
+    "verification/quint/evidence/cargo-authority.json": "175b4cdb99a1c044a350653d487ce8e54ecb87e20fe2be909405682e04f0f95f",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
-    "verification/quint/mutations/AtomicCommitOutbox.json": "378eddcc375f01e44ab3e7b13f11f41a5da4d2e2c6d1ac4f2379d665784a7458",
+    "verification/quint/mutations/AtomicCommitOutbox.json": "999711b541d6268b7f72ae3469e44f9376863b68168101bfe48181210a77d097",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
-    "verification/quint/specs/AtomicCommitOutbox.qnt": "64a128c3f080e808898abb3344e45be42db4a9d81ee4f8c1d1816b6143948948",
-    "verification/quint/src/atomic_commit_outbox.rs": "1a3e1bd8c5b370305a0a4b4428223ee7d8f5c818a7ab46c0a50f2da6085dfcaf",
+    "verification/quint/specs/AtomicCommitOutbox.qnt": "b224f5e0cc30e971be61f0bd2e573e5da6c57d0dad170424997c19214c3d32ab",
+    "verification/quint/src/atomic_commit_outbox.rs": "445e8c1fad4db16be9d7d965c87d0385aee645a63af0d02c166e024dae8e83dd",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
     "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",
-    "verification/quint/src/model.rs": "a17b646ad378b199594891f3d3db9dd7a2df7fa85b5754956cdaa559562a7042",
+    "verification/quint/src/model.rs": "7e59712abd8c38970af57ad204e48915963da5657c9613ddc6011bf923613410",
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
     "verification/quint/src/server.rs": "38050325dd6280331c1b1668e507e0a638d5ccee6ecde090416a59f9ecd3f5da",
-    "verification/quint/tests/atomic_commit_outbox_connect.rs": "2aa5dfd9b468ac7a1105c12e2a6234c2f6e79a1f97ab78cb1c7c135827293f50"
+    "verification/quint/tests/atomic_commit_outbox_connect.rs": "45ac052b9ff08affe800ff9e5985b1f5b576d439abd29d0d6eb61668eb6607cf"
   },
   "invariants": [
     "TypeOK",
     "AtomicCommit",
     "OutboxCompleteness",
     "NoPartialTransaction",
-    "ConflictNeverCommits"
+    "ConflictNeverCommits",
+    "CompleteReservation",
+    "PublicationConsumesReservation",
+    "CancellationRefundsCapacity",
+    "ResetInvalidatesEventOwnership"
   ],
   "temporalProperties": [],
   "mutations": [
@@ -106,17 +116,46 @@
       "property": "ConflictNeverCommits",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RESERVE-PARTIAL-001",
+      "property": "CompleteReservation",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-PUBLISH-WITHOUT-RESERVE-001",
+      "property": "PublicationConsumesReservation",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-CANCEL-LEAK-001",
+      "property": "CancellationRefundsCapacity",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RESET-STALE-001",
+      "property": "ResetInvalidatesEventOwnership",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
     }
   ],
   "scenarios": [
     "commit",
     "conflict",
-    "abort"
+    "abort",
+    "cancelReservation",
+    "resetGeneration"
   ],
   "actions": [
     "Begin",
     "StageWrite",
     "StageOutbox",
+    "Reserve",
+    "Cancel",
+    "Reset",
     "DetectConflict",
     "Commit",
     "Abort"
@@ -124,7 +163,10 @@
   "projectionFields": [
     "documents",
     "outbox",
-    "transactionState"
+    "transactionState",
+    "reservedEvents",
+    "publishedEvents",
+    "eventGeneration"
   ],
   "simulation": {
     "seeds": [

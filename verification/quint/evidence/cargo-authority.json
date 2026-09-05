@@ -233,6 +233,7 @@
       "features": [],
       "dependencies": [
         "path+crates/fireemu-adapter-functions/Cargo.toml#fireemu-adapter-functions@0.1.0",
+        "path+crates/fireemu-adapter-grpc/Cargo.toml#fireemu-adapter-grpc@0.1.0",
         "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.1.0",
         "path+crates/fireemu-core-events/Cargo.toml#fireemu-core-events@0.1.0",
         "path+crates/fireemu-core-export/Cargo.toml#fireemu-core-export@0.1.0",
@@ -242,13 +243,16 @@
         "path+crates/fireemu-core-storage/Cargo.toml#fireemu-core-storage@0.1.0",
         "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.1.0",
         "path+crates/fireemu-export-publication/Cargo.toml#fireemu-export-publication@0.1.0",
+        "path+crates/fireemu-proto-firestore/Cargo.toml#fireemu-proto-firestore@0.1.0",
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#quint-connect@0.1.2",
         "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
         "registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9",
-        "registry+https://github.com/rust-lang/crates.io-index#tempfile@3.27.0"
+        "registry+https://github.com/rust-lang/crates.io-index#tempfile@3.27.0",
+        "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.1",
+        "registry+https://github.com/rust-lang/crates.io-index#tonic@0.13.1"
       ]
     },
     {

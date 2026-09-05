@@ -644,11 +644,8 @@ impl RestState {
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
             request_options: None,
         };
-        let (parsed, write) = self.local.plan_create(&req)?;
         let guard = self.write_guard(principal);
-        let doc = self
-            .local
-            .execute_planned_with(&parsed, &write, req.mask.as_ref(), &*guard)?;
+        let doc = self.local.create_document_with(&req, &*guard)?;
         Ok(ok(document_to_json(&doc)))
     }
 

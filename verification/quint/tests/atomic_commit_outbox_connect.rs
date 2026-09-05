@@ -34,9 +34,22 @@ fn staging_is_invisible_until_one_real_atomic_commit() {
             documents: BTreeMap::from([("d1".to_owned(), 0), ("d2".to_owned(), 0)]),
             outbox: BTreeSet::new(),
             transaction_state: "Staging".to_owned(),
+            reserved_events: 0,
+            published_events: 0,
+            event_generation: 0,
         }
     );
 
+    driver
+        .reserve()
+        .expect("reserve complete Functions fan-out");
+    assert_eq!(
+        driver
+            .project()
+            .expect("reserved projection")
+            .reserved_events,
+        4
+    );
     driver.commit().expect("commit staged writes");
     assert_eq!(
         driver.project().expect("committed projection"),
@@ -44,6 +57,9 @@ fn staging_is_invisible_until_one_real_atomic_commit() {
             documents: BTreeMap::from([("d1".to_owned(), 1), ("d2".to_owned(), 1)]),
             outbox: BTreeSet::from(["d1".to_owned(), "d2".to_owned()]),
             transaction_state: "Committed".to_owned(),
+            reserved_events: 0,
+            published_events: 4,
+            event_generation: 0,
         }
     );
 }
@@ -64,8 +80,18 @@ fn real_multi_write_rejection_publishes_neither_documents_nor_changes() {
             documents: BTreeMap::from([("d1".to_owned(), 0), ("d2".to_owned(), 0)]),
             outbox: BTreeSet::new(),
             transaction_state: "Aborted".to_owned(),
+            reserved_events: 0,
+            published_events: 0,
+            event_generation: 0,
         }
     );
+}
+
+#[test]
+fn real_adapter_capacity_refusal_preserves_source_and_publishes_no_event() {
+    initialized_driver()
+        .verify_real_capacity_refusal()
+        .expect("real adapter capacity refusal remains atomic");
 }
 
 #[test]
@@ -77,6 +103,9 @@ fn disabled_actions_preserve_every_projected_field() {
     assert!(driver.detect_conflict().is_err());
     assert!(driver.commit().is_err());
     assert!(driver.abort().is_err());
+    assert!(driver.reserve().is_err());
+    assert!(driver.cancel().is_err());
+    assert!(driver.reset().is_err());
     assert_eq!(driver.project().expect("unchanged projection"), initial);
 }
 
@@ -88,6 +117,9 @@ fn modeled_action_inventory_is_exact() {
             "Begin",
             "StageWrite",
             "StageOutbox",
+            "Reserve",
+            "Cancel",
+            "Reset",
             "DetectConflict",
             "Commit",
             "Abort",
@@ -95,10 +127,13 @@ fn modeled_action_inventory_is_exact() {
     );
 }
 
-const PROJECTION_FAULTS: [ProjectionFault; 3] = [
+const PROJECTION_FAULTS: [ProjectionFault; 6] = [
     ProjectionFault::Documents,
     ProjectionFault::Outbox,
     ProjectionFault::TransactionState,
+    ProjectionFault::ReservedEvents,
+    ProjectionFault::PublishedEvents,
+    ProjectionFault::EventGeneration,
 ];
 
 #[test]
@@ -115,6 +150,18 @@ fn projection_fault_changes_exactly_one_field() {
                 "transactionState",
                 baseline.transaction_state != perturbed.transaction_state,
             ),
+            (
+                "reservedEvents",
+                baseline.reserved_events != perturbed.reserved_events,
+            ),
+            (
+                "publishedEvents",
+                baseline.published_events != perturbed.published_events,
+            ),
+            (
+                "eventGeneration",
+                baseline.event_generation != perturbed.event_generation,
+            ),
         ]
         .into_iter()
         .filter_map(|(field, differs)| differs.then_some(field))
@@ -123,7 +170,13 @@ fn projection_fault_changes_exactly_one_field() {
     }
 }
 
-const SCENARIOS: [&str; 3] = ["commit", "conflict", "abort"];
+const SCENARIOS: [&str; 5] = [
+    "commit",
+    "conflict",
+    "abort",
+    "cancelReservation",
+    "resetGeneration",
+];
 
 #[test]
 #[ignore = "requires the pinned local Quint CLI"]

@@ -1842,7 +1842,14 @@ impl LocalBackend {
         // Attribution is confined to this operation: whatever a previous one left on this
         // thread is dropped here, and whatever this one stages is dropped on the way out.
         let _actor = ActorScope::enter();
-        handle.with(f)
+        handle.with(|state| {
+            let outcome = f(state);
+            // Core operations may legally release an expired retention root even when the
+            // requested operation returns an error. Reconcile before releasing this database
+            // lock so a later same-database commit cannot be overwritten by stale accounting.
+            self.reconcile_history(parent, state.history_usage());
+            outcome
+        })
     }
 
     fn read_db<T>(

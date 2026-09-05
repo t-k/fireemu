@@ -36,18 +36,101 @@ const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
 fn history_budget_write(project: &str, database: &str, document: &str) -> pb::CommitRequest {
+    history_budget_update(project, database, document, 1)
+}
+
+fn history_budget_update(
+    project: &str,
+    database: &str,
+    document: &str,
+    value: i64,
+) -> pb::CommitRequest {
     pb::CommitRequest {
         database: format!("projects/{project}/databases/{database}"),
         writes: vec![pb::Write {
             operation: Some(pb::write::Operation::Update(pb::Document {
                 name: format!("projects/{project}/databases/{database}/documents/items/{document}"),
-                fields: [("v".to_owned(), i(1))].into_iter().collect(),
+                fields: [("v".to_owned(), i(value))].into_iter().collect(),
                 ..Default::default()
             })),
             ..Default::default()
         }],
         ..Default::default()
     }
+}
+
+#[test]
+fn observing_transaction_expiry_releases_aggregate_history_capacity() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let backend = LocalBackend::new(gateway, Arc::clone(&clock), 7).with_history_budget_limits(
+        HistoryBudgetLimits {
+            session_bytes: u64::MAX,
+            session_versions: u64::MAX,
+            global_bytes: u64::MAX,
+            global_versions: 2,
+        },
+    );
+    backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "a", 1),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(1))
+        .unwrap();
+    backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "a", 2),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    let transaction = backend
+        .begin_transaction(&pb::BeginTransactionRequest {
+            database: "projects/demo-a/databases/(default)".to_owned(),
+            ..Default::default()
+        })
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(3_601))
+        .unwrap();
+
+    let expired = backend
+        .get_document(
+            &pb::GetDocumentRequest {
+                name: "projects/demo-a/databases/(default)/documents/items/a".to_owned(),
+                consistency_selector: Some(
+                    pb::get_document_request::ConsistencySelector::Transaction(transaction),
+                ),
+                ..Default::default()
+            },
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        )
+        .unwrap_err();
+    assert_eq!(expired.code(), tonic::Code::Aborted);
+
+    backend
+        .commit_with(
+            &history_budget_write("demo-b", "(default)", "b"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .expect("the expired transaction's unreachable version was released");
+    assert_eq!(backend.history_usage().versions, 2);
 }
 
 fn history_budget_backend(session_versions: u64, global_versions: u64) -> LocalBackend {

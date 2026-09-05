@@ -1933,6 +1933,7 @@ impl FirestoreState {
         let expired = now >= previous_deadline;
         if expired {
             self.finish_transaction(id, TransactionState::Finished);
+            self.compact(now);
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
         }
         self.active_transaction_deadlines
@@ -2669,6 +2670,7 @@ impl FirestoreState {
         let transaction = self.transaction(id)?;
         if now >= transaction_deadline(transaction) {
             self.finish_transaction(id, TransactionState::Finished);
+            self.compact(now);
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
         }
         let transaction = self.transaction(id)?;

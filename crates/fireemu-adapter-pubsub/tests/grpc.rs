@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -15,11 +15,14 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::publisher_client::PublisherClient;
 use pb::subscriber_client::SubscriberClient;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio_stream::StreamExt as _;
 
 struct Harness {
     endpoint: String,
     clock: Arc<Mutex<VirtualClock>>,
+    handle: PubSubHandle,
+    server: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Harness {
@@ -38,6 +41,30 @@ impl Harness {
     async fn subscriber(&self) -> SubscriberClient<tonic::transport::Channel> {
         SubscriberClient::new(self.channel().await)
     }
+
+    async fn shutdown(mut self) {
+        self.handle.shutdown_push_dispatcher().await;
+        if let Some(server) = self.server.take() {
+            server.abort();
+            let _ = server.await;
+        }
+    }
+
+    async fn abort_server(&mut self) {
+        if let Some(server) = self.server.take() {
+            server.abort();
+            let _ = server.await;
+        }
+    }
+}
+
+impl Drop for Harness {
+    fn drop(&mut self) {
+        self.handle.cancel_push_dispatcher();
+        if let Some(server) = &self.server {
+            server.abort();
+        }
+    }
 }
 
 async fn start() -> Harness {
@@ -48,14 +75,17 @@ async fn start() -> Harness {
     let handle = PubSubHandle::new(state, clock.clone(), None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let _ = serve_pubsub(listener, handle).await;
+    let server_handle = handle.clone();
+    let server = tokio::spawn(async move {
+        let _ = serve_pubsub(listener, server_handle).await;
     });
     // Give the server a moment to accept.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     Harness {
         endpoint: format!("http://{addr}"),
         clock,
+        handle,
+        server: Some(server),
     }
 }
 
@@ -102,6 +132,7 @@ fn push_sink_sequence(statuses: Vec<u16>) -> PushSink {
                 thread::sleep(std::time::Duration::from_millis(2));
                 continue;
             };
+            stream.set_nonblocking(false).unwrap();
             let mut request = Vec::new();
             let mut buffer = [0_u8; 4096];
             let body_start = loop {
@@ -155,6 +186,10 @@ fn push_sink_sequence(statuses: Vec<u16>) -> PushSink {
 }
 
 fn barrier_push_sink() -> BarrierPushSink {
+    barrier_push_sink_with_status(204)
+}
+
+fn barrier_push_sink_with_status(status: u16) -> BarrierPushSink {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -173,6 +208,7 @@ fn barrier_push_sink() -> BarrierPushSink {
                 thread::sleep(std::time::Duration::from_millis(2));
                 continue;
             };
+            stream.set_nonblocking(false).unwrap();
             let mut request = Vec::new();
             let mut buffer = [0_u8; 4096];
             let body_start = loop {
@@ -225,9 +261,9 @@ fn barrier_push_sink() -> BarrierPushSink {
                     thread::sleep(std::time::Duration::from_millis(2));
                 }
             }
-            let _ = stream.write_all(
-                b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            );
+            let response =
+                format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(response.as_bytes());
             let _ = stream.flush();
         }
     });
@@ -239,6 +275,77 @@ fn barrier_push_sink() -> BarrierPushSink {
         stop,
         worker,
     )
+}
+
+type GatedPushSink = (
+    String,
+    Arc<AtomicUsize>,
+    tokio::sync::watch::Sender<bool>,
+    tokio::task::JoinHandle<()>,
+);
+
+async fn gated_push_sink(expected: usize) -> GatedPushSink {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let received = Arc::new(AtomicUsize::new(0));
+    let observed = received.clone();
+    let (release, released) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(async move {
+        let mut connections = tokio::task::JoinSet::new();
+        for _ in 0..expected {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let observed = observed.clone();
+            let mut released = released.clone();
+            connections.spawn(async move {
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                let body_end = loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert_ne!(read, 0, "push request ended before its body");
+                    request.extend_from_slice(&buffer[..read]);
+                    let Some(header_end) = request
+                        .windows(4)
+                        .position(|window| window == b"\r\n\r\n")
+                        .map(|index| index + 4)
+                    else {
+                        continue;
+                    };
+                    let content_length = request
+                        .windows(b"content-length:".len())
+                        .position(|window| window.eq_ignore_ascii_case(b"content-length:"))
+                        .and_then(|index| {
+                            let line = request[index..].split(|byte| *byte == b'\n').next()?;
+                            std::str::from_utf8(line)
+                                .ok()?
+                                .split(':')
+                                .nth(1)?
+                                .trim()
+                                .parse::<usize>()
+                                .ok()
+                        })
+                        .unwrap_or_default();
+                    if request.len() >= header_end.saturating_add(content_length) {
+                        break header_end + content_length;
+                    }
+                };
+                assert!(request.len() >= body_end);
+                observed.fetch_add(1, Ordering::AcqRel);
+                while !*released.borrow() {
+                    released.changed().await.unwrap();
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+            });
+        }
+        while let Some(result) = connections.join_next().await {
+            result.unwrap();
+        }
+    });
+    (format!("http://{address}/push"), received, release, worker)
 }
 
 #[tokio::test]
@@ -785,6 +892,249 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
     assert!(pulled.is_empty());
     stop.store(true, Ordering::Release);
     worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn saturated_workers_release_cross_topic_work_without_another_publish() {
+    const SATURATED_WORKERS: usize = 256;
+
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (blocked_endpoint, blocked_count, release, blocked_worker) =
+        gated_push_sink(SATURATED_WORKERS).await;
+    let (other_endpoint, other_bodies, stop_other, other_worker) = push_sink(204);
+    let first_topic = "projects/demo-app/topics/saturated-first";
+    let second_topic = "projects/demo-app/topics/saturated-second";
+
+    for topic in [first_topic, second_topic] {
+        pubc.create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    for index in 0..SATURATED_WORKERS {
+        subc.create_subscription(pb::Subscription {
+            name: format!("projects/demo-app/subscriptions/saturated-{index:04}"),
+            topic: first_topic.to_owned(),
+            push_config: Some(pb::PushConfig {
+                push_endpoint: blocked_endpoint.clone(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    subc.create_subscription(pb::Subscription {
+        name: "projects/demo-app/subscriptions/saturated-other".to_owned(),
+        topic: second_topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: other_endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    pubc.publish(pb::PublishRequest {
+        topic: first_topic.to_owned(),
+        messages: vec![msg(b"occupy")],
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while blocked_count.load(Ordering::Acquire) != SATURATED_WORKERS {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all worker slots must be occupied");
+
+    pubc.publish(pb::PublishRequest {
+        topic: second_topic.to_owned(),
+        messages: vec![msg(b"other-topic")],
+    })
+    .await
+    .unwrap();
+    assert!(other_bodies.lock().unwrap().is_empty());
+    release.send(true).unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while other_bodies.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cross-topic work must remain queued at saturation");
+
+    h.shutdown().await;
+    blocked_worker.await.unwrap();
+    stop_other.store(true, Ordering::Release);
+    other_worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_cancels_and_joins_in_flight_push_io() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, started, release, stop, worker) = barrier_push_sink();
+    let topic = "projects/demo-app/topics/push-shutdown";
+    let subscription = "projects/demo-app/subscriptions/push-shutdown";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"in-flight")],
+    })
+    .await
+    .unwrap();
+    started.await.unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), h.shutdown())
+        .await
+        .expect("dispatcher shutdown must cancel and join in-flight I/O");
+    assert_eq!(bodies.lock().unwrap().len(), 1);
+
+    release.store(true, Ordering::Release);
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn aborting_the_public_server_cancels_in_flight_push_retries() {
+    let mut h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, started, release, stop, worker) = barrier_push_sink_with_status(500);
+    let topic = "projects/demo-app/topics/push-server-abort";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: "projects/demo-app/subscriptions/push-server-abort".to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"must-not-retry")],
+    })
+    .await
+    .unwrap();
+    started.await.unwrap();
+
+    h.abort_server().await;
+    release.store(true, Ordering::Release);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(bodies.lock().unwrap().len(), 1);
+
+    h.handle.shutdown_push_dispatcher().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn ready_notification_is_not_consumed_by_an_unrelated_blocked_worker() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (blocked_endpoint, _blocked_bodies, started, release, stop_blocked, blocked_worker) =
+        barrier_push_sink();
+    let (ready_endpoint, ready_bodies, stop_ready, ready_worker) = push_sink(204);
+    let blocked_topic = "projects/demo-app/topics/blocked-notify";
+    let ready_topic = "projects/demo-app/topics/ready-notify";
+
+    for topic in [blocked_topic, ready_topic] {
+        pubc.create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    for (name, topic, endpoint) in [
+        (
+            "projects/demo-app/subscriptions/blocked-notify",
+            blocked_topic,
+            blocked_endpoint,
+        ),
+        (
+            "projects/demo-app/subscriptions/ready-notify",
+            ready_topic,
+            ready_endpoint,
+        ),
+    ] {
+        subc.create_subscription(pb::Subscription {
+            name: name.to_owned(),
+            topic: topic.to_owned(),
+            push_config: Some(pb::PushConfig {
+                push_endpoint: endpoint,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    pubc.publish(pb::PublishRequest {
+        topic: blocked_topic.to_owned(),
+        messages: vec![msg(b"blocked")],
+    })
+    .await
+    .unwrap();
+    started.await.unwrap();
+
+    pubc.publish(pb::PublishRequest {
+        topic: ready_topic.to_owned(),
+        messages: vec![msg(b"ready")],
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while ready_bodies.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dispatcher readiness must have a dedicated notification");
+
+    h.shutdown().await;
+    release.store(true, Ordering::Release);
+    stop_blocked.store(true, Ordering::Release);
+    stop_ready.store(true, Ordering::Release);
+    blocked_worker.join().unwrap();
+    ready_worker.join().unwrap();
 }
 
 #[tokio::test]

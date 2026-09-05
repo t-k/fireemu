@@ -666,7 +666,7 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
     if let Some(listener) = pubsub_listener {
         spawn_server!(
             "Pub/Sub",
-            fireemu_adapter_pubsub::serve_pubsub(listener, pubsub)
+            fireemu_adapter_pubsub::serve_pubsub(listener, pubsub.clone())
         );
     }
     let log_bus = fireemu_adapter_logging::LogBus::new();
@@ -843,6 +843,7 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
     if let Some(runtime) = functions_runtime {
         runtime.shutdown().await;
     }
+    pubsub.shutdown_push_dispatcher().await;
     servers.abort_all();
     while servers.join_next().await.is_some() {}
     outcome.map(|_| code)

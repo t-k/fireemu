@@ -257,8 +257,14 @@ impl HistoryBudgetLedger {
         &mut self,
         key: (String, String),
         owner: HistoryBudgetOwner,
-        usage: HistoryUsage,
+        mut usage: HistoryUsage,
     ) -> Result<u64, FirestoreError> {
+        // A speculative reduction is not capacity another database may consume. It becomes
+        // visible only when this reservation commits; cancellation must leave the old charge.
+        if let Some(committed) = self.committed.get(&key) {
+            usage.total_bytes = usage.total_bytes.max(committed.usage.total_bytes);
+            usage.versions = usage.versions.max(committed.usage.versions);
+        }
         let mut effective = self.effective();
         effective.insert(
             key.clone(),
@@ -352,11 +358,14 @@ struct HistoryReservation {
 }
 
 impl HistoryReservation {
-    fn commit(mut self) {
-        if let Ok(mut ledger) = self.ledger.lock() {
-            if let Some(pending) = ledger.pending.remove(&self.id) {
-                ledger.committed.insert(pending.key, pending.charge);
-            }
+    fn commit(mut self, actual: HistoryUsage) {
+        let mut ledger = self
+            .ledger
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(mut pending) = ledger.pending.remove(&self.id) {
+            pending.charge.usage = actual;
+            ledger.committed.insert(pending.key, pending.charge);
         }
         self.committed = true;
     }
@@ -365,9 +374,11 @@ impl HistoryReservation {
 impl Drop for HistoryReservation {
     fn drop(&mut self) {
         if !self.committed {
-            if let Ok(mut ledger) = self.ledger.lock() {
-                ledger.pending.remove(&self.id);
-            }
+            self.ledger
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending
+                .remove(&self.id);
         }
     }
 }
@@ -834,24 +845,28 @@ impl LocalBackend {
 
     /// Shares the session ownership registry used by control-plane registration.
     pub fn set_tenancy(&self, tenancy: fireemu_core_session::tenancy::SharedTenancy) {
-        if let Ok(mut slot) = self.tenancy.lock() {
-            *slot = Some(tenancy);
-        }
+        *self
+            .tenancy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tenancy);
     }
 
     fn history_owner(&self, project: &str) -> HistoryBudgetOwner {
-        let tenancy = self.tenancy.lock().ok().and_then(|slot| slot.clone());
-        tenancy
-            .and_then(|tenancy| {
-                tenancy.read().ok().map(|tenancy| {
-                    if tenancy.is_registered(project) {
-                        HistoryBudgetOwner::Project(project.to_owned())
-                    } else {
-                        HistoryBudgetOwner::Default
-                    }
-                })
-            })
-            .unwrap_or(HistoryBudgetOwner::Default)
+        let tenancy = self
+            .tenancy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        tenancy.map_or(HistoryBudgetOwner::Default, |tenancy| {
+            let tenancy = tenancy
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if tenancy.is_registered(project) {
+                HistoryBudgetOwner::Project(project.to_owned())
+            } else {
+                HistoryBudgetOwner::Default
+            }
+        })
     }
 
     fn reserve_history(
@@ -860,20 +875,36 @@ impl LocalBackend {
         projection: HistoryProjection,
     ) -> Result<HistoryReservation, FirestoreError> {
         let owner = self.history_owner(parent.project.as_str());
-        let mut ledger = self.history_budget.lock().map_err(|_| {
-            FirestoreError::HistoryCapacity(HistoryCapacityError {
-                dimension: "ledger unavailable",
-                current: 1,
-                maximum: 0,
-            })
-        })?;
-        let id = ledger.reserve(database_key(parent), owner, projection.after)?;
+        let mut ceiling = projection.after;
+        ceiling.total_bytes = ceiling.total_bytes.max(projection.before.total_bytes);
+        ceiling.versions = ceiling.versions.max(projection.before.versions);
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let id = ledger.reserve(database_key(parent), owner, ceiling)?;
         drop(ledger);
         Ok(HistoryReservation {
             ledger: self.history_budget.clone(),
             id,
             committed: false,
         })
+    }
+
+    fn reconcile_history(&self, parent: &Parent, usage: HistoryUsage) {
+        let key = database_key(parent);
+        let owner = self.history_owner(parent.project.as_str());
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if usage.versions == 0 && usage.total_bytes == 0 {
+            ledger.committed.remove(&key);
+        } else if let Some(charge) = ledger.committed.get_mut(&key) {
+            charge.usage = usage;
+        } else {
+            ledger.committed.insert(key, HistoryCharge { owner, usage });
+        }
     }
 
     /// The session's admission barrier (share it with every other mutable surface).
@@ -972,10 +1003,12 @@ impl LocalBackend {
                 key
             })
             .collect();
-        if let Ok(mut ledger) = self.history_budget.lock() {
-            for key in &keys {
-                ledger.committed.remove(key);
-            }
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for key in &keys {
+            ledger.committed.remove(key);
         }
         keys
     }
@@ -1030,7 +1063,11 @@ impl LocalBackend {
                 state.compact(now);
                 Ok(state.history_usage())
             });
-            if let (Ok(usage), Ok(mut ledger)) = (usage, self.history_budget.lock()) {
+            if let Ok(usage) = usage {
+                let mut ledger = self
+                    .history_budget
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if let Some(charge) = ledger.committed.get_mut(&key) {
                     charge.usage = usage;
                 }
@@ -1043,8 +1080,15 @@ impl LocalBackend {
     pub fn history_usage(&self) -> HistoryUsage {
         self.history_budget
             .lock()
-            .map(|ledger| sum_history_usage(ledger.committed.values().map(|charge| charge.usage)))
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .committed
+            .values()
+            .map(|charge| charge.usage)
+            .fold(HistoryUsage::default(), |mut total, usage| {
+                total.total_bytes = total.total_bytes.saturating_add(usage.total_bytes);
+                total.versions = total.versions.saturating_add(usage.versions);
+                total
+            })
     }
 
     /// Copies the databases `scope` owns, each under its own lock.
@@ -1125,7 +1169,7 @@ impl LocalBackend {
             let ledger = self
                 .history_budget
                 .lock()
-                .map_err(|_| Status::unavailable("Firestore history budget is unavailable"))?;
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !ledger.pending.is_empty() {
                 return Err(Status::unavailable(
                     "Firestore history reservations are still in flight",
@@ -1165,12 +1209,14 @@ impl LocalBackend {
                 *rng = ids.clone();
             }
         }
-        if let Ok(mut ledger) = self.history_budget.lock() {
-            ledger
-                .committed
-                .retain(|(project, _), _| !scope.owns_project(project));
-            ledger.committed.extend(restored_charges);
-        }
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ledger
+            .committed
+            .retain(|(project, _), _| !scope.owns_project(project));
+        ledger.committed.extend(restored_charges);
         self.bump_generations(&touched);
         self.announce_wipe(touched);
         Ok(())
@@ -1322,7 +1368,7 @@ impl LocalBackend {
                 Ok((event, publication, history))
             })
             .map_err(|error| status_from_error(&error))?;
-        history.commit();
+        history.commit(db.history_usage());
         publication.publish();
         self.publish_committed(&event, &result);
         Ok(result)
@@ -2403,8 +2449,12 @@ impl LocalBackend {
     pub fn rollback(&self, req: &pb::RollbackRequest) -> Result<(), Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let txn = Self::required_txn(&parent, &req.transaction)?;
+        let now = self.write_time();
         self.with_db(&parent, |db| {
-            db.rollback(&txn).map_err(|e| status_from_error(&e))
+            db.rollback(&txn).map_err(|e| status_from_error(&e))?;
+            db.compact(now);
+            self.reconcile_history(&parent, db.history_usage());
+            Ok(())
         })
     }
 
@@ -3220,6 +3270,7 @@ mod lock_tests {
     use std::time::Duration;
 
     use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_session::tenancy::Tenancy;
     use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
     use fireemu_core_types::time::LogicalInstant;
 
@@ -3241,6 +3292,92 @@ mod lock_tests {
             ))),
             7,
         ))
+    }
+
+    fn history_usage(versions: u64) -> HistoryUsage {
+        HistoryUsage {
+            versions,
+            total_bytes: versions,
+            ..HistoryUsage::default()
+        }
+    }
+
+    #[test]
+    fn pending_reduction_does_not_release_committed_capacity() {
+        let limits = HistoryBudgetLimits {
+            session_bytes: u64::MAX,
+            session_versions: u64::MAX,
+            global_bytes: u64::MAX,
+            global_versions: 14,
+        };
+        let mut ledger = HistoryBudgetLedger::new(limits);
+        let first_key = ("first".to_owned(), "(default)".to_owned());
+        ledger.committed.insert(
+            first_key.clone(),
+            HistoryCharge {
+                owner: HistoryBudgetOwner::Default,
+                usage: history_usage(10),
+            },
+        );
+
+        let reduction = ledger
+            .reserve(first_key, HistoryBudgetOwner::Default, history_usage(5))
+            .unwrap();
+        let error = ledger
+            .reserve(
+                ("second".to_owned(), "(default)".to_owned()),
+                HistoryBudgetOwner::Default,
+                history_usage(5),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            FirestoreError::HistoryCapacity(HistoryCapacityError {
+                dimension: "global versions",
+                current: 15,
+                maximum: 14,
+            })
+        ));
+        ledger.pending.remove(&reduction);
+        assert_eq!(
+            ledger.committed[&("first".to_owned(), "(default)".to_owned())]
+                .usage
+                .versions,
+            10
+        );
+    }
+
+    #[test]
+    fn poisoned_history_and_tenancy_locks_fail_closed_with_recovered_accounting() {
+        let backend = backend();
+        let tenancy = Arc::new(RwLock::new(Tenancy::new("primary-app")));
+        tenancy
+            .write()
+            .unwrap()
+            .register("demo-app", &[], &[])
+            .unwrap();
+        backend.set_tenancy(tenancy.clone());
+        let ledger = backend.history_budget.clone();
+
+        assert!(std::panic::catch_unwind(|| {
+            let _guard = ledger.lock().unwrap();
+            panic!("poison history ledger");
+        })
+        .is_err());
+        assert!(std::panic::catch_unwind(|| {
+            let _guard = tenancy.write().unwrap();
+            panic!("poison tenancy registry");
+        })
+        .is_err());
+
+        let parent = parse_parent("projects/demo-app/databases/(default)/documents").unwrap();
+        assert_eq!(
+            backend.history_owner("demo-app"),
+            HistoryBudgetOwner::Project("demo-app".to_owned())
+        );
+        backend.reconcile_history(&parent, history_usage(3));
+        assert_eq!(backend.history_usage().versions, 3);
     }
 
     #[test]

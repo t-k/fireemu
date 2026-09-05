@@ -289,10 +289,9 @@ pub fn status_from_error(e: &FirestoreError) -> tonic::Status {
             v.maximum.value(),
             v.precision
         )),
-        FirestoreError::HistoryCapacity(error) => tonic::Status::resource_exhausted(format!(
-            "Firestore retained history {} {} exceeds {}",
-            error.dimension, error.current, error.maximum
-        )),
+        FirestoreError::HistoryCapacity(_) => {
+            tonic::Status::resource_exhausted("Firestore retained history capacity is exhausted")
+        }
         FirestoreError::EventAdmission(error) => {
             use fireemu_core_types::admission::EventAdmissionError;
             match error {

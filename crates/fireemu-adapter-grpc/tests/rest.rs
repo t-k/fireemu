@@ -183,13 +183,14 @@ fn commit_query_aggregation_and_transactions_over_rest() {
         json!({"writes": [
             {"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/1"), "fields": {"v": {"integerValue": "1"}, "t": {"stringValue": "x"}}}},
             {"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/2"), "fields": {"v": {"integerValue": "2"}, "t": {"stringValue": "y"}}}},
+            {"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/3"), "fields": {"t": {"stringValue": "missing-v"}}}},
             {"transform": {"document": format!("projects/demo-app/databases/(default)/documents/n/1"), "fieldTransforms": [{"fieldPath": "v", "increment": {"integerValue": "10"}}, {"fieldPath": "at", "setToServerValue": "REQUEST_TIME"}]}}
         ]}),
     );
     assert_eq!(status, 200, "{committed}");
-    assert_eq!(committed["writeResults"].as_array().map(Vec::len), Some(3));
+    assert_eq!(committed["writeResults"].as_array().map(Vec::len), Some(4));
     assert_eq!(
-        committed["writeResults"][2]["transformResults"][0]["integerValue"],
+        committed["writeResults"][3]["transformResults"][0]["integerValue"],
         "11"
     );
     assert!(committed["commitTime"].as_str().is_some());
@@ -236,6 +237,20 @@ fn commit_query_aggregation_and_transactions_over_rest() {
     assert_eq!(
         agg[0]["result"]["aggregateFields"]["total"]["integerValue"],
         "13"
+    );
+    let (status, count_only) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runAggregationQuery"),
+        json!({"structuredAggregationQuery": {
+            "structuredQuery": {"from": [{"collectionId": "n"}]},
+            "aggregations": [{"alias": "count", "count": {}}]
+        }}),
+    );
+    assert_eq!(status, 200, "{count_only}");
+    assert_eq!(
+        count_only[0]["result"]["aggregateFields"]["count"]["integerValue"],
+        "3"
     );
 
     let (status, begun) = call(

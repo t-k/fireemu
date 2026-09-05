@@ -1145,6 +1145,215 @@ fn bounded_name_reads_at_two_hundred_thousand_documents_stay_within_twice_the_ba
 // Aggregations (FS-AGG-PERF-*)
 // ---------------------------------------------------------------------------------------
 
+#[test]
+fn combined_aggregations_use_the_common_set_of_documents_with_every_target_field() {
+    let mut db = FirestoreState::new();
+    db.commit(
+        &[
+            set(
+                "items/complete",
+                BTreeMap::from([
+                    ("x".to_owned(), Value::Integer(10)),
+                    ("y".to_owned(), Value::Integer(100)),
+                ]),
+            ),
+            set(
+                "items/missing-y",
+                BTreeMap::from([("x".to_owned(), Value::Integer(20))]),
+            ),
+        ],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let query = Query::new(QueryScope::collection(None, collection("items")));
+
+    let combined = db
+        .run_aggregation(
+            &query,
+            &[
+                Aggregation::Count { up_to: None },
+                Aggregation::Sum(fp("x")),
+                Aggregation::Avg(fp("y")),
+            ],
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        combined,
+        vec![Value::Integer(1), Value::Integer(10), Value::Double(100.0)]
+    );
+    assert_eq!(
+        db.run_aggregation(&query, &[Aggregation::Count { up_to: None }], None)
+            .unwrap(),
+        vec![Value::Integer(2)]
+    );
+}
+
+#[test]
+fn aggregation_presence_distinguishes_missing_from_null_and_non_numeric_values() {
+    let mut db = FirestoreState::new();
+    db.commit(
+        &[
+            set("items/missing", BTreeMap::new()),
+            set(
+                "items/null",
+                BTreeMap::from([("x".to_owned(), Value::Null)]),
+            ),
+            set(
+                "items/text",
+                BTreeMap::from([("x".to_owned(), Value::String("text".to_owned()))]),
+            ),
+            set(
+                "items/integer",
+                BTreeMap::from([("x".to_owned(), Value::Integer(10))]),
+            ),
+            set(
+                "items/double",
+                BTreeMap::from([("x".to_owned(), Value::Double(2.5))]),
+            ),
+        ],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let query = Query::new(QueryScope::collection(None, collection("items")));
+    assert_eq!(
+        db.run_aggregation(
+            &query,
+            &[
+                Aggregation::Count { up_to: None },
+                Aggregation::Sum(fp("x")),
+                Aggregation::Avg(fp("x")),
+            ],
+            None,
+        )
+        .unwrap(),
+        vec![Value::Integer(4), Value::Double(12.5), Value::Double(6.25)]
+    );
+    assert_eq!(
+        db.run_aggregation(
+            &query,
+            &[
+                Aggregation::Count { up_to: None },
+                Aggregation::Sum(fp("absent")),
+                Aggregation::Avg(fp("absent")),
+            ],
+            None,
+        )
+        .unwrap(),
+        vec![Value::Integer(0), Value::Integer(0), Value::Null]
+    );
+}
+
+#[test]
+fn nan_is_a_present_numeric_value_in_the_common_aggregation_set() {
+    let mut db = FirestoreState::new();
+    db.commit(
+        &[
+            set(
+                "items/nan",
+                BTreeMap::from([("x".to_owned(), Value::Double(f64::NAN))]),
+            ),
+            set("items/missing", BTreeMap::new()),
+        ],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let query = Query::new(QueryScope::collection(None, collection("items")));
+    let values = db
+        .run_aggregation(
+            &query,
+            &[
+                Aggregation::Count { up_to: None },
+                Aggregation::Sum(fp("x")),
+                Aggregation::Avg(fp("x")),
+            ],
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(values[0], Value::Integer(1));
+    assert!(matches!(values[1], Value::Double(value) if value.is_nan()));
+    assert!(matches!(values[2], Value::Double(value) if value.is_nan()));
+}
+
+#[test]
+fn aggregation_field_presence_is_applied_before_offset_and_limit() {
+    let mut db = FirestoreState::new();
+    db.commit(
+        &[
+            set("items/a-missing", BTreeMap::new()),
+            set(
+                "items/b-first",
+                BTreeMap::from([("x".to_owned(), Value::Integer(10))]),
+            ),
+            set(
+                "items/c-second",
+                BTreeMap::from([("x".to_owned(), Value::Integer(20))]),
+            ),
+        ],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.offset = 1;
+    query.limit = Some(1);
+    assert_eq!(
+        db.run_aggregation(
+            &query,
+            &[
+                Aggregation::Count { up_to: None },
+                Aggregation::Sum(fp("x")),
+            ],
+            None,
+        )
+        .unwrap(),
+        vec![Value::Integer(1), Value::Integer(20)]
+    );
+}
+
+#[test]
+fn aggregation_field_presence_respects_a_cursor_on_an_excluded_document() {
+    let mut db = FirestoreState::new();
+    db.commit(
+        &[
+            set(
+                "items/a-first",
+                BTreeMap::from([("x".to_owned(), Value::Integer(10))]),
+            ),
+            set("items/b-missing", BTreeMap::new()),
+            set(
+                "items/c-last",
+                BTreeMap::from([("x".to_owned(), Value::Integer(20))]),
+            ),
+        ],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.start_at = Some(Cursor {
+        values: vec![Value::Reference(path("items/b-missing").resource_name())],
+        before: false,
+    });
+
+    assert_eq!(
+        db.run_aggregation(
+            &query,
+            &[
+                Aggregation::Count { up_to: None },
+                Aggregation::Sum(fp("x")),
+            ],
+            None,
+        )
+        .unwrap(),
+        vec![Value::Integer(1), Value::Integer(20)]
+    );
+}
+
 /// The materializing reference: aggregate over the documents the reference executor
 /// returns, with the documented numeric semantics.
 #[allow(clippy::cast_precision_loss)]
@@ -1197,6 +1406,31 @@ fn reference_aggregate(selected: &[Document], aggregation: &Aggregation) -> Valu
     }
 }
 
+fn reference_aggregation_input(
+    corpus: &[Document],
+    query: &Query,
+    aggregations: &[Aggregation],
+) -> Vec<Document> {
+    let mut required = Vec::new();
+    for aggregation in aggregations {
+        if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
+            if !required.contains(&field) {
+                required.push(field);
+            }
+        }
+    }
+    let eligible = corpus
+        .iter()
+        .filter(|document| {
+            required
+                .iter()
+                .all(|field| get_field(&document.fields, field).is_some())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    reference_run(&eligible, query)
+}
+
 /// FS-AGG-PERF-03 / FS-AGG-PERF-04: the streaming aggregations agree with the materializing
 /// reference over the same generated queries -- filters, ordering, cursors, offset, limit,
 /// projection, missing fields, mixed integer / double contributors, NaN, empty results and
@@ -1226,7 +1460,7 @@ fn streaming_aggregations_agree_with_the_materializing_reference() {
             // returns and takes nothing away from what `sum` / `avg` see.
             let mut unprojected = query.clone();
             unprojected.projection = None;
-            let selected = reference_run(&docs, &unprojected);
+            let selected = reference_aggregation_input(&docs, &unprojected, &aggregations);
             let want: Vec<Value> = aggregations
                 .iter()
                 .map(|a| reference_aggregate(&selected, a))

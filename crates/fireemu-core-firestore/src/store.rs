@@ -2152,7 +2152,7 @@ impl FirestoreState {
         }
         for (query, observed) in &transaction.queries {
             let mut current = QueryObserver::default();
-            self.select(query, None, Consumption::Ordered, |document| {
+            self.select(query, None, &[], Consumption::Ordered, |document| {
                 current.push(document);
             })?;
             if current.finish() != *observed {
@@ -2630,7 +2630,7 @@ impl FirestoreState {
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let mut out: Vec<Document> = Vec::new();
-        let mut stats = self.select(query, version, Consumption::Ordered, |doc| {
+        let mut stats = self.select(query, version, &[], Consumption::Ordered, |doc| {
             out.push(doc.clone());
         })?;
         stats.cloned_documents = out.len() as u64;
@@ -2665,6 +2665,7 @@ impl FirestoreState {
             query,
             changed_documents,
             false,
+            &[],
             Consumption::Ordered,
             |document| documents.push(document.clone()),
         )?;
@@ -2689,6 +2690,7 @@ impl FirestoreState {
         &'a self,
         query: &Query,
         version: Option<CommitVersion>,
+        required_fields: &[&FieldPath],
         consumption: Consumption,
         sink: F,
     ) -> Result<QueryStats, FirestoreError> {
@@ -2699,7 +2701,7 @@ impl FirestoreState {
                 Some(version) => self.get_at(path, version),
                 None => self.get(path),
             });
-        select_from(query, documents, true, consumption, sink)
+        select_from(query, documents, true, required_fields, consumption, sink)
     }
 
     /// Runs aggregations over the query results.
@@ -2727,6 +2729,7 @@ impl FirestoreState {
         aggregations: &[Aggregation],
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Value>, QueryStats), FirestoreError> {
+        let mut required_fields = Vec::new();
         for aggregation in aggregations {
             if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
                 if field.is_document_name() {
@@ -2734,17 +2737,26 @@ impl FirestoreState {
                         "Aggregations are not supported for the property: __key__".into(),
                     ));
                 }
+                if !required_fields.contains(&field) {
+                    required_fields.push(field);
+                }
             }
         }
         let mut accumulators: Vec<Accumulator> = aggregations
             .iter()
             .map(|_| Accumulator::default())
             .collect();
-        let stats = self.select(query, version, Consumption::Unordered, |doc| {
-            for (aggregation, accumulator) in aggregations.iter().zip(&mut accumulators) {
-                accumulator.fold(aggregation, doc);
-            }
-        })?;
+        let stats = self.select(
+            query,
+            version,
+            &required_fields,
+            Consumption::Unordered,
+            |doc| {
+                for (aggregation, accumulator) in aggregations.iter().zip(&mut accumulators) {
+                    accumulator.fold(aggregation, doc);
+                }
+            },
+        )?;
         let values = aggregations
             .iter()
             .zip(accumulators)
@@ -2934,6 +2946,7 @@ fn select_from<'a, I, F>(
     query: &Query,
     documents: I,
     source_is_path_ordered: bool,
+    required_fields: &[&FieldPath],
     consumption: Consumption,
     mut sink: F,
 ) -> Result<QueryStats, FirestoreError>
@@ -2961,6 +2974,12 @@ where
     for document in documents {
         stats.scanned += 1;
         if !document_in_scope(document, scope) {
+            continue;
+        }
+        if required_fields
+            .iter()
+            .any(|field| get_field(&document.fields, field).is_none())
+        {
             continue;
         }
         if let Some(filter) = &query.filter {

@@ -937,6 +937,7 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
             writes: vec![
                 update_write("n/1", &[("v", i(1))]),
                 update_write("n/2", &[("v", i(2))]),
+                update_write("n/3", &[("other", i(3))]),
                 pb::Write {
                     operation: Some(pb::write::Operation::Update(pb::Document {
                         name: "bad name".to_owned(),
@@ -952,7 +953,8 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
         .into_inner();
     assert_eq!(resp.status[0].code, 0);
     assert_eq!(resp.status[1].code, 0);
-    assert_eq!(resp.status[2].code, i32::from(tonic::Code::InvalidArgument));
+    assert_eq!(resp.status[2].code, 0);
+    assert_eq!(resp.status[3].code, i32::from(tonic::Code::InvalidArgument));
 
     let agg = pb::RunAggregationQueryRequest {
         parent: DOCS.to_owned(),
@@ -1045,6 +1047,25 @@ fn agg_count(collection: &str, alias: &str) -> pb::StructuredAggregationQuery {
             ),
         }],
     }
+}
+
+fn agg_count_and_sum(collection: &str, field: &str) -> pb::StructuredAggregationQuery {
+    let mut query = agg_count(collection, "count");
+    query
+        .aggregations
+        .push(pb::structured_aggregation_query::Aggregation {
+            alias: "sum".to_owned(),
+            operator: Some(
+                pb::structured_aggregation_query::aggregation::Operator::Sum(
+                    pb::structured_aggregation_query::aggregation::Sum {
+                        field: Some(sq::FieldReference {
+                            field_path: field.to_owned(),
+                        }),
+                    },
+                ),
+            ),
+        });
+    query
 }
 
 #[tokio::test]
@@ -1281,6 +1302,72 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     let only = stream.next().await.unwrap().unwrap();
     assert!(!only.transaction.is_empty());
     assert!(only.result.is_none());
+    handle.abort();
+}
+
+#[tokio::test]
+async fn aggregation_transaction_conflicts_when_a_missing_field_becomes_present() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("aggregation-conflict/present", &[("v", i(1))]),
+                update_write("aggregation-conflict/missing", &[("other", i(2))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut stream = client
+        .run_aggregation_query(pb::RunAggregationQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    agg_count_and_sum("aggregation-conflict", "v"),
+                ),
+            ),
+            consistency_selector: Some(
+                pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                    pb::TransactionOptions {
+                        mode: Some(pb::transaction_options::Mode::ReadWrite(
+                            pb::transaction_options::ReadWrite::default(),
+                        )),
+                    },
+                ),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let response = stream.next().await.unwrap().unwrap();
+    let result = response.result.unwrap();
+    assert_eq!(result.aggregate_fields.get("count"), Some(&i(1)));
+    assert_eq!(result.aggregate_fields.get("sum"), Some(&i(1)));
+    assert!(!response.transaction.is_empty());
+    assert!(stream.next().await.is_none());
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("aggregation-conflict/missing", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let error = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("aggregation-conflict/inside", &[("v", i(3))])],
+            transaction: response.transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Aborted);
+
     handle.abort();
 }
 

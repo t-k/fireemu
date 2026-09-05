@@ -55,64 +55,6 @@ export const DIVERGENCES = {
       "The official emulator does not implement PartitionQuery (UNIMPLEMENTED); fireemu " +
       "splits a collection group ordered by `__name__` into cursors, for parallel readers.",
   },
-  "queries/aggregations#several-aggregations": {
-    fireemu: {
-      status: 200,
-      code: "OK",
-      body: [
-        {
-          done: true,
-          readTime: "<now>",
-          result: {
-            aggregateFields: {
-              avg_d: { doubleValue: "NaN" },
-              capped: { integerValue: "1" },
-              sum_n: { doubleValue: 9223372036854776000 },
-              total: { integerValue: "6" },
-            },
-          },
-        },
-      ],
-    },
-    reason:
-      "When one request carries several aggregations, the official emulator restricts every " +
-      "aggregation to the documents that hold each aggregated field (a count next to " +
-      "`avg(d)` counts only the documents with `d`). fireemu counts every matching document " +
-      "and sums over the documents that hold the summed field, as each aggregation is " +
-      "documented on its own.",
-  },
-  "queries/aggregations#count-beside-a-sum-over-a-missing-field": {
-    fireemu: {
-      status: 200,
-      code: "OK",
-      body: [
-        {
-          done: true,
-          readTime: "<now>",
-          result: {
-            aggregateFields: { sum_d: { doubleValue: "NaN" }, total: { integerValue: "6" } },
-          },
-        },
-      ],
-    },
-    reason: "The isolated form of the several-aggregations row: the count is 6, not 4.",
-  },
-  "queries/aggregations#count-beside-an-avg-over-a-missing-field": {
-    fireemu: {
-      status: 200,
-      code: "OK",
-      body: [
-        {
-          done: true,
-          readTime: "<now>",
-          result: {
-            aggregateFields: { avg_d: { doubleValue: "NaN" }, total: { integerValue: "6" } },
-          },
-        },
-      ],
-    },
-    reason: "The isolated form of the several-aggregations row, with an average.",
-  },
   "transactions/lifecycle#get-with-transaction-query-parameter": {
     fireemu: {
       status: 200,

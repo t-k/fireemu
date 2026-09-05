@@ -1486,6 +1486,19 @@ fn blocking_sign_in_method<'a>(
     }
 }
 
+fn discard_pending_inbound_credentials(
+    store: &Arc<Mutex<AuthStore>>,
+    pending: Option<&PendingSignInId>,
+) {
+    let Some(pending) = pending else {
+        return;
+    };
+    let mut store = store
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    store.clear_pending_sign_in_credentials(pending);
+}
+
 // The request parts stay separate here so the ordinary dispatcher remains the one source of
 // route behavior; grouping them in a second request type would duplicate that boundary.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1506,6 +1519,7 @@ fn dispatch_with_blocking_hook(
         .and_then(PendingSignInId::parse)
         .and_then(|pending| {
             Some((
+                pending.clone(),
                 store.pending_sign_in_user(&pending)?,
                 store.pending_sign_in_context(&pending)?.clone(),
             ))
@@ -1539,7 +1553,7 @@ fn dispatch_with_blocking_hook(
         .as_deref()
         .and_then(|uid| candidate.user_by_id(uid))
         .map(|user| user.local_id.clone())
-        .or_else(|| pending_continuation.as_ref().map(|(uid, _)| uid.clone()));
+        .or_else(|| pending_continuation.as_ref().map(|(_, uid, _)| uid.clone()));
     let speculative_uid = uid.clone();
     let is_new = is_authentication
         && uid_text.as_deref().is_some_and(|uid| {
@@ -1552,7 +1566,7 @@ fn dispatch_with_blocking_hook(
         handler,
         body,
         &response,
-        pending_continuation.as_ref().map(|(_, context)| context),
+        pending_continuation.as_ref().map(|(_, _, context)| context),
     )
     .map(str::to_owned);
     let inbound_credentials = blocking
@@ -1619,7 +1633,7 @@ fn dispatch_with_blocking_hook(
                     let context = blocking_context(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                        pending_continuation.as_ref().map(|(_, context)| context),
+                        pending_continuation.as_ref().map(|(_, _, context)| context),
                         sign_in_method.as_deref(),
                         inbound_credentials.as_ref(),
                     );
@@ -1632,7 +1646,11 @@ fn dispatch_with_blocking_hook(
                     ) {
                         Ok(value) => value,
                         Err(failure) => {
-                            return error(failure.identity_status(), &failure.client_message())
+                            discard_pending_inbound_credentials(
+                                store_arc,
+                                pending_continuation.as_ref().map(|(pending, _, _)| pending),
+                            );
+                            return error(failure.identity_status(), &failure.client_message());
                         }
                     }
                 };
@@ -1643,6 +1661,10 @@ fn dispatch_with_blocking_hook(
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                         &value,
                     ) {
+                        discard_pending_inbound_credentials(
+                            store_arc,
+                            pending_continuation.as_ref().map(|(pending, _, _)| pending),
+                        );
                         return error(400, &reason);
                     }
                     blocking_responses.push((

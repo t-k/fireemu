@@ -716,6 +716,16 @@ impl MfaState {
         }
     }
 
+    /// Drops raw credentials retained by one pending sign-in without consuming its non-secret
+    /// provenance or the pending credential itself.
+    pub fn clear_pending_sign_in_credentials(&mut self, id: &str) -> bool {
+        let Some(pending) = self.pending_sign_ins.get_mut(id) else {
+            return false;
+        };
+        pending.context.inbound_credentials = None;
+        true
+    }
+
     /// Rebinds every detached TOTP factor to the secret `live` holds for the same enrollment
     /// id, dropping the factors `live` has no secret for; returns how many were dropped.
     /// The replay boundary keeps the higher of the two accepted steps, so a code accepted

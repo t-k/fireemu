@@ -9,7 +9,7 @@ use fireemu_adapter_http::identity_toolkit::{
 };
 use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::AuthStore;
+use fireemu_core_auth::store::{AuthStore, PendingSignInId};
 use fireemu_core_auth::{base32, totp::totp_at};
 use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
@@ -2521,6 +2521,115 @@ fn blocking_auth_forwards_idp_credentials_only_after_mfa_continuation() {
     let debug = format!("{context:?}");
     assert!(!debug.contains("access-mfa-sentinel"));
     assert!(!debug.contains("refresh-mfa-sentinel"));
+}
+
+fn assert_rejected_mfa_hook_drops_raw_credentials(
+    hook: Arc<dyn AuthBlockingHook>,
+    expected_status: u16,
+) {
+    let mut s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "rejected-raw-mfa@example.com",
+            "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15550007777"}]
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [created["localId"]]}),
+    );
+    let enrollment_id = lookup["users"][0]["mfaInfo"][0]["mfaEnrollmentId"]
+        .as_str()
+        .unwrap();
+    s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+        contexts: Arc::new(Mutex::new(Vec::new())),
+        forward_inbound_credentials: true,
+    }));
+    let id_token = json!({
+        "sub": "oidc-rejected-raw-mfa",
+        "email": "rejected-raw-mfa@example.com",
+        "email_verified": true
+    })
+    .to_string();
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({
+            "postBody": format!(
+                "providerId=oidc.corp&id_token={}&access_token=reject-access-sentinel&refresh_token=reject-refresh-sentinel",
+                percent(&id_token)
+            ),
+            "requestUri": DUMMY_URI
+        }),
+    );
+    assert_eq!(status, 200, "{pending}");
+    let credential = pending["mfaPendingCredential"].as_str().unwrap();
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({
+            "mfaPendingCredential": credential,
+            "mfaEnrollmentId": enrollment_id,
+            "phoneSignInInfo": {"recaptchaToken": "x"}
+        }),
+    );
+    assert_eq!(status, 200, "{started}");
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["code"]
+        .as_str()
+        .unwrap();
+    s.blocking = Some(hook);
+    let (status, refused) = finalize_mfa(
+        &s,
+        &json!({
+            "mfaPendingCredential": credential,
+            "phoneVerificationInfo": {
+                "sessionInfo": started["phoneResponseInfo"]["sessionInfo"],
+                "code": code
+            }
+        }),
+    );
+    assert_eq!(status, expected_status, "{refused}");
+
+    let pending_id = PendingSignInId::parse(credential).unwrap();
+    let store = s.store.lock().unwrap();
+    let context = store.pending_sign_in_context(&pending_id).unwrap();
+    assert_eq!(context.inbound_credentials(), None);
+    assert_eq!(context.sign_in_provider(), Some("oidc.corp"));
+    assert_eq!(store.pending_sign_in_count(), 1);
+}
+
+#[test]
+fn rejected_mfa_hooks_drop_raw_credentials_but_keep_retry_provenance() {
+    for (hook, expected_status) in [
+        (
+            Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
+            503,
+        ),
+        (Arc::new(RejectBeforeSignInHook { timeout: true }), 503),
+        (
+            Arc::new(FixedBeforeSignInHook {
+                response: json!({
+                    "userRecord": {
+                        "updateMask": "sessionClaims",
+                        "sessionClaims": {"firebase": "reserved"}
+                    }
+                }),
+            }),
+            400,
+        ),
+    ] {
+        assert_rejected_mfa_hook_drops_raw_credentials(hook, expected_status);
+    }
 }
 
 #[test]

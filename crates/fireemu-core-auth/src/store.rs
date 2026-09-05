@@ -2527,6 +2527,18 @@ impl AuthStore {
             .map(|pending| &pending.context)
     }
 
+    /// Drops raw credentials retained by a pending second-factor sign-in without consuming its
+    /// pending credential or non-secret first-factor provenance.
+    pub fn clear_pending_sign_in_credentials(&mut self, pending: &PendingSignInId) -> bool {
+        let Some(owner) = self.pending_sign_in_owners.get(&pending.0).cloned() else {
+            return false;
+        };
+        self.users
+            .get_mut(&owner)
+            .map(Arc::make_mut)
+            .is_some_and(|user| user.mfa.clear_pending_sign_in_credentials(&pending.0))
+    }
+
     /// Completes the second-factor step.
     pub fn finalize_mfa_sign_in(
         &mut self,

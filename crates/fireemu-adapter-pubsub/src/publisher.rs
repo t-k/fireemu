@@ -87,7 +87,7 @@ impl Publisher for PublisherService {
             .into_iter()
             .map(|message| BridgeMessage { message })
             .collect();
-        self.handle.bridge_deliver(topic.topic(), &bridge);
+        self.handle.bridge_deliver(&topic.to_full(), &bridge);
         self.handle.schedule_push(&topic);
         Ok(Response::new(pb::PublishResponse { message_ids: ids }))
     }

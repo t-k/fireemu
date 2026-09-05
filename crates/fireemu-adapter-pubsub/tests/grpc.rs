@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use fireemu_adapter_pubsub::{serve_pubsub, PubSubHandle};
+use fireemu_adapter_pubsub::{serve_pubsub, BridgeMessage, PubSubHandle, TopicDelivery};
 use fireemu_core_pubsub::PubSubState;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -68,11 +68,15 @@ impl Drop for Harness {
 }
 
 async fn start() -> Harness {
+    start_with_bridge(None).await
+}
+
+async fn start_with_bridge(bridge: Option<Arc<dyn TopicDelivery>>) -> Harness {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_700_000_000),
     )));
     let state = Arc::new(Mutex::new(PubSubState::new(42)));
-    let handle = PubSubHandle::new(state, clock.clone(), None);
+    let handle = PubSubHandle::new(state, clock.clone(), bridge);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server_handle = handle.clone();
@@ -87,6 +91,42 @@ async fn start() -> Harness {
         handle,
         server: Some(server),
     }
+}
+
+#[derive(Default)]
+struct RecordingTopicDelivery(Mutex<Vec<String>>);
+
+impl TopicDelivery for RecordingTopicDelivery {
+    fn deliver(&self, topic: &str, _messages: &[BridgeMessage]) {
+        self.0.lock().unwrap().push(topic.to_owned());
+    }
+}
+
+#[tokio::test]
+async fn functions_bridge_receives_the_full_source_topic_resource() {
+    let delivery = Arc::new(RecordingTopicDelivery::default());
+    let harness = start_with_bridge(Some(delivery.clone())).await;
+    let mut publisher = harness.publisher().await;
+    publisher
+        .create_topic(pb::Topic {
+            name: "projects/other-project/topics/jobs".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    publisher
+        .publish(pb::PublishRequest {
+            topic: "projects/other-project/topics/jobs".to_owned(),
+            messages: vec![msg(b"scope sentinel")],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        *delivery.0.lock().unwrap(),
+        vec!["projects/other-project/topics/jobs"]
+    );
+    harness.shutdown().await;
 }
 
 fn msg(data: &[u8]) -> pb::PubsubMessage {

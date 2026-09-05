@@ -178,7 +178,8 @@ pub struct BridgeMessage {
 /// the existing `FunctionsRuntime::publish`, so the topic-trigger path is unchanged and the new
 /// broker state is additive.
 pub trait TopicDelivery: Send + Sync {
-    /// Deliver `messages` published on the short `topic` name to subscribed functions.
+    /// Deliver `messages` published on the canonical `projects/{project}/topics/{topic}`
+    /// resource to subscribed functions.
     fn deliver(&self, topic: &str, messages: &[BridgeMessage]);
 }
 

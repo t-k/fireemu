@@ -1936,7 +1936,7 @@
       "claims": [
         {
           "id": "PUBSUB-CLAIM-WIRE",
-          "statement": "The google.pubsub.v1 wire emulator on port 8085 is served over gRPC and its documented REST/JSON subset: a real @google-cloud/pubsub or firebase-admin client creates, gets, lists and deletes topics and subscriptions, publishes, pulls (unary and streaming), acknowledges, extends and nacks ack deadlines, and seeks to a timestamp, with ordering keys, subscription filters and dead-letter forwarding; REST uses the annotated PUT resource routes and atomic FieldMask subscription updates; and a message published through the client protocol reaches subscribed onMessagePublished (v2) and topic().onPublish (v1) Cloud Functions.",
+          "statement": "The google.pubsub.v1 wire emulator on port 8085 is served over gRPC and its documented REST/JSON subset: a real @google-cloud/pubsub or firebase-admin client creates, gets, lists and deletes topics and subscriptions, publishes, pulls (unary and streaming), acknowledges, extends and nacks ack deadlines, and seeks to a timestamp, with ordering keys, subscription filters and dead-letter forwarding; REST uses the annotated PUT resource routes and atomic FieldMask subscription updates; and a message published through the client protocol reaches subscribed onMessagePublished (v2) and topic().onPublish (v1) Cloud Functions only when the canonical source topic belongs to the Functions runtime project.",
           "capabilities": [
             {
               "id": "PUBSUB-WIRE-1",
@@ -1950,7 +1950,9 @@
               "streaming_pull_delivers_and_acks",
               "rest_put_routes_preserve_every_supported_subscription_field",
               "rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields",
-              "snapshot_lifecycle_replays_backlog_and_post_creation_messages"
+              "snapshot_lifecycle_replays_backlog_and_post_creation_messages",
+              "functions_bridge_receives_the_full_source_topic_resource",
+              "pubsub_bridge_accepts_only_the_runtime_projects_full_topic_resource"
             ],
             "integration": [
               "crates/fireemu-adapter-pubsub/tests/grpc.rs",

@@ -3029,6 +3029,9 @@ impl PubSubBridge {
 
 impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
     fn deliver(&self, topic: &str, messages: &[fireemu_adapter_pubsub::BridgeMessage]) {
+        let Some(topic) = owned_pubsub_topic(self.0.project(), topic) else {
+            return;
+        };
         // The runtime consumes the same `{data: <base64>, attributes, orderingKey}` message
         // shape the control publish route produces (`pubsub_event` reads `data` verbatim as the
         // CloudEvent body).
@@ -3046,8 +3049,13 @@ impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
                 value
             })
             .collect();
-        let _ = self.0.publish(topic, &values);
+        let _ = self.0.publish(topic.topic(), &values);
     }
+}
+
+fn owned_pubsub_topic(project: &str, resource: &str) -> Option<fireemu_core_pubsub::TopicName> {
+    let topic = fireemu_core_pubsub::TopicName::parse(resource).ok()?;
+    (topic.project() == project).then_some(topic)
 }
 
 /// Standard base64 with padding (the encoding the `PubSub` `CloudEvent` `data` field carries).
@@ -3090,14 +3098,14 @@ mod tests {
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
         functions_source_stamp, functions_source_stamp_with_file_version, hash_source_file,
-        hash_source_stamp_entry, node_engine_matches, package_node_engine, parse_node_version,
-        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
-        source_scan_pacing_delay, stream_source_chunks, update_watch_hash,
-        validate_functions_codebase_budget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
-        FunctionsSourceScanBudget, FunctionsSourceStamp, NodeInstallation, BLOCKING_AUTH_DEADLINE,
-        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
-        MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
-        SOURCE_IO_BUFFER_BYTES,
+        hash_source_stamp_entry, node_engine_matches, owned_pubsub_topic, package_node_engine,
+        parse_node_version, provision_function_pubsub_resources, select_node_installation,
+        snapshot_functions_source, source_scan_pacing_delay, stream_source_chunks,
+        update_watch_hash, validate_functions_codebase_budget, FunctionsSourceEntryBudget,
+        FunctionsSourceFileVersion, FunctionsSourceScanBudget, FunctionsSourceStamp,
+        NodeInstallation, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
+        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
@@ -4227,6 +4235,17 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn pubsub_bridge_accepts_only_the_runtime_projects_full_topic_resource() {
+        assert_eq!(
+            owned_pubsub_topic("demo-app", "projects/demo-app/topics/jobs")
+                .map(|topic| topic.to_full()),
+            Some("projects/demo-app/topics/jobs".to_owned())
+        );
+        assert!(owned_pubsub_topic("demo-app", "projects/other-project/topics/jobs").is_none());
+        assert!(owned_pubsub_topic("demo-app", "jobs").is_none());
     }
 
     #[test]

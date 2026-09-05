@@ -386,7 +386,7 @@ fn publish(
         .into_iter()
         .map(|message| BridgeMessage { message })
         .collect::<Vec<_>>();
-    handle.bridge_deliver(topic.topic(), &bridge);
+    handle.bridge_deliver(&topic.to_full(), &bridge);
     handle.schedule_push(&topic);
     Ok((StatusCode::OK, json!({"messageIds": ids})))
 }

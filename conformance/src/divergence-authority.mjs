@@ -38,7 +38,7 @@ const validHttpsUrl = (value) => {
   if (!nonEmptyString(value)) return false;
   const rawWhitespaceOrControl = (character) => {
     const codePoint = character.codePointAt(0);
-    return codePoint <= 0x20 || codePoint === 0x7f || /\s/u.test(character);
+    return codePoint <= 0x20 || (codePoint >= 0x7f && codePoint <= 0x9f) || /\s/u.test(character);
   };
   if ([...value].some(rawWhitespaceOrControl)) return false;
   if (!value.startsWith("https://")) return false;

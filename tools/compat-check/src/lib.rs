@@ -435,7 +435,7 @@ fn well_formed_fixture(value: &str) -> bool {
         && path.starts_with("conformance/")
         && Path::new(path)
             .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+            .is_some_and(|extension| extension == "json")
         && path.split('/').all(|segment| {
             !segment.is_empty()
                 && segment != "."
@@ -460,7 +460,9 @@ fn fixture_escapes_root(root: &Path, reference: &str) -> bool {
 /// when no documented-divergence row exists there. `pinned` is the register entry's
 /// `fireemu` value: an object-shaped matrix row binds only when its recorded oracle answer
 /// differs from it, because the matrix's own `divergence` marks are regenerated from the
-/// register and a pinned answer equal to the oracle documents no divergence at all.
+/// register and a pinned answer equal to the oracle documents no divergence at all. Only the
+/// matrix sections carry `fireemu`, so an entry of the `divergences` section can never bind
+/// through the object-shaped branch; the Firestore matrix is the only object-shaped artifact.
 fn fixture_row_key(root: &Path, reference: &str, pinned: Option<&Value>) -> Option<String> {
     let mut parts = reference.split('#');
     let path = parts.next()?;

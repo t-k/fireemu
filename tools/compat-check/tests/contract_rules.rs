@@ -968,6 +968,17 @@ fn cases() -> Vec<Case> {
             expect: Some("authority sourceUrls must contain only non-empty HTTPS URLs"),
         },
         Case {
+            name: "authority-fixture-extension-is-case-sensitive-like-the-node-gate",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/fixtures/firestore/COPY.JSON",
+                    &json!({"id": "firestore/a-scenario", "steps": [{"id": "read", "status": "documented-divergence"}]}).to_string(),
+                );
+                fixture.write_divergences(&forged_register("conformance/fixtures/firestore/COPY.JSON#read"));
+            },
+            expect: Some("authority fixture must be a repository-relative conformance file"),
+        },
+        Case {
             name: "authority-fixture-must-match-its-register-key",
             mutate: |_, _, fixture| {
                 fixture.write_fixture(

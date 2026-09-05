@@ -145,6 +145,7 @@ test("authority URLs with raw whitespace are rejected before parsing", () => {
     " https://firebase.google.com/docs",
     "https://localhost/docs",
     "https://",
+    "https://firebase.google.com/docs\u009B",
   ]) {
     assert.match(
       problemsOf(register(entry({ sourceUrls: [url] }))),

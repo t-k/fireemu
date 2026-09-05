@@ -52,6 +52,7 @@ fn state(app_check: Option<fireemu_core_app_check::AppCheckGate>) -> ControlStat
             "demo-app".to_owned(),
         )])),
         project_hooks: None,
+        resource_hooks: Vec::new(),
     }
 }
 

@@ -98,6 +98,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             "demo-app".to_owned(),
         )])),
         project_hooks: None,
+        resource_hooks: Vec::new(),
     });
     Arc::new(UiState {
         stream_limiter: Arc::new(fireemu_adapter_ui::sse::StreamLimiter::default()),

@@ -2242,6 +2242,7 @@ fn control_state(
             "default".to_owned(),
             cfg.auth_project.clone(),
         )])),
+        resource_hooks: Vec::new(),
         project_hooks: Some(Arc::new(sessions::Projects {
             backend: backend.clone(),
             storage: storage.clone(),

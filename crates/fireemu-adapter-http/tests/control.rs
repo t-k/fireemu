@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::control::{
-    handle, handle_with, ControlState, SnapshotHook, SnapshotPart, TransitionFailure,
+    handle, handle_with, ControlState, ResourceHook, SnapshotHook, SnapshotPart, TransitionFailure,
     MAX_SNAPSHOTS_PER_SESSION,
 };
 use fireemu_adapter_http::identity_toolkit::RequestHeaders;
@@ -12,6 +12,7 @@ use fireemu_core_rules::runtime::RulesetSlot;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_session::tenancy::Scope;
 use fireemu_core_types::edition::FirestoreEdition;
+use fireemu_core_types::resources::{Gauge, RetentionRoot, RootBudget, ServiceResources, Unit};
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
@@ -47,6 +48,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
             "demo-app".to_owned(),
         )])),
         project_hooks: None,
+        resource_hooks: Vec::new(),
     }
 }
 
@@ -1656,4 +1658,261 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
     );
     let after = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
     assert_eq!(after.body["requests"], json!([]));
+}
+
+/// A resource hook that reports one outstanding root per scope and records the scopes it
+/// was asked about, so the tests can see that a session is only ever asked about itself.
+struct FakeResources {
+    scopes: Mutex<Vec<Scope>>,
+    roots: usize,
+    fail: bool,
+}
+
+impl FakeResources {
+    fn new(roots: usize, fail: bool) -> Arc<Self> {
+        Arc::new(Self {
+            scopes: Mutex::new(Vec::new()),
+            roots,
+            fail,
+        })
+    }
+}
+
+impl ResourceHook for FakeResources {
+    fn name(&self) -> &'static str {
+        "fake"
+    }
+    fn collect(
+        &self,
+        scope: &Scope,
+        budget: RootBudget,
+    ) -> Result<ServiceResources, TransitionFailure> {
+        self.scopes.lock().unwrap().push(scope.clone());
+        if self.fail {
+            return Err(TransitionFailure::new("fake", "the fake store is poisoned"));
+        }
+        let owner = scope.project().unwrap_or("default").to_owned();
+        let mut roots = vec![RetentionRoot {
+            kind: "transaction".to_owned(),
+            id: format!("tx-{owner}"),
+            count: 1,
+            bytes: 128,
+            outstanding: true,
+        }];
+        roots.extend((0..self.roots).map(|i| RetentionRoot {
+            kind: "history".to_owned(),
+            id: format!("h-{i}"),
+            count: 1,
+            bytes: 8,
+            outstanding: false,
+        }));
+        Ok(ServiceResources {
+            service: "fake".to_owned(),
+            gauges: vec![
+                Gauge::logical("history.total_bytes", Unit::Bytes, 1024, Some(4096))
+                    .with_reclaimable(256),
+            ],
+            refusals: vec![fireemu_core_types::resources::Refusal {
+                reason: "capacity".to_owned(),
+                count: 2,
+            }],
+            roots: budget.bound(roots),
+        })
+    }
+}
+
+#[test]
+fn resource_diagnostics_are_privileged_session_scoped_and_bounded() {
+    let hook = FakeResources::new(2, false);
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.resource_hooks = vec![hook.clone()];
+
+    // The report names retention roots, so a page needs the token even to read it.
+    let page = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let r = handle_with(
+        &s,
+        "GET",
+        "/v1/sessions/default/resources",
+        &page,
+        &json!({}),
+    );
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert!(
+        hook.scopes.lock().unwrap().is_empty(),
+        "a refused request collects nothing"
+    );
+    let with_token = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let r = handle_with(
+        &s,
+        "GET",
+        "/v1/sessions/default/resources",
+        &with_token,
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["schemaVersion"], 1);
+    assert_eq!(r.body["session"], "default");
+    assert_eq!(r.body["project"], "demo-app");
+    assert_eq!(r.body["complete"], true);
+    assert!(
+        r.body["headers"].is_null(),
+        "the response carries no request data"
+    );
+    let services = r.body["services"].as_array().unwrap();
+    let snapshots = services
+        .iter()
+        .find(|s| s["service"] == "snapshots")
+        .unwrap();
+    assert_eq!(snapshots["gauges"][0]["id"], "snapshots.retained");
+    assert_eq!(snapshots["gauges"][0]["limit"], MAX_SNAPSHOTS_PER_SESSION);
+    let fake = services.iter().find(|s| s["service"] == "fake").unwrap();
+    assert_eq!(
+        fake["gauges"][0],
+        json!({"id": "history.total_bytes", "measure": "logical", "unit": "bytes", "current": 1024, "limit": 4096, "reclaimable": 256})
+    );
+    assert_eq!(
+        fake["refusals"],
+        json!([{"reason": "capacity", "count": 2}])
+    );
+    assert_eq!(fake["roots"]["total"], 3);
+    assert_eq!(fake["roots"]["truncated"], false);
+    assert_eq!(fake["roots"]["items"][0]["id"], "tx-default");
+    assert_eq!(fake["roots"]["items"][0]["outstanding"], true);
+    assert!(matches!(
+        hook.scopes.lock().unwrap().as_slice(),
+        [Scope::AllExcept(_)]
+    ));
+
+    // Another session is asked about its own project only, and sees only its own roots.
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions",
+        &json!({"name": "other", "project": "demo-other"}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = handle(&s, "GET", "/v1/sessions/other/resources", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["project"], "demo-other");
+    let fake = r.body["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["service"] == "fake")
+        .unwrap()
+        .clone();
+    let ids: Vec<&str> = fake["roots"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"tx-demo-other"));
+    assert!(!ids.contains(&"tx-default"), "{ids:?}");
+    assert_eq!(
+        hook.scopes.lock().unwrap().last(),
+        Some(&Scope::Project("demo-other".to_owned()))
+    );
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/nope/resources", &json!({})).status,
+        404
+    );
+
+    // A large root set is truncated to the budget, outstanding roots first, and says so.
+    let big = FakeResources::new(500, false);
+    s.resource_hooks = vec![big];
+    let r = handle(&s, "GET", "/v1/sessions/default/resources", &json!({}));
+    let fake = r.body["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["service"] == "fake")
+        .unwrap()
+        .clone();
+    assert_eq!(fake["roots"]["total"], 501);
+    assert_eq!(fake["roots"]["truncated"], true);
+    assert_eq!(
+        fake["roots"]["items"].as_array().unwrap().len(),
+        RootBudget::DEFAULT.max_roots
+    );
+    assert_eq!(fake["roots"]["items"][0]["id"], "tx-default");
+
+    // A hook that cannot report is named, and the report says it is incomplete.
+    s.resource_hooks = vec![FakeResources::new(0, true)];
+    let r = handle(&s, "GET", "/v1/sessions/default/resources", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["complete"], false);
+    assert_eq!(
+        r.body["errors"],
+        json!([{"service": "fake", "message": "the fake store is poisoned"}])
+    );
+}
+
+#[test]
+fn quiescence_assertions_need_exact_allowances_and_refuse_incomplete_reports() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.resource_hooks = vec![FakeResources::new(1, false)];
+    let path = "/v1/sessions/default/resources:assertQuiescent";
+
+    let r = handle(&s, "POST", path, &json!({}));
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert_eq!(r.body["quiescent"], false);
+    assert_eq!(
+        r.body["leaks"],
+        json!([{"service": "fake", "kind": "transaction", "id": "tx-default", "count": 1, "bytes": 128}])
+    );
+    assert_eq!(r.body["staleAllowances"], json!([]));
+
+    let allow = json!({"service": "fake", "kind": "transaction", "id": "tx-default", "reason": "the test holds it"});
+    let r = handle(&s, "POST", path, &json!({"allow": [allow]}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["quiescent"], true);
+
+    // A prefix, another kind or another service allows nothing and is reported stale.
+    for stale in [
+        json!({"service": "fake", "kind": "transaction", "id": "tx-", "reason": "prefix"}),
+        json!({"service": "fake", "kind": "listener", "id": "tx-default", "reason": "kind"}),
+        json!({"service": "snapshots", "kind": "transaction", "id": "tx-default", "reason": "service"}),
+    ] {
+        let r = handle(&s, "POST", path, &json!({"allow": [stale.clone()]}));
+        assert_eq!(r.status, 409, "{}", r.body);
+        assert_eq!(r.body["leaks"].as_array().unwrap().len(), 1);
+        assert_eq!(r.body["staleAllowances"], json!([stale]));
+    }
+
+    // Allowances are validated at the boundary.
+    for bad in [
+        json!({"allow": "everything"}),
+        json!({"allow": [{"service": "fake", "kind": "transaction"}]}),
+        json!({"allow": [{"service": "fake", "kind": "transaction", "id": "", "reason": "x"}]}),
+        json!({"allow": [{"service": "fake", "kind": "transaction", "id": "tx-default", "reason": "bad\u{0}byte"}]}),
+        json!({"allow": [{"service": "fake", "kind": "transaction", "id": "x".repeat(300), "reason": "long"}]}),
+        json!({"allow": (0..65).map(|i| json!({"service": "fake", "kind": "k", "id": format!("{i}"), "reason": "many"})).collect::<Vec<_>>()}),
+    ] {
+        let r = handle(&s, "POST", path, &bad);
+        assert_eq!(r.status, 400, "{bad} => {}", r.body);
+    }
+
+    // The assertion is privileged for pages like every other mutation-grade route.
+    let page = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        ..RequestHeaders::default()
+    };
+    assert_eq!(handle_with(&s, "POST", path, &page, &json!({})).status, 403);
+
+    // A truncated or failed report cannot prove quiescence.
+    s.resource_hooks = vec![FakeResources::new(500, false)];
+    let r = handle(&s, "POST", path, &json!({"allow": [allow.clone()]}));
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert_eq!(r.body["truncatedServices"], json!(["fake"]));
+    s.resource_hooks = vec![FakeResources::new(0, true)];
+    let r = handle(&s, "POST", path, &json!({}));
+    assert_eq!(r.status, 500, "{}", r.body);
 }

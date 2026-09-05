@@ -37,6 +37,17 @@ scripts/local-regression-gate --session compat --report docs.local/gates/compat.
 
 The gate runs `cargo nextest run --profile pr` (choose another profile with `--profile`) through `scripts/cargo-session` and writes a JSON report naming the commit, whether the tree was dirty, the profile, the arguments, the nextest and rustc versions, and the counts of tests run, passed, failed and skipped. It exits non-zero when a test fails, when cargo-nextest is not installed (`missing-dependency`) and when no test ran (`no-tests`), so an empty filter or a missing tool is never recorded as a pass. Cite the report, not the exit status, in work logs and issue closures. `scripts/local-regression-gate.test.sh` is its self-test.
 
+## Post-pressure recovery harness
+
+`crates/fireemu/tests/recovery.rs` drives a real daemon through four phases (baseline, saturate, release, reuse) and samples what it retains after each: the logical Firestore charge and version count from `GET /v1/sessions/default/resources`, the retained snapshot bytes, the session count, and the process RSS, open file descriptors and child processes. The verdict is about retention, not speed: every logical gauge must return to its baseline after the release, and the reuse phase must be fully admitted and charge the store again. RSS is recorded but never asserted, because an allocator cache keeps it high after the logical charge is gone. A measurement that fails is recorded as missing with its reason and fails the verdict; it is never written as zero. The test also holds a snapshot across one release on purpose and checks that the verdict names it as a leak.
+
+```sh
+cargo nextest run -p fireemu --test recovery
+FIREEMU_RECOVERY_LONG=1 FIREEMU_RECOVERY_REPORT=docs.local/recovery/$(git rev-parse --short HEAD).json cargo nextest run -p fireemu --test recovery
+```
+
+Every run writes a JSON artifact (under the target tmpdir unless `FIREEMU_RECOVERY_REPORT` names a file) with the commit, dirty state, machine, toolchain, build profile, dataset, per-phase samples, verdict and the cleanup result. Compare runs only when the profile, dataset and machine match. The long dataset is opt-in and not part of any automatic job.
+
 ## Removing stale artifacts
 
 After renaming a crate, clean every session target that built the old name before continuing. Resolve and clean one exact target at a time:

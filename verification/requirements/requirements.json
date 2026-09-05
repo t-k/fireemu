@@ -232,6 +232,54 @@
       }
     },
     {
+      "id": "INV-IDLE-006",
+      "statement": "The await-idle causality window is bounded: it retains at most the configured number of causal records.",
+      "criticality": "important",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "artifacts": {
+        "quint": "AwaitIdle.qnt::WindowBounded",
+        "mutation": [
+          "M-FORMAL-IDLE-WINDOW-BOUND-001"
+        ],
+        "integration": [
+          "crates/fireemu-adapter-functions/tests/runtime.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-IDLE-007",
+      "statement": "Every registered causal record is either retained in the window or counted as evicted; the diagnostic never loses a record silently.",
+      "criticality": "important",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "artifacts": {
+        "quint": "AwaitIdle.qnt::WindowAccounting",
+        "mutation": [
+          "M-FORMAL-IDLE-WINDOW-ACCOUNTING-001"
+        ],
+        "integration": [
+          "crates/fireemu-adapter-functions/tests/runtime.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-IDLE-008",
+      "statement": "Eviction from the causality window is a gap, never a completion: a terminal mark belongs only to a retained record whose work is over.",
+      "criticality": "important",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "artifacts": {
+        "quint": "AwaitIdle.qnt::EvictionIsNotCompletion",
+        "mutation": [
+          "M-FORMAL-IDLE-WINDOW-EVICTED-MARK-001"
+        ],
+        "integration": [
+          "crates/fireemu-adapter-functions/tests/runtime.rs"
+        ]
+      }
+    },
+    {
       "id": "LIVE-RESET-001",
       "statement": "After a reset begins, the new epoch eventually becomes Active.",
       "criticality": "critical",

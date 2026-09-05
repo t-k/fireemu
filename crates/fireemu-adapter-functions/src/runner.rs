@@ -850,6 +850,92 @@ fn kill_process_group(pid: Option<u32>) {
 mod tests {
     use super::{child_env, LogBuffer, RunnerLog, LOG_CAPACITY};
 
+    #[cfg(unix)]
+    mod trusted_temp {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/trusted_temp.rs"
+        ));
+    }
+
+    #[cfg(not(unix))]
+    mod trusted_temp {
+        use std::ops::Deref;
+        use std::path::{Path, PathBuf};
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_NAMESPACE: AtomicU64 = AtomicU64::new(0);
+
+        pub struct TrustedTempDir(PathBuf);
+
+        impl TrustedTempDir {
+            pub fn new(label: &str) -> Self {
+                loop {
+                    let nonce = NEXT_NAMESPACE.fetch_add(1, Ordering::Relaxed);
+                    let path = std::env::temp_dir()
+                        .join(format!("fireemu-{label}-{}-{nonce}", std::process::id()));
+                    match std::fs::create_dir(&path) {
+                        Ok(()) => return Self(path),
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                        Err(error) => panic!("create owned test directory: {error}"),
+                    }
+                }
+            }
+        }
+
+        impl Deref for TrustedTempDir {
+            type Target = Path;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl Drop for TrustedTempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+    }
+
+    struct OwnedTestDirectory(std::path::PathBuf);
+
+    impl OwnedTestDirectory {
+        fn create(path: std::path::PathBuf) -> Self {
+            std::fs::create_dir(&path).expect("create owned test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for OwnedTestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn credential_sandbox_fixture_cleanup_keeps_a_sibling_sentinel() {
+        let owned_root = trusted_temp::TrustedTempDir::new("runner-sandbox-fixture");
+        let sentinel_path = owned_root
+            .parent()
+            .expect("trusted test namespace parent")
+            .join(format!(
+                "{}-sentinel",
+                owned_root
+                    .file_name()
+                    .expect("trusted test namespace basename")
+                    .to_string_lossy()
+            ));
+        let sentinel = OwnedTestDirectory::create(sentinel_path);
+
+        drop(owned_root);
+
+        assert!(
+            sentinel.0.exists(),
+            "fixture cleanup must not remove a sibling it did not create"
+        );
+    }
+
     fn environment_value<'a>(environment: &'a [(String, String)], name: &str) -> &'a str {
         environment
             .iter()
@@ -900,10 +986,7 @@ mod tests {
         use std::process::Command;
         use std::time::Duration;
 
-        let root =
-            std::env::temp_dir().join(format!("fireemu-runner-cancel-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir(&root).unwrap();
+        let root = trusted_temp::TrustedTempDir::new("runner-cancel");
         let descendant_pid = root.join("descendant.pid");
         let script = format!(
             "sleep 30 & echo $! > '{}'; sleep 30",
@@ -947,19 +1030,13 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
     async fn shutting_down_a_runner_removes_its_credential_sandbox() {
         use std::time::Duration;
 
-        let root = std::env::temp_dir().join(format!(
-            "fireemu-runner-sandbox-probe-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir(&root).unwrap();
+        let root = trusted_temp::TrustedTempDir::new("runner-sandbox-probe");
         let probe = root.join("config-path");
         let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
         let runner = super::Runner::spawn(
@@ -983,7 +1060,6 @@ mod tests {
         runner.shutdown().await;
 
         assert!(!sandbox.exists(), "runner credential sandbox remains");
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

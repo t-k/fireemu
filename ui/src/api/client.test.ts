@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { parseSse } from "./client";
+import { parseApiError, parseSse } from "./client";
+
+describe("API errors", () => {
+  it("retains a Google RPC status for conflict handling", () => {
+    expect(
+      parseApiError(400, {
+        error: { code: 400, status: "FAILED_PRECONDITION", message: "update time changed" },
+      }),
+    ).toEqual({ status: 400, code: "FAILED_PRECONDITION", message: "update time changed" });
+  });
+});
 
 describe("server-sent event parsing", () => {
   it("returns complete events and keeps the remainder", () => {

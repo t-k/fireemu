@@ -86,6 +86,11 @@ export const en = {
   "firestore.fieldType": "Type",
   "firestore.fieldValue": "Value",
   "firestore.edit": "Edit",
+  "firestore.editConflict": "This document changed after editing began. Your draft was not saved.",
+  "firestore.editConflictDeleted":
+    "This document was deleted after editing began. Your draft remains available.",
+  "firestore.reloadDraft": "Reload latest and keep draft",
+  "firestore.draftReapplied": "The latest document was loaded and your draft was kept.",
   "firestore.updateTime": "Updated",
   "firestore.createTime": "Created",
   "firestore.live": "Live",

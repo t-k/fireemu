@@ -237,7 +237,7 @@ export const parseField = (
         return ok({ integerValue: n.toString() });
       }
       const n = Number(v);
-      if (v === "" || !Number.isFinite(n)) return err("integer, decimal, NaN, or Infinity");
+      if (v === "" || !Number.isFinite(n)) return err("integer or decimal");
       return ok({ doubleValue: n });
     }
     case "timestamp": {
@@ -336,6 +336,78 @@ export const parseFields = (
     });
   }
   return ok(out);
+};
+
+const sameWireValue = (left: unknown, right: unknown): boolean => {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => sameWireValue(value, right[index]))
+    );
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const keys = Object.keys(leftRecord);
+  return (
+    keys.length === Object.keys(rightRecord).length &&
+    keys.every(
+      (key) => Object.hasOwn(rightRecord, key) && sameWireValue(leftRecord[key], rightRecord[key]),
+    )
+  );
+};
+
+/** The top-level fields changed or deleted since editing began. */
+export const diffFields = (
+  original: Record<string, FsValue>,
+  next: Record<string, FsValue>,
+): { fields: Record<string, FsValue>; fieldPaths: string[] } => {
+  const fields: Record<string, FsValue> = {};
+  const fieldPaths: string[] = [];
+  for (const name of [...Object.keys(original), ...Object.keys(next)]) {
+    if (fieldPaths.includes(name)) continue;
+    const beforePresent = Object.hasOwn(original, name);
+    const afterPresent = Object.hasOwn(next, name);
+    const before = original[name];
+    const after = next[name];
+    if (beforePresent && afterPresent && sameWireValue(before, after)) continue;
+    if (!beforePresent && !afterPresent) continue;
+    fieldPaths.push(name);
+    if (afterPresent) {
+      Object.defineProperty(fields, name, {
+        value: after,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  return { fields, fieldPaths };
+};
+
+/** Reapplies a top-level field delta to a freshly loaded document. */
+export const applyFieldDiff = (
+  latest: Record<string, FsValue>,
+  changes: { fields: Record<string, FsValue>; fieldPaths: string[] },
+): Record<string, FsValue> => {
+  const entries = new Map(Object.entries(latest));
+  for (const name of changes.fieldPaths) {
+    if (Object.hasOwn(changes.fields, name)) entries.set(name, changes.fields[name]!);
+    else entries.delete(name);
+  }
+  const rebased: Record<string, FsValue> = {};
+  for (const [name, value] of entries) {
+    Object.defineProperty(rebased, name, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return rebased;
 };
 
 /** The default text for a type when the user switches to it. */

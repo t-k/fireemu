@@ -464,6 +464,22 @@ fn history_path_usage(
     finish_history_usage(usage)
 }
 
+fn history_path_usage_after_floor(
+    path: &DocumentPath,
+    versions: &[(CommitVersion, Option<Arc<Document>>)],
+    floor: CommitVersion,
+) -> HistoryUsage {
+    let cut = versions
+        .partition_point(|(version, _)| *version <= floor)
+        .saturating_sub(1);
+    let remaining = &versions[cut..];
+    if matches!(remaining, [(version, None)] if *version <= floor) {
+        HistoryUsage::default()
+    } else {
+        history_path_usage(path, remaining)
+    }
+}
+
 /// A rejected history-budget dimension.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryCapacityError {
@@ -733,6 +749,14 @@ impl ListingTrie {
     }
 }
 
+/// Reclaimable usage at one immutable database version and retention floor.
+#[derive(Debug, Clone, Copy)]
+struct CompactionForecast {
+    version: CommitVersion,
+    floor: CommitVersion,
+    reclaimed: HistoryUsage,
+}
+
 /// One Firestore database.
 #[derive(Debug, Clone)]
 pub struct FirestoreState {
@@ -779,6 +803,9 @@ pub struct FirestoreState {
     /// Exact logical usage, maintained with each published history mutation. Keeping this
     /// cached makes a no-op admission independent of retained-history cardinality.
     history_usage: HistoryUsage,
+    /// Last immutable compaction forecast. A refused external admission can retry without
+    /// rescanning the retained corpus; every published mutation invalidates it.
+    compaction_forecast: Option<CompactionForecast>,
     /// Paths whose history still holds something a later compaction could drop (more than
     /// one version, or a single tombstone). Compaction only visits these.
     compactable: BTreeSet<DocumentPath>,
@@ -812,6 +839,7 @@ impl Default for FirestoreState {
             max_versions_per_path: DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
             history_limits: HistoryLimits::default(),
             history_usage: HistoryUsage::default(),
+            compaction_forecast: None,
             compactable: BTreeSet::new(),
         }
     }
@@ -1507,6 +1535,7 @@ impl FirestoreState {
             max_versions_per_path: self.max_versions_per_path,
             history_limits: self.history_limits,
             history_usage: HistoryUsage::default(),
+            compaction_forecast: None,
             compactable: BTreeSet::new(),
         };
         snapshot.history_usage = snapshot.recount_history_usage();
@@ -1547,6 +1576,7 @@ impl FirestoreState {
             staged.insert(imported.path, document);
         }
         self.last_commit_time = Some(commit_time);
+        self.compaction_forecast = None;
         if staged.is_empty() {
             return Ok(CommitResult {
                 commit_time,
@@ -1980,17 +2010,88 @@ impl FirestoreState {
         finish_history_usage(usage)
     }
 
-    fn projected_history_usage(&self, staged: &[StagedChange]) -> (HistoryUsage, HistoryUsage) {
-        let mut usage = self.history_usage();
-        if staged.is_empty() {
-            return (usage, usage);
+    fn base_compaction_reclaim(&mut self, floor: CommitVersion) -> HistoryUsage {
+        if floor <= self.compaction_floor {
+            return HistoryUsage::default();
         }
-        let mut evicted = HistoryUsage::default();
+        if let Some(forecast) = self
+            .compaction_forecast
+            .filter(|forecast| forecast.version == self.version && forecast.floor == floor)
+        {
+            return forecast.reclaimed;
+        }
+
+        let mut reclaimed = HistoryUsage::default();
+        for path in &self.compactable {
+            let versions = self
+                .history
+                .get(path)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            reclaimed = add_history_usage(
+                reclaimed,
+                subtract_history_usage(
+                    history_path_usage(path, versions),
+                    history_path_usage_after_floor(path, versions, floor),
+                ),
+            );
+        }
+        let removed_commit_times = u64::try_from(
+            self.commit_times
+                .iter()
+                .take_while(|(version, _)| *version < floor)
+                .count(),
+        )
+        .unwrap_or(u64::MAX);
+        reclaimed.commit_times = removed_commit_times;
+        reclaimed.commit_time_bytes =
+            removed_commit_times.saturating_mul(HISTORY_COMMIT_TIME_BYTES);
+        self.compaction_forecast = Some(CompactionForecast {
+            version: self.version,
+            floor,
+            reclaimed,
+        });
+        reclaimed
+    }
+
+    fn projected_retention_floor(
+        &self,
+        projected_capacity_floor: CommitVersion,
+        projected_version: CommitVersion,
+        now: LogicalInstant,
+    ) -> CommitVersion {
+        let window = i128::from(READ_TIME_RETENTION_SECONDS) * 1_000_000_000;
+        let oldest_read = LogicalInstant::from_nanos(now.as_nanos().saturating_sub(window));
+        let mut floor = self.version_at(oldest_read).max(projected_capacity_floor);
+        if let Some(oldest_transaction) = self
+            .transactions
+            .values()
+            .filter(|transaction| {
+                transaction.state == TransactionState::Active
+                    && transaction_deadline(transaction) > now
+            })
+            .map(|transaction| transaction.read_version)
+            .min()
+        {
+            floor = floor.min(oldest_transaction);
+        }
+        floor.max(projected_capacity_floor).min(projected_version)
+    }
+
+    fn projected_history_usage(
+        &mut self,
+        staged: &[StagedChange],
+        now: LogicalInstant,
+    ) -> (HistoryUsage, HistoryUsage) {
+        let mut usage = self.history_usage();
         let mut projected_capacity_floor = self.capacity_floor;
-        usage.commit_times = usage.commit_times.saturating_add(1);
-        usage.commit_time_bytes = usage
-            .commit_time_bytes
-            .saturating_add(HISTORY_COMMIT_TIME_BYTES);
+        let next_version = CommitVersion(self.version.0.saturating_add(1));
+        if !staged.is_empty() {
+            usage.commit_times = usage.commit_times.saturating_add(1);
+            usage.commit_time_bytes = usage
+                .commit_time_bytes
+                .saturating_add(HISTORY_COMMIT_TIME_BYTES);
+        }
         for (path, before, after) in staged {
             usage.versions = usage.versions.saturating_add(1);
             usage.version_metadata_bytes = usage
@@ -2036,42 +2137,48 @@ impl FirestoreState {
                 .len()
                 .saturating_add(1)
                 .saturating_sub(self.max_versions_per_path);
-            for (_, document) in existing.iter().take(evicted_count) {
-                evicted.versions = evicted.versions.saturating_add(1);
-                evicted.version_metadata_bytes = evicted
-                    .version_metadata_bytes
-                    .saturating_add(HISTORY_VERSION_METADATA_BYTES);
-                if let Some(document) = document {
-                    let bytes =
-                        document_size(path, &document.fields).map_or(u64::MAX, |size| size.total);
-                    evicted.historical_document_bytes =
-                        evicted.historical_document_bytes.saturating_add(bytes);
-                } else {
-                    evicted.tombstones = evicted.tombstones.saturating_add(1);
-                    evicted.tombstone_bytes = evicted
-                        .tombstone_bytes
-                        .saturating_add(HISTORY_TOMBSTONE_BYTES);
-                }
-            }
             if evicted_count > 0 {
-                let oldest_kept = existing.get(evicted_count).map_or(
-                    CommitVersion(self.version.0.saturating_add(1)),
-                    |(version, _)| *version,
-                );
+                let oldest_kept = existing
+                    .get(evicted_count)
+                    .map_or(next_version, |(version, _)| *version);
                 projected_capacity_floor = projected_capacity_floor.max(oldest_kept);
             }
         }
         let uncompacted = finish_history_usage(usage);
-        let removed_commit_times = u64::try_from(
-            self.commit_times
-                .iter()
-                .take_while(|(version, _)| *version < projected_capacity_floor)
-                .count(),
-        )
-        .unwrap_or(u64::MAX);
-        evicted.commit_times = removed_commit_times;
-        evicted.commit_time_bytes = removed_commit_times.saturating_mul(HISTORY_COMMIT_TIME_BYTES);
-        (uncompacted, subtract_history_usage(uncompacted, evicted))
+
+        let projected_version = if staged.is_empty() {
+            self.version
+        } else {
+            next_version
+        };
+        let floor =
+            self.projected_retention_floor(projected_capacity_floor, projected_version, now);
+
+        // The cached forecast describes the immutable retained state. Replace the reclaim
+        // contribution only for paths this prospective commit changes, keeping retries
+        // proportional to the write set instead of to all retained history.
+        let mut reclaimed = self.base_compaction_reclaim(floor);
+        for (path, _, after) in staged {
+            let existing = self
+                .history
+                .get(path)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let existing_reclaim = subtract_history_usage(
+                history_path_usage(path, existing),
+                history_path_usage_after_floor(path, existing, floor),
+            );
+            reclaimed = subtract_history_usage(reclaimed, existing_reclaim);
+
+            let mut projected = existing.to_vec();
+            projected.push((next_version, after.clone()));
+            let projected_reclaim = subtract_history_usage(
+                history_path_usage(path, &projected),
+                history_path_usage_after_floor(path, &projected, floor),
+            );
+            reclaimed = add_history_usage(reclaimed, projected_reclaim);
+        }
+        (uncompacted, subtract_history_usage(uncompacted, reclaimed))
     }
 
     fn check_history_limits(&self, usage: HistoryUsage) -> Result<(), FirestoreError> {
@@ -2138,6 +2245,7 @@ impl FirestoreState {
         if floor <= self.compaction_floor {
             return self.compaction_floor;
         }
+        self.compaction_forecast = None;
         self.compaction_floor = floor;
         let mut removed_commit_times = 0u64;
         while self
@@ -2482,13 +2590,14 @@ impl FirestoreState {
             changes: published_changes,
         };
         let before = self.history_usage();
-        let (uncompacted, after) = self.projected_history_usage(&staged_changes);
+        let (uncompacted, after) = self.projected_history_usage(&staged_changes, now);
         self.check_history_limits(after)?;
         let reservation = admit(&result, HistoryProjection { before, after })?;
 
         // Publish. All fallible validation and external admission completed above. Every
         // accepted commit consumes a commit time, changed documents or not.
         self.last_commit_time = Some(commit_time);
+        self.compaction_forecast = None;
         self.history_usage = uncompacted;
         if changed {
             self.version = next_version;
@@ -2521,9 +2630,7 @@ impl FirestoreState {
         }
         // Retention is owned by the store: every commit drops the history that has fallen
         // out of the read window and is not pinned by an active transaction.
-        if changed {
-            self.compact(now);
-        }
+        self.compact(now);
         debug_assert!(self.history_usage.total_bytes <= after.total_bytes);
         debug_assert!(self.history_usage.versions <= after.versions);
         Ok((result, reservation))
@@ -4233,6 +4340,57 @@ mod scope_index_tests {
             )
             .expect("advance beyond retention");
         assert!(!state.history.contains_key(&path("root/a/children/x")));
+        assert_scope_projection(&state);
+    }
+
+    #[test]
+    fn cached_history_usage_survives_mixed_state_transitions() {
+        let mut state = FirestoreState::new();
+        state
+            .commit(
+                &[set("mixed/a"), set("mixed/b")],
+                None,
+                LogicalInstant::UNIX_EPOCH,
+            )
+            .expect("create two documents");
+        assert_scope_projection(&state);
+
+        state
+            .commit(
+                &[set("mixed/a"), delete("mixed/b"), set("mixed/c")],
+                None,
+                LogicalInstant::from_unix_seconds(1),
+            )
+            .expect("publish an update, delete, and create together");
+        assert_scope_projection(&state);
+
+        let transaction = state
+            .begin_transaction(false, LogicalInstant::from_unix_seconds(2))
+            .expect("begin transaction");
+        state.rollback(&transaction).expect("roll transaction back");
+        assert_scope_projection(&state);
+
+        let forecast_time = LogicalInstant::from_unix_seconds(READ_TIME_RETENTION_SECONDS + 3);
+        let _ = state.projected_history_usage(&[], forecast_time);
+        assert!(state.compaction_forecast.is_some());
+        state
+            .import_documents(
+                vec![ImportedDocument {
+                    path: path("imported/a"),
+                    fields: BTreeMap::new(),
+                    create_time: None,
+                    update_time: None,
+                }],
+                forecast_time,
+            )
+            .expect("import one document");
+        assert!(state.compaction_forecast.is_none());
+        assert_scope_projection(&state);
+        assert_scope_projection(&state.visible_snapshot());
+
+        state.compact(LogicalInstant::from_unix_seconds(
+            READ_TIME_RETENTION_SECONDS * 2 + 4,
+        ));
         assert_scope_projection(&state);
     }
 

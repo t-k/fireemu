@@ -3388,20 +3388,29 @@ mod lock_tests {
             global_bytes: u64::MAX,
             global_versions: 14,
         };
-        let mut ledger = HistoryBudgetLedger::new(limits);
+        let ledger = Arc::new(Mutex::new(HistoryBudgetLedger::new(limits)));
         let first_key = ("first".to_owned(), "(default)".to_owned());
-        ledger.replace_committed(
-            first_key.clone(),
-            &HistoryCharge {
-                owner: HistoryBudgetOwner::Default,
-                usage: history_usage(10),
-            },
-        );
-
-        let reduction = ledger
-            .reserve(first_key, HistoryBudgetOwner::Default, history_usage(5))
-            .unwrap();
+        let reduction = {
+            let mut locked = ledger.lock().unwrap();
+            locked.replace_committed(
+                first_key.clone(),
+                &HistoryCharge {
+                    owner: HistoryBudgetOwner::Default,
+                    usage: history_usage(10),
+                },
+            );
+            let id = locked
+                .reserve(first_key, HistoryBudgetOwner::Default, history_usage(5))
+                .unwrap();
+            HistoryReservation {
+                ledger: Arc::clone(&ledger),
+                id,
+                committed: false,
+            }
+        };
         let error = ledger
+            .lock()
+            .unwrap()
             .reserve(
                 ("second".to_owned(), "(default)".to_owned()),
                 HistoryBudgetOwner::Default,
@@ -3417,7 +3426,15 @@ mod lock_tests {
                 maximum: 14,
             })
         ));
-        ledger.pending.remove(&reduction);
+        drop(reduction);
+        let ledger = ledger.lock().unwrap();
+        assert!(ledger.pending.is_empty());
+        assert!(ledger.pending_by_key.is_empty());
+        assert_eq!(ledger.charged_global.versions, 10);
+        assert_eq!(
+            ledger.charged_by_owner[&HistoryBudgetOwner::Default].versions,
+            10
+        );
         assert_eq!(
             ledger.committed[&("first".to_owned(), "(default)".to_owned())]
                 .usage

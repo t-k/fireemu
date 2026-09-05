@@ -64,7 +64,6 @@ fn history_capacity_recovers_after_retention_roots_expire() {
         .is_some());
 
     state.rollback(&transaction).unwrap();
-    state.compact(t(READ_TIME_RETENTION_SECONDS + 1));
     state
         .commit(
             &[set("docs/c", &[])],
@@ -73,6 +72,50 @@ fn history_capacity_recovers_after_retention_roots_expire() {
         )
         .unwrap();
     assert!(state.history_usage().versions <= 3);
+}
+
+#[test]
+fn an_aged_cross_path_version_is_forecast_as_reclaimable() {
+    let mut state = FirestoreState::with_history_limits(HistoryLimits {
+        max_bytes: u64::MAX,
+        max_versions: 2,
+    });
+    state
+        .commit(&[set("docs/a", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    state
+        .commit(&[set("docs/a", &[("v", Value::Integer(2))])], None, t(1))
+        .unwrap();
+
+    state
+        .commit(
+            &[set("docs/b", &[("v", Value::Integer(3))])],
+            None,
+            t(READ_TIME_RETENTION_SECONDS + 2),
+        )
+        .unwrap();
+
+    assert_eq!(state.history_usage().versions, 2);
+}
+
+#[test]
+fn an_accepted_noop_releases_expired_history() {
+    let latest = set("docs/a", &[("v", Value::Integer(2))]);
+    let mut state = FirestoreState::new();
+    state
+        .commit(&[set("docs/a", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    state
+        .commit(std::slice::from_ref(&latest), None, t(1))
+        .unwrap();
+    assert_eq!(state.history_usage().versions, 2);
+
+    let result = state
+        .commit(&[latest], None, t(READ_TIME_RETENTION_SECONDS + 2))
+        .unwrap();
+
+    assert!(result.changes.is_empty());
+    assert_eq!(state.history_usage().versions, 1);
 }
 
 #[test]

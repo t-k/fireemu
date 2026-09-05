@@ -545,6 +545,27 @@ impl SubscriptionState {
         Ok(())
     }
 
+    /// Retained payload accounting for the resource diagnostics: `(unacknowledged messages,
+    /// their payload bytes, acknowledged-but-retained payload bytes)`. Acknowledged entries
+    /// stay retained only while a snapshot or the retention window still needs them, so their
+    /// bytes are what a reclaim could release.
+    #[must_use]
+    pub fn retention_accounting(&self) -> (usize, u64, u64) {
+        let mut unacked = 0usize;
+        let mut unacked_bytes = 0u64;
+        let mut acked_bytes = 0u64;
+        for entry in &self.entries {
+            let bytes = u64::try_from(entry.stored.message.data.len()).unwrap_or(u64::MAX);
+            if entry.state == Delivery::Acked {
+                acked_bytes = acked_bytes.saturating_add(bytes);
+            } else {
+                unacked += 1;
+                unacked_bytes = unacked_bytes.saturating_add(bytes);
+            }
+        }
+        (unacked, unacked_bytes, acked_bytes)
+    }
+
     /// Returns the stable message IDs that were not acknowledged at the current point in time.
     #[must_use]
     pub fn unacknowledged_message_ids(&self) -> BTreeSet<String> {

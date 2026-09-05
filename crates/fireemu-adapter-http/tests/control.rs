@@ -1824,7 +1824,11 @@ fn resource_diagnostics_are_privileged_session_scoped_and_bounded() {
         handle(&s, "GET", "/v1/sessions/nope/resources", &json!({})).status,
         404
     );
+}
 
+#[test]
+fn resource_diagnostics_are_bounded_and_name_a_failing_service() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
     // A large root set is truncated to the budget, outstanding roots first, and says so.
     let big = FakeResources::new(500, false);
     s.resource_hooks = vec![big];

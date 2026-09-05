@@ -25,6 +25,9 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
+use fireemu_core_types::resources::{
+    Gauge, Refusal, RetentionRoot, RetentionRoots, RootBudget, ServiceResources, Unit,
+};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 use tokio::sync::Notify;
@@ -2722,6 +2725,125 @@ impl FunctionsRuntime {
                 "reason": f.reason,
             })).collect::<Vec<_>>(),
         })
+    }
+
+    /// The runtime's retention report for the resource diagnostics: outbox records and bytes,
+    /// Eventarc records and bytes, the retained history windows and running work, each against
+    /// its limit, with one outstanding root per queued event and running invocation. Payloads
+    /// are never included; an event root carries its identifier and retained byte count only.
+    #[must_use]
+    pub fn resources(&self, budget: RootBudget) -> ServiceResources {
+        let Ok(inner) = self.inner.lock() else {
+            return ServiceResources {
+                service: "functions".to_owned(),
+                gauges: Vec::new(),
+                refusals: Vec::new(),
+                roots: RetentionRoots::default(),
+            };
+        };
+        ServiceResources {
+            service: "functions".to_owned(),
+            gauges: self.resource_gauges(&inner),
+            refusals: vec![Refusal {
+                reason: "schedule.overlap".to_owned(),
+                count: inner.overlap_rejected,
+            }],
+            roots: budget.bound(Self::resource_roots(&inner)),
+        }
+    }
+
+    fn resource_roots(inner: &Inner) -> Vec<RetentionRoot> {
+        let mut roots = Vec::new();
+        for (id, payload) in &inner.payloads {
+            let Some(record) = inner.outbox.record(*id) else {
+                continue;
+            };
+            let phase = match record.state() {
+                EventState::Pending | EventState::Leased => "pending",
+                EventState::RetryWaiting { .. } => "retry",
+                _ => continue,
+            };
+            roots.push(RetentionRoot {
+                kind: format!("event.{phase}"),
+                id: format!("{id:?}"),
+                count: 1,
+                bytes: u64::try_from(payload.retained_bytes).unwrap_or(u64::MAX),
+                outstanding: true,
+            });
+        }
+        for key in inner.running.keys() {
+            roots.push(RetentionRoot {
+                kind: "invocation".to_owned(),
+                id: key.clone(),
+                count: 1,
+                bytes: 0,
+                outstanding: true,
+            });
+        }
+        roots
+    }
+
+    fn resource_gauges(&self, inner: &Inner) -> Vec<Gauge> {
+        let count = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
+        vec![
+            Gauge::logical(
+                "outbox.records",
+                Unit::Count,
+                count(
+                    inner
+                        .payloads
+                        .len()
+                        .saturating_add(inner.reserved_event_records),
+                ),
+                Some(count(MAX_ACTIVE_EVENT_RECORDS)),
+            ),
+            Gauge::logical(
+                "outbox.bytes",
+                Unit::Bytes,
+                count(
+                    inner
+                        .active_event_bytes
+                        .saturating_add(inner.reserved_event_bytes),
+                ),
+                Some(count(MAX_ACTIVE_EVENT_BYTES)),
+            ),
+            Gauge::logical(
+                "eventarc.records",
+                Unit::Count,
+                count(inner.active_eventarc_records),
+                Some(count(MAX_ACTIVE_EVENTARC_RECORDS)),
+            ),
+            Gauge::logical(
+                "eventarc.bytes",
+                Unit::Bytes,
+                count(inner.active_eventarc_bytes),
+                Some(count(MAX_ACTIVE_EVENTARC_BYTES)),
+            ),
+            Gauge::logical(
+                "history.records",
+                Unit::Count,
+                count(inner.history.records.len()),
+                Some(count(inner.history.retention)),
+            ),
+            Gauge::logical(
+                "dead_letters.records",
+                Unit::Count,
+                count(inner.dead_letters.records.len()),
+                Some(count(inner.dead_letters.retention)),
+            ),
+            Gauge::logical(
+                "invocations.running",
+                Unit::Count,
+                count(inner.running.len()),
+                Some(count(self.max_global_concurrency())),
+            ),
+            Gauge::logical(
+                "tasks.in_flight",
+                Unit::Count,
+                count(inner.task_scheduler.outstanding()),
+                None,
+            ),
+        ]
     }
 
     /// Returns the read-only Cloud Tasks `/queueStats` payload for all loaded task queues.

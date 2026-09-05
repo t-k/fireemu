@@ -45,6 +45,7 @@ mod functions;
 mod hub;
 mod import_export;
 mod init;
+mod resources;
 mod session_rsa_cache;
 mod sessions;
 mod snapshots;
@@ -2221,6 +2222,16 @@ fn control_state(
                 .expect("validated Functions Pub/Sub resources reprovision after reset");
         }
     }));
+    // Resource diagnostics, one hook per service (spec 15); collected one after another.
+    let mut resource_hooks: Vec<Arc<dyn fireemu_adapter_http::control::ResourceHook>> = vec![
+        Arc::new(resources::Firestore(backend.clone())),
+        Arc::new(resources::Storage(storage.clone())),
+        Arc::new(resources::Auth(registry.clone())),
+        Arc::new(resources::PubSub(pubsub.clone())),
+    ];
+    if let Some(runtime) = functions {
+        resource_hooks.push(Arc::new(resources::Functions(runtime.clone())));
+    }
     fireemu_adapter_http::control::ControlState {
         clock: clock.clone(),
         require_demo_prefix: cfg.require_demo_prefix,
@@ -2242,7 +2253,7 @@ fn control_state(
             "default".to_owned(),
             cfg.auth_project.clone(),
         )])),
-        resource_hooks: Vec::new(),
+        resource_hooks,
         project_hooks: Some(Arc::new(sessions::Projects {
             backend: backend.clone(),
             storage: storage.clone(),

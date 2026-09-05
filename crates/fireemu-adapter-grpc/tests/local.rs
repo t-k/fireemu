@@ -3617,3 +3617,103 @@ fn capture_and_restore_stay_atomic_under_the_barrier() {
     assert_eq!(lock_test_version(&backend, "demo-s1"), Some(2));
     assert_eq!(lock_test_version(&backend, "demo-s2"), Some(1));
 }
+
+#[test]
+fn resources_report_the_session_charge_active_transactions_and_refusals() {
+    use fireemu_core_session::tenancy::Scope;
+    use fireemu_core_types::resources::RootBudget;
+
+    let backend = history_budget_backend(2, 10);
+    backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "a", 1),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "b", 1),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    // The third version exceeds the session's two-version budget: refused and counted.
+    let refused = backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "c", 1),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::ResourceExhausted);
+    let _transaction = backend
+        .begin_transaction(&pb::BeginTransactionRequest {
+            database: "projects/demo-a/databases/(default)".to_owned(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let default = backend.resources(
+        &Scope::AllExcept(std::collections::BTreeSet::new()),
+        RootBudget::DEFAULT,
+    );
+    assert_eq!(default.service, "firestore");
+    let gauge = |report: &fireemu_core_types::resources::ServiceResources, id: &str| {
+        report
+            .gauges
+            .iter()
+            .find(|g| g.id == id)
+            .unwrap_or_else(|| panic!("{id} in {:?}", report.gauges))
+            .clone()
+    };
+    assert_eq!(gauge(&default, "history.session_versions").current, 2);
+    assert_eq!(gauge(&default, "history.session_versions").limit, Some(2));
+    assert!(gauge(&default, "history.session_versions").saturated());
+    assert_eq!(gauge(&default, "history.global_versions").current, 2);
+    assert_eq!(gauge(&default, "history.global_versions").limit, Some(10));
+    assert_eq!(gauge(&default, "transactions.active").current, 1);
+    assert!(gauge(&default, "history.live_document_bytes").current > 0);
+    assert!(
+        default
+            .refusals
+            .iter()
+            .any(|r| r.reason == "history.session_versions" && r.count == 1),
+        "{:?}",
+        default.refusals
+    );
+    let database = default
+        .roots
+        .roots
+        .iter()
+        .find(|r| r.kind == "database")
+        .unwrap();
+    assert_eq!(database.id, "demo-a/(default)");
+    assert_eq!(database.count, 2);
+    assert!(!database.outstanding);
+    let transactions = default
+        .roots
+        .roots
+        .iter()
+        .find(|r| r.kind == "transactions")
+        .unwrap();
+    assert_eq!(transactions.id, "demo-a/(default)");
+    assert_eq!(transactions.count, 1);
+    assert!(transactions.outstanding);
+    assert_eq!(
+        default.roots.roots[0].kind, "transactions",
+        "outstanding roots come first"
+    );
+
+    // A project session sees its own databases and never the backend-wide totals.
+    let project = backend.resources(&Scope::Project("demo-a".to_owned()), RootBudget::DEFAULT);
+    assert!(project
+        .gauges
+        .iter()
+        .all(|g| !g.id.starts_with("history.global_")));
+    assert!(project
+        .roots
+        .roots
+        .iter()
+        .any(|r| r.id == "demo-a/(default)"));
+    let other = backend.resources(&Scope::Project("demo-z".to_owned()), RootBudget::DEFAULT);
+    assert_eq!(other.roots.total, 0);
+    assert_eq!(gauge(&other, "transactions.active").current, 0);
+}

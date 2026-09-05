@@ -2458,3 +2458,56 @@ async fn history_cursors_deliver_deltas_and_resync_across_eviction_and_reset() {
     );
     runtime.runner().shutdown().await;
 }
+
+#[tokio::test]
+async fn resources_report_running_invocations_as_outstanding_roots() {
+    use fireemu_core_types::resources::RootBudget;
+    let (runtime, _clock) = start().await;
+    let idle = runtime.resources(RootBudget::DEFAULT);
+    assert_eq!(idle.service, "functions");
+    assert_eq!(idle.roots.total, 0);
+    let gauge = |report: &fireemu_core_types::resources::ServiceResources, id: &str| {
+        report
+            .gauges
+            .iter()
+            .find(|g| g.id == id)
+            .unwrap_or_else(|| panic!("{id} in {:?}", report.gauges))
+            .clone()
+    };
+    assert_eq!(
+        gauge(&idle, "outbox.records").limit,
+        Some(fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS as u64)
+    );
+    assert_eq!(
+        gauge(&idle, "outbox.bytes").limit,
+        Some(fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_BYTES as u64)
+    );
+    assert_eq!(gauge(&idle, "invocations.running").current, 0);
+
+    runtime.on_storage_event(&slow_object("held.txt"));
+    for _ in 0..200 {
+        if runtime.status()["running"].as_u64().unwrap_or(0) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let busy = runtime.resources(RootBudget::DEFAULT);
+    assert_eq!(gauge(&busy, "invocations.running").current, 1);
+    assert_eq!(
+        gauge(&busy, "invocations.running").limit,
+        Some(runtime.max_global_concurrency() as u64)
+    );
+    let outstanding: Vec<_> = busy.roots.roots.iter().filter(|r| r.outstanding).collect();
+    assert!(!outstanding.is_empty(), "{:?}", busy.roots);
+    assert!(outstanding.iter().any(|r| r.kind == "invocation"));
+    assert!(
+        busy.roots.roots.iter().all(|r| !r.id.contains("held.txt")),
+        "a root never carries the event payload: {:?}",
+        busy.roots
+    );
+    assert!(busy
+        .refusals
+        .iter()
+        .any(|r| r.reason == "schedule.overlap" && r.count == 0));
+    runtime.reset();
+}

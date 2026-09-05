@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use fireemu_core_types::admission::EventAdmissionError;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+use fireemu_core_types::resources::{Gauge, RetentionRoot, RootBudget, ServiceResources, Unit};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::hash::{base64, crc32c, md5, Crc32c, Md5};
@@ -670,6 +671,75 @@ impl StorageState {
         retained
             .checked_add(additional)
             .is_some_and(|total| total <= limit)
+    }
+
+    /// The retention report of the buckets `owned` selects: objects and their bytes per bucket
+    /// as retained roots, and every upload still receiving bytes as an outstanding root. An
+    /// upload identifier is a capability (whoever holds it can append), so the root carries a
+    /// digest of it rather than the identifier itself.
+    #[must_use]
+    pub fn resources(&self, owned: impl Fn(&str) -> bool, budget: RootBudget) -> ServiceResources {
+        let count = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
+        let mut roots = Vec::new();
+        let mut objects = 0u64;
+        let mut object_bytes = 0u64;
+        for bucket in self.buckets() {
+            if !owned(bucket.as_str()) {
+                continue;
+            }
+            let listed = self.objects(&bucket);
+            let bytes = listed
+                .iter()
+                .fold(0u64, |sum, meta| sum.saturating_add(meta.size));
+            objects = objects.saturating_add(count(listed.len()));
+            object_bytes = object_bytes.saturating_add(bytes);
+            roots.push(RetentionRoot {
+                kind: "bucket".to_owned(),
+                id: bucket.as_str().to_owned(),
+                count: count(listed.len()),
+                bytes,
+                outstanding: false,
+            });
+        }
+        let mut uploads = 0u64;
+        let mut upload_bytes = 0u64;
+        for (id, upload) in &self.uploads {
+            if !owned(upload.bucket.as_str()) || !matches!(upload.state, UploadState::Receiving) {
+                continue;
+            }
+            let bytes = count(upload.received.len());
+            uploads += 1;
+            upload_bytes = upload_bytes.saturating_add(bytes);
+            let digest = fireemu_core_types::hash::sha256(id.as_str().as_bytes());
+            roots.push(RetentionRoot {
+                kind: "upload".to_owned(),
+                id: fireemu_core_types::hash::base64_url_safe(&digest[..12]),
+                count: 1,
+                bytes,
+                outstanding: true,
+            });
+        }
+        ServiceResources {
+            service: "storage".to_owned(),
+            gauges: vec![
+                Gauge::logical("objects.count", Unit::Count, objects, None),
+                Gauge::logical("objects.bytes", Unit::Bytes, object_bytes, None),
+                Gauge::logical(
+                    "uploads.active",
+                    Unit::Count,
+                    uploads,
+                    Some(count(MAX_UPLOAD_SESSIONS)),
+                ),
+                Gauge::logical(
+                    "uploads.bytes",
+                    Unit::Bytes,
+                    upload_bytes,
+                    Some(MAX_RETAINED_UPLOAD_BYTES),
+                ),
+            ],
+            refusals: Vec::new(),
+            roots: budget.bound(roots),
+        }
     }
 
     /// Bytes retained across unfinished resumable uploads.
@@ -2145,6 +2215,108 @@ mod tests {
         assert_eq!(
             upload_size_error(4, Some(3)),
             Some(StorageError::UploadSizeMismatch)
+        );
+    }
+
+    #[test]
+    fn resources_report_owned_buckets_and_active_uploads_with_digested_ids() {
+        use fireemu_core_types::resources::RootBudget;
+        let mut state = StorageState::new(1);
+        let now = LogicalInstant::UNIX_EPOCH;
+        let mine = BucketName::try_new("demo-app.appspot.com").unwrap();
+        let theirs = BucketName::try_new("demo-other.appspot.com").unwrap();
+        state
+            .put(
+                &mine,
+                &ObjectName::try_new("a.txt").unwrap(),
+                vec![1; 10],
+                NewMetadata::default(),
+                Precondition::default(),
+                now,
+            )
+            .unwrap();
+        state
+            .put(
+                &mine,
+                &ObjectName::try_new("b.txt").unwrap(),
+                vec![2; 5],
+                NewMetadata::default(),
+                Precondition::default(),
+                now,
+            )
+            .unwrap();
+        state
+            .put(
+                &theirs,
+                &ObjectName::try_new("c.txt").unwrap(),
+                vec![3; 100],
+                NewMetadata::default(),
+                Precondition::default(),
+                now,
+            )
+            .unwrap();
+        let upload = state
+            .begin_upload(
+                &mine,
+                &ObjectName::try_new("large.bin").unwrap(),
+                NewMetadata::default(),
+                Precondition::default(),
+                None,
+                now,
+            )
+            .unwrap();
+        state
+            .append_upload_owned(&upload, 0, vec![9; 7], now)
+            .unwrap();
+        let finished = state
+            .begin_upload(
+                &mine,
+                &ObjectName::try_new("done.bin").unwrap(),
+                NewMetadata::default(),
+                Precondition::default(),
+                None,
+                now,
+            )
+            .unwrap();
+        state.cancel_upload(&finished, now).unwrap();
+
+        let report = state.resources(
+            |bucket| bucket == "demo-app.appspot.com",
+            RootBudget::DEFAULT,
+        );
+        assert_eq!(report.service, "storage");
+        let gauge = |id: &str| report.gauges.iter().find(|g| g.id == id).unwrap().clone();
+        assert_eq!(gauge("objects.count").current, 2);
+        assert_eq!(gauge("objects.bytes").current, 15);
+        assert_eq!(gauge("uploads.active").current, 1);
+        assert_eq!(
+            gauge("uploads.active").limit,
+            Some(MAX_UPLOAD_SESSIONS as u64)
+        );
+        assert_eq!(gauge("uploads.bytes").current, 7);
+        assert_eq!(
+            gauge("uploads.bytes").limit,
+            Some(MAX_RETAINED_UPLOAD_BYTES)
+        );
+        let roots = &report.roots;
+        assert!(!roots.truncated);
+        assert_eq!(roots.total, 2);
+        let upload_root = roots.roots.iter().find(|r| r.kind == "upload").unwrap();
+        assert!(upload_root.outstanding);
+        assert_eq!(upload_root.bytes, 7);
+        assert_ne!(
+            upload_root.id,
+            upload.as_str(),
+            "the upload id is a capability"
+        );
+        assert!(!upload_root.id.contains(upload.as_str()));
+        let bucket_root = roots.roots.iter().find(|r| r.kind == "bucket").unwrap();
+        assert_eq!(bucket_root.id, "demo-app.appspot.com");
+        assert_eq!(bucket_root.count, 2);
+        assert!(!bucket_root.outstanding);
+        assert!(
+            roots.roots.iter().all(|r| r.id != "demo-other.appspot.com"),
+            "another session's bucket is not reported"
         );
     }
 }

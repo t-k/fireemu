@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+use fireemu_core_types::resources::{Gauge, RetentionRoot, RootBudget, ServiceResources, Unit};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::error::{PubSubError, Result};
@@ -108,6 +109,112 @@ impl PubSubState {
             ack_rng: SplitMix64::new(seed ^ 0x5053_5542_4143_4b5f),
             snapshot_counter: 0,
             snapshot_retained_bytes: 0,
+        }
+    }
+
+    /// The retention report of the topics, subscriptions and snapshots of the projects `owns`
+    /// selects: counts against the per-project limits, unacknowledged messages and their
+    /// payload bytes as outstanding roots (one per subscription), and snapshots as retained
+    /// roots. The snapshot byte total is daemon-wide and reported only when `report_global`
+    /// is set (the default session), so a session never reads another session's totals.
+    /// Message payloads are never included.
+    #[must_use]
+    pub fn resources(
+        &self,
+        owns: &dyn Fn(&str) -> bool,
+        report_global: bool,
+        budget: RootBudget,
+    ) -> ServiceResources {
+        let count = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
+        let mut roots = Vec::new();
+        let mut topics = 0u64;
+        for topic in self.topics.values() {
+            if owns(topic.name.project()) {
+                topics += 1;
+            }
+        }
+        let mut subscriptions = 0u64;
+        let mut unacked = 0u64;
+        let mut unacked_bytes = 0u64;
+        let mut retained_acked_bytes = 0u64;
+        for (name, subscription) in &self.subscriptions {
+            if !owns(subscription.config().name.project()) {
+                continue;
+            }
+            subscriptions += 1;
+            let (pending, bytes, acked_bytes) = subscription.retention_accounting();
+            retained_acked_bytes = retained_acked_bytes.saturating_add(acked_bytes);
+            if pending == 0 {
+                continue;
+            }
+            let pending = count(pending);
+            unacked = unacked.saturating_add(pending);
+            unacked_bytes = unacked_bytes.saturating_add(bytes);
+            roots.push(RetentionRoot {
+                kind: "unacked".to_owned(),
+                id: name.clone(),
+                count: pending,
+                bytes,
+                outstanding: true,
+            });
+        }
+        let mut snapshots = 0u64;
+        for (name, snapshot) in &self.snapshots {
+            if !owns(&snapshot.owner_project) {
+                continue;
+            }
+            snapshots += 1;
+            let bytes = snapshot
+                .captured_messages
+                .iter()
+                .fold(0u64, |sum, message| {
+                    sum.saturating_add(count(message.message.data.len()))
+                });
+            roots.push(RetentionRoot {
+                kind: "snapshot".to_owned(),
+                id: name.clone(),
+                count: count(snapshot.captured_messages.len()),
+                bytes,
+                outstanding: false,
+            });
+        }
+        let mut gauges = vec![
+            Gauge::logical("topics", Unit::Count, topics, Some(count(MAX_TOPICS))),
+            Gauge::logical(
+                "subscriptions",
+                Unit::Count,
+                subscriptions,
+                Some(count(MAX_SUBSCRIPTIONS)),
+            ),
+            Gauge::logical("unacked.messages", Unit::Count, unacked, None),
+            Gauge::logical("unacked.bytes", Unit::Bytes, unacked_bytes, None),
+            Gauge::logical(
+                "retained.bytes",
+                Unit::Bytes,
+                unacked_bytes.saturating_add(retained_acked_bytes),
+                None,
+            )
+            .with_reclaimable(retained_acked_bytes),
+            Gauge::logical(
+                "snapshots.retained",
+                Unit::Count,
+                snapshots,
+                Some(count(MAX_SNAPSHOTS)),
+            ),
+        ];
+        if report_global {
+            gauges.push(Gauge::logical(
+                "snapshots.retained_bytes",
+                Unit::Bytes,
+                count(self.snapshot_retained_bytes),
+                Some(count(MAX_SNAPSHOT_RETAINED_BYTES)),
+            ));
+        }
+        ServiceResources {
+            service: "pubsub".to_owned(),
+            gauges,
+            refusals: Vec::new(),
+            roots: budget.bound(roots),
         }
     }
 
@@ -2026,5 +2133,71 @@ mod tests {
         let restored = state.pull(&target, 1, now).unwrap();
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].message.message.data, b"restored");
+    }
+
+    #[test]
+    fn resources_report_owned_subscriptions_and_unacknowledged_messages() {
+        use fireemu_core_types::resources::RootBudget;
+        let mut s = PubSubState::new(42);
+        let now = LogicalInstant::from_unix_seconds(1000);
+        for project in ["demo-app", "demo-other"] {
+            s.create_topic(topic(project, "orders"), BTreeMap::new())
+                .unwrap();
+            s.create_subscription(sub_cfg(project, "orders-sub", "orders", Filter::always()))
+                .unwrap();
+            s.publish(
+                &topic(project, "orders"),
+                vec![data(b"hello"), data(b"world!")],
+                now,
+            )
+            .unwrap();
+        }
+        s.create_subscription(sub_cfg("demo-app", "idle-sub", "orders", Filter::always()))
+            .unwrap();
+
+        let mine = |project: &str| project == "demo-app";
+        let report = s.resources(&mine, false, RootBudget::DEFAULT);
+        assert_eq!(report.service, "pubsub");
+        let gauge = |id: &str| report.gauges.iter().find(|g| g.id == id).unwrap().clone();
+        assert_eq!(gauge("topics").current, 1);
+        assert_eq!(gauge("subscriptions").current, 2);
+        assert_eq!(gauge("subscriptions").limit, Some(MAX_SUBSCRIPTIONS as u64));
+        assert_eq!(gauge("unacked.messages").current, 2);
+        assert_eq!(gauge("unacked.bytes").current, 11);
+        assert!(
+            report
+                .gauges
+                .iter()
+                .all(|g| g.id != "snapshots.retained_bytes"),
+            "the daemon-wide snapshot total is reported to the default session only"
+        );
+        assert_eq!(report.roots.total, 1);
+        let root = &report.roots.roots[0];
+        assert_eq!(root.kind, "unacked");
+        assert_eq!(root.id, "projects/demo-app/subscriptions/orders-sub");
+        assert_eq!(root.count, 2);
+        assert!(root.outstanding);
+
+        let subscription = SubscriptionName::new("demo-app", "orders-sub").unwrap();
+        let pulled = s.pull(&subscription, 10, now).unwrap();
+        let acks: Vec<String> = pulled.iter().map(|m| m.ack_id.clone()).collect();
+        assert_eq!(s.acknowledge(&subscription, &acks), Ok(2));
+        let quiet = s.resources(&mine, true, RootBudget::DEFAULT);
+        assert_eq!(quiet.roots.total, 0);
+        let retained = quiet
+            .gauges
+            .iter()
+            .find(|g| g.id == "retained.bytes")
+            .unwrap();
+        assert_eq!(
+            retained.current, 11,
+            "acknowledged payloads stay retained until reclaimed"
+        );
+        assert_eq!(retained.reclaimable, 11);
+        assert!(quiet
+            .gauges
+            .iter()
+            .any(|g| g.id == "snapshots.retained_bytes"
+                && g.limit == Some(MAX_SNAPSHOT_RETAINED_BYTES as u64)));
     }
 }

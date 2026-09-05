@@ -31,6 +31,9 @@ use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{Clock, DeterministicRng, SplitMix64};
 use fireemu_core_types::ids::{CollectionId, DatabaseId, DocumentId};
+use fireemu_core_types::resources::{
+    Gauge, Refusal, RetentionRoot, RootBudget, ServiceResources, Unit,
+};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
@@ -237,6 +240,8 @@ struct HistoryBudgetLedger {
     charged_by_owner: BTreeMap<HistoryBudgetOwner, HistoryUsage>,
     accounting_steps: u64,
     next_reservation: u64,
+    /// Refused reservations by the limit that refused them, for the resource report.
+    refusals: BTreeMap<&'static str, u64>,
 }
 
 impl HistoryBudgetLedger {
@@ -250,7 +255,16 @@ impl HistoryBudgetLedger {
             charged_by_owner: BTreeMap::new(),
             accounting_steps: 0,
             next_reservation: 0,
+            refusals: BTreeMap::new(),
         }
+    }
+
+    fn note_refusal(&mut self, error: &FirestoreError) {
+        let dimension = match error {
+            FirestoreError::HistoryCapacity(capacity) => capacity.dimension,
+            _ => "other",
+        };
+        *self.refusals.entry(dimension).or_default() += 1;
     }
 
     fn adjust_totals(&mut self, old: Option<&HistoryCharge>, new: Option<&HistoryCharge>) {
@@ -283,11 +297,13 @@ impl HistoryBudgetLedger {
         // A speculative reduction is not capacity another database may consume. It becomes
         // visible only when this reservation commits; cancellation must leave the old charge.
         if self.pending_by_key.contains_key(&key) {
-            return Err(FirestoreError::HistoryCapacity(HistoryCapacityError {
+            let error = FirestoreError::HistoryCapacity(HistoryCapacityError {
                 dimension: "database reservation",
                 current: 1,
                 maximum: 0,
-            }));
+            });
+            self.note_refusal(&error);
+            return Err(error);
         }
         let previous = self.committed.get(&key).cloned();
         if let Some(committed) = &previous {
@@ -301,7 +317,10 @@ impl HistoryBudgetLedger {
             }),
             charge.usage,
         );
-        self.validate_global(candidate_global)?;
+        if let Err(error) = self.validate_global(candidate_global) {
+            self.note_refusal(&error);
+            return Err(error);
+        }
         let current_owner_total = self
             .charged_by_owner
             .get(&charge.owner)
@@ -314,7 +333,11 @@ impl HistoryBudgetLedger {
                 current_owner_total
             }
         });
-        self.validate_owner(add_aggregate_usage(without_previous, charge.usage))?;
+        if let Err(error) = self.validate_owner(add_aggregate_usage(without_previous, charge.usage))
+        {
+            self.note_refusal(&error);
+            return Err(error);
+        }
         let id = self.next_reservation;
         self.next_reservation = self.next_reservation.wrapping_add(1);
         self.adjust_totals(previous.as_ref(), Some(&charge));
@@ -1148,6 +1171,143 @@ impl LocalBackend {
                 }
             }
         }
+    }
+
+    /// One session's Firestore retention report for the resource diagnostics: the session's
+    /// logical history charge against its limits (and the backend-wide charge for the default
+    /// session only, so a session never reads another session's totals), the refusals the
+    /// ledger counted by limit, and one root per database plus one per database with active
+    /// transactions. Each database is read under its own lock, one after another; the report
+    /// never holds two databases' locks or the catalog lock while reading a database.
+    #[must_use]
+    pub fn resources(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        budget: RootBudget,
+    ) -> ServiceResources {
+        let owner = match scope {
+            fireemu_core_session::tenancy::Scope::Project(project) => {
+                HistoryBudgetOwner::Project(project.clone())
+            }
+            fireemu_core_session::tenancy::Scope::AllExcept(_) => HistoryBudgetOwner::Default,
+        };
+        let (mut gauges, refusals) = self.history_budget_gauges(&owner, scope.is_default());
+        let (database_gauges, roots) = self.database_roots(scope);
+        gauges.extend(database_gauges);
+        ServiceResources {
+            service: "firestore".to_owned(),
+            gauges,
+            refusals,
+            roots: budget.bound(roots),
+        }
+    }
+
+    /// The ledger's view: the owner's charge against the session limits, the backend-wide
+    /// charge against the global limits for the default session only, and the refusals by
+    /// limit.
+    fn history_budget_gauges(
+        &self,
+        owner: &HistoryBudgetOwner,
+        report_global: bool,
+    ) -> (Vec<Gauge>, Vec<Refusal>) {
+        let ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let session = ledger
+            .charged_by_owner
+            .get(owner)
+            .copied()
+            .unwrap_or_default();
+        let limits = ledger.limits;
+        let mut gauges = vec![
+            Gauge::logical(
+                "history.session_bytes",
+                Unit::Bytes,
+                session.total_bytes,
+                Some(limits.session_bytes),
+            ),
+            Gauge::logical(
+                "history.session_versions",
+                Unit::Count,
+                session.versions,
+                Some(limits.session_versions),
+            ),
+        ];
+        if report_global {
+            gauges.push(Gauge::logical(
+                "history.global_bytes",
+                Unit::Bytes,
+                ledger.charged_global.total_bytes,
+                Some(limits.global_bytes),
+            ));
+            gauges.push(Gauge::logical(
+                "history.global_versions",
+                Unit::Count,
+                ledger.charged_global.versions,
+                Some(limits.global_versions),
+            ));
+        }
+        let refusals = ledger
+            .refusals
+            .iter()
+            .map(|(reason, count)| Refusal {
+                reason: format!("history.{}", reason.replace(' ', "_")),
+                count: *count,
+            })
+            .collect();
+        (gauges, refusals)
+    }
+
+    /// One root per database the scope owns (its retained versions and bytes) and one per
+    /// database with active transactions, each read under that database's own lock.
+    fn database_roots(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+    ) -> (Vec<Gauge>, Vec<RetentionRoot>) {
+        let mut roots = Vec::new();
+        let mut live_bytes = 0u64;
+        let mut historical_bytes = 0u64;
+        let mut transactions = 0u64;
+        for ((project, database), handle) in self.handles_of(scope) {
+            let Some((usage, stats)) =
+                handle.read(|state| (state.history_usage(), state.transaction_bookkeeping_stats()))
+            else {
+                continue;
+            };
+            live_bytes = live_bytes.saturating_add(usage.live_document_bytes);
+            historical_bytes = historical_bytes.saturating_add(usage.historical_document_bytes);
+            let active = u64::try_from(stats.active).unwrap_or(u64::MAX);
+            transactions = transactions.saturating_add(active);
+            let id = format!("{project}/{database}");
+            roots.push(RetentionRoot {
+                kind: "database".to_owned(),
+                id: id.clone(),
+                count: usage.versions,
+                bytes: usage.total_bytes,
+                outstanding: false,
+            });
+            if active > 0 {
+                roots.push(RetentionRoot {
+                    kind: "transactions".to_owned(),
+                    id,
+                    count: active,
+                    bytes: stats.conflict_ledger_bytes,
+                    outstanding: true,
+                });
+            }
+        }
+        let gauges = vec![
+            Gauge::logical("history.live_document_bytes", Unit::Bytes, live_bytes, None),
+            Gauge::logical(
+                "history.historical_document_bytes",
+                Unit::Bytes,
+                historical_bytes,
+                None,
+            ),
+            Gauge::logical("transactions.active", Unit::Count, transactions, None),
+        ];
+        (gauges, roots)
     }
 
     /// Aggregate logical Firestore history retained by the backend.

@@ -960,6 +960,66 @@ fn the_inspection_routes_are_project_scoped_and_can_wipe_accounts() {
 }
 
 #[test]
+fn allow_duplicate_emails_applies_to_password_accounts_and_active_lookup() {
+    let s = state();
+    let config_path = format!("{EMU}/config");
+    let (status, enabled) = {
+        let response = handle_with(
+            &s,
+            "PATCH",
+            &config_path,
+            &owner(),
+            &json!({"signIn": {"allowDuplicateEmails": true}}),
+        );
+        (response.status, response.body)
+    };
+    assert_eq!(status, 200, "{enabled}");
+    assert_eq!(enabled["signIn"]["allowDuplicateEmails"], true);
+
+    let first = sign_up(&s, "duplicate@example.com");
+    let second = sign_up(&s, "duplicate@example.com");
+    assert_ne!(first["localId"], second["localId"]);
+
+    let (_, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"email": ["duplicate@example.com"]}),
+    );
+    assert_eq!(lookup["users"][0]["localId"], second["localId"]);
+
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    assert_eq!(
+        claims(signed_in["idToken"].as_str().unwrap())["sub"],
+        second["localId"]
+    );
+
+    let (status, updated) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"localId": first["localId"], "email": "duplicate@example.com"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": second["idToken"]}),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400);
+}
+
+#[test]
 fn an_unverified_provider_email_never_claims_an_existing_account() {
     let s = state();
     let victim = sign_up(&s, "victim@example.com");

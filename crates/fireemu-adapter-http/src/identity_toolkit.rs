@@ -2671,9 +2671,10 @@ fn sign_up(
         let Some(email) = new_user.email.as_deref() else {
             return error(400, "MISSING_EMAIL");
         };
-        if store
-            .user_by_email(email)
-            .is_some_and(|u| u.local_id != uid)
+        if !store.config().allow_duplicate_emails
+            && store
+                .user_by_email(email)
+                .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
         }
@@ -3462,9 +3463,10 @@ fn update(
         return error(400, "OPERATION_NOT_ALLOWED");
     }
     if let Some(email) = &plan.email {
-        if store
-            .user_by_email(email)
-            .is_some_and(|u| u.local_id != uid)
+        if !store.config().allow_duplicate_emails
+            && store
+                .user_by_email(email)
+                .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
         }
@@ -4666,9 +4668,10 @@ fn send_oob_code(
                 let Some(new_email) = str_field(body, "newEmail") else {
                     return error(400, "MISSING_NEW_EMAIL");
                 };
-                if store
-                    .user_by_email(new_email)
-                    .is_some_and(|u| u.local_id != uid)
+                if !store.config().allow_duplicate_emails
+                    && store
+                        .user_by_email(new_email)
+                        .is_some_and(|u| u.local_id != uid)
                 {
                     return error(400, "EMAIL_EXISTS");
                 }
@@ -4814,9 +4817,10 @@ fn sign_in_with_email_link(
             Ok(uid) => uid,
             Err(r) => return r,
         };
-        if store
-            .user_by_email(email)
-            .is_some_and(|u| u.local_id != uid)
+        if !store.config().allow_duplicate_emails
+            && store
+                .user_by_email(email)
+                .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
         }
@@ -5677,7 +5681,8 @@ fn emulator_route(
         // `PATCH` replaces the switches the request names and reads the rest back. The
         // official emulator applies both; `enableImprovedEmailPrivacy` changes what a
         // password sign-in, a password reset and `createAuthUri` reveal, while
-        // `allowDuplicateEmails` is recorded for export and does not yet admit duplicates.
+        // `allowDuplicateEmails` is persisted in the export and controls the email ownership
+        // policy of the selected project.
         ("PATCH", "config") => {
             let mut config = store.config();
             if let Some(v) = body

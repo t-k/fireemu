@@ -134,7 +134,7 @@
     "upgradePolicy": "Bumping the pin in conformance/package.json and re-recording turns every newly detected difference into a debt row in conformance/DEBT.md, because a row can only become a documented divergence once a human writes it into conformance/divergences.json. Any surface the new baseline adds is absent from this contract, so compat-check fails until it is enumerated with a scope; until then the claim sentence names the old version and is therefore false, which is the intended fail-closed behaviour."
   },
   "claim": {
-    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions and Cloud Pub/Sub, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Eventarc and Cloud Tasks remain open gaps.",
+    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub and Cloud Tasks remain open gaps.",
     "documents": [
       "README.md"
     ],
@@ -473,7 +473,20 @@
           "officialLimitations": [
             "the official emulator refuses readTime selectors and findNearest on the REST surface rather than answering them"
           ],
-          "fireemuOnly": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "Eventarc trigger definitions are limited to 256 KiB after project substitution, the live registry to 4096 entries and 16 MiB, one publish to 256 input events and 256 expanded deliveries, and the Functions runtime to 4096 active event records and 64 MiB of serialized payload and routing data; Eventarc may consume at most 3072 records and 48 MiB so other trigger sources retain a reservation, and admission fails atomically with 400, 413 or 429 rather than retaining unbounded local work",
+              "precision": "strictly-safer"
+            },
+            {
+              "behaviour": "custom channels are bound to the registration project and compared as full resource names; non-loopback browser origins are refused and CORS is exposed only on the two google routes, preventing another local or remote project from driving trigger management or delivery through suffix matching",
+              "precision": "strictly-safer"
+            },
+            {
+              "behaviour": "removal compares the semantic eventTrigger object rather than depending on JSON member insertion order, and a successful source reload rebuilds the manifest-owned table at the new generation instead of retaining manually duplicated stale-generation registrations",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
           "productionOnly": [],
           "preview": []
         },
@@ -1950,14 +1963,12 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [],
-      "gaps": [
-        "the emulator-internal trigger registration, removal and getTriggers management routes"
-      ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
       "claims": [
         {
           "id": "EVENTARC-CLAIM-LOCAL-PUBLISH",
-          "statement": "When a Functions codebase is loaded, the Eventarc support emulator has an independently bound listener advertised by the Hub and CLOUD_EVENTARC_EMULATOR_HOST; custom channel and google-channel publications are accepted only on that listener and dispatched to matching Functions triggers.",
+          "statement": "When a Functions codebase is loaded, the Eventarc support emulator has an independently bound listener advertised by the Hub and CLOUD_EVENTARC_EMULATOR_HOST; custom channel and google-channel publications are accepted only on that listener and dispatched through the live trigger table maintained by the official registration, removal and getTriggers routes.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -1967,6 +1978,10 @@
           "evidence": {
             "tests": [
               "support_service_routes_are_isolated_from_the_functions_listener",
+              "eventarc_management_routes_control_live_dispatch_and_expose_the_official_table",
+              "eventarc_cors_is_limited_to_the_two_official_google_routes",
+              "eventarc_publish_rejects_amplified_fanout_without_partial_enqueue",
+              "rejected_manifest_reload_keeps_the_eventarc_generation_and_table",
               "functions_starts_eventarc_and_tasks_on_dedicated_ports"
             ],
             "integration": [
@@ -1977,7 +1992,24 @@
             "conformance": []
           },
           "officialLimitations": [],
-          "fireemuOnly": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "Eventarc trigger definitions are limited to 256 KiB after project substitution, the live registry to 4096 entries and 16 MiB including owned lookup and display indexes, one publish to 256 input events and 256 fault-expanded deliveries, and active Functions events to 4096 records and 64 MiB of serialized payload and routing data. Eventarc may consume at most 3072 records and 48 MiB, preserving a reservation for other trigger sources; admission fails atomically with 400, 413 or 429 rather than retaining unbounded local work.",
+              "reason": "The production Eventarc control plane is managed and does not expose this local in-memory failure mode. The explicit bounds prevent a local SDK client from exhausting the emulator process."
+            },
+            {
+              "behaviour": "Custom Eventarc channels require the full project-qualified resource for dispatch, and Eventarc response CORS is restricted to loopback origins. OPTIONS is not synthesized and follows the pinned emulator's route miss behaviour.",
+              "reason": "A local support listener must not become a cross-origin control plane for another project or a remote web page."
+            },
+            {
+              "behaviour": "Trigger removal compares parsed JSON objects semantically rather than preserving the pinned emulator's JSON member-order sensitivity.",
+              "reason": "The production API represents a trigger definition as structured data, so member order is not a semantic distinction."
+            },
+            {
+              "behaviour": "A successful Functions source reload rebuilds the Eventarc table from the current manifest generation and removes manual, duplicate, or stale-generation registrations.",
+              "reason": "The registration endpoints are emulator-local rather than a production Eventarc lifecycle API. Rebuilding prevents a stale local binding from dispatching after the source it named has been replaced."
+            }
+          ],
           "productionOnly": [],
           "preview": []
         }

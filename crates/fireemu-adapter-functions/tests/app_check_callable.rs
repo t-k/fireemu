@@ -266,6 +266,52 @@ impl Harness {
         self.raw_to_from(addr, path, body, None).await.status
     }
 
+    async fn raw_request_to(
+        &self,
+        method: &str,
+        addr: std::net::SocketAddr,
+        path: &str,
+        body: &[u8],
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
+        self.raw_request_with_origin(method, addr, path, body, None)
+            .await
+    }
+
+    async fn raw_request_with_origin(
+        &self,
+        method: &str,
+        addr: std::net::SocketAddr,
+        path: &str,
+        body: &[u8],
+        origin: Option<&str>,
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let origin = origin.map_or_else(String::new, |value| format!("origin: {value}\r\n"));
+        let preflight = if method == "OPTIONS" {
+            "access-control-request-method: POST\r\n"
+        } else {
+            ""
+        };
+        let head = format!(
+            "{method} {path} HTTP/1.1\r\nhost: {addr}\r\n{origin}{preflight}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        let mut stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("the support listener accepts");
+        stream
+            .write_all(head.as_bytes())
+            .await
+            .expect("request head");
+        stream.write_all(body).await.expect("request body");
+        stream.flush().await.expect("flush");
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.expect("response");
+        fireemu_adapter_functions::http::parse_response(&raw, method)
+            .expect("a well-formed support response")
+    }
+
     async fn raw_to_from(
         &self,
         addr: std::net::SocketAddr,
@@ -622,6 +668,251 @@ async fn support_service_routes_are_isolated_from_the_functions_listener() {
 
     eventarc_server.abort();
     tasks_server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn eventarc_management_routes_control_live_dispatch_and_expose_the_official_table() {
+    let h = start(true).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind Eventarc");
+    let addr = listener.local_addr().expect("a local Eventarc address");
+    let server = tokio::spawn(fireemu_adapter_functions::http::serve_eventarc(
+        listener,
+        h.runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
+    ));
+    let dispatcher = tokio::spawn(h.runtime.clone().dispatch_loop());
+    let trigger_name = "us-central1-customEvent-0-locations/us-central1/channels/custom";
+    let trigger_path = format!("/emulator/v1/projects/{PROJECT}/triggers/{trigger_name}");
+    let remove_path = format!("/emulator/v1/remove/projects/{PROJECT}/triggers/{trigger_name}");
+    let trigger = br#"{"eventTrigger":{"eventType":"com.example.done","channel":"locations/us-central1/channels/custom","eventFilters":{"region":"eu"},"service":"eventarc.googleapis.com"}}"#;
+    let publish_path = "/projects/demo-app/locations/us-central1/channels/custom:publishEvents";
+    let event = br#"{"events":[{"id":"e-1","type":"com.example.done","specVersion":"1.0","source":"test","attributes":{"time":{"ceTimestamp":"2026-09-05T00:00:00Z"},"datacontenttype":{"ceString":"application/json"},"region":{"ceString":"eu"}},"textData":"{\"ok\":true}"}]}"#;
+
+    let listed = h
+        .raw_request_with_origin(
+            "GET",
+            addr,
+            "/google/getTriggers",
+            b"",
+            Some("http://127.0.0.1:5173"),
+        )
+        .await;
+    assert_eq!(listed.status, 200);
+    assert_eq!(
+        response_header(&listed, "access-control-allow-origin"),
+        Some("http://127.0.0.1:5173")
+    );
+    let listed: Value = serde_json::from_slice(&listed.body).expect("trigger table JSON");
+    let key = "com.example.done-locations/us-central1/channels/custom";
+    assert_eq!(listed[key][0]["projectId"], PROJECT);
+    assert_eq!(listed[key][0]["triggerName"], trigger_name);
+
+    assert_eq!(h.post_raw_to(addr, publish_path, event).await, 200);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.runtime.status()["succeeded"].as_u64() != Some(1) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the registered function is dispatched");
+
+    let cross_project = "/projects/demo-other/locations/us-central1/channels/custom:publishEvents";
+    assert_eq!(h.post_raw_to(addr, cross_project, event).await, 200);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.runtime.status()["succeeded"], 1);
+
+    let removed = h.raw_request_to("POST", addr, &remove_path, trigger).await;
+    assert_eq!(removed.status, 200);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&removed.body).unwrap(),
+        serde_json::json!({"res": "OK"})
+    );
+    assert_eq!(h.post_raw_to(addr, publish_path, event).await, 200);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.runtime.status()["succeeded"], 1);
+    let listed = h
+        .raw_request_to("GET", addr, "/google/getTriggers", b"")
+        .await;
+    assert_eq!(
+        serde_json::from_slice::<Value>(&listed.body).unwrap(),
+        serde_json::json!({})
+    );
+
+    let missing = h.raw_request_to("POST", addr, &remove_path, trigger).await;
+    assert_eq!(missing.status, 400);
+    assert!(String::from_utf8_lossy(&missing.body).contains("Unable to delete function trigger"));
+
+    let arbitrary_path = format!(
+        "/emulator/v1/projects/{PROJECT}/triggers/us-central1-customEvent-arbitrary-suffix"
+    );
+    let arbitrary_remove = format!(
+        "/emulator/v1/remove/projects/{PROJECT}/triggers/us-central1-customEvent-arbitrary-suffix"
+    );
+    let arbitrary = h
+        .raw_request_to("POST", addr, &arbitrary_path, trigger)
+        .await;
+    assert_eq!(arbitrary.status, 200);
+    assert_eq!(h.post_raw_to(addr, publish_path, event).await, 200);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.runtime.status()["succeeded"], 1);
+    assert_eq!(
+        h.raw_request_to("POST", addr, &arbitrary_remove, trigger)
+            .await
+            .status,
+        200
+    );
+
+    let registered = h.raw_request_to("POST", addr, &trigger_path, trigger).await;
+    assert_eq!(registered.status, 200);
+    assert_eq!(h.post_raw_to(addr, publish_path, event).await, 200);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.runtime.status()["succeeded"].as_u64() != Some(2) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("re-registration restores dispatch");
+
+    server.abort();
+    dispatcher.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn eventarc_cors_is_limited_to_the_two_official_google_routes() {
+    let h = start(true).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(fireemu_adapter_functions::http::serve_eventarc(
+        listener,
+        h.runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
+    ));
+    let origin = Some("http://127.0.0.1:5173");
+    let custom = h
+        .raw_request_with_origin(
+            "POST",
+            addr,
+            "/projects/demo-app/locations/us-central1/channels/custom:publishEvents",
+            br#"{"events":[]}"#,
+            origin,
+        )
+        .await;
+    assert_eq!(custom.status, 200);
+    assert_eq!(
+        response_header(&custom, "access-control-allow-origin"),
+        None
+    );
+    let triggers = h
+        .raw_request_with_origin("GET", addr, "/google/getTriggers", b"", origin)
+        .await;
+    assert_eq!(triggers.status, 200);
+    assert_eq!(
+        response_header(&triggers, "access-control-allow-origin"),
+        origin
+    );
+    let google = h
+        .raw_request_with_origin(
+            "POST",
+            addr,
+            "/google/publishEvents",
+            br#"{"events":[]}"#,
+            origin,
+        )
+        .await;
+    assert_eq!(google.status, 200);
+    assert_eq!(
+        response_header(&google, "access-control-allow-origin"),
+        origin
+    );
+    let google_preflight = h
+        .raw_request_with_origin("OPTIONS", addr, "/google/publishEvents", b"", origin)
+        .await;
+    assert_eq!(google_preflight.status, 404);
+    assert_eq!(
+        response_header(&google_preflight, "access-control-allow-origin"),
+        None
+    );
+    let custom_preflight = h
+        .raw_request_with_origin(
+            "OPTIONS",
+            addr,
+            "/projects/demo-app/locations/us-central1/channels/custom:publishEvents",
+            b"",
+            origin,
+        )
+        .await;
+    assert_eq!(custom_preflight.status, 404);
+    assert_eq!(
+        response_header(&custom_preflight, "access-control-allow-origin"),
+        None
+    );
+
+    server.abort();
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn eventarc_publish_rejects_amplified_fanout_without_partial_enqueue() {
+    let h = start(true).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(fireemu_adapter_functions::http::serve_eventarc(
+        listener,
+        h.runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
+    ));
+    let unmatched = serde_json::json!({
+        "events": (0..=fireemu_adapter_functions::eventarc::MAX_EVENTS_PER_PUBLISH)
+            .map(|id| serde_json::json!({
+                "id": id.to_string(),
+                "type": "com.example.unmatched",
+                "specVersion": "1.0",
+                "source": "test",
+                "attributes": {}
+            }))
+            .collect::<Vec<_>>()
+    });
+    let unmatched = serde_json::to_vec(&unmatched).unwrap();
+    assert_eq!(
+        h.raw_request_to(
+            "POST",
+            addr,
+            "/projects/demo-app/locations/us-central1/channels/custom:publishEvents",
+            &unmatched,
+        )
+        .await
+        .status,
+        429
+    );
+    assert!(h.runtime.is_idle());
+    let trigger_name = "us-central1-customEvent-0-locations/us-central1/channels/custom";
+    let trigger_path = format!("/emulator/v1/projects/{PROJECT}/triggers/{trigger_name}");
+    let trigger = br#"{"eventTrigger":{"eventType":"com.example.done","channel":"locations/us-central1/channels/custom","eventFilters":{"region":"eu"},"service":"eventarc.googleapis.com"}}"#;
+    for _ in 0..256 {
+        assert_eq!(
+            h.raw_request_to("POST", addr, &trigger_path, trigger)
+                .await
+                .status,
+            200
+        );
+    }
+    let event = br#"{"events":[{"id":"e-1","type":"com.example.done","specVersion":"1.0","source":"test","attributes":{"time":{"ceTimestamp":"2026-09-05T00:00:00Z"},"datacontenttype":{"ceString":"application/json"},"region":{"ceString":"eu"}},"textData":"{\"ok\":true}"}]}"#;
+    let publish = h
+        .raw_request_to(
+            "POST",
+            addr,
+            "/projects/demo-app/locations/us-central1/channels/custom:publishEvents",
+            event,
+        )
+        .await;
+    assert_eq!(publish.status, 429);
+    assert!(h.runtime.is_idle(), "a rejected batch must enqueue nothing");
+
+    server.abort();
     h.stop().await;
 }
 

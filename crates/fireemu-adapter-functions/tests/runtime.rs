@@ -663,6 +663,39 @@ async fn shutdown_rejects_late_reload_and_reset_runner_installation() {
 }
 
 #[tokio::test]
+async fn rejected_manifest_reload_keeps_the_eventarc_generation_and_table() {
+    let (runtime, _clock) = start().await;
+    let before = runtime.eventarc_triggers().unwrap();
+    let generation = runtime.trigger_generation();
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let spawn = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    };
+    let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
+    let mut changed = runtime.manifest().clone();
+    changed
+        .functions
+        .retain(|function| function.name != "customEvent");
+    let error = runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest: changed,
+            runner: replacement.clone(),
+            spawn: Some(spawn),
+            cleanup_dir: None,
+        })
+        .unwrap_err();
+    assert!(error.contains("changed its trigger manifest"), "{error}");
+    assert_eq!(runtime.trigger_generation(), generation);
+    assert_eq!(runtime.eventarc_triggers().unwrap(), before);
+    assert!(!replacement.is_alive());
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn omitted_second_generation_concurrency_admits_two_http_requests() {
     let (runtime, _clock) = start_with_policies_and_manifest(
         fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
@@ -924,6 +957,10 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
         Arc::new(initial),
         Some(slow),
     );
+    let before_reload = runtime.eventarc_triggers().unwrap().to_string();
+    assert!(
+        before_reload.contains("us-central1-customEvent-0-locations/us-central1/channels/custom")
+    );
     let (target, admission) = runtime
         .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
         .unwrap()
@@ -943,6 +980,13 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
             cleanup_dir: None,
         })
         .unwrap();
+    let after_reload = runtime.eventarc_triggers().unwrap().to_string();
+    assert!(
+        !after_reload.contains("us-central1-customEvent-0-locations/us-central1/channels/custom")
+    );
+    assert!(
+        after_reload.contains("us-central1-customEvent-1-locations/us-central1/channels/custom")
+    );
 
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert!(Arc::ptr_eq(&runtime.runner(), &expected));

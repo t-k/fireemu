@@ -125,7 +125,13 @@ const FieldsEditor: Component<{
                     value={f.type}
                     onChange={(e) => {
                       const type = e.currentTarget.value as FieldType;
-                      update(i(), { type, text: defaultText(type) });
+                      update(i(), {
+                        type,
+                        text: defaultText(type),
+                        original: undefined,
+                        dirty: true,
+                        numberKind: undefined,
+                      });
                     }}
                   >
                     <For each={FIELD_TYPES}>
@@ -143,7 +149,7 @@ const FieldsEditor: Component<{
                         placeholder={hint(f.type)}
                         disabled={f.type === "null"}
                         value={f.text}
-                        onInput={(e) => update(i(), { text: e.currentTarget.value })}
+                        onInput={(e) => update(i(), { text: e.currentTarget.value, dirty: true })}
                       />
                     }
                   >
@@ -152,7 +158,7 @@ const FieldsEditor: Component<{
                       aria-label={t("firestore.fieldValue")}
                       placeholder={hint(f.type)}
                       value={f.text}
-                      onInput={(e) => update(i(), { text: e.currentTarget.value })}
+                      onInput={(e) => update(i(), { text: e.currentTarget.value, dirty: true })}
                     />
                   </Show>
                 </td>

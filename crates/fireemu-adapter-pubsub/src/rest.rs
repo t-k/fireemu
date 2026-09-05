@@ -155,6 +155,9 @@ fn dispatch_topic(
             json!({"topics": topics, "nextPageToken": ""}),
         ));
     }
+    if parts.len() != 1 {
+        return Err(RestError::not_found("invalid topic resource path"));
+    }
 
     let (topic_id, operation) = split_operation(parts);
     let topic = TopicName::new(project, topic_id).map_err(RestError::from_core)?;
@@ -213,6 +216,9 @@ fn dispatch_subscription(
             json!({"subscriptions": subscriptions, "nextPageToken": ""}),
         ));
     }
+    if parts.len() != 1 {
+        return Err(RestError::not_found("invalid subscription resource path"));
+    }
 
     let (subscription_id, operation) = split_operation(parts);
     let subscription =
@@ -260,6 +266,9 @@ fn dispatch_snapshot(
             StatusCode::OK,
             json!({"snapshots": snapshots, "nextPageToken": ""}),
         ));
+    }
+    if parts.len() != 1 {
+        return Err(RestError::not_found("invalid snapshot resource path"));
     }
 
     let (snapshot_id, operation) = split_operation(parts);

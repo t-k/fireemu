@@ -216,3 +216,92 @@ async fn grpc_snapshot_can_be_sought_through_rest_into_a_new_subscription() {
         BASE64.encode(b"captured")
     );
 }
+
+#[tokio::test]
+async fn a_rejected_rest_subscription_update_keeps_the_previous_configuration() {
+    let address = start().await;
+    let (status, _) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/topics/events",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, created) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/subscriptions/events-sub",
+        json!({"topic": "projects/demo-app/topics/events"}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(created["ackDeadlineSeconds"], 10);
+
+    let (status, _) = rest_request(
+        address,
+        "PATCH",
+        "/v1/projects/demo-app/subscriptions/events-sub",
+        json!({
+            "ackDeadlineSeconds": 20,
+            "pushConfig": {"pushEndpoint": "https://example.com/not-loopback"}
+        }),
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    let (status, after) = rest_request(
+        address,
+        "GET",
+        "/v1/projects/demo-app/subscriptions/events-sub",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(after["ackDeadlineSeconds"], 10);
+    assert!(after.get("pushConfig").is_none());
+}
+
+#[tokio::test]
+async fn a_malformed_rest_push_config_cannot_clear_an_existing_endpoint() {
+    let address = start().await;
+    let (status, _) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/topics/events",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let endpoint = "http://127.0.0.1:8080/push";
+    let (status, _) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/subscriptions/events-sub",
+        json!({
+            "topic": "projects/demo-app/topics/events",
+            "pushConfig": {"pushEndpoint": endpoint}
+        }),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let (status, _) = rest_request(
+        address,
+        "PATCH",
+        "/v1/projects/demo-app/subscriptions/events-sub",
+        json!({"pushConfig": "not-an-object"}),
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    let (status, after) = rest_request(
+        address,
+        "GET",
+        "/v1/projects/demo-app/subscriptions/events-sub",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(after["pushConfig"]["pushEndpoint"], endpoint);
+}

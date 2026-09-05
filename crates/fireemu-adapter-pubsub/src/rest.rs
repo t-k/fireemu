@@ -411,37 +411,60 @@ fn update_subscription(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    if let Some(value) = body.get("ackDeadlineSeconds") {
-        handle
-            .state()
-            .update_ack_deadline(&subscription, parse_u32(value)?)
-            .map_err(RestError::from_core)?;
-    }
-    if let Some(push_config) = body.get("pushConfig") {
-        let endpoint = push_config
-            .get("pushEndpoint")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        crate::push::validate_endpoint(&endpoint).map_err(RestError::invalid)?;
-        handle
-            .state()
-            .update_push_config(
-                &subscription,
-                PushConfig {
-                    push_endpoint: endpoint,
-                },
-            )
-            .map_err(RestError::from_core)?;
-    }
-    let topic = handle
-        .state()
-        .subscription_config(&subscription)
-        .map_err(RestError::from_core)?
-        .topic
-        .clone();
+    let ack_deadline_seconds = body.get("ackDeadlineSeconds").map(parse_u32).transpose()?;
+    let push_config = body
+        .get("pushConfig")
+        .map(|push_config| {
+            let push_config = push_config
+                .as_object()
+                .ok_or_else(|| RestError::invalid("pushConfig must be an object"))?;
+            let endpoint = push_config
+                .get("pushEndpoint")
+                .map(|endpoint| {
+                    endpoint.as_str().ok_or_else(|| {
+                        RestError::invalid("pushConfig.pushEndpoint must be a string")
+                    })
+                })
+                .transpose()?
+                .unwrap_or_default()
+                .to_owned();
+            crate::push::validate_endpoint(&endpoint).map_err(RestError::invalid)?;
+            Ok(PushConfig {
+                push_endpoint: endpoint,
+            })
+        })
+        .transpose()?;
+    let (topic, response) = {
+        let mut state = handle.state();
+        let mut candidate = state
+            .subscription_config(&subscription)
+            .map_err(RestError::from_core)?
+            .clone();
+        if let Some(seconds) = ack_deadline_seconds {
+            candidate.ack_deadline_seconds = seconds;
+        }
+        if let Some(push_config) = &push_config {
+            candidate.push_config = push_config.clone();
+        }
+        candidate.validate().map_err(RestError::from_core)?;
+        if let Some(seconds) = ack_deadline_seconds {
+            state
+                .update_ack_deadline(&subscription, seconds)
+                .map_err(RestError::from_core)?;
+        }
+        if let Some(push_config) = push_config {
+            state
+                .update_push_config(&subscription, push_config)
+                .map_err(RestError::from_core)?;
+        }
+        let config = state
+            .subscription_config(&subscription)
+            .map_err(RestError::from_core)?
+            .clone();
+        (config.topic.clone(), subscription_json(&state, &config))
+    };
     handle.schedule_push(&topic);
-    get_subscription(subscription, handle)
+    Ok((StatusCode::OK, response))
 }
 
 #[allow(clippy::needless_pass_by_value)]

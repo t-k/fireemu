@@ -84,8 +84,11 @@ module AtomicCommitOutbox {
     hasConflict' = false,
   }
 
+  // Staging is closed once the batch is reserved: the runtime reserves the complete,
+  // capacity-charged fan-out after every draft is known and publishes exactly that batch.
   action stageWrite(doc) = all {
     observable.transactionState == "Staging",
+    observable.reservedEvents == 0,
     not(staged.contains(doc)),
     observable.documents.get(doc) < MAX_VERSION,
     record("StageWrite", doc),
@@ -98,6 +101,7 @@ module AtomicCommitOutbox {
 
   action stageOutbox(doc) = all {
     observable.transactionState == "Staging",
+    observable.reservedEvents == 0,
     staged.contains(doc),
     record("StageOutbox", doc),
     observable' = observable,
@@ -157,8 +161,11 @@ module AtomicCommitOutbox {
     hasConflict' = hasConflict,
   }
 
+  // Generations are bounded so the exhaustive checker explores a finite space; the bound is
+  // not a property of the runtime, which numbers epochs without limit.
   action reset = all {
     observable.transactionState == "Staging",
+    observable.eventGeneration < MAX_VERSION,
     record("Reset", ""),
     observable' = {
       documents: observable.documents,

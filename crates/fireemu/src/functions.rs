@@ -2525,6 +2525,7 @@ pub fn auth_sink(
 pub struct BlockingAuthBridge {
     runtime: Arc<FunctionsRuntime>,
     deadline: Duration,
+    forward_inbound_credentials: bool,
 }
 
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
@@ -2611,6 +2612,15 @@ fn blocking_auth_context_json(
         });
         if let Some(claims) = &credential.claims {
             value["claims"] = claims.clone();
+        }
+        if let Some(access_token) = &credential.access_token {
+            value["accessToken"] = serde_json::Value::String(access_token.clone());
+        }
+        if let Some(id_token) = &credential.id_token {
+            value["idToken"] = serde_json::Value::String(id_token.clone());
+        }
+        if let Some(refresh_token) = &credential.refresh_token {
+            value["refreshToken"] = serde_json::Value::String(refresh_token.clone());
         }
         context["credential"] = value;
     }
@@ -2730,12 +2740,33 @@ impl BlockingAuthBridge {
         Self {
             runtime,
             deadline: BLOCKING_AUTH_DEADLINE,
+            forward_inbound_credentials: false,
+        }
+    }
+
+    /// Builds a bridge with the explicit raw credential forwarding policy.
+    #[must_use]
+    pub fn new_with_forward_inbound_credentials(
+        runtime: Arc<FunctionsRuntime>,
+        forward_inbound_credentials: bool,
+    ) -> Self {
+        if !forward_inbound_credentials {
+            return Self::new(runtime);
+        }
+        Self {
+            runtime,
+            deadline: BLOCKING_AUTH_DEADLINE,
+            forward_inbound_credentials,
         }
     }
 
     #[cfg(test)]
     fn with_deadline(runtime: Arc<FunctionsRuntime>, deadline: Duration) -> Self {
-        Self { runtime, deadline }
+        Self {
+            runtime,
+            deadline,
+            forward_inbound_credentials: false,
+        }
     }
 
     fn invoke_for_namespace(
@@ -2846,6 +2877,10 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
 
     fn handles(&self, event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
         self.runtime.handles_blocking_auth(event)
+    }
+
+    fn forward_inbound_credentials(&self) -> bool {
+        self.forward_inbound_credentials
     }
 
     fn invoke(
@@ -3236,6 +3271,9 @@ mod tests {
                 claims: Some(claims.clone()),
                 provider_id: "oidc.corp".to_owned(),
                 sign_in_method: "oidc.corp".to_owned(),
+                access_token: None,
+                id_token: None,
+                refresh_token: None,
             }),
             additional_user_info: Some(AuthBlockingAdditionalUserInfo {
                 provider_id: "oidc.corp".to_owned(),
@@ -3279,6 +3317,36 @@ mod tests {
         );
         assert!(value["credential"].get("idToken").is_none());
         assert!(value["credential"].get("accessToken").is_none());
+
+        let raw_request = AuthBlockingContext {
+            credential: Some(AuthBlockingCredential {
+                claims: None,
+                provider_id: "oidc.corp".to_owned(),
+                sign_in_method: "oidc.corp".to_owned(),
+                access_token: Some("access-sentinel".to_owned()),
+                id_token: Some("id-sentinel".to_owned()),
+                refresh_token: Some("refresh-sentinel".to_owned()),
+            }),
+            ..request.clone()
+        };
+        let raw_value = super::blocking_auth_context_json(
+            "demo-app",
+            Some("customer"),
+            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+            &raw_request,
+            "event-raw",
+            "2026-08-29T12:01:00Z",
+        );
+        assert_eq!(
+            raw_value["credential"],
+            json!({
+                "providerId": "oidc.corp",
+                "signInMethod": "oidc.corp",
+                "accessToken": "access-sentinel",
+                "idToken": "id-sentinel",
+                "refreshToken": "refresh-sentinel"
+            })
+        );
 
         let before_create = super::blocking_auth_context_json(
             "demo-app",

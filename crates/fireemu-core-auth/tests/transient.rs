@@ -4,7 +4,9 @@
 //! effect, and pending sign-ins resolve through a direct ownership lookup
 //! (`AUTH-TRANSIENT-01` .. `-05`). Refresh tokens are not part of it (`AUTH-TRANSIENT-06`).
 
-use fireemu_core_auth::mfa::{MfaError, TotpPolicy, MAX_PENDING_PER_USER};
+use fireemu_core_auth::mfa::{
+    MfaError, PendingSignInContext, PendingSignInCredentials, TotpPolicy, MAX_PENDING_PER_USER,
+};
 use fireemu_core_auth::store::{
     AuthError, AuthSnapshot, AuthStore, NewUser, OobRequestType, VerificationPurpose,
     MAX_OUTSTANDING_CODES, OOB_CODE_TTL_SECONDS, PENDING_SIGN_IN_TTL_SECONDS, SMS_CODE_TTL_SECONDS,
@@ -194,7 +196,24 @@ fn pending_enrollments_and_sign_ins_expire_and_the_per_user_budget_refuses() {
     let code = totp_at(&secret, &s.policy().params(), after(1000));
     s.finalize_totp_enrollment(&uid, &material.session_id, code, after(1000))
         .unwrap();
-    let pending = s.start_mfa_sign_in(&uid, after(1000)).unwrap();
+    let raw_credentials = PendingSignInCredentials::new(
+        Some("expiring-access-sentinel".to_owned()),
+        Some("expiring-id-sentinel".to_owned()),
+        Some("expiring-refresh-sentinel".to_owned()),
+    );
+    let pending = s
+        .start_mfa_sign_in_with_context(
+            &uid,
+            after(1000),
+            PendingSignInContext::new_with_credentials(
+                Some("oidc.corp".to_owned()),
+                false,
+                None,
+                Some(raw_credentials),
+            ),
+        )
+        .unwrap();
+    let retained_with_raw = s.retained_user_bytes();
     assert_eq!(s.pending_sign_in_user(&pending), Some(uid.clone()));
     assert_eq!(s.pending_sign_in_count(), 1);
     assert_eq!(s.pending_mfa_user_count(), 1);
@@ -208,6 +227,7 @@ fn pending_enrollments_and_sign_ins_expire_and_the_per_user_budget_refuses() {
     assert_eq!(s.pending_sign_in_user(&pending), None);
     assert_eq!(s.pending_sign_in_count(), 0);
     assert_eq!(s.pending_mfa_user_count(), 0);
+    assert!(s.retained_user_bytes() < retained_with_raw);
     let late = after(1000 + PENDING_SIGN_IN_TTL_SECONDS + 1);
     assert_eq!(
         s.finalize_mfa_sign_in(

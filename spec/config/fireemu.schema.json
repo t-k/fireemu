@@ -165,7 +165,11 @@
             "enrollmentSessionTtlSeconds": { "type": "integer", "minimum": 1 }
           }
         },
-        "secretMaterialization": { "enum": ["redact", "allow"] }
+        "secretMaterialization": { "enum": ["redact", "allow"] },
+        "forwardInboundCredentials": {
+          "type": "boolean",
+          "description": "Allow blocking Auth Functions to receive caller-supplied IdP access, ID and refresh tokens. Defaults to false."
+        }
       }
     },
     "appCheck": {

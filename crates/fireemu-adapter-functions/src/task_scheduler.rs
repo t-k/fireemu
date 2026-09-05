@@ -472,6 +472,7 @@ impl TaskScheduler {
         self.statistics_at(project, region_for, Instant::now())
     }
 
+    #[allow(clippy::cast_precision_loss)] // queueStats publishes the official floating-point rate shape
     fn statistics_at(
         &mut self,
         project: &str,
@@ -750,6 +751,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one scenario covers the exact and adjacent window boundaries
     fn queue_statistics_preserves_same_timestamp_counts_and_window_boundaries() {
         let start = Instant::now();
         let mut scheduler = TaskScheduler::from_manifest(

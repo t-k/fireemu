@@ -210,8 +210,12 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         barrier: Some(barrier.clone()),
         events: functions_runtime.as_ref().map(functions::auth_sink),
         blocking: functions_runtime.as_ref().map(|runtime| {
-            Arc::new(functions::BlockingAuthBridge::new(runtime.clone()))
-                as Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>
+            Arc::new(
+                functions::BlockingAuthBridge::new_with_forward_inbound_credentials(
+                    runtime.clone(),
+                    cfg.auth_forward_inbound_credentials,
+                ),
+            ) as Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>
         }),
         operation_gate: Arc::new(Mutex::new(())),
         control_token: Some(control_token.clone()),

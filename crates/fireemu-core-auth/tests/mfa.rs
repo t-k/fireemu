@@ -1,7 +1,9 @@
 //! TOTP enrollment and sign-in state machine on the virtual clock (INV-AUTH-001..003).
 
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims, CustomClaimsError};
-use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, TotpPolicy};
+use fireemu_core_auth::mfa::{
+    MfaError, PendingSignInContext, PendingSignInCredentials, TotpPolicy,
+};
 use fireemu_core_auth::store::{AuthStore, NewUser, SecondFactorAssertion};
 use fireemu_core_auth::totp::totp_at;
 use fireemu_core_types::determinism::SplitMix64;
@@ -92,6 +94,41 @@ fn pending_sign_in_provenance_is_redacted_and_consumed_with_the_credential() {
     s.finalize_mfa_sign_in(&uid, &pending, code, later).unwrap();
     assert!(s.pending_sign_in_context(&pending).is_none());
     assert!(s.retained_user_bytes() < retained_before_pending + 64);
+}
+
+#[test]
+fn pending_sign_in_credentials_are_redacted_and_counted() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("credentials@example.com"), t0())
+        .unwrap();
+    let material = s.start_totp_enrollment(&uid, t0()).unwrap();
+    let secret = material.secret_for_test().to_vec();
+    let code = totp_at(&secret, &s.policy().params(), t0());
+    s.finalize_totp_enrollment(&uid, &material.session_id, code, t0())
+        .unwrap();
+    let credentials = PendingSignInCredentials::new(
+        Some("access-sentinel".to_owned()),
+        Some("id-sentinel".to_owned()),
+        Some("refresh-sentinel".to_owned()),
+    );
+    let context = PendingSignInContext::new_with_credentials(
+        Some("oidc.corp".to_owned()),
+        false,
+        None,
+        Some(credentials.clone()),
+    );
+    let pending = s
+        .start_mfa_sign_in_with_context(&uid, t0(), context)
+        .unwrap();
+    let stored = s.pending_sign_in_context(&pending).unwrap();
+    assert_eq!(stored.inbound_credentials(), Some(&credentials));
+    let debug = format!("{stored:?}");
+    assert!(debug.contains("[redacted]"));
+    assert!(!debug.contains("access-sentinel"));
+    assert!(!debug.contains("id-sentinel"));
+    assert!(!debug.contains("refresh-sentinel"));
+    assert!(s.retained_user_bytes() >= "access-sentinel".len() as u64);
 }
 
 #[test]

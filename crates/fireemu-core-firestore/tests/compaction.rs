@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
-    CommitVersion, FirestoreError, FirestoreState, HistoryLimits, Write, WriteOp,
+    CommitVersion, FirestoreError, FirestoreState, HistoryLimits, Precondition, Write, WriteOp,
     READ_TIME_RETENTION_SECONDS,
 };
 use fireemu_core_firestore::value::Value;
@@ -126,6 +126,49 @@ fn a_noop_succeeds_when_the_history_budget_is_full() {
 
     assert!(result.changes.is_empty());
     assert_eq!(state.history_usage(), before);
+}
+
+#[test]
+fn a_hot_path_replacement_uses_the_capacity_it_atomically_reclaims() {
+    let mut state = FirestoreState::with_history_limits(HistoryLimits {
+        max_bytes: u64::MAX,
+        max_versions: 1,
+    })
+    .with_retained_version_limit(1);
+    state
+        .commit(&[set("docs/a", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+
+    state
+        .commit(&[set("docs/a", &[("v", Value::Integer(2))])], None, t(0))
+        .unwrap();
+
+    assert_eq!(state.history_usage().versions, 1);
+    assert_eq!(
+        state
+            .get(&path("docs/a"))
+            .and_then(|document| document.fields.get("v")),
+        Some(&Value::Integer(2))
+    );
+}
+
+#[test]
+fn a_refused_write_does_not_run_expired_history_maintenance() {
+    let mut state = FirestoreState::new();
+    state.commit(&[set("docs/a", &[])], None, t(0)).unwrap();
+    state.commit(&[delete("docs/a")], None, t(1)).unwrap();
+    let before = state.history_usage();
+    let floor = state.compaction_floor();
+    let mut refused = set("docs/a", &[]);
+    refused.precondition = Some(Precondition::Exists(true));
+
+    let error = state
+        .commit(&[refused], None, t(READ_TIME_RETENTION_SECONDS + 2))
+        .unwrap_err();
+
+    assert!(matches!(error, FirestoreError::NotFound(_)));
+    assert_eq!(state.history_usage(), before);
+    assert_eq!(state.compaction_floor(), floor);
 }
 
 fn fields(entries: &[(&str, Value)]) -> BTreeMap<String, Value> {

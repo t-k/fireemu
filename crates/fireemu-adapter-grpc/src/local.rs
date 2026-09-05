@@ -232,6 +232,10 @@ struct HistoryBudgetLedger {
     limits: HistoryBudgetLimits,
     committed: BTreeMap<(String, String), HistoryCharge>,
     pending: BTreeMap<u64, PendingHistoryCharge>,
+    pending_by_key: BTreeMap<(String, String), u64>,
+    charged_global: HistoryUsage,
+    charged_by_owner: BTreeMap<HistoryBudgetOwner, HistoryUsage>,
+    accounting_steps: u64,
     next_reservation: u64,
 }
 
@@ -241,16 +245,33 @@ impl HistoryBudgetLedger {
             limits,
             committed: BTreeMap::new(),
             pending: BTreeMap::new(),
+            pending_by_key: BTreeMap::new(),
+            charged_global: HistoryUsage::default(),
+            charged_by_owner: BTreeMap::new(),
+            accounting_steps: 0,
             next_reservation: 0,
         }
     }
 
-    fn effective(&self) -> BTreeMap<(String, String), HistoryCharge> {
-        let mut effective = self.committed.clone();
-        for pending in self.pending.values() {
-            effective.insert(pending.key.clone(), pending.charge.clone());
+    fn adjust_totals(&mut self, old: Option<&HistoryCharge>, new: Option<&HistoryCharge>) {
+        if let Some(old) = old {
+            self.accounting_steps = self.accounting_steps.saturating_add(1);
+            self.charged_global = subtract_aggregate_usage(self.charged_global, old.usage);
+            let remove_owner = {
+                let total = self.charged_by_owner.entry(old.owner.clone()).or_default();
+                *total = subtract_aggregate_usage(*total, old.usage);
+                total.versions == 0 && total.total_bytes == 0
+            };
+            if remove_owner {
+                self.charged_by_owner.remove(&old.owner);
+            }
         }
-        effective
+        if let Some(new) = new {
+            self.accounting_steps = self.accounting_steps.saturating_add(1);
+            self.charged_global = add_aggregate_usage(self.charged_global, new.usage);
+            let owner = self.charged_by_owner.entry(new.owner.clone()).or_default();
+            *owner = add_aggregate_usage(*owner, new.usage);
+        }
     }
 
     fn reserve(
@@ -261,36 +282,54 @@ impl HistoryBudgetLedger {
     ) -> Result<u64, FirestoreError> {
         // A speculative reduction is not capacity another database may consume. It becomes
         // visible only when this reservation commits; cancellation must leave the old charge.
-        if let Some(committed) = self.committed.get(&key) {
+        if self.pending_by_key.contains_key(&key) {
+            return Err(FirestoreError::HistoryCapacity(HistoryCapacityError {
+                dimension: "database reservation",
+                current: 1,
+                maximum: 0,
+            }));
+        }
+        let previous = self.committed.get(&key).cloned();
+        if let Some(committed) = &previous {
             usage.total_bytes = usage.total_bytes.max(committed.usage.total_bytes);
             usage.versions = usage.versions.max(committed.usage.versions);
         }
-        let mut effective = self.effective();
-        effective.insert(
-            key.clone(),
-            HistoryCharge {
-                owner: owner.clone(),
-                usage,
-            },
+        let charge = HistoryCharge { owner, usage };
+        let candidate_global = add_aggregate_usage(
+            previous.as_ref().map_or(self.charged_global, |old| {
+                subtract_aggregate_usage(self.charged_global, old.usage)
+            }),
+            charge.usage,
         );
-        self.validate_effective(&effective)?;
+        self.validate_global(candidate_global)?;
+        let current_owner_total = self
+            .charged_by_owner
+            .get(&charge.owner)
+            .copied()
+            .unwrap_or_default();
+        let without_previous = previous.as_ref().map_or(current_owner_total, |old| {
+            if old.owner == charge.owner {
+                subtract_aggregate_usage(current_owner_total, old.usage)
+            } else {
+                current_owner_total
+            }
+        });
+        self.validate_owner(add_aggregate_usage(without_previous, charge.usage))?;
         let id = self.next_reservation;
         self.next_reservation = self.next_reservation.wrapping_add(1);
+        self.adjust_totals(previous.as_ref(), Some(&charge));
         self.pending.insert(
             id,
             PendingHistoryCharge {
-                key,
-                charge: HistoryCharge { owner, usage },
+                key: key.clone(),
+                charge,
             },
         );
+        self.pending_by_key.insert(key, id);
         Ok(id)
     }
 
-    fn validate_effective(
-        &self,
-        effective: &BTreeMap<(String, String), HistoryCharge>,
-    ) -> Result<(), FirestoreError> {
-        let global = sum_history_usage(effective.values().map(|charge| charge.usage));
+    fn validate_global(&self, global: HistoryUsage) -> Result<(), FirestoreError> {
         check_aggregate_history_limit(
             "global versions",
             global.versions,
@@ -301,38 +340,68 @@ impl HistoryBudgetLedger {
             global.total_bytes,
             self.limits.global_bytes,
         )?;
-        let owners: std::collections::BTreeSet<HistoryBudgetOwner> = effective
-            .values()
-            .map(|charge| charge.owner.clone())
-            .collect();
-        for owner in owners {
-            let session = sum_history_usage(
-                effective
-                    .values()
-                    .filter(|charge| charge.owner == owner)
-                    .map(|charge| charge.usage),
-            );
-            check_aggregate_history_limit(
-                "session versions",
-                session.versions,
-                self.limits.session_versions,
-            )?;
-            check_aggregate_history_limit(
-                "session bytes",
-                session.total_bytes,
-                self.limits.session_bytes,
-            )?;
+        Ok(())
+    }
+
+    fn validate_owner(&self, session: HistoryUsage) -> Result<(), FirestoreError> {
+        check_aggregate_history_limit(
+            "session versions",
+            session.versions,
+            self.limits.session_versions,
+        )?;
+        check_aggregate_history_limit(
+            "session bytes",
+            session.total_bytes,
+            self.limits.session_bytes,
+        )
+    }
+
+    fn validate_replacement(
+        &self,
+        removed: impl Iterator<Item = HistoryCharge>,
+        added: impl Iterator<Item = HistoryCharge>,
+    ) -> Result<(), FirestoreError> {
+        let mut global = self.charged_global;
+        let mut owners = self.charged_by_owner.clone();
+        for charge in removed {
+            global = subtract_aggregate_usage(global, charge.usage);
+            let total = owners.entry(charge.owner).or_default();
+            *total = subtract_aggregate_usage(*total, charge.usage);
+        }
+        for charge in added {
+            global = add_aggregate_usage(global, charge.usage);
+            let total = owners.entry(charge.owner).or_default();
+            *total = add_aggregate_usage(*total, charge.usage);
+        }
+        self.validate_global(global)?;
+        for usage in owners.into_values() {
+            self.validate_owner(usage)?;
         }
         Ok(())
     }
+
+    fn remove_committed(&mut self, key: &(String, String)) {
+        if let Some(charge) = self.committed.remove(key) {
+            self.adjust_totals(Some(&charge), None);
+        }
+    }
+
+    fn replace_committed(&mut self, key: (String, String), charge: &HistoryCharge) {
+        let old = self.committed.insert(key, charge.clone());
+        self.adjust_totals(old.as_ref(), Some(charge));
+    }
 }
 
-fn sum_history_usage(usages: impl Iterator<Item = HistoryUsage>) -> HistoryUsage {
-    usages.fold(HistoryUsage::default(), |mut total, usage| {
-        total.total_bytes = total.total_bytes.saturating_add(usage.total_bytes);
-        total.versions = total.versions.saturating_add(usage.versions);
-        total
-    })
+fn add_aggregate_usage(mut total: HistoryUsage, usage: HistoryUsage) -> HistoryUsage {
+    total.total_bytes = total.total_bytes.saturating_add(usage.total_bytes);
+    total.versions = total.versions.saturating_add(usage.versions);
+    total
+}
+
+fn subtract_aggregate_usage(mut total: HistoryUsage, usage: HistoryUsage) -> HistoryUsage {
+    total.total_bytes = total.total_bytes.saturating_sub(usage.total_bytes);
+    total.versions = total.versions.saturating_sub(usage.versions);
+    total
 }
 
 fn check_aggregate_history_limit(
@@ -364,7 +433,10 @@ impl HistoryReservation {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(mut pending) = ledger.pending.remove(&self.id) {
+            ledger.pending_by_key.remove(&pending.key);
+            let reserved = pending.charge.clone();
             pending.charge.usage = actual;
+            ledger.adjust_totals(Some(&reserved), Some(&pending.charge));
             ledger.committed.insert(pending.key, pending.charge);
         }
         self.committed = true;
@@ -374,11 +446,15 @@ impl HistoryReservation {
 impl Drop for HistoryReservation {
     fn drop(&mut self) {
         if !self.committed {
-            self.ledger
+            let mut ledger = self
+                .ledger
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .pending
-                .remove(&self.id);
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(pending) = ledger.pending.remove(&self.id) {
+                ledger.pending_by_key.remove(&pending.key);
+                let committed = ledger.committed.get(&pending.key).cloned();
+                ledger.adjust_totals(Some(&pending.charge), committed.as_ref());
+            }
         }
     }
 }
@@ -899,11 +975,9 @@ impl LocalBackend {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if usage.versions == 0 && usage.total_bytes == 0 {
-            ledger.committed.remove(&key);
-        } else if let Some(charge) = ledger.committed.get_mut(&key) {
-            charge.usage = usage;
+            ledger.remove_committed(&key);
         } else {
-            ledger.committed.insert(key, HistoryCharge { owner, usage });
+            ledger.replace_committed(key, &HistoryCharge { owner, usage });
         }
     }
 
@@ -1008,7 +1082,7 @@ impl LocalBackend {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for key in &keys {
-            ledger.committed.remove(key);
+            ledger.remove_committed(key);
         }
         keys
     }
@@ -1068,8 +1142,9 @@ impl LocalBackend {
                     .history_budget
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if let Some(charge) = ledger.committed.get_mut(&key) {
+                if let Some(mut charge) = ledger.committed.get(&key).cloned() {
                     charge.usage = usage;
+                    ledger.replace_committed(key, &charge);
                 }
             }
         }
@@ -1081,14 +1156,7 @@ impl LocalBackend {
         self.history_budget
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .committed
-            .values()
-            .map(|charge| charge.usage)
-            .fold(HistoryUsage::default(), |mut total, usage| {
-                total.total_bytes = total.total_bytes.saturating_add(usage.total_bytes);
-                total.versions = total.versions.saturating_add(usage.versions);
-                total
-            })
+            .charged_global
     }
 
     /// Copies the databases `scope` owns, each under its own lock.
@@ -1175,11 +1243,13 @@ impl LocalBackend {
                     "Firestore history reservations are still in flight",
                 ));
             }
-            let mut effective = ledger.committed.clone();
-            effective.retain(|(project, _), _| !scope.owns_project(project));
-            effective.extend(restored_charges.clone());
+            let removed = ledger
+                .committed
+                .iter()
+                .filter(|((project, _), _)| scope.owns_project(project))
+                .map(|(_, charge)| charge.clone());
             ledger
-                .validate_effective(&effective)
+                .validate_replacement(removed, restored_charges.values().cloned())
                 .map_err(|error| status_from_error(&error))?;
         }
         if scope.is_default() {
@@ -1213,10 +1283,18 @@ impl LocalBackend {
             .history_budget
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        ledger
+        let removed_keys: Vec<_> = ledger
             .committed
-            .retain(|(project, _), _| !scope.owns_project(project));
-        ledger.committed.extend(restored_charges);
+            .keys()
+            .filter(|(project, _)| scope.owns_project(project))
+            .cloned()
+            .collect();
+        for key in removed_keys {
+            ledger.remove_committed(&key);
+        }
+        for (key, charge) in restored_charges {
+            ledger.replace_committed(key, &charge);
+        }
         self.bump_generations(&touched);
         self.announce_wipe(touched);
         Ok(())
@@ -3312,9 +3390,9 @@ mod lock_tests {
         };
         let mut ledger = HistoryBudgetLedger::new(limits);
         let first_key = ("first".to_owned(), "(default)".to_owned());
-        ledger.committed.insert(
+        ledger.replace_committed(
             first_key.clone(),
-            HistoryCharge {
+            &HistoryCharge {
                 owner: HistoryBudgetOwner::Default,
                 usage: history_usage(10),
             },
@@ -3349,6 +3427,37 @@ mod lock_tests {
     }
 
     #[test]
+    fn one_reservation_has_constant_accounting_work_across_many_owners() {
+        let mut ledger = HistoryBudgetLedger::new(HistoryBudgetLimits {
+            session_bytes: u64::MAX,
+            session_versions: u64::MAX,
+            global_bytes: u64::MAX,
+            global_versions: u64::MAX,
+        });
+        for index in 0..8_192 {
+            ledger.replace_committed(
+                (format!("project-{index}"), "(default)".to_owned()),
+                &HistoryCharge {
+                    owner: HistoryBudgetOwner::Project(format!("project-{index}")),
+                    usage: history_usage(1),
+                },
+            );
+        }
+        let before = ledger.accounting_steps;
+
+        ledger
+            .reserve(
+                ("new-project".to_owned(), "(default)".to_owned()),
+                HistoryBudgetOwner::Project("new-project".to_owned()),
+                history_usage(1),
+            )
+            .unwrap();
+
+        assert_eq!(ledger.accounting_steps - before, 1);
+        assert_eq!(ledger.charged_global.versions, 8_193);
+    }
+
+    #[test]
     fn poisoned_history_and_tenancy_locks_fail_closed_with_recovered_accounting() {
         let backend = backend();
         let tenancy = Arc::new(RwLock::new(Tenancy::new("primary-app")));
@@ -3376,8 +3485,44 @@ mod lock_tests {
             backend.history_owner("demo-app"),
             HistoryBudgetOwner::Project("demo-app".to_owned())
         );
-        backend.reconcile_history(&parent, history_usage(3));
-        assert_eq!(backend.history_usage().versions, 3);
+        let cancelled = backend
+            .reserve_history(
+                &parent,
+                HistoryProjection {
+                    before: HistoryUsage::default(),
+                    after: history_usage(1),
+                },
+            )
+            .unwrap();
+        drop(cancelled);
+        assert_eq!(backend.history_usage().versions, 0);
+
+        let request = pb::CommitRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: "projects/demo-app/databases/(default)/documents/items/one".to_owned(),
+                    fields: [(
+                        "v".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::IntegerValue(1)),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    ..pb::Document::default()
+                })),
+                ..pb::Write::default()
+            }],
+            ..pb::CommitRequest::default()
+        };
+        backend.commit(&request).unwrap();
+        let snapshot = backend.snapshot_databases();
+        assert_eq!(backend.history_usage().versions, 1);
+        backend.reset();
+        assert_eq!(backend.history_usage().versions, 0);
+        backend.restore_databases(snapshot).unwrap();
+        assert_eq!(backend.history_usage().versions, 1);
     }
 
     #[test]

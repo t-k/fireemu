@@ -980,6 +980,71 @@ mod tests {
         std::fs::remove_dir_all(second.1).expect("second sandbox cleanup");
     }
 
+    #[test]
+    fn spawn_setup_guard_removes_its_owned_sandbox_on_error_and_unwind() {
+        let on_error = super::create_credential_sandbox().unwrap();
+        let on_error_path = on_error.clone();
+        drop(super::CredentialSandboxGuard(Some(on_error)));
+        assert!(!on_error_path.exists());
+
+        let on_unwind = super::create_credential_sandbox().unwrap();
+        let on_unwind_path = on_unwind.clone();
+        let result = std::panic::catch_unwind(|| {
+            let _guard = super::CredentialSandboxGuard(Some(on_unwind));
+            panic!("simulated spawn unwind");
+        });
+        assert!(result.is_err());
+        assert!(!on_unwind_path.exists());
+    }
+
+    #[cfg(unix)]
+    async fn assert_failed_hello_removes_credential_sandbox(script: &str, expected: &str) {
+        use std::time::Duration;
+
+        let root = trusted_temp::TrustedTempDir::new("runner-failed-hello");
+        let probe = root.join("config-path");
+        let result = super::Runner::spawn(
+            &[
+                "python3".to_owned(),
+                "-c".to_owned(),
+                script.to_owned(),
+                probe.display().to_string(),
+            ],
+            None,
+            &[],
+            Duration::from_millis(100),
+        )
+        .await;
+        let error = match result {
+            Ok(runner) => {
+                runner.shutdown().await;
+                panic!("runner must fail before hello");
+            }
+            Err(error) => error,
+        };
+        assert!(error.contains(expected), "{error}");
+        let config = std::fs::read_to_string(&probe).expect("runner reported its config path");
+        let sandbox = std::path::Path::new(config.trim())
+            .parent()
+            .expect("gcloud config has a sandbox parent");
+        assert!(!sandbox.exists(), "failed runner sandbox remains");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_and_early_exit_remove_their_credential_sandboxes() {
+        assert_failed_hello_removes_credential_sandbox(
+            "import os,sys,time; open(sys.argv[1], 'w').write(os.environ['CLOUDSDK_CONFIG']); time.sleep(10)",
+            "sent no hello",
+        )
+        .await;
+        assert_failed_hello_removes_credential_sandbox(
+            "import os,sys; open(sys.argv[1], 'w').write(os.environ['CLOUDSDK_CONFIG'])",
+            "exited before its hello",
+        )
+        .await;
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn cancelling_runner_start_kills_its_whole_process_group() {

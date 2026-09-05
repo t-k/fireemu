@@ -48,3 +48,16 @@ Do not run recursive pruning over a parent that contains active worktrees. The r
 If an unexpectedly warm build spends more system CPU time than user CPU time, first inspect free disk space, count the directories under the exact target's `debug/incremental` directory, and check for another Cargo process using that target. On macOS, a stalled security assessment process can also delay newly linked binaries; inspect the process state before attributing the delay to the compiler.
 
 The default Cargo development profile retains line tables for workspace crates while omitting dependency debug information. Use `--profile debugging` when full debug information is required; it has a separate artifact identity.
+
+## Emulator UI size report
+
+`pnpm -C ui build` writes Vite's build manifest to `ui/dist/.vite/manifest.json`; the daemon does not embed that directory. The size report reads it to separate the initial bundle (the entry and its static imports) from route chunks loaded on demand and chunks several routes share, counts every emitted file once, and compresses with fixed gzip and Brotli settings:
+
+```sh
+pnpm -C ui build
+pnpm -C ui size --out .runs/size-report.json
+pnpm -C ui size --out .runs/size-report.json --baseline .runs/previous.json
+```
+
+The report records the commit (with a `-dirty` suffix when `ui/` has uncommitted changes), the Node and Vite versions and the host platform, and never an absolute path or environment variable. Record a release binary next to the bundle with `--binary <path> --target <triple> --profile <name> [--features a,b]`; a comparison refuses reports whose compression settings, binary target, profile or features differ, so a number measured on another platform is never shown as a trend. `ui/.runs/` is ignored by git; keep baselines you want to compare against under `docs.local/`.
+

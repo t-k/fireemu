@@ -13,6 +13,9 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: false,
+    // `dist/.vite/manifest.json` feeds scripts/size-report.mjs; the daemon's build.rs does not
+    // embed the `.vite` directory.
+    manifest: true,
   },
   server: {
     port: 5173,

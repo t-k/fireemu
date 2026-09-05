@@ -857,7 +857,7 @@
       ],
       "notes": [],
       "gaps": [
-        "raw inbound OAuth credentials reach blocking Auth Functions only when auth.forwardInboundCredentials is enabled (default off) and only the token kinds the function's options request; the default emulator accepts the provider assertion and exposes its normalized claims, and the raw material is never retained in snapshots or exports. The per-token-kind matrix against real Node SDK handlers and the production expectation are still open in the Authentication parent issue",
+        "raw inbound OAuth credentials reach beforeCreate and beforeSignIn handlers only when auth.forwardInboundCredentials is enabled (default off) and only the token kinds the function's options request; the default emulator accepts the provider assertion and exposes its normalized claims, and the raw material is never retained in snapshots or exports. The per-token-kind matrix against real Node SDK handlers and the production expectation are still open in the Authentication parent issue",
         "Android, Apple and Unity SDK matrices are outside the current Node/Web/REST/gRPC compatibility scope"
       ],
       "prohibitedClaimTerms": [],

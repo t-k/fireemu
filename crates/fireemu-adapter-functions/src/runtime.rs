@@ -126,6 +126,8 @@ pub struct BlockingAuthTarget {
     pub addr: String,
     /// Per-runner proxy secret.
     pub secret: String,
+    /// Raw credential fields requested by this exact admitted target generation.
+    pub token_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
     runner: Arc<Runner>,
     revision: u64,
     owner: usize,
@@ -2575,8 +2577,27 @@ impl FunctionsRuntime {
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> bool {
         self.manifest.functions.iter().any(|function| {
-            matches!(function.trigger, Trigger::BlockingAuth { event: candidate } if candidate == event)
+            matches!(function.trigger, Trigger::BlockingAuth { event: candidate, .. } if candidate == event)
         })
+    }
+
+    /// Token policy of the first Blocking Auth target selected for `event`.
+    #[must_use]
+    pub fn blocking_auth_token_policy(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        self.manifest
+            .functions
+            .iter()
+            .find_map(|function| match function.trigger {
+                Trigger::BlockingAuth {
+                    event: candidate,
+                    token_policy,
+                } if candidate == event => Some(token_policy),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     /// Atomically selects a ready Blocking Auth runner generation and reserves one slot in the
@@ -2589,7 +2610,7 @@ impl FunctionsRuntime {
             return Err("the Functions runtime is shutting down".to_owned());
         }
         let Some(spec) = self.manifest.functions.iter().find(|function| {
-            matches!(function.trigger, Trigger::BlockingAuth { event: candidate } if candidate == event)
+            matches!(function.trigger, Trigger::BlockingAuth { event: candidate, .. } if candidate == event)
         }) else {
             return Ok(None);
         };
@@ -2637,6 +2658,10 @@ impl FunctionsRuntime {
             region: spec.region.clone(),
             addr: format!("127.0.0.1:{port}"),
             secret: self.config.runner_secret.clone(),
+            token_policy: match spec.trigger {
+                Trigger::BlockingAuth { token_policy, .. } => token_policy,
+                _ => unreachable!("the selected function is a Blocking Auth target"),
+            },
             runner: current.runner.clone(),
             revision: current.revision,
             owner,

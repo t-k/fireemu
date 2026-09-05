@@ -441,6 +441,16 @@ function callableAppCheck(instrumentation, fn) {
   };
 }
 
+function blockingAuthTrigger(eventType, options) {
+  return {
+    type: "blockingAuth",
+    eventType,
+    accessToken: options?.accessToken === true,
+    idToken: options?.idToken === true,
+    refreshToken: options?.refreshToken === true,
+  };
+}
+
 function describe(name, fn, instrumentation) {
   const callable = () => ({
     type: "http",
@@ -465,7 +475,10 @@ function describe(name, fn, instrumentation) {
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
       if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
-        return { ...base, trigger: { type: "blockingAuth", eventType } };
+        return {
+          ...base,
+          trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
+        };
       }
       return ignored(
         base,
@@ -509,7 +522,10 @@ function describe(name, fn, instrumentation) {
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
       if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
-        return { ...base, trigger: { type: "blockingAuth", eventType } };
+        return {
+          ...base,
+          trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
+        };
       }
       return ignored(
         base,
@@ -618,7 +634,10 @@ function describe(name, fn, instrumentation) {
     if (t.blockingTrigger) {
       const eventType = String(t.blockingTrigger.eventType || "");
       if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
-        return { ...base, trigger: { type: "blockingAuth", eventType } };
+        return {
+          ...base,
+          trigger: blockingAuthTrigger(eventType, t.blockingTrigger.options),
+        };
       }
       return ignored(
         base,

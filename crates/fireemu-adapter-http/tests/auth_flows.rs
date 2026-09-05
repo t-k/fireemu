@@ -11,7 +11,7 @@ use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, PendingSignInId};
 use fireemu_core_auth::{base32, totp::totp_at};
-use fireemu_core_functions::manifest::BlockingAuthEvent;
+use fireemu_core_functions::manifest::{BlockingAuthEvent, BlockingAuthTokenPolicy};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -40,6 +40,7 @@ struct FilteringIdpBlockingHook {
 struct RawCredentialBlockingHook {
     contexts: Arc<Mutex<Vec<(BlockingAuthEvent, AuthBlockingContext)>>>,
     forward_inbound_credentials: bool,
+    token_policy: Option<BlockingAuthTokenPolicy>,
 }
 
 struct FixedBeforeSignInHook {
@@ -134,6 +135,13 @@ impl AuthBlockingHook for RawCredentialBlockingHook {
 
     fn forward_inbound_credentials(&self) -> bool {
         self.forward_inbound_credentials
+    }
+
+    fn inbound_credential_policy(&self, _event: BlockingAuthEvent) -> BlockingAuthTokenPolicy {
+        if !self.forward_inbound_credentials {
+            return BlockingAuthTokenPolicy::default();
+        }
+        self.token_policy.unwrap_or(BlockingAuthTokenPolicy::ALL)
     }
 
     fn invoke_for_with_context(
@@ -2160,6 +2168,7 @@ fn blocking_auth_forwards_raw_idp_credentials_only_when_opted_in() {
         s.blocking = Some(Arc::new(RawCredentialBlockingHook {
             contexts: Arc::clone(&contexts),
             forward_inbound_credentials,
+            token_policy: None,
         }));
         let (status, response) = post(
             &s,
@@ -2188,6 +2197,50 @@ fn blocking_auth_forwards_raw_idp_credentials_only_when_opted_in() {
             let debug = format!("{context:?}");
             assert!(!debug.contains("access-sentinel"));
             assert!(!debug.contains("refresh-sentinel"));
+        }
+    }
+}
+
+#[test]
+fn blocking_auth_retains_and_forwards_only_each_targets_requested_tokens() {
+    let id_token = json!({
+        "sub": "oidc-token-policy",
+        "email": "token-policy@example.com",
+        "email_verified": true
+    })
+    .to_string();
+    for bits in 0_u8..8 {
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        let mut s = state();
+        s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+            contexts: Arc::clone(&contexts),
+            forward_inbound_credentials: true,
+            token_policy: Some(BlockingAuthTokenPolicy {
+                access_token: bits & 1 != 0,
+                id_token: bits & 2 != 0,
+                refresh_token: bits & 4 != 0,
+            }),
+        }));
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithIdp"),
+            &json!({
+                "postBody": format!(
+                    "providerId=oidc.corp&id_token={}&access_token=access-sentinel&refresh_token=refresh-sentinel",
+                    percent(&id_token)
+                ),
+                "requestUri": DUMMY_URI
+            }),
+        );
+        assert_eq!(status, 200, "policy {bits}: {response}");
+
+        let recorded = contexts.lock().unwrap();
+        assert_eq!(recorded.len(), 2);
+        for (_, context) in recorded.iter() {
+            let credential = context.credential.as_ref().unwrap();
+            assert_eq!(credential.access_token.is_some(), bits & 1 != 0);
+            assert_eq!(credential.id_token.is_some(), bits & 2 != 0);
+            assert_eq!(credential.refresh_token.is_some(), bits & 4 != 0);
         }
     }
 }
@@ -2453,6 +2506,7 @@ fn blocking_auth_forwards_idp_credentials_only_after_mfa_continuation() {
     s.blocking = Some(Arc::new(RawCredentialBlockingHook {
         contexts: Arc::clone(&contexts),
         forward_inbound_credentials: true,
+        token_policy: None,
     }));
     let oidc = json!({
         "sub": "oidc-raw-mfa",
@@ -2494,6 +2548,11 @@ fn blocking_auth_forwards_idp_credentials_only_after_mfa_continuation() {
         .unwrap()["code"]
         .as_str()
         .unwrap();
+    s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+        contexts: Arc::clone(&contexts),
+        forward_inbound_credentials: false,
+        token_policy: Some(BlockingAuthTokenPolicy::ALL),
+    }));
     let (status, signed) = finalize_mfa(
         &s,
         &json!({
@@ -2509,15 +2568,9 @@ fn blocking_auth_forwards_idp_credentials_only_after_mfa_continuation() {
     assert_eq!(recorded.len(), 1);
     let context = &recorded[0].1;
     let credential = context.credential.as_ref().unwrap();
-    assert_eq!(credential.id_token.as_deref(), Some(id_token.as_str()));
-    assert_eq!(
-        credential.access_token.as_deref(),
-        Some("access-mfa-sentinel")
-    );
-    assert_eq!(
-        credential.refresh_token.as_deref(),
-        Some("refresh-mfa-sentinel")
-    );
+    assert_eq!(credential.id_token, None);
+    assert_eq!(credential.access_token, None);
+    assert_eq!(credential.refresh_token, None);
     let debug = format!("{context:?}");
     assert!(!debug.contains("access-mfa-sentinel"));
     assert!(!debug.contains("refresh-mfa-sentinel"));
@@ -2549,6 +2602,7 @@ fn assert_rejected_mfa_hook_drops_raw_credentials(
     s.blocking = Some(Arc::new(RawCredentialBlockingHook {
         contexts: Arc::new(Mutex::new(Vec::new())),
         forward_inbound_credentials: true,
+        token_policy: None,
     }));
     let id_token = json!({
         "sub": "oidc-rejected-raw-mfa",

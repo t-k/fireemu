@@ -696,6 +696,60 @@ async fn rejected_manifest_reload_keeps_the_eventarc_generation_and_table() {
 }
 
 #[tokio::test]
+async fn hot_reload_rejects_a_policy_only_blocking_auth_manifest_change() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "policyGuard",
+                "trigger": {
+                    "type": "blockingAuth",
+                    "eventType": "beforeSignIn",
+                    "accessToken": true
+                }
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+    let generation = runtime.trigger_generation();
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let spawn = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    };
+    let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
+    let mut changed = runtime.manifest().clone();
+    let guard = changed
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "policyGuard")
+        .unwrap();
+    let Trigger::BlockingAuth { token_policy, .. } = &mut guard.trigger else {
+        unreachable!();
+    };
+    token_policy.id_token = true;
+
+    let error = runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest: changed,
+            runner: replacement.clone(),
+            spawn: Some(spawn),
+            cleanup_dir: None,
+        })
+        .unwrap_err();
+    assert!(error.contains("changed its trigger manifest"), "{error}");
+    assert_eq!(runtime.trigger_generation(), generation);
+    assert!(!replacement.is_alive());
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn omitted_second_generation_concurrency_admits_two_http_requests() {
     let (runtime, _clock) = start_with_policies_and_manifest(
         fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
@@ -733,7 +787,7 @@ async fn blocking_auth_admission_shares_the_global_functions_budget() {
             let mut blocking = parse_manifest(&json!({"functions": [{
                 "name": "beforeCreate",
                 "generation": 2,
-                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate", "accessToken": true, "idToken": false, "refreshToken": true}
             }, {
                 "name": "limitedBeforeSignIn",
                 "generation": 2,
@@ -748,10 +802,13 @@ async fn blocking_auth_admission_shares_the_global_functions_budget() {
     .await;
     let mut admissions = Vec::new();
     for _ in 0..4 {
-        let (_, admission) = runtime
+        let (target, admission) = runtime
             .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
             .unwrap()
             .unwrap();
+        assert!(target.token_policy.access_token);
+        assert!(!target.token_policy.id_token);
+        assert!(target.token_policy.refresh_token);
         admissions.push(admission);
     }
     assert!(runtime
@@ -1340,7 +1397,7 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
         {"name": "b", "generation": 2, "concurrency": null, "trigger": {"type": "callable"}, "platformOptions": {"preserveExternalChanges": true, "availableMemoryMb": 1024, "minInstances": 1, "maxInstances": 5, "cpu": "gcf_gen1", "ingressSettings": "ALLOW_INTERNAL_ONLY", "invoker": ["public"], "serviceAccountEmail": "runner@example.test", "vpcConnector": "connector", "vpcEgressSettings": "PRIVATE_RANGES_ONLY", "networkInterfaces": [{"network": "default", "tags": ["local"]}], "labels": {"team": "emulator"}, "secrets": ["API_KEY"]}},
         {"name": "c", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "timeZone": "Asia/Tokyo", "retryConfig": {"retryCount": 4, "maxRetrySeconds": 90, "maxBackoffSeconds": 30, "maxDoublings": 2, "minBackoffSeconds": 3}}, "region": "asia-northeast1", "retry": true},
         {"name": "d", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.deleted", "bucket": "b"}},
-        {"name": "e", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSignIn"}}
+        {"name": "e", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSignIn", "accessToken": true, "idToken": false, "refreshToken": true}}
     ]});
     let m = parse_manifest(&v).unwrap();
     assert_eq!(m.functions.len(), 5);
@@ -1366,11 +1423,15 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
         })
     );
     assert_eq!(back["functions"][4]["trigger"]["eventType"], "beforeSignIn");
+    assert_eq!(back["functions"][4]["trigger"]["accessToken"], true);
+    assert_eq!(back["functions"][4]["trigger"]["idToken"], false);
+    assert_eq!(back["functions"][4]["trigger"]["refreshToken"], true);
     for bad in [
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "nope", "document": "a/{b}"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created", "document": "a"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "schedule", "schedule": "* * * * *", "timeZone": "Mars/Olympus"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "pubsub"}}]}),
+        json!({"functions": [{"name": "x", "trigger": {"type": "blockingAuth", "eventType": "beforeSignIn", "accessToken": "yes"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "http"}}, {"name": "x", "trigger": {"type": "http"}}]}),
         json!({"nope": 1}),
     ] {
@@ -1380,6 +1441,31 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
         "functions": [{"name": "bad", "generation": 3, "trigger": {"type": "http"}}]
     }))
     .is_err());
+}
+
+#[test]
+fn blocking_auth_manifest_round_trips_all_token_policies() {
+    for bits in 0_u8..8 {
+        let access_token = bits & 1 != 0;
+        let id_token = bits & 2 != 0;
+        let refresh_token = bits & 4 != 0;
+        let input = json!({"functions": [{
+            "name": format!("policy{bits}"),
+            "trigger": {
+                "type": "blockingAuth",
+                "eventType": "beforeSignIn",
+                "accessToken": access_token,
+                "idToken": id_token,
+                "refreshToken": refresh_token
+            }
+        }]});
+        let manifest = parse_manifest(&input).unwrap();
+        let output = manifest_to_json(&manifest);
+        assert_eq!(
+            output["functions"][0]["trigger"],
+            input["functions"][0]["trigger"]
+        );
+    }
 }
 
 #[test]

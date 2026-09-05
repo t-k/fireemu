@@ -365,6 +365,19 @@ pub trait AuthBlockingHook: Send + Sync {
         false
     }
 
+    /// Raw fields required by the effective target for one event. The default preserves the
+    /// all-or-nothing policy of existing in-process hooks.
+    fn inbound_credential_policy(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        if self.forward_inbound_credentials() {
+            fireemu_core_functions::manifest::BlockingAuthTokenPolicy::ALL
+        } else {
+            fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default()
+        }
+    }
+
     /// Runs one before-create or before-sign-in function. Implementations must return within a
     /// finite deadline. An error rejects and rolls back the Auth request; the value is the
     /// validated blocking response for future field updates.
@@ -1356,22 +1369,40 @@ fn apply_blocking_response(
     Ok(session_claims.map(|claims| claims.claims))
 }
 
-fn inbound_credentials_from_request(body: &Value) -> Option<PendingSignInCredentials> {
+fn inbound_credentials_from_request(
+    body: &Value,
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+) -> Option<PendingSignInCredentials> {
     let request_uri = str_field(body, "requestUri")?;
     let params = normalized_idp_params(request_uri, str_field(body, "postBody"));
     let credentials = PendingSignInCredentials::new(
-        params
-            .get("access_token")
-            .filter(|token| !token.is_empty())
-            .cloned(),
-        params
-            .get("id_token")
-            .filter(|token| !token.is_empty())
-            .cloned(),
-        params
-            .get("refresh_token")
-            .filter(|token| !token.is_empty())
-            .cloned(),
+        policy
+            .access_token
+            .then(|| {
+                params
+                    .get("access_token")
+                    .filter(|token| !token.is_empty())
+                    .cloned()
+            })
+            .flatten(),
+        policy
+            .id_token
+            .then(|| {
+                params
+                    .get("id_token")
+                    .filter(|token| !token.is_empty())
+                    .cloned()
+            })
+            .flatten(),
+        policy
+            .refresh_token
+            .then(|| {
+                params
+                    .get("refresh_token")
+                    .filter(|token| !token.is_empty())
+                    .cloned()
+            })
+            .flatten(),
     );
     (credentials.access_token().is_some()
         || credentials.id_token().is_some()
@@ -1383,6 +1414,7 @@ fn blocking_credential(
     provider_id: &str,
     claims: Option<Value>,
     inbound_credentials: Option<&PendingSignInCredentials>,
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
 ) -> Option<AuthBlockingCredential> {
     let has_inbound_credentials = inbound_credentials.is_some_and(|credentials| {
         credentials.access_token().is_some()
@@ -1396,12 +1428,27 @@ fn blocking_credential(
         claims,
         provider_id: provider_id.to_owned(),
         sign_in_method: provider_id.to_owned(),
-        access_token: inbound_credentials
-            .and_then(|credentials| credentials.access_token().map(str::to_owned)),
-        id_token: inbound_credentials
-            .and_then(|credentials| credentials.id_token().map(str::to_owned)),
-        refresh_token: inbound_credentials
-            .and_then(|credentials| credentials.refresh_token().map(str::to_owned)),
+        access_token: policy
+            .access_token
+            .then(|| {
+                inbound_credentials
+                    .and_then(|credentials| credentials.access_token().map(str::to_owned))
+            })
+            .flatten(),
+        id_token: policy
+            .id_token
+            .then(|| {
+                inbound_credentials
+                    .and_then(|credentials| credentials.id_token().map(str::to_owned))
+            })
+            .flatten(),
+        refresh_token: policy
+            .refresh_token
+            .then(|| {
+                inbound_credentials
+                    .and_then(|credentials| credentials.refresh_token().map(str::to_owned))
+            })
+            .flatten(),
     })
 }
 
@@ -1411,6 +1458,7 @@ fn blocking_context(
     pending: Option<&PendingSignInContext>,
     sign_in_method: Option<&str>,
     inbound_credentials: Option<&PendingSignInCredentials>,
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
 ) -> AuthBlockingContext {
     if let Some(pending) = pending {
         let provider_id = pending.sign_in_provider();
@@ -1421,7 +1469,7 @@ fn blocking_context(
             .flatten();
         let inbound_credentials = pending.inbound_credentials().or(inbound_credentials);
         let credential = provider_id.and_then(|provider_id| {
-            blocking_credential(provider_id, claims.clone(), inbound_credentials)
+            blocking_credential(provider_id, claims.clone(), inbound_credentials, policy)
         });
         return AuthBlockingContext {
             credential,
@@ -1447,7 +1495,7 @@ fn blocking_context(
         .then(|| profile.clone())
         .flatten();
     let credential = provider_id.and_then(|provider_id| {
-        blocking_credential(provider_id, claims.clone(), inbound_credentials)
+        blocking_credential(provider_id, claims.clone(), inbound_credentials, policy)
     });
     AuthBlockingContext {
         credential,
@@ -1569,9 +1617,16 @@ fn dispatch_with_blocking_hook(
         pending_continuation.as_ref().map(|(_, _, context)| context),
     )
     .map(str::to_owned);
-    let inbound_credentials = blocking
-        .forward_inbound_credentials()
-        .then(|| inbound_credentials_from_request(body))
+    let before_create_policy = blocking.inbound_credential_policy(
+        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+    );
+    let before_sign_in_policy = blocking.inbound_credential_policy(
+        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+    );
+    let retained_policy = before_create_policy.union(before_sign_in_policy);
+    let inbound_credentials = retained_policy
+        .any()
+        .then(|| inbound_credentials_from_request(body, retained_policy))
         .flatten();
     let project = store.project_id().to_owned();
     let tenant = store.tenant_id().map(str::to_owned);
@@ -1593,6 +1648,7 @@ fn dispatch_with_blocking_hook(
                         None,
                         sign_in_method.as_deref(),
                         inbound_credentials.as_ref(),
+                        before_create_policy,
                     );
                     match blocking.invoke_for_with_context(
                         &project,
@@ -1636,6 +1692,7 @@ fn dispatch_with_blocking_hook(
                         pending_continuation.as_ref().map(|(_, _, context)| context),
                         sign_in_method.as_deref(),
                         inbound_credentials.as_ref(),
+                        before_sign_in_policy,
                     );
                     match blocking.invoke_for_with_context(
                         &project,
@@ -2177,7 +2234,7 @@ struct DispatchOptions {
     stateless_refresh_tokens: bool,
     fake_custom_token_expiry: FakeCustomTokenExpiry,
     query_limits: AuthQueryLimits,
-    forward_inbound_credentials: bool,
+    inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
 }
 
 impl From<&AuthState> for DispatchOptions {
@@ -2187,10 +2244,18 @@ impl From<&AuthState> for DispatchOptions {
             stateless_refresh_tokens: state.stateless_refresh_tokens,
             fake_custom_token_expiry: state.fake_custom_token_expiry,
             query_limits: state.query_limits,
-            forward_inbound_credentials: state
-                .blocking
-                .as_deref()
-                .is_some_and(AuthBlockingHook::forward_inbound_credentials),
+            inbound_credential_policy: state.blocking.as_deref().map_or_else(
+                fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
+                |blocking| {
+                    blocking
+                        .inbound_credential_policy(
+                            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                        )
+                        .union(blocking.inbound_credential_policy(
+                            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                        ))
+                },
+            ),
         }
     }
 }
@@ -2242,7 +2307,7 @@ fn dispatch(
         Handler::SendVerificationCode => send_verification_code(store, body, at),
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
         Handler::SignInWithIdp => {
-            sign_in_with_idp(store, body, at, options.forward_inbound_credentials)
+            sign_in_with_idp(store, body, at, options.inbound_credential_policy)
         }
         Handler::CreateAuthUri => create_auth_uri(store, body),
         Handler::Projects => JsonResponse {
@@ -5364,7 +5429,7 @@ fn sign_in_with_idp(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
-    forward_inbound_credentials: bool,
+    inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
 ) -> JsonResponse {
     let ResolvedIdp {
         provider_id,
@@ -5444,8 +5509,9 @@ fn sign_in_with_idp(
         }
     }
 
-    let inbound_credentials = forward_inbound_credentials
-        .then(|| inbound_credentials_from_request(body))
+    let inbound_credentials = inbound_credential_policy
+        .any()
+        .then(|| inbound_credentials_from_request(body, inbound_credential_policy))
         .flatten();
     finish_sign_in_with_attributes_and_credentials(
         store,

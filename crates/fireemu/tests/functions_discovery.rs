@@ -858,6 +858,111 @@ fn assert_blocking_sign_in_contract(port: u16, before_create_body: &str) {
     }
 }
 
+fn assert_blocking_token_policy_handlers(port: u16, base_body: &str) {
+    let credential_body = |event_type: &str, bits: u8| {
+        let mut value: serde_json::Value = serde_json::from_str(base_body).unwrap();
+        value["data"]["context"]["eventType"] = event_type.into();
+        let mut credential = serde_json::Map::new();
+        for (bit, field, sentinel) in [
+            (1, "accessToken", "access-sentinel"),
+            (2, "idToken", "id-sentinel"),
+            (4, "refreshToken", "refresh-sentinel"),
+        ] {
+            if bits & bit != 0 {
+                credential.insert(field.to_owned(), sentinel.into());
+            }
+        }
+        value["data"]["context"]["credential"] = credential.into();
+        value.to_string()
+    };
+    let expected_keys = |bits: u8| {
+        [(1, "accessToken"), (2, "idToken"), (4, "refreshToken")]
+            .into_iter()
+            .filter_map(|(bit, field)| (bits & bit != 0).then_some(field))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    for bits in 0_u8..8 {
+        let input = credential_body(
+            "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
+            bits,
+        );
+        let (status, response) =
+            invoke_blocking_runner(port, &format!("fxTokenPolicy{bits}"), &input);
+        assert_eq!(status, 200, "policy {bits}: {response}");
+        assert_eq!(
+            response["userRecord"]["sessionClaims"]["credentialKeys"],
+            expected_keys(bits)
+        );
+    }
+    let input = credential_body(
+        "providers/cloud.auth/eventTypes/user.beforeCreate",
+        1 | 2 | 4,
+    );
+    let (status, response) = invoke_blocking_runner(port, "fxBeforeCreateAllTokens", &input);
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["userRecord"]["customClaims"]["credentialKeys"],
+        "accessToken,idToken,refreshToken"
+    );
+    let input = credential_body(
+        "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
+        1 | 4,
+    );
+    let (status, response) = invoke_blocking_runner(port, "fxLegacyBeforeSignInTokens", &input);
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["userRecord"]["sessionClaims"]["credentialKeys"],
+        "accessToken,refreshToken"
+    );
+    let input = credential_body(
+        "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
+        1 | 2,
+    );
+    let (status, response) = invoke_blocking_runner(port, "fxTokenPolicy7", &input);
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["userRecord"]["sessionClaims"]["credentialKeys"],
+        "accessToken,idToken"
+    );
+}
+
+fn assert_blocking_discovery_token_policies(manifest: &serde_json::Value) {
+    let functions = manifest["functions"].as_array().unwrap();
+    let trigger_of = |name: &str| {
+        &functions
+            .iter()
+            .find(|function| function["name"] == name)
+            .unwrap_or_else(|| panic!("missing discovered function {name}"))["trigger"]
+    };
+    for bits in 0_u8..8 {
+        let trigger = trigger_of(&format!("fxTokenPolicy{bits}"));
+        assert_eq!(
+            trigger["eventType"],
+            "providers/cloud.auth/eventTypes/user.beforeSignIn"
+        );
+        assert_eq!(trigger["accessToken"], bits & 1 != 0);
+        assert_eq!(trigger["idToken"], bits & 2 != 0);
+        assert_eq!(trigger["refreshToken"], bits & 4 != 0);
+    }
+    let before_create = trigger_of("fxBeforeCreateAllTokens");
+    assert_eq!(
+        before_create["eventType"],
+        "providers/cloud.auth/eventTypes/user.beforeCreate"
+    );
+    assert_eq!(before_create["accessToken"], true);
+    assert_eq!(before_create["idToken"], true);
+    assert_eq!(before_create["refreshToken"], true);
+    let legacy = trigger_of("fxLegacyBeforeSignInTokens");
+    assert_eq!(
+        legacy["eventType"],
+        "providers/cloud.auth/eventTypes/user.beforeSignIn"
+    );
+    assert_eq!(legacy["accessToken"], true);
+    assert_eq!(legacy["idToken"], false);
+    assert_eq!(legacy["refreshToken"], true);
+}
+
 /// Functions scenario 5: an export whose product fireemu does not serve is named, not
 /// dropped -- and by default it stops the run rather than pretending the trigger is live.
 #[test]
@@ -1029,6 +1134,8 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
         hello_timeout: Duration::from_secs(20),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let manifest = runner.hello().manifest.as_ref().expect("runner manifest");
+    assert_blocking_discovery_token_policies(manifest);
     let port = runner
         .hello()
         .http_port
@@ -1061,6 +1168,7 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
         }
     })
     .to_string();
+    assert_blocking_token_policy_handlers(port, &body);
     for function in ["fxBeforeCreate", "fxLegacyBeforeCreate"] {
         let (status, response) = invoke_blocking_runner(port, function, &body);
         assert_eq!(status, 200, "{function}");

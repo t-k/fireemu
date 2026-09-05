@@ -322,8 +322,19 @@ pub fn trigger_json(trigger: &Trigger) -> Value {
             "filters": filters,
         }),
         Trigger::Auth { event } => json!({"kind": "auth", "event": event.event_type()}),
-        Trigger::BlockingAuth { event } => {
-            json!({"kind": "blockingAuth", "event": event.as_str()})
+        Trigger::BlockingAuth {
+            event,
+            token_policy,
+        } => {
+            json!({
+                "kind": "blockingAuth",
+                "event": event.as_str(),
+                "tokenPolicy": {
+                    "accessToken": token_policy.access_token,
+                    "idToken": token_policy.id_token,
+                    "refreshToken": token_policy.refresh_token,
+                }
+            })
         }
         Trigger::Storage { event, bucket } => {
             json!({"kind": "storage", "event": event.event_type(), "bucket": bucket})

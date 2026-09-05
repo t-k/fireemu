@@ -2267,10 +2267,14 @@ fn check_manifest_agrees_on_blocking_auth(
             .functions
             .iter()
             .filter_map(|function| match function.trigger {
-                Trigger::BlockingAuth { event } => Some((
+                Trigger::BlockingAuth {
+                    event,
+                    token_policy,
+                } => Some((
                     function.name.clone(),
                     function.region.clone(),
                     event.as_str(),
+                    token_policy,
                 )),
                 _ => None,
             })
@@ -2283,20 +2287,28 @@ fn check_manifest_agrees_on_blocking_auth(
             .find(|index| configured.get(*index) != discovered.get(*index))
             .unwrap_or(0);
         return Err(match (discovered.get(mismatch), configured.get(mismatch)) {
-            (Some((name, region, event)), None) => format!(
+            (Some((name, region, event, _)), None) => format!(
                 "the configured functions manifest omits discovered Blocking Auth hook {name:?} \
                  in {region} for {event} at position {mismatch}; blocking policy cannot be \
                  bypassed by a custom manifest"
             ),
-            (None, Some((name, region, event))) => format!(
+            (None, Some((name, region, event, _))) => format!(
                 "the configured functions manifest invents Blocking Auth hook {name:?} in \
                  {region} for {event} at position {mismatch}; it must match codebase discovery"
             ),
             (Some(discovered), Some(configured)) => format!(
                 "the configured functions manifest changes Blocking Auth hook order or identity \
                  at position {mismatch}: codebase discovery has {:?} in {} for {}, configured \
-                 manifest has {:?} in {} for {}; blocking policy selection must match exactly",
-                discovered.0, discovered.1, discovered.2, configured.0, configured.1, configured.2,
+                manifest has {:?} in {} for {} with token policy {:?}; configured manifest has \
+                token policy {:?}; blocking policy selection must match exactly",
+                discovered.0,
+                discovered.1,
+                discovered.2,
+                configured.0,
+                configured.1,
+                configured.2,
+                discovered.3,
+                configured.3,
             ),
             (None, None) => unreachable!("different contracts have a mismatching position"),
         });
@@ -2574,6 +2586,25 @@ fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
     )
 }
 
+fn narrow_blocking_auth_credentials(
+    context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+) -> fireemu_adapter_http::identity_toolkit::AuthBlockingContext {
+    let mut narrowed = context.clone();
+    if let Some(credential) = &mut narrowed.credential {
+        if !policy.access_token {
+            credential.access_token = None;
+        }
+        if !policy.id_token {
+            credential.id_token = None;
+        }
+        if !policy.refresh_token {
+            credential.refresh_token = None;
+        }
+    }
+    narrowed
+}
+
 fn blocking_auth_context_json(
     project: &str,
     tenant: Option<&str>,
@@ -2805,12 +2836,13 @@ impl BlockingAuthBridge {
         let Some((target, _admission)) = admitted else {
             return Ok(None);
         };
+        let context = narrow_blocking_auth_credentials(context, target.token_policy);
         let user_json = blocking_auth_user_json(user, tenant);
         let event_context = blocking_auth_context_json(
             project,
             tenant,
             event,
-            context,
+            &context,
             &format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
             &fireemu_core_types::time::LogicalInstant::to_rfc3339(self.runtime.now())
                 .unwrap_or_default(),
@@ -2881,6 +2913,17 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
 
     fn forward_inbound_credentials(&self) -> bool {
         self.forward_inbound_credentials
+    }
+
+    fn inbound_credential_policy(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        if self.forward_inbound_credentials {
+            self.runtime.blocking_auth_token_policy(event)
+        } else {
+            fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default()
+        }
     }
 
     fn invoke(
@@ -3360,6 +3403,39 @@ mod tests {
             before_create["eventType"],
             "providers/cloud.auth/eventTypes/user.beforeCreate"
         );
+    }
+
+    #[test]
+    fn blocking_auth_context_is_narrowed_to_the_admitted_targets_token_policy() {
+        use fireemu_adapter_http::identity_toolkit::{AuthBlockingContext, AuthBlockingCredential};
+        use fireemu_core_functions::manifest::BlockingAuthTokenPolicy;
+
+        let context = AuthBlockingContext {
+            credential: Some(AuthBlockingCredential {
+                claims: Some(json!({"sub": "provider-user"})),
+                provider_id: "oidc.corp".to_owned(),
+                sign_in_method: "oidc.corp".to_owned(),
+                access_token: Some("access-sentinel".to_owned()),
+                id_token: Some("id-sentinel".to_owned()),
+                refresh_token: Some("refresh-sentinel".to_owned()),
+            }),
+            ..AuthBlockingContext::default()
+        };
+        for bits in 0_u8..8 {
+            let narrowed = super::narrow_blocking_auth_credentials(
+                &context,
+                BlockingAuthTokenPolicy {
+                    access_token: bits & 1 != 0,
+                    id_token: bits & 2 != 0,
+                    refresh_token: bits & 4 != 0,
+                },
+            );
+            let credential = narrowed.credential.unwrap();
+            assert_eq!(credential.access_token.is_some(), bits & 1 != 0);
+            assert_eq!(credential.id_token.is_some(), bits & 2 != 0);
+            assert_eq!(credential.refresh_token.is_some(), bits & 4 != 0);
+            assert_eq!(credential.claims, Some(json!({"sub": "provider-user"})));
+        }
     }
 
     #[test]
@@ -4440,6 +4516,29 @@ mod tests {
             .expect_err("custom manifest ordering must not select a different first hook");
         assert!(error.contains("firstCreateGuard"), "{error}");
         assert!(error.contains("secondCreateGuard"), "{error}");
+    }
+
+    #[test]
+    fn a_configured_manifest_cannot_widen_or_narrow_discovered_token_policy() {
+        let manifest = |access_token: bool| {
+            parse_manifest(&json!({"functions": [{
+                "name": "guardSignIn",
+                "trigger": {
+                    "type": "blockingAuth",
+                    "eventType": "beforeSignIn",
+                    "accessToken": access_token
+                }
+            }]}))
+            .unwrap()
+        };
+        for (configured, discovered, direction) in [
+            (manifest(true), manifest(false), "widen"),
+            (manifest(false), manifest(true), "narrow"),
+        ] {
+            let error = super::check_manifest_agrees_on_blocking_auth(&configured, &discovered)
+                .unwrap_err();
+            assert!(error.contains("token policy"), "{direction}: {error}");
+        }
     }
 
     /// A manifest whose only ignored export is an unrecognised shape starts, with a line

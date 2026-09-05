@@ -17,6 +17,7 @@ import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { readValidatedDivergenceRegister } from "../divergence-authority.mjs";
 import { CLAIMS, AREA_NAMES } from "./matrix.mjs";
 import { PROGRAMS } from "./programs.mjs";
+import { programExpectation } from "./program-expectations.mjs";
 import { generated, render, shrink } from "./generate.mjs";
 
 const PROJECT = "demo-rules-matrix";
@@ -356,7 +357,6 @@ async function recordPrograms() {
           id: p.id,
           area: p.area,
           oracle: oracle[p.id] ?? { missing: true },
-          ...(PROGRAM_DIVERGENCES[p.id] ? { divergence: PROGRAM_DIVERGENCES[p.id] } : {}),
         })),
       },
       null,
@@ -365,12 +365,6 @@ async function recordPrograms() {
   );
   console.log(`recorded ${PROGRAMS.length} programs`);
 }
-
-/**
- * Programs where fireemu deliberately answers something else. `fireemu` holds the answer it
- * is pinned to, exactly as the claim divergences are.
- */
-const PROGRAM_DIVERGENCES = {};
 
 async function checkPrograms() {
   const recorded = JSON.parse(await readFile(PROGRAMS_JSON, "utf8"));
@@ -385,7 +379,13 @@ async function checkPrograms() {
   let failures = 0;
   let messageDrift = 0;
   for (const row of recorded.programs) {
-    const expected = row.divergence ? row.divergence.fireemu : row.oracle;
+    const expectation = programExpectation(row);
+    if (expectation.isErr()) {
+      failures += 1;
+      console.error(`\n${expectation.error}`);
+      continue;
+    }
+    const { expected } = expectation.value;
     const actual = got[row.id] ?? { missing: true };
     if (JSON.stringify(decision(expected)) !== JSON.stringify(decision(actual))) {
       failures += 1;

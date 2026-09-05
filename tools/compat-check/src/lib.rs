@@ -15,7 +15,7 @@
 //! | `CC-07` | contradictory public statements: an item one entry calls `unimplemented` that another entry, or the contract's shared vocabulary, calls `implemented` |
 //! | `CC-08` | a compatibility profile that sets or declares a configuration key the canonical schema does not define, or a value it does not allow; a declared key without a `hand-written` / `not-implemented` status and a note, or one that is also set; and a profile name the schema's `profile` key does not accept (or accepts and the contract does not declare) |
 //! | `CC-09` | a conformance fixture cited as evidence that records unresolved `debt`, unless the claim excludes that step by name with the issue that owns it; a fixture with no `parity` or `documented-divergence` step (so nothing the local oracle answered); a stale exclusion, and a step status the suite does not define |
-//! | `CC-10` | a documented divergence without a complete, verified oracle authority record, or a stale authority that names no documented-divergence artifact row |
+//! | `CC-10` | a documented divergence without a complete, verified oracle authority record, a stale authority that names no documented-divergence artifact row, or a divergence recorded in an artifact that has no authority section (`conformance/rules-programs.json`) |
 //!
 //! Artifact names resolve the way `tools/traceability-check` resolves them, so the two gates
 //! agree on what "an existing test" means: a `tests` name is a function defined in a Rust file
@@ -266,6 +266,7 @@ fn check_matrix_authorities(
             }
         }
     }
+    check_rules_program_recording(root, problems);
     let Ok(text) = fs::read_to_string(root.join("conformance/rules-matrix.json")) else {
         return;
     };
@@ -285,6 +286,32 @@ fn check_matrix_authorities(
                     "CC-10: conformance/rules-matrix.json row {id} has no authority entry"
                 ));
             }
+        }
+    }
+}
+
+/// `conformance/rules-programs.json` is a recording of the official oracle, not an authority.
+/// The register has no section for Rules programs, so a `divergence` written into a recorded
+/// program would pin fireemu to an answer nothing verified; it is refused outright.
+fn check_rules_program_recording(root: &Path, problems: &mut Vec<String>) {
+    const PATH: &str = "conformance/rules-programs.json";
+    let Ok(text) = fs::read_to_string(root.join(PATH)) else {
+        return;
+    };
+    let Ok(recording) = serde_json::from_str::<Value>(&text) else {
+        return;
+    };
+    for program in recording
+        .get("programs")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        if program.get("divergence").is_some() {
+            let id = str_field(program, "id").unwrap_or("<unnamed>");
+            problems.push(format!(
+                "CC-10: {PATH} row {id} records a divergence, but Rules programs have no authority section in {DIVERGENCES_PATH}"
+            ));
         }
     }
 }

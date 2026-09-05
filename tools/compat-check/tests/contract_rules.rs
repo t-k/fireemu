@@ -791,6 +791,29 @@ fn cases() -> Vec<Case> {
                 "CC-10: conformance/pubsub-matrix.json row pubsub-probe/delivery#push has no authority entry",
             ),
         },
+        // CC-10: the Rules program recording has no register section, so a divergence written
+        // into it is a promotion nothing authorized.
+        Case {
+            name: "rules-program-recording-cannot-pin-an-unauthorized-divergence",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/rules-programs.json",
+                    &json!({
+                        "version": 1,
+                        "programs": [{
+                            "id": "budget-get-10",
+                            "area": "budget",
+                            "oracle": {"steps": {"read": {"status": 404}}},
+                            "divergence": {"fireemu": {"steps": {"read": {"status": 200}}}}
+                        }]
+                    })
+                    .to_string(),
+                );
+            },
+            expect: Some(
+                "CC-10: conformance/rules-programs.json row budget-get-10 records a divergence, but Rules programs have no authority section in conformance/divergences.json",
+            ),
+        },
         Case {
             name: "authority-fixture-must-match-its-register-key",
             mutate: |_, _, fixture| {

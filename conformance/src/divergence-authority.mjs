@@ -109,8 +109,8 @@ const sameJson = (a, b) => {
 /**
  * Resolves a fixture reference to the register key it identifies, mirroring
  * `fixture_row_key` in the Rust gate. `pinned` is the entry's `fireemu` value: an
- * object-shaped matrix row binds only when its recorded oracle answer differs from it,
- * because the matrix's own `divergence` marks are regenerated from the register.
+ * object-shaped matrix row binds only when the last recording marked it divergent with
+ * exactly that answer and its recorded oracle answer differs from it.
  */
 export function fixtureRowKey(root, reference, pinned) {
   const [path, ...fragments] = reference.split("#");
@@ -138,11 +138,14 @@ export function fixtureRowKey(root, reference, pinned) {
   const steps = program?.steps;
   const present = Array.isArray(steps)
     ? steps.some((row) => rowId(row) === step && row.status === "documented-divergence")
-    : steps !== null &&
+    : // A row binds only when the last recording marked it divergent with exactly the
+      // pinned answer and the oracle answer differs from it.
+      steps !== null &&
       typeof steps === "object" &&
       Object.hasOwn(steps, step) &&
       steps[step]?.oracle !== undefined &&
       pinned !== undefined &&
+      sameJson(steps[step]?.divergence?.fireemu, pinned) &&
       !sameJson(steps[step].oracle, pinned);
   if (!present) return undefined;
   const prefix = path.endsWith("pubsub-matrix.json")

@@ -37,8 +37,15 @@ function repositoryRoot() {
         {
           id: "values/type-order",
           steps: {
-            "descending-name-only": { oracle: { status: 200 } },
+            "descending-name-only": {
+              oracle: { status: 200 },
+              divergence: { fireemu: { status: 409 }, reason: "recorded" },
+            },
             ascending: { oracle: { status: 200 } },
+            "stale-mark": {
+              oracle: { status: 200 },
+              divergence: { fireemu: { status: 500 }, reason: "recorded" },
+            },
           },
         },
       ],
@@ -268,7 +275,7 @@ test("the checked-in register is frozen after validation and cannot be promoted 
   assert.equal(promoted[0].status, STATUS.debt);
 });
 
-test("an object-shaped matrix row binds only when the pinned answer differs from the oracle", () => {
+test("an object-shaped matrix row binds only through its recorded divergence mark", () => {
   const pinned = {
     fireemu: { status: 409 },
     reason: "pinned",
@@ -298,6 +305,21 @@ test("an object-shaped matrix row binds only when the pinned answer differs from
     firestoreMatrixDivergences: { "values/type-order#ascending": parity },
   };
   assert.match(problemsOf(promoted), /does not name an existing documented-divergence row/);
+
+  // A recorded mark whose answer is not the pinned one binds nothing either.
+  const drifted = {
+    ...register,
+    firestoreMatrixDivergences: {
+      "values/type-order#stale-mark": {
+        ...pinned,
+        authority: {
+          ...pinned.authority,
+          fixture: "conformance/firestore-matrix.json#values/type-order#stale-mark",
+        },
+      },
+    },
+  };
+  assert.match(problemsOf(drifted), /does not name an existing documented-divergence row/);
 });
 
 test("a fixture reached through a symbolic link out of the repository is refused", () => {

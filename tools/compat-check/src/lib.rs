@@ -458,9 +458,8 @@ fn fixture_escapes_root(root: &Path, reference: &str) -> bool {
 
 /// Resolves an authority's fixture reference to the register key it justifies, or `None`
 /// when no documented-divergence row exists there. `pinned` is the register entry's
-/// `fireemu` value: an object-shaped matrix row binds only when its recorded oracle answer
-/// differs from it, because the matrix's own `divergence` marks are regenerated from the
-/// register and a pinned answer equal to the oracle documents no divergence at all. Only the
+/// `fireemu` value: an object-shaped matrix row binds only when the last recording marked it
+/// divergent with exactly that answer and its recorded oracle answer differs from it. Only the
 /// matrix sections carry `fireemu`, so an entry of the `divergences` section can never bind
 /// through the object-shaped branch; the Firestore matrix is the only object-shaped artifact.
 fn fixture_row_key(root: &Path, reference: &str, pinned: Option<&Value>) -> Option<String> {
@@ -514,13 +513,18 @@ fn fixture_row_key(root: &Path, reference: &str, pinned: Option<&Value>) -> Opti
                     str_field(row, "id") == Some(step)
                         && str_field(row, "status") == Some("documented-divergence")
                 }),
-                // Matrix files retain the measured oracle answer; the canonical register
-                // supplies the pinned fireemu answer and the authority. The two must differ,
-                // or the entry documents no divergence.
-                Value::Object(rows) => rows
-                    .get(*step)
-                    .and_then(|row| row.get("oracle"))
-                    .is_some_and(|oracle| pinned.is_some_and(|pinned| pinned != oracle)),
+                // Matrix files retain the measured oracle answer and, from the last
+                // recording, the divergence mark; the canonical register supplies the
+                // authority. A row binds only when the recording marked it divergent with
+                // this exact pinned answer and the oracle answer differs from it, so neither
+                // a stale register entry nor a hand-edited mark alone can promote a row.
+                Value::Object(rows) => rows.get(*step).is_some_and(|row| {
+                    let recorded_divergence = row.pointer("/divergence/fireemu");
+                    let oracle = row.get("oracle");
+                    pinned.is_some_and(|pinned| {
+                        recorded_divergence == Some(pinned) && oracle.is_some_and(|o| o != pinned)
+                    })
+                }),
                 _ => false,
             })
             .then(|| {

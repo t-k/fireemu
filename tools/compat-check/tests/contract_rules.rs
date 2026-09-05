@@ -909,6 +909,35 @@ fn cases() -> Vec<Case> {
         // CC-10: an object-shaped matrix row without a `divergence` is a parity row; binding an
         // authority to it would promote an agreeing row to a divergence with a forged answer.
         Case {
+            name: "authority-cannot-bind-a-matrix-row-whose-mark-pins-another-answer",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/firestore-matrix.json",
+                    &json!({"programs": [{"id": "values/type-order", "steps": {"ascending": {"oracle": {"status": 200}, "divergence": {"fireemu": {"status": 500}}}}}]}).to_string(),
+                );
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {},
+                    "firestoreMatrixDivergences": {
+                        "values/type-order#ascending": {
+                            "fireemu": {"status": 409},
+                            "reason": "the register drifted from the recording",
+                            "authority": {
+                                "kind": "production-spec",
+                                "sourceUrls": ["https://firebase.google.com/docs/firestore"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/firestore-matrix.json#values/type-order#ascending",
+                                "approvalRecord": "README.md"
+                            }
+                        }
+                    },
+                    "rulesMatrixDivergences": {},
+                }));
+            },
+            expect: Some("does not name an existing documented-divergence row"),
+        },
+        Case {
             name: "authority-cannot-bind-a-parity-matrix-row",
             mutate: |_, _, fixture| {
                 fixture.write(
@@ -920,8 +949,8 @@ fn cases() -> Vec<Case> {
                     "divergences": {},
                     "firestoreMatrixDivergences": {
                         "values/type-order#ascending": {
-                            "fireemu": {"status": 200},
-                            "reason": "promoting a parity row: the pinned answer is the oracle's own",
+                            "fireemu": "forged-answer",
+                            "reason": "promoting a parity row that the recording never marked divergent",
                             "authority": {
                                 "kind": "production-spec",
                                 "sourceUrls": ["https://firebase.google.com/docs/firestore"],

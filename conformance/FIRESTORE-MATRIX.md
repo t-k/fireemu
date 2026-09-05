@@ -125,11 +125,11 @@ own answer (marked below).
 | avg-integers | 200 | OK | 1 aggregation results |
 | avg-with-nan | 200 | OK | 1 aggregation results |
 | avg-empty | 200 | OK | 1 aggregation results |
-| several-aggregations (divergence) | 200 | OK | 1 aggregation results |
+| several-aggregations | 200 | OK | 1 aggregation results |
 | count-collection-group | 200 | OK | 1 aggregation results |
 | count-with-cursor | 200 | OK | 1 aggregation results |
-| count-beside-a-sum-over-a-missing-field (divergence) | 200 | OK | 1 aggregation results |
-| count-beside-an-avg-over-a-missing-field (divergence) | 200 | OK | 1 aggregation results |
+| count-beside-a-sum-over-a-missing-field | 200 | OK | 1 aggregation results |
+| count-beside-an-avg-over-a-missing-field | 200 | OK | 1 aggregation results |
 | duplicate-alias | 400 | INVALID_ARGUMENT | `Aggregation aliases contain duplicate alias: x.` |
 | no-aggregations | 400 | INVALID_ARGUMENT | `Aggregations can not be empty.` |
 | sum-on-name | 400 | INVALID_ARGUMENT | `Aggregations are not supported for the property: __key__` |
@@ -173,7 +173,7 @@ own answer (marked below).
 | replace-without-mask | 200 | OK | commit(1 results) |
 | read-after-replace | 200 | OK | document |
 | update-time-precondition-matches | 200 | OK | commit(1 results) |
-| update-time-precondition-is-stale | 400 | FAILED_PRECONDITION | `the stored version (1788151519830406) does not match the required base version (1788151519827800)` |
+| update-time-precondition-is-stale | 400 | FAILED_PRECONDITION | `the stored version (1788626393762990) does not match the required base version (1788626393757403)` |
 | update-time-precondition-on-a-missing-document | 400 | FAILED_PRECONDITION | `the stored version (0) does not match the required base version (1577836800000000)` |
 | delete-missing-is-ok | 200 | OK | commit(1 results) |
 | delete-missing-with-exists-true | 404 | NOT_FOUND | `no entity to update: app: "dev~demo-firestore-probe" path <   Element {     type: "wr"     name: "none"   } > ` |
@@ -240,16 +240,16 @@ own answer (marked below).
 | commit-finished-transaction-again | 409 | ABORTED | `The referenced transaction has expired or is no longer valid.` |
 | begin-contended | 200 | OK | object(transaction) |
 | read-contended | 200 | OK | found 1, missing 0 |
-| out-of-band-write | 409 | ABORTED | `Transaction lock timeout.` |
-| contended-commit-is-aborted | 200 | OK | commit(1 results) |
-| counter-keeps-the-out-of-band-value | 200 | OK | document |
+| out-of-band-write (divergence) | 409 | ABORTED | `Transaction lock timeout.` |
+| contended-commit-is-aborted (divergence) | 200 | OK | commit(1 results) |
+| counter-keeps-the-out-of-band-value (divergence) | 200 | OK | document |
 | begin-unread | 200 | OK | object(transaction) |
 | out-of-band-write-2 | 200 | OK | commit(1 results) |
 | blind-write-in-a-transaction-commits | 200 | OK | commit(1 results) |
 | begin-query | 200 | OK | object(transaction) |
 | query-in-transaction | 200 | OK | 3 documents: tx/counter, tx/other, tx/third |
-| phantom-write | 409 | ABORTED | `Transaction lock timeout.` |
-| commit-after-a-phantom-row | 200 | OK | commit(1 results) |
+| phantom-write (divergence) | 409 | ABORTED | `Transaction lock timeout.` |
+| commit-after-a-phantom-row (divergence) | 200 | OK | commit(1 results) |
 | begin-read-only | 200 | OK | object(transaction) |
 | read-only-commit-with-writes | 400 | INVALID_ARGUMENT | `Cannot modify entities in a read-only transaction.` |
 | read-only-commit-without-writes | 200 | OK | object() |

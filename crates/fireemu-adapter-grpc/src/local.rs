@@ -1197,7 +1197,7 @@ impl LocalBackend {
             }
             fireemu_core_session::tenancy::Scope::AllExcept(_) => HistoryBudgetOwner::Default,
         };
-        let (mut gauges, refusals) = self.history_budget_gauges(&owner, scope.is_default());
+        let (mut gauges, refusals) = self.history_budget_gauges(&owner, scope.is_default())?;
         let (database_gauges, roots, unreadable) = self.database_roots(scope);
         if unreadable > 0 {
             return Err(format!(
@@ -1220,11 +1220,12 @@ impl LocalBackend {
         &self,
         owner: &HistoryBudgetOwner,
         report_global: bool,
-    ) -> (Vec<Gauge>, Vec<Refusal>) {
+    ) -> Result<(Vec<Gauge>, Vec<Refusal>), String> {
+        // A poisoned ledger is a half-applied update, not a value to report as complete.
         let ledger = self
             .history_budget
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .map_err(|_| "the history budget ledger is poisoned".to_owned())?;
         let session = ledger
             .charged_by_owner
             .get(owner)
@@ -1267,7 +1268,7 @@ impl LocalBackend {
                 count: *count,
             })
             .collect();
-        (gauges, refusals)
+        Ok((gauges, refusals))
     }
 
     /// One root per database the scope owns (its retained versions and bytes) and one per

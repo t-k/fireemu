@@ -127,12 +127,27 @@ fn check_divergence_authorities(root: &Path, contract: &Value, problems: &mut Ve
         return;
     }
     let mut entries = BTreeMap::new();
-    for section in ["divergences", "firestoreMatrixDivergences"] {
+    for section in [
+        "divergences",
+        "firestoreMatrixDivergences",
+        "rulesMatrixDivergences",
+    ] {
         let Some(section_entries) = register.get(section).and_then(Value::as_object) else {
             problems.push(format!("CC-10: {DIVERGENCES_PATH} has no {section} object"));
             continue;
         };
         for (key, entry) in section_entries {
+            if str_field(entry, "reason").is_none_or(str::is_empty) {
+                problems.push(format!("CC-10: divergence {key} has no reason"));
+            }
+            if section == "divergences" && str_field(entry, "documents").is_none_or(str::is_empty) {
+                problems.push(format!("CC-10: divergence {key} has no documents"));
+            }
+            if section != "divergences" && entry.get("fireemu").is_none() {
+                problems.push(format!(
+                    "CC-10: matrix divergence {key} has no fireemu value"
+                ));
+            }
             if entries.insert(key.as_str(), entry).is_some() {
                 problems.push(format!("CC-10: divergence {key} is declared twice"));
             }
@@ -144,7 +159,7 @@ fn check_divergence_authorities(root: &Path, contract: &Value, problems: &mut Ve
         .and_then(|baseline| str_field(baseline, "version"))
         .unwrap_or("");
     for (key, entry) in &entries {
-        validate_authority_entry(root, key, entry, baseline_version, problems);
+        validate_authority_entry(root, key, entry, baseline_version, true, problems);
     }
     for divergence in contract
         .pointer("/profiles/firebase/officialEmulatorDivergences")
@@ -153,7 +168,18 @@ fn check_divergence_authorities(root: &Path, contract: &Value, problems: &mut Ve
         .unwrap_or_default()
     {
         let contract_key = str_field(divergence, "key").unwrap_or("<unnamed>");
-        for reference in strings(divergence, "authorityRefs") {
+        let references = strings(divergence, "authorityRefs");
+        if references.is_empty() {
+            validate_authority_entry(
+                root,
+                contract_key,
+                divergence,
+                baseline_version,
+                false,
+                problems,
+            );
+        }
+        for reference in references {
             if !entries.contains_key(reference) {
                 problems.push(format!(
                     "CC-10: contract divergence {contract_key} names unknown authority {reference}"
@@ -240,6 +266,27 @@ fn check_matrix_authorities(
             }
         }
     }
+    let Ok(text) = fs::read_to_string(root.join("conformance/rules-matrix.json")) else {
+        return;
+    };
+    let Ok(matrix) = serde_json::from_str::<Value>(&text) else {
+        return;
+    };
+    for claim in matrix
+        .get("claims")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        if claim.get("divergence").is_some() {
+            let id = str_field(claim, "id").unwrap_or("<unnamed>");
+            if !entries.contains_key(id) {
+                problems.push(format!(
+                    "CC-10: conformance/rules-matrix.json row {id} has no authority entry"
+                ));
+            }
+        }
+    }
 }
 
 fn validate_authority_entry(
@@ -247,6 +294,7 @@ fn validate_authority_entry(
     key: &str,
     entry: &Value,
     baseline_version: &str,
+    require_fixture: bool,
     problems: &mut Vec<String>,
 ) {
     let Some(authority) = entry.get("authority") else {
@@ -268,11 +316,7 @@ fn validate_authority_entry(
         }
     }
     let urls = strings(authority, "sourceUrls");
-    if urls.is_empty()
-        || urls
-            .iter()
-            .any(|url| !url.starts_with("https://") || url.chars().any(char::is_whitespace))
-    {
+    if urls.is_empty() || urls.iter().any(|url| !valid_https_url(url)) {
         problems.push(format!(
             "CC-10: {key} authority sourceUrls must contain only non-empty HTTPS URLs"
         ));
@@ -299,6 +343,9 @@ fn validate_authority_entry(
         ));
     }
     let Some(fixture) = str_field(authority, "fixture") else {
+        if !require_fixture {
+            return;
+        }
         problems.push(format!("CC-10: {key} authority names no fixture"));
         return;
     };
@@ -315,6 +362,17 @@ fn validate_authority_entry(
     }
 }
 
+fn valid_https_url(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    !authority.is_empty()
+        && !authority.contains('@')
+        && authority.contains('.')
+        && !value.chars().any(char::is_whitespace)
+}
+
 fn fixture_row_key(root: &Path, reference: &str) -> Option<String> {
     let mut parts = reference.split('#');
     let path = parts.next()?;
@@ -322,16 +380,33 @@ fn fixture_row_key(root: &Path, reference: &str) -> Option<String> {
     let text = fs::read_to_string(root.join(path)).ok()?;
     let value = serde_json::from_str::<Value>(&text).ok()?;
     match fragments.as_slice() {
-        [step] => value
-            .get("steps")
-            .and_then(Value::as_array)
-            .is_some_and(|steps| {
-                steps.iter().any(|row| {
-                    str_field(row, "id") == Some(step)
-                        && str_field(row, "status") == Some("documented-divergence")
+        [step] => {
+            if let Some(id) = value
+                .get("steps")
+                .and_then(Value::as_array)
+                .and_then(|steps| {
+                    steps
+                        .iter()
+                        .any(|row| {
+                            str_field(row, "id") == Some(step)
+                                && str_field(row, "status") == Some("documented-divergence")
+                        })
+                        .then(|| str_field(&value, "id").unwrap_or(""))
                 })
-            })
-            .then(|| format!("{}#{step}", str_field(&value, "id").unwrap_or(""))),
+            {
+                Some(format!("{id}#{step}"))
+            } else {
+                value
+                    .get("claims")
+                    .and_then(Value::as_array)
+                    .is_some_and(|claims| {
+                        claims.iter().any(|row| {
+                            str_field(row, "id") == Some(step) && row.get("divergence").is_some()
+                        })
+                    })
+                    .then(|| (*step).to_owned())
+            }
+        }
         [program, step] => value
             .get("programs")
             .and_then(Value::as_array)

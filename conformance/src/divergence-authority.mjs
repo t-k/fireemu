@@ -6,6 +6,7 @@ const KINDS = new Set([
   "intentional-local-policy",
   "unverified",
 ]);
+const validatedMaps = new WeakSet();
 
 const validDate = (value) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value ?? "")) return false;
@@ -16,13 +17,24 @@ const validDate = (value) => {
 export function validateDivergenceRegister(register, baselineVersion) {
   const problems = [];
   if (register?.schemaVersion !== 2) problems.push("schemaVersion must be 2");
-  for (const section of ["divergences", "firestoreMatrixDivergences"]) {
+  for (const section of [
+    "divergences",
+    "firestoreMatrixDivergences",
+    "rulesMatrixDivergences",
+  ]) {
     const entries = register?.[section];
     if (!entries || Array.isArray(entries) || typeof entries !== "object") {
       problems.push(`${section} must be an object`);
       continue;
     }
     for (const [key, entry] of Object.entries(entries)) {
+      if (!entry?.reason) problems.push(`${key}: reason is required`);
+      if (section === "divergences" && !entry?.documents) {
+        problems.push(`${key}: documents is required`);
+      }
+      if (section !== "divergences" && !("fireemu" in (entry ?? {}))) {
+        problems.push(`${key}: fireemu value is required`);
+      }
       const authority = entry?.authority;
       if (!authority || typeof authority !== "object") {
         problems.push(`${key}: authority is required`);
@@ -37,7 +49,8 @@ export function validateDivergenceRegister(register, baselineVersion) {
         authority.sourceUrls.length === 0 ||
         authority.sourceUrls.some((url) => {
           try {
-            return new URL(url).protocol !== "https:";
+            const parsed = new URL(url);
+            return parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password;
           } catch {
             return true;
           }
@@ -73,5 +86,10 @@ export function readValidatedDivergenceRegister() {
   if (problems.length > 0) {
     throw new Error(`invalid divergence authority register:\n${problems.join("\n")}`);
   }
+  validatedMaps.add(register.divergences);
+  validatedMaps.add(register.firestoreMatrixDivergences);
+  validatedMaps.add(register.rulesMatrixDivergences);
   return register;
 }
+
+export const isValidatedDivergenceMap = (value) => validatedMaps.has(value);

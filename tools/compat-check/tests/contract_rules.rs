@@ -47,6 +47,7 @@ impl Fixture {
             "schemaVersion": 2,
             "divergences": {},
             "firestoreMatrixDivergences": {},
+            "rulesMatrixDivergences": {},
         }));
         fixture.write(
             "README.md",
@@ -691,6 +692,7 @@ fn cases() -> Vec<Case> {
                         }
                     },
                     "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
                 }));
             },
             expect: None,
@@ -720,6 +722,7 @@ fn cases() -> Vec<Case> {
                         }
                     },
                     "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
                 }));
             },
             expect: Some("CC-10: firestore/a-scenario#read is unverified and cannot justify a documented divergence"),
@@ -742,6 +745,7 @@ fn cases() -> Vec<Case> {
                         }
                     },
                     "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
                 }));
             },
             expect: Some("authority sourceUrls must contain only non-empty HTTPS URLs"),
@@ -764,9 +768,72 @@ fn cases() -> Vec<Case> {
                         }
                     },
                     "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
                 }));
             },
             expect: Some("does not name an existing documented-divergence row"),
+        },
+        Case {
+            name: "matrix-row-cannot-outlive-its-authority",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/pubsub-matrix.json",
+                    &json!({
+                        "programs": [{
+                            "id": "delivery",
+                            "steps": [{"id": "push", "status": "documented-divergence"}]
+                        }]
+                    })
+                    .to_string(),
+                );
+            },
+            expect: Some(
+                "CC-10: conformance/pubsub-matrix.json row pubsub-probe/delivery#push has no authority entry",
+            ),
+        },
+        Case {
+            name: "authority-fixture-must-match-its-register-key",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/other-scenario",
+                    &json!([{"id": "read", "status": "documented-divergence"}]),
+                );
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "documents": "README.md",
+                            "reason": "misbound on purpose",
+                            "authority": {
+                                "kind": "production-spec",
+                                "sourceUrls": ["https://firebase.google.com/docs/firestore"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/other-scenario.json#read",
+                                "approvalRecord": "README.md"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
+                }));
+            },
+            expect: Some("authority fixture points to different row firestore/other-scenario#read"),
+        },
+        Case {
+            name: "contract-divergence-needs-structured-authority",
+            mutate: |contract, _, _| {
+                contract
+                    .pointer_mut("/profiles/firebase")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(
+                        "officialEmulatorDivergences".to_owned(),
+                        json!([{"key": "free.text", "note": "not enough"}]),
+                    );
+            },
+            expect: Some("CC-10: free.text has no authority object"),
         },
         // CC-09: a row no local oracle can answer (production-only) is not emulator evidence,
         // so a fixture made only of such rows proves nothing.

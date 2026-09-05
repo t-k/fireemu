@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { compareScenario, deepEqual } from "./diff.mjs";
+import { classifyScenario, compareScenario, deepEqual } from "./diff.mjs";
 import { normalizeError } from "./normalize.mjs";
 
 const fixture = {
@@ -43,6 +43,22 @@ test("deepEqual distinguishes shape, order and key set", () => {
   assert.ok(!deepEqual([1, 2], [2, 1]));
   assert.ok(!deepEqual({ a: 1 }, { a: 1, b: undefined }));
   assert.ok(!deepEqual({ a: 1 }, { a: "1" }));
+});
+
+test("an unvalidated annotation cannot promote a mismatch to documented divergence", () => {
+  const steps = classifyScenario({
+    scenarioId: "example/scenario",
+    oracleScenario: { steps: [{ id: "read", value: { status: 200 } }] },
+    testdScenario: { steps: [{ id: "read", value: { status: 403 } }] },
+    annotations: {
+      "example/scenario#read": {
+        documents: "README.md",
+        reason: "not verified",
+        authority: { kind: "unverified" },
+      },
+    },
+  });
+  assert.equal(steps[0].status, "debt");
 });
 
 test("a faithful replay passes and counts only the gated rows", () => {

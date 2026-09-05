@@ -15,13 +15,22 @@ import { compareScenario } from "./diff.mjs";
 import { fixtureOwnershipFailures } from "./fixture-ownership.mjs";
 import { readAllFixtures } from "./fixtures.mjs";
 import { configFor, runTestd } from "./sides.mjs";
+import { readValidatedDivergenceRegister } from "./divergence-authority.mjs";
 
 const fixtures = await readAllFixtures();
+const authorities = readValidatedDivergenceRegister().divergences;
 if (fixtures.size === 0) {
   console.error(
     "no fixtures under conformance/fixtures: run `pnpm -C conformance run oracle` first",
   );
   process.exit(2);
+}
+for (const fixture of fixtures.values()) {
+  for (const step of fixture.steps ?? []) {
+    if (step.status === "documented-divergence" && !authorities[`${fixture.id}#${step.id}`]) {
+      throw new Error(`${fixture.id}#${step.id} has no verified divergence authority`);
+    }
+  }
 }
 
 await mkdir(RUNS_DIR, { recursive: true });

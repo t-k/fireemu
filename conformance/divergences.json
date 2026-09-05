@@ -8,7 +8,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://firebase.google.com/docs/firestore/query-data/indexing",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -17,7 +17,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/firestore/missing-composite-index.json#admin-two-equality-filters",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Composite indexes\""
       }
     },
     "firestore/missing-composite-index#admin-equality-plus-inequality": {
@@ -26,7 +26,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://firebase.google.com/docs/firestore/query-data/indexing",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -35,7 +35,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/firestore/missing-composite-index.json#admin-equality-plus-inequality",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Composite indexes\""
       }
     },
     "firestore/missing-composite-index#client-two-equality-filters": {
@@ -44,7 +44,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://firebase.google.com/docs/firestore/query-data/indexing",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -53,7 +53,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/firestore/missing-composite-index.json#client-two-equality-filters",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Composite indexes\""
       }
     },
     "firestore/lite-rest-transport#query-needing-a-composite-index": {
@@ -62,7 +62,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://firebase.google.com/docs/firestore/query-data/indexing",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -71,7 +71,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/firestore/lite-rest-transport.json#query-needing-a-composite-index",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Composite indexes\""
       }
     },
     "firestore/rest-error-shapes#runQuery-needing-a-composite-index": {
@@ -80,7 +80,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://firebase.google.com/docs/firestore/query-data/indexing",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -89,7 +89,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/firestore/rest-error-shapes.json#runQuery-needing-a-composite-index",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Composite indexes\""
       }
     },
     "appcheck/exchange-and-jwks#exchange-a-registered-debug-secret": {
@@ -98,7 +98,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/app-check",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -107,37 +107,43 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/exchange-and-jwks.json#exchange-a-registered-debug-secret",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.1"
       }
     },
     "appcheck/exchange-and-jwks#exchange-an-unknown-secret": {
       "documents": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 17",
       "reason": "No route on the oracle (404) against the specified 403 PERMISSION_DENIED \"App attestation failed.\" that fireemu returns for an unknown project, app, disabled app or secret alike.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/exchange-and-jwks.json#exchange-an-unknown-secret",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 17"
       }
     },
     "appcheck/exchange-and-jwks#exchange-a-limited-use-token": {
       "documents": "capability manifest APPCHECK-REPLAY-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 17 and 23",
       "reason": "No route on the oracle (404). fireemu fails closed with 501 UNIMPLEMENTED / APP_CHECK_REPLAY_UNSUPPORTED rather than issuing a reusable token for a limited-use request.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/exchange-and-jwks.json#exchange-a-limited-use-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-REPLAY-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 17 and 23"
       }
     },
     "appcheck/exchange-and-jwks#jwks": {
@@ -146,7 +152,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/app-check",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -155,67 +161,79 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/exchange-and-jwks.json#jwks",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-JWKS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.2"
       }
     },
     "appcheck/unenforced-header-matrix#firestore-rest-valid-token": {
       "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
       "reason": "The oracle issues no App Check token, so it cannot run the valid-token column at all; the row records the same request without the field and marks itself `noTokenIssuedBySide`.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#firestore-rest-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "conformance/ORACLE.md, \"What the oracle cannot answer\""
       }
     },
     "appcheck/unenforced-header-matrix#auth-signup-valid-token": {
       "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
       "reason": "The oracle issues no App Check token; see the Firestore row.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#auth-signup-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "conformance/ORACLE.md, \"What the oracle cannot answer\""
       }
     },
     "appcheck/unenforced-header-matrix#storage-metadata-valid-token": {
       "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
       "reason": "The oracle issues no App Check token; see the Firestore row.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#storage-metadata-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "conformance/ORACLE.md, \"What the oracle cannot answer\""
       }
     },
     "appcheck/unenforced-header-matrix#callable-unenforcing-valid-token": {
       "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
       "reason": "The oracle issues no token, so its callable sees no app. fireemu forwards the verified token and the callable receives request.app with the registered app id, which is what section 13.4 requires of an unenforcing callable.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/cloud-functions",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#callable-unenforcing-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4"
       }
     },
     "appcheck/unenforced-header-matrix#callable-unenforcing-unverifiable-token": {
@@ -224,7 +242,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/cloud-functions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -233,7 +251,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#callable-unenforcing-unverifiable-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4"
       }
     },
     "appcheck/unenforced-header-matrix#callable-unenforcing-duplicate-fields": {
@@ -242,7 +260,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/cloud-functions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -251,22 +269,25 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#callable-unenforcing-duplicate-fields",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3"
       }
     },
     "appcheck/unenforced-header-matrix#callable-enforcing-valid-token": {
       "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs)",
       "reason": "The oracle issues no token, so its enforcing callable answers 401. fireemu presents a verified token and the callable runs with request.app populated.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/cloud-functions",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#callable-enforcing-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs)"
       }
     },
     "appcheck/unenforced-header-matrix#callable-enforcing-unverifiable-token": {
@@ -275,7 +296,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/cloud-functions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -284,7 +305,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#callable-enforcing-unverifiable-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4"
       }
     },
     "appcheck/unenforced-header-matrix#callable-enforcing-duplicate-fields": {
@@ -293,7 +314,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/cloud-functions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -302,22 +323,25 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#callable-enforcing-duplicate-fields",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3"
       }
     },
     "appcheck/unenforced-header-matrix#on-request-valid-token": {
       "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
       "reason": "The oracle issues no token, so it sends no field and its onRequest handler counts zero. Both sides pass the raw field list through unclassified, which is what the row is about.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/unenforced-header-matrix.json#on-request-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "conformance/ORACLE.md, \"What the oracle cannot answer\""
       }
     },
     "appcheck/enforced-header-matrix#firestore-rest-no-app-check-field": {
@@ -326,7 +350,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/app-check",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -335,7 +359,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#firestore-rest-no-app-check-field",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17"
       }
     },
     "appcheck/enforced-header-matrix#firestore-rest-unverifiable-token": {
@@ -344,7 +368,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -353,7 +377,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#firestore-rest-unverifiable-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17"
       }
     },
     "appcheck/enforced-header-matrix#firestore-rest-duplicate-fields": {
@@ -362,7 +386,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -371,22 +395,25 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#firestore-rest-duplicate-fields",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3"
       }
     },
     "appcheck/enforced-header-matrix#firestore-rest-valid-token": {
       "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
       "reason": "Both sides admit, but the oracle admits because it never looked and cannot present a token; the row is marked `noTokenIssuedBySide` so the agreement is not read as parity.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#firestore-rest-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "conformance/ORACLE.md, \"What the oracle cannot answer\""
       }
     },
     "appcheck/enforced-header-matrix#auth-signup-no-app-check-field": {
@@ -395,7 +422,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/app-check",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -404,7 +431,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#auth-signup-no-app-check-field",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.3"
       }
     },
     "appcheck/enforced-header-matrix#auth-signup-unverifiable-token": {
@@ -413,7 +440,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -422,7 +449,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#auth-signup-unverifiable-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.3"
       }
     },
     "appcheck/enforced-header-matrix#auth-signup-duplicate-fields": {
@@ -431,7 +458,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -440,22 +467,25 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#auth-signup-duplicate-fields",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3"
       }
     },
     "appcheck/enforced-header-matrix#auth-signup-valid-token": {
       "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
       "reason": "Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#auth-signup-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "conformance/ORACLE.md, \"What the oracle cannot answer\""
       }
     },
     "appcheck/enforced-header-matrix#storage-metadata-no-app-check-field": {
@@ -464,7 +494,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/app-check",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -473,7 +503,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#storage-metadata-no-app-check-field",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.2"
       }
     },
     "appcheck/enforced-header-matrix#storage-metadata-unverifiable-token": {
@@ -482,7 +512,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -491,7 +521,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#storage-metadata-unverifiable-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.2"
       }
     },
     "appcheck/enforced-header-matrix#storage-metadata-duplicate-fields": {
@@ -500,7 +530,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -509,37 +539,43 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#storage-metadata-duplicate-fields",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3"
       }
     },
     "appcheck/enforced-header-matrix#storage-metadata-valid-token": {
       "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
       "reason": "Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/custom-resource-backend",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#storage-metadata-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "conformance/ORACLE.md, \"What the oracle cannot answer\""
       }
     },
     "appcheck/enforced-header-matrix#callable-enforcing-valid-token": {
       "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs)",
       "reason": "The oracle issues no token, so its enforcing callable answers 401; fireemu presents a verified token and the handler runs with request.app.",
       "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/app-check/cloud-functions",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#callable-enforcing-valid-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs)"
       }
     },
     "appcheck/enforced-header-matrix#callable-enforcing-unverifiable-token": {
@@ -548,7 +584,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/cloud-functions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -557,7 +593,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#callable-enforcing-unverifiable-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4"
       }
     },
     "appcheck/enforced-header-matrix#callable-enforcing-duplicate-fields": {
@@ -566,7 +602,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/app-check/cloud-functions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -575,7 +611,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/appcheck/enforced-header-matrix.json#callable-enforcing-duplicate-fields",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3"
       }
     },
     "functions/callable-auth-context#a-forged-bearer-token-is-not-an-identity": {
@@ -584,7 +620,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/functions/callable-reference",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -593,7 +629,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/functions/callable-auth-context.json#a-forged-bearer-token-is-not-an-identity",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3"
       }
     },
     "functions/callable-auth-context#bearer-owner-is-not-a-callable-identity": {
@@ -602,7 +638,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/functions/callable-reference",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -611,7 +647,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/functions/callable-auth-context.json#bearer-owner-is-not-a-callable-identity",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3"
       }
     },
     "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-loopback-origin": {
@@ -619,14 +655,17 @@
       "reason": "The official emulator varies its callable preflight response only on Origin and Access-Control-Request-Headers. fireemu also names Access-Control-Request-Method, Sec-Fetch-Site and Sec-Fetch-Mode because those request fields participate in its loopback callable admission decision; this prevents a shared cache from replaying an admitted response for a request that the proxy would refuse.",
       "authority": {
         "kind": "official-emulator",
-        "sourceUrls": ["https://github.com/firebase/firebase-tools/tree/v15.28.2"],
+        "sourceUrls": [
+          "https://firebase.google.com/docs/functions/http-events",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
         "checkedOn": "2026-09-05",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json#preflight-on-a-callable-from-a-loopback-origin",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin": {
@@ -635,7 +674,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/functions/http-events",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -644,7 +683,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json#preflight-on-a-callable-from-a-remote-origin",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Functions\""
       }
     },
     "functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable": {
@@ -653,7 +692,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/functions/http-events",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -662,7 +701,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json#a-cross-origin-post-to-a-callable",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Functions\""
       }
     },
     "pubsub-probe/seek-to-time#replayed": {
@@ -671,7 +710,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/pubsub/docs",
+          "https://cloud.google.com/pubsub/docs/replay-overview",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -680,7 +719,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/pubsub-matrix.json#seek-to-time#replayed",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Pub/Sub\"; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "pubsub-probe/rest-resource-wire#snapshotPut": {
@@ -689,7 +728,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/pubsub/docs",
+          "https://cloud.google.com/pubsub/docs/replay-overview",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -698,7 +737,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/pubsub-matrix.json#rest-resource-wire#snapshotPut",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "vendored google/pubsub/v1/pubsub.proto Snapshot.labels; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "pubsub-probe/snapshot-future-retention#restored": {
@@ -707,7 +746,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/pubsub/docs",
+          "https://cloud.google.com/pubsub/docs/replay-overview",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -716,7 +755,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/pubsub-matrix.json#snapshot-future-retention#restored",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "Google Cloud Pub/Sub replay overview, 'Replay and purge messages with seek'; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/fb-resumable-upload#upload-with-wrong-offset": {
@@ -725,7 +764,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/performing-resumable-uploads",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -734,7 +773,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#fb-resumable-upload#upload-with-wrong-offset",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/fb-resumable-upload#wrong-offset-object": {
@@ -743,7 +782,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/performing-resumable-uploads",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -752,7 +791,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#fb-resumable-upload#wrong-offset-object",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/rules-request-model#overwrite-locked-is-an-update": {
@@ -761,7 +800,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://firebase.google.com/docs/storage/security/core-syntax",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -770,7 +809,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#rules-request-model#overwrite-locked-is-an-update",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/rules-request-model#cache-control-visible-to-rules": {
@@ -779,7 +818,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://firebase.google.com/docs/storage/security/core-syntax",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -788,7 +827,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#rules-request-model#cache-control-visible-to-rules",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/rules-request-model#content-language-visible-to-rules": {
@@ -797,7 +836,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://firebase.google.com/docs/storage/security/core-syntax",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -806,7 +845,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#rules-request-model#content-language-visible-to-rules",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-resumable-upload#chunk-one": {
@@ -815,7 +854,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/performing-resumable-uploads",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -824,7 +863,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#chunk-one",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-resumable-upload#chunk-two": {
@@ -833,7 +872,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/performing-resumable-uploads",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -842,7 +881,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#chunk-two",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-resumable-upload#chunked-object": {
@@ -851,7 +890,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/performing-resumable-uploads",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -860,7 +899,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#chunked-object",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-preconditions#insert-if-generation-match-zero-on-existing": {
@@ -869,7 +908,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/request-preconditions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -878,7 +917,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-preconditions#insert-if-generation-match-zero-on-existing",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-preconditions#get-if-generation-not-match-current": {
@@ -887,7 +926,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/request-preconditions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -896,7 +935,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-preconditions#get-if-generation-not-match-current",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-preconditions#delete-if-generation-mismatch": {
@@ -905,7 +944,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/request-preconditions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -914,7 +953,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-preconditions#delete-if-generation-mismatch",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-preconditions#malformed-precondition": {
@@ -923,7 +962,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/request-preconditions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -932,7 +971,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-preconditions#malformed-precondition",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-preconditions#object-still-present": {
@@ -941,7 +980,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/request-preconditions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -950,7 +989,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-preconditions#object-still-present",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-checksums#mismatching-md5": {
@@ -959,7 +998,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/data-validation",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -968,7 +1007,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-checksums#mismatching-md5",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-checksums#mismatching-md5-not-published": {
@@ -977,7 +1016,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/data-validation",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -986,7 +1025,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-checksums#mismatching-md5-not-published",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-checksums#mismatching-crc32c-in-metadata": {
@@ -995,7 +1034,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/data-validation",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1004,7 +1043,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-checksums#mismatching-crc32c-in-metadata",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/triggers#finalize-on-firebase-media-upload": {
@@ -1013,7 +1052,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://firebase.google.com/docs/functions/storage-events",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1022,7 +1061,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#triggers#finalize-on-firebase-media-upload",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/triggers#metadata-update-on-patch": {
@@ -1031,7 +1070,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://firebase.google.com/docs/functions/storage-events",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1040,7 +1079,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#triggers#metadata-update-on-patch",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/triggers#finalize-on-overwrite": {
@@ -1049,7 +1088,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://firebase.google.com/docs/functions/storage-events",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1058,7 +1097,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#triggers#finalize-on-overwrite",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/triggers#finalize-on-json-api-copy": {
@@ -1067,7 +1106,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://firebase.google.com/docs/functions/storage-events",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1076,7 +1115,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#triggers#finalize-on-json-api-copy",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/triggers#delete": {
@@ -1085,7 +1124,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://firebase.google.com/docs/functions/storage-events",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1094,7 +1133,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#triggers#delete",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/triggers#metadata-update-on-token-creation": {
@@ -1103,7 +1142,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://firebase.google.com/docs/functions/storage-events",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1112,7 +1151,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#triggers#metadata-update-on-token-creation",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)"
       }
     },
     "storage-probe/gcs-update-list-delete#get-missing-media": {
@@ -1121,7 +1160,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/get",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1130,7 +1169,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#get-missing-media",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); conformance/storage-matrix.json"
       }
     },
     "storage-probe/triggers#json-api-resumable-finalize": {
@@ -1139,7 +1178,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs",
+          "https://cloud.google.com/storage/docs/performing-resumable-uploads",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1148,7 +1187,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#triggers#json-api-resumable-finalize",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)"
       }
     }
   },
@@ -1163,7 +1202,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://firebase.google.com/docs/firestore/query-data/order-limit-data",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1172,7 +1211,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#values/type-order#descending-name-only",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "queries/collection-group#partition-query": {
@@ -1204,7 +1243,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest/v1/projects.databases.documents/partitionQuery",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1213,7 +1252,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#queries/collection-group#partition-query",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "transactions/lifecycle#get-with-transaction-query-parameter": {
@@ -1235,7 +1274,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://firebase.google.com/docs/firestore/manage-data/transactions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1244,7 +1283,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#transactions/lifecycle#get-with-transaction-query-parameter",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "transactions/lifecycle#out-of-band-write": {
@@ -1264,7 +1303,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/firestore/manage-data/transactions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1273,7 +1312,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#transactions/lifecycle#out-of-band-write",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "transactions/lifecycle#contended-commit-is-aborted": {
@@ -1285,7 +1324,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/firestore/manage-data/transactions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1294,7 +1333,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#transactions/lifecycle#contended-commit-is-aborted",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "transactions/lifecycle#counter-keeps-the-out-of-band-value": {
@@ -1316,7 +1355,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/firestore/manage-data/transactions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1325,7 +1364,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#transactions/lifecycle#counter-keeps-the-out-of-band-value",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "transactions/lifecycle#phantom-write": {
@@ -1345,7 +1384,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/firestore/manage-data/transactions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1354,7 +1393,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#transactions/lifecycle#phantom-write",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "transactions/lifecycle#commit-after-a-phantom-row": {
@@ -1366,7 +1405,7 @@
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
-          "https://github.com/t-k/fireemu/blob/main/README.md",
+          "https://firebase.google.com/docs/firestore/manage-data/transactions",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1375,7 +1414,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#transactions/lifecycle#commit-after-a-phantom-row",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "errors/rest-shapes#run-query-without-from": {
@@ -1387,7 +1426,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1396,7 +1435,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#errors/rest-shapes#run-query-without-from",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "errors/rest-shapes#from-with-empty-collection-id": {
@@ -1408,7 +1447,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1417,7 +1456,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#errors/rest-shapes#from-with-empty-collection-id",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "errors/rest-shapes#write-to-another-database": {
@@ -1429,7 +1468,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1438,7 +1477,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#errors/rest-shapes#write-to-another-database",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "errors/rest-shapes#list-with-bad-page-token": {
@@ -1450,7 +1489,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1459,7 +1498,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#errors/rest-shapes#list-with-bad-page-token",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "emulator/routes#put-rules-without-files": {
@@ -1471,7 +1510,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1480,7 +1519,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#emulator/routes#put-rules-without-files",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "emulator/routes#write-to-a-named-database": {
@@ -1492,7 +1531,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1501,7 +1540,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#emulator/routes#write-to-a-named-database",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "emulator/routes#database-with-uppercase-name": {
@@ -1513,7 +1552,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1522,7 +1561,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#emulator/routes#database-with-uppercase-name",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "reads/read-time#read-at-the-first-update-time": {
@@ -1544,7 +1583,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest/v1/projects.databases.documents/get",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1553,7 +1592,7 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#reads/read-time#read-at-the-first-update-time",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
       }
     },
     "reads/read-time#list-at-the-first-update-time": {
@@ -1579,7 +1618,7 @@
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/firestore",
+          "https://cloud.google.com/firestore/docs/reference/rest/v1/projects.databases.documents/get",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
         "checkedOn": "2026-09-05",
@@ -1588,7 +1627,63 @@
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#reads/read-time#list-at-the-first-update-time",
-        "decidedBy": "fireemu maintainers"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
+      }
+    }
+  },
+  "rulesMatrixDivergences": {
+    "gen-0082": {
+      "fireemu": "error",
+      "reason": "The official compiler's static type checker rejects a method that no type of the receiver has (`[].upper()`) while it compiles the file. fireemu type-checks at evaluation time, so the same program loads and the same request is denied, with the error raised one stage later.",
+      "authority": {
+        "kind": "intentional-local-policy",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/rules/rules-language",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-05",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/rules-matrix.json#gen-0082",
+        "approvalRecord": "conformance/rules-matrix.json"
+      }
+    },
+    "gen-0123": {
+      "fireemu": "error",
+      "reason": "Same static type check on an operator rather than a method: the official compiler refuses `['a', 'b'] + -2.5` at load, fireemu raises on it at evaluation.",
+      "authority": {
+        "kind": "intentional-local-policy",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/rules/rules-language",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-05",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/rules-matrix.json#gen-0123",
+        "approvalRecord": "conformance/rules-matrix.json"
+      }
+    },
+    "gen-0220": {
+      "fireemu": "error",
+      "reason": "Same static type check, reached through `({} is path).toBase64()`: a compile error for the official compiler, an evaluation error for fireemu. The decision is the same in both.",
+      "authority": {
+        "kind": "intentional-local-policy",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/rules/rules-language",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-05",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/rules-matrix.json#gen-0220",
+        "approvalRecord": "conformance/rules-matrix.json"
       }
     }
   }

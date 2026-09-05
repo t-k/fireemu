@@ -14,6 +14,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
+import { readValidatedDivergenceRegister } from "../divergence-authority.mjs";
 import { CLAIMS, AREA_NAMES } from "./matrix.mjs";
 import { PROGRAMS } from "./programs.mjs";
 import { generated, render, shrink } from "./generate.mjs";
@@ -144,34 +145,13 @@ async function probeFireemu(inPath, outPath, script = "src/rules-probe/session.m
   return JSON.parse(await readFile(outPath, "utf8"));
 }
 
-/**
- * Rows where fireemu deliberately answers something else, keyed by claim id. Each names the
- * answer fireemu gives and why; `check` gates those rows against `fireemu`, so the
- * divergence is pinned rather than merely tolerated, and an unlisted difference still fails.
- */
-const DIVERGENCES = {
-  "gen-0082": {
-    fireemu: "error",
-    reason:
-      "The official compiler's static type checker rejects a method that no type of the " +
-      "receiver has (`[].upper()`) while it compiles the file. fireemu type-checks at " +
-      "evaluation time, so the same program loads and the same request is denied, with the " +
-      "error raised one stage later.",
-  },
-  "gen-0123": {
-    fireemu: "error",
-    reason:
-      "Same static type check on an operator rather than a method: the official compiler " +
-      "refuses `['a', 'b'] + -2.5` at load, fireemu raises on it at evaluation.",
-  },
-  "gen-0220": {
-    fireemu: "error",
-    reason:
-      "Same static type check, reached through `({} is path).toBase64()`: a compile error " +
-      "for the official compiler, an evaluation error for fireemu. The decision is the " +
-      "same in both.",
-  },
-};
+const register = readValidatedDivergenceRegister();
+const DIVERGENCES = Object.fromEntries(
+  Object.entries(register.rulesMatrixDivergences).map(([key, entry]) => [
+    key,
+    { fireemu: entry.fireemu, reason: entry.reason },
+  ]),
+);
 
 const claimList = () => [...CLAIMS, ...generated(SEED, GENERATED)];
 
@@ -271,9 +251,19 @@ async function check() {
   let diverged = 0;
   for (const row of matrix.claims) {
     const got = result.claims[row.id] ?? "not-run";
-    const expected = row.divergence ? row.divergence.fireemu : row.oracle;
+    const divergence = DIVERGENCES[row.id];
+    if (row.divergence && !divergence) {
+      mismatches.push({
+        ...row,
+        expected: "verified authority",
+        fireemu: got,
+        node: byId.get(row.id)?.node,
+      });
+      continue;
+    }
+    const expected = divergence ? divergence.fireemu : row.oracle;
     if (got === expected) {
-      if (row.divergence) diverged += 1;
+      if (divergence) diverged += 1;
       continue;
     }
     mismatches.push({ ...row, expected, fireemu: got, node: byId.get(row.id)?.node });

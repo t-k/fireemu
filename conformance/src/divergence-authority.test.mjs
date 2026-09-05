@@ -21,6 +21,7 @@ const register = (value) => ({
   schemaVersion: 2,
   divergences: { "scenario#step": value },
   firestoreMatrixDivergences: {},
+  rulesMatrixDivergences: {},
 });
 
 test("a complete production authority is accepted", () => {
@@ -54,4 +55,26 @@ test("bad sources dates baselines and decisions fail closed", () => {
   assert.match(problems, /checkedOn is invalid/);
   assert.match(problems, /officialBaseline must match/);
   assert.match(problems, /decidedBy or approvalRecord is required/);
+});
+
+test("schema sections kinds fixture and evidence fields are mandatory", () => {
+  assert.match(validateDivergenceRegister({}, "15.28.2").join("\n"), /schemaVersion must be 2/);
+  const malformed = register(entry({ kind: "guess", fixture: "" }));
+  delete malformed.divergences["scenario#step"].reason;
+  delete malformed.divergences["scenario#step"].documents;
+  delete malformed.rulesMatrixDivergences;
+  const problems = validateDivergenceRegister(malformed, "15.28.2").join("\n");
+  assert.match(problems, /reason is required/);
+  assert.match(problems, /documents is required/);
+  assert.match(problems, /unknown authority kind/);
+  assert.match(problems, /fixture is required/);
+  assert.match(problems, /rulesMatrixDivergences must be an object/);
+});
+
+test("authority URLs cannot carry credentials", () => {
+  const problems = validateDivergenceRegister(
+    register(entry({ sourceUrls: ["https://user:secret@example.test/source"] })),
+    "15.28.2",
+  );
+  assert.match(problems.join("\n"), /valid HTTPS URLs/);
 });

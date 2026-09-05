@@ -23,6 +23,8 @@ const TESTD_HTTP_PORT = 32292;
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "firestore-probe");
 const MATRIX_JSON = join(CONFORMANCE_DIR, "firestore-matrix.json");
 const MATRIX_MD = join(CONFORMANCE_DIR, "FIRESTORE-MATRIX.md");
+const PRODUCTION_JSON = join(CONFORMANCE_DIR, "firestore-production-matrix.json");
+const PRODUCTION_MD = join(CONFORMANCE_DIR, "FIRESTORE-PRODUCTION-MATRIX.md");
 const GRACE_MS = 8000;
 
 async function terminateGroup(child) {
@@ -391,8 +393,145 @@ async function check() {
   return 1;
 }
 
+/**
+ * Runs the programs against production Firestore and compares every row with the recorded
+ * official-emulator answer and with what fireemu is held to (the pinned divergence or the
+ * oracle). Needs `FIREEMU_PRODUCTION_PROJECT` and an OAuth token (`FIREEMU_PRODUCTION_TOKEN`
+ * or `gcloud auth application-default print-access-token`). The production project id is
+ * normalized out of every recorded value and never written to the matrix.
+ */
+async function recordProduction() {
+  const project = process.env.FIREEMU_PRODUCTION_PROJECT;
+  if (!project) throw new Error("FIREEMU_PRODUCTION_PROJECT is required");
+  const token =
+    process.env.FIREEMU_PRODUCTION_TOKEN ??
+    (
+      await runSupervisor({
+        name: "gcloud",
+        command: "gcloud",
+        args: ["auth", "application-default", "print-access-token"],
+        env: {},
+        timeoutMs: 60_000,
+      })
+    ).trim();
+  const metadata = await (
+    await fetch(`https://firestore.googleapis.com/v1/projects/${project}/databases/(default)`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+  ).json();
+  const inPath = await writePrograms();
+  const outPath = join(RUN_DIR, "production.json");
+  // `FIREEMU_PRODUCTION_REUSE=1` re-classifies the last production run without new requests.
+  if (process.env.FIREEMU_PRODUCTION_REUSE !== "1")
+    await runSupervisor({
+      name: "production",
+      command: "node",
+      args: [SESSION],
+      env: {
+        FIRESTORE_PROBE_TARGET: "production",
+        FIRESTORE_PROBE_SCHEME: "https",
+        FIRESTORE_PROBE_HOST: "firestore.googleapis.com",
+        FIRESTORE_PROBE_TOKEN: token,
+        FIRESTORE_PROBE_PROJECT: project,
+        FIRESTORE_PROBE_RECORD_PROJECT: PROJECT,
+        FIRESTORE_PROBE_IN: inPath,
+        FIRESTORE_PROBE_OUT: outPath,
+        FIRESTORE_PROBE_TIMEOUT_MS: "60000",
+      },
+      timeoutMs: 1_800_000,
+    });
+  const production = JSON.parse(await readFile(outPath, "utf8"));
+  const matrix = JSON.parse(await readFile(MATRIX_JSON, "utf8"));
+  const recordedRows = new Map(
+    matrix.programs.flatMap((p) =>
+      Object.entries(p.steps).map(([id, row]) => [rowKey(p.id, id), row]),
+    ),
+  );
+  const counts = {};
+  const programs = PROGRAMS.map((p) => {
+    const result = production[p.id] ?? {};
+    return {
+      id: p.id,
+      area: p.area,
+      ...(result.seedError !== undefined ? { seedError: result.seedError } : {}),
+      steps: Object.fromEntries(
+        p.steps.map((s) => {
+          const recorded = recordedRows.get(rowKey(p.id, s.id));
+          const emulator = recorded?.oracle ?? { missing: true };
+          const fireemu = recorded?.divergence?.fireemu ?? emulator;
+          const prod = result.steps?.[s.id] ?? { missing: true };
+          const same = (a, b) => canonical(decision(a)) === canonical(decision(b));
+          let status;
+          const needsIndex =
+            prod.code === "FAILED_PRECONDITION" && /requires an index/.test(prod.message ?? "");
+          if (same(prod, emulator) && same(prod, fireemu)) status = "parity";
+          else if (needsIndex && !same(prod, fireemu)) status = "production-needs-index";
+          else if (same(prod, fireemu)) status = "fireemu-matches-production";
+          else if (same(prod, emulator)) status = "fireemu-divergence";
+          else if (same(emulator, fireemu)) status = "emulators-diverge-from-production";
+          else status = "three-way-difference";
+          counts[status] = (counts[status] ?? 0) + 1;
+          return [s.id, { production: prod, emulator, fireemu, status }];
+        }),
+      ),
+    };
+  });
+  const dropId = (value) =>
+    JSON.parse(JSON.stringify(value ?? null).replaceAll(project, "<production project>"));
+  const output = {
+    version: 1,
+    recordedAgainst: {
+      target: "production Firestore (Native mode) over the public REST surface",
+      database: dropId({
+        type: metadata.type,
+        concurrencyMode: metadata.concurrencyMode,
+        databaseEdition: metadata.databaseEdition,
+        locationId: metadata.locationId,
+        versionRetentionPeriod: metadata.versionRetentionPeriod,
+      }),
+      officialEmulatorMatrix: matrix.recordedAgainst,
+      note: "The production project id is normalized to the recording project id in every value; the project itself is not recorded. Rows compare status, canonical error code and normalized body; error message text is not compared.",
+    },
+    summary: counts,
+    programs,
+  };
+  await writeFile(PRODUCTION_JSON, `${JSON.stringify(output, null, 2)}\n`);
+  const lines = [
+    "# Firestore production matrix",
+    "",
+    "Every row of `firestore-matrix.json` run against production Firestore (Native mode, the concurrency mode and edition recorded in `firestore-production-matrix.json`), compared with the official emulator's recorded answer and with what fireemu is held to. Regenerate with `pnpm -C conformance firestore:production` (needs `FIREEMU_PRODUCTION_PROJECT` and Application Default Credentials).",
+    "",
+    "| status | rows | meaning |",
+    "| --- | --- | --- |",
+    `| parity | ${counts.parity ?? 0} | production, the official emulator and fireemu agree |`,
+    `| fireemu-matches-production | ${counts["fireemu-matches-production"] ?? 0} | fireemu follows production where the official emulator differs |`,
+    `| fireemu-divergence | ${counts["fireemu-divergence"] ?? 0} | production and the official emulator agree; fireemu differs |`,
+    `| emulators-diverge-from-production | ${counts["emulators-diverge-from-production"] ?? 0} | the official emulator and fireemu agree with each other but not with production |`,
+    `| three-way-difference | ${counts["three-way-difference"] ?? 0} | production, the official emulator and fireemu all differ |`,
+    `| production-needs-index | ${counts["production-needs-index"] ?? 0} | production refused the query for want of a composite index in the oracle project; not a semantic comparison until the index exists |`,
+    "",
+    "## Rows that are not parity",
+    "",
+    "| row | status | production | official emulator | fireemu |",
+    "| --- | --- | --- | --- | --- |",
+  ];
+  const cell = (v) => JSON.stringify(decision(v)).slice(0, 90).replaceAll("|", "\\|");
+  for (const p of programs) {
+    for (const [id, row] of Object.entries(p.steps)) {
+      if (row.status === "parity") continue;
+      lines.push(
+        `| ${rowKey(p.id, id)} | ${row.status} | ${cell(row.production)} | ${cell(row.emulator)} | ${cell(row.fireemu)} |`,
+      );
+    }
+  }
+  await writeFile(PRODUCTION_MD, `${lines.join("\n")}\n`);
+  console.log(`recorded ${programs.length} programs against production: ${JSON.stringify(counts)}`);
+}
+
 const mode = process.argv[2] ?? "record";
-if (mode === "record") {
+if (mode === "record-production") {
+  await recordProduction();
+} else if (mode === "record") {
   await record();
 } else if (mode === "check") {
   process.exitCode = await check();

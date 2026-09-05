@@ -19,23 +19,115 @@ const PROJECT = process.env.FIRESTORE_PROBE_PROJECT ?? "demo-conformance";
 const IN = process.env.FIRESTORE_PROBE_IN;
 const OUT = process.env.FIRESTORE_PROBE_OUT;
 const REQUEST_TIMEOUT_MS = Number(process.env.FIRESTORE_PROBE_TIMEOUT_MS ?? 20_000);
+// Production target: `https`, an OAuth bearer token instead of the emulator's `owner`, no
+// emulator wipe route (documents are deleted through the public API instead), and the real
+// project id normalized back to the recording project so a production run compares row by
+// row with the emulator matrices without ever recording the production identifier.
+const SCHEME = process.env.FIRESTORE_PROBE_SCHEME ?? "http";
+const TOKEN = process.env.FIRESTORE_PROBE_TOKEN ?? "owner";
+const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
+const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
 
-const url = (path) => `http://${HOST}${path.replaceAll("PROJECT", PROJECT)}`;
+const url = (path) => `${SCHEME}://${HOST}${path.replaceAll("PROJECT", PROJECT)}`;
 const substituteProject = (value) =>
   JSON.parse(JSON.stringify(value ?? null).replaceAll("PROJECT", PROJECT));
+const authorized = (headers = {}) => ({ ...headers, authorization: `Bearer ${TOKEN}` });
 
 /** Wipes the emulator's documents so one program never sees another's writes. */
 async function clear(database = "(default)") {
+  if (PRODUCTION) {
+    await clearThroughPublicApi(database);
+    return;
+  }
   await fetch(`http://${HOST}/emulator/v1/projects/${PROJECT}/databases/${database}/documents`, {
     method: "DELETE",
   });
+}
+
+/**
+ * Production has no wipe route: every document under every root collection is deleted
+ * through `:runQuery` (names only) and `:commit`, recursing into subcollections. Only the
+ * probe project is ever addressed, and only documents the probes seeded can exist there.
+ */
+async function clearThroughPublicApi(database) {
+  const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/${database}/documents`;
+  // Listing is paged and only eventually reflects deletes: loop until a full listing is empty.
+  for (let round = 0; round < 8; round += 1) {
+    const collectionIds = await listCollectionIds(base, "");
+    if (collectionIds === null || collectionIds.length === 0) return;
+    for (const collectionId of collectionIds) {
+      await deleteCollection(base, "", collectionId);
+    }
+  }
+  throw new Error("clear: the production database still lists collections after 8 rounds");
+}
+
+/** Every collection id under `parentPath` (all pages), or `null` for a missing database. */
+async function listCollectionIds(base, parentPath) {
+  const parent = parentPath ? `${base}/${parentPath}` : base;
+  const ids = [];
+  let pageToken;
+  do {
+    const listed = await fetch(`${parent}:listCollectionIds`, {
+      method: "POST",
+      headers: authorized({ "content-type": "application/json" }),
+      body: JSON.stringify(pageToken ? { pageToken } : {}),
+    });
+    if (listed.status === 404) return null;
+    if (!listed.ok) {
+      throw new Error(`clear: listCollectionIds ${listed.status} ${await listed.text()}`);
+    }
+    const page = await listed.json();
+    ids.push(...(page.collectionIds ?? []));
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  return ids;
+}
+
+async function deleteCollection(base, parentPath, collectionId) {
+  const parent = parentPath ? `${base}/${parentPath}` : base;
+  // `showMissing` lists the parents that exist only through their subcollections, so the
+  // recursion reaches every document however it was left behind.
+  const names = [];
+  const missing = [];
+  let pageToken;
+  do {
+    const query = new URLSearchParams({
+      showMissing: "true",
+      "mask.fieldPaths": "__name__",
+      pageSize: "300",
+      ...(pageToken ? { pageToken } : {}),
+    });
+    const listed = await fetch(`${parent}/${collectionId}?${query}`, { headers: authorized() });
+    if (!listed.ok) throw new Error(`clear: list ${listed.status} ${await listed.text()}`);
+    const page = await listed.json();
+    for (const document of page.documents ?? []) {
+      (document.createTime === undefined ? missing : names).push(document.name);
+    }
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  for (const name of [...names, ...missing]) {
+    const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
+    for (const child of (await listCollectionIds(base, relative)) ?? []) {
+      await deleteCollection(base, relative, child);
+    }
+  }
+  for (let index = 0; index < names.length; index += 400) {
+    const writes = names.slice(index, index + 400).map((name) => ({ delete: name }));
+    const commit = await fetch(`${base}:commit`, {
+      method: "POST",
+      headers: authorized({ "content-type": "application/json" }),
+      body: JSON.stringify({ writes }),
+    });
+    if (!commit.ok) throw new Error(`clear: commit ${commit.status} ${await commit.text()}`);
+  }
 }
 
 async function seed(documents) {
   for (const document of documents ?? []) {
     const response = await fetch(url(document.path), {
       method: "PATCH",
-      headers: { "content-type": "application/json", authorization: "Bearer owner" },
+      headers: authorized({ "content-type": "application/json" }),
       body: JSON.stringify({ fields: substituteProject(document.fields) }),
     });
     if (!response.ok) {
@@ -82,6 +174,7 @@ const INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
  */
 function normalize(value, key = "") {
   if (typeof value === "string") {
+    if (PROJECT !== RECORD_PROJECT) value = value.replaceAll(PROJECT, RECORD_PROJECT);
     if (INSTANT.test(value) && Number(value.slice(0, 4)) >= 2026) return "<now>";
     if (key === "transaction") return "<txn>";
     // Page tokens are opaque and shaped differently by each side; a generated document id
@@ -119,7 +212,7 @@ async function step(spec, raw) {
         ? spec.body
         : JSON.stringify(resolve(substituteProject(spec.body), raw));
   }
-  if (spec.owner !== false) init.headers.authorization = "Bearer owner";
+  if (spec.owner !== false) init.headers.authorization = `Bearer ${TOKEN}`;
   // A request the side never answers is recorded as such rather than hanging the run: the
   // official emulator's REST adapter drops the connection on a bytes-typed query parameter
   // (`?transaction=`) without writing a response.
@@ -153,7 +246,7 @@ async function step(spec, raw) {
       recorded: {
         status: response.status,
         code: error.status ?? String(error.code ?? ""),
-        message: String(error.message ?? "").slice(0, 400),
+        message: normalize(String(error.message ?? "").slice(0, 400)),
       },
       raw: body,
     };

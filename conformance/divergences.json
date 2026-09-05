@@ -1198,20 +1198,21 @@
         "code": "OK",
         "bodyDigest": "5 documents: ord/ts-late, ord/ts-early, ord/true, ord/str-kanji, ord/str-empty"
       },
-      "reason": "The official emulator refuses a query whose first order is `__name__` descending (FAILED_PRECONDITION 'Firestore does not support descending key scans'); fireemu serves it, in reverse name order, which is the ordering the SDKs' `orderBy(documentId(), 'desc')` asks for.",
+      "reason": "The official emulator refuses a query whose first order is `__name__` descending (FAILED_PRECONDITION 'Firestore does not support descending key scans'); fireemu serves it, in reverse name order, which is the ordering the SDKs' `orderBy(documentId(), 'desc')` asks for. Production Firestore (Native, REST, 2026-09-06) refuses orderBy(__name__, desc) with FAILED_PRECONDITION until a composite index exists, so without an index it agrees with the official emulator that fireemu diverges. fireemu serves the order the SDKs ask for; whether production serves it once the index exists is unverified.",
       "authority": {
-        "kind": "production-spec",
+        "kind": "intentional-local-policy",
         "sourceUrls": [
           "https://firebase.google.com/docs/firestore/query-data/order-limit-data",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-09-06",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#values/type-order#descending-name-only",
-        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics",
+        "productionObservation": "conformance/firestore-production-matrix.json#values/type-order#descending-name-only"
       }
     },
     "queries/collection-group#partition-query": {
@@ -1422,20 +1423,21 @@
         "status": 400,
         "code": "INVALID_ARGUMENT"
       },
-      "reason": "A StructuredQuery without a collection selector scans every collection under the parent on the official emulator; fireemu requires the selector (INVALID_ARGUMENT), the shape every SDK sends.",
+      "reason": "A StructuredQuery without a collection selector scans every collection under the parent on the official emulator; fireemu requires the selector (INVALID_ARGUMENT), the shape every SDK sends. Production Firestore (Native, REST, 2026-09-06) serves a runQuery without a collection selector like the official emulator does; fireemu refuses it. Recorded as a local policy pending a fix, not as production behaviour.",
       "authority": {
-        "kind": "production-spec",
+        "kind": "intentional-local-policy",
         "sourceUrls": [
           "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-09-06",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#errors/rest-shapes#run-query-without-from",
-        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics",
+        "productionObservation": "conformance/firestore-production-matrix.json#errors/rest-shapes#run-query-without-from"
       }
     },
     "errors/rest-shapes#from-with-empty-collection-id": {
@@ -1443,20 +1445,21 @@
         "status": 400,
         "code": "INVALID_ARGUMENT"
       },
-      "reason": "An empty collection id is the selector-less query above on the official emulator; fireemu refuses the empty identifier.",
+      "reason": "An empty collection id is the selector-less query above on the official emulator; fireemu refuses the empty identifier. Production Firestore (Native, REST, 2026-09-06) serves a runQuery whose collection selector has an empty id like the official emulator does; fireemu refuses it. Recorded as a local policy pending a fix, not as production behaviour.",
       "authority": {
-        "kind": "production-spec",
+        "kind": "intentional-local-policy",
         "sourceUrls": [
           "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-09-06",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#errors/rest-shapes#from-with-empty-collection-id",
-        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics",
+        "productionObservation": "conformance/firestore-production-matrix.json#errors/rest-shapes#from-with-empty-collection-id"
       }
     },
     "errors/rest-shapes#write-to-another-database": {
@@ -1548,20 +1551,21 @@
         "status": 400,
         "code": "INVALID_ARGUMENT"
       },
-      "reason": "fireemu validates the database id in the route (lowercase letters, digits and hyphens, as production names databases) and refuses `Named`; the official emulator serves any database name and answers NOT_FOUND for the document.",
+      "reason": "fireemu validates the database id in the route (lowercase letters, digits and hyphens, as production names databases) and refuses `Named`; the official emulator serves any database name and answers NOT_FOUND for the document. Production Firestore (Native, REST, 2026-09-06) answers NOT_FOUND for a database id with uppercase letters, as the official emulator does; fireemu answers INVALID_ARGUMENT. Recorded as a local policy pending a fix.",
       "authority": {
-        "kind": "production-spec",
+        "kind": "intentional-local-policy",
         "sourceUrls": [
           "https://cloud.google.com/firestore/docs/reference/rest",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-09-06",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/firestore-matrix.json#emulator/routes#database-with-uppercase-name",
-        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics"
+        "approvalRecord": "spec/compatibility/contract.json#firestore.semantics",
+        "productionObservation": "conformance/firestore-production-matrix.json#emulator/routes#database-with-uppercase-name"
       }
     },
     "reads/read-time#read-at-the-first-update-time": {

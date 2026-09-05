@@ -15,7 +15,7 @@ const repo = resolve(here, "../..");
 const smoke = resolve(repo, "tools/sdk-smoke");
 const inventory = readFileSync(resolve(repo, "docs/functions-export-inventory.md"), "utf8");
 
-const STATUSES = ["served", "deferred", "not-planned", "unsupported"];
+const STATUSES = new Set(["served", "deferred", "not-planned", "unsupported"]);
 const NON_TRIGGER_V1 = new Set([
   "Change",
   "DEFAULT_FAILURE_POLICY",
@@ -63,7 +63,7 @@ test("every row carries a documented status", () => {
   for (const row of [...rows("v1"), ...rows("v2")]) {
     const statuses = row.status.match(/\b(served|deferred|not-planned|unsupported)\b/g) ?? [];
     assert.ok(statuses.length > 0, `${row.name}: status ${JSON.stringify(row.status)}`);
-    for (const status of statuses) assert.ok(STATUSES.includes(status), `${row.name}: ${status}`);
+    for (const status of statuses) assert.ok(STATUSES.has(status), `${row.name}: ${status}`);
   }
 });
 

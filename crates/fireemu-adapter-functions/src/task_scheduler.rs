@@ -794,6 +794,32 @@ mod tests {
     }
 
     #[test]
+    fn a_token_refill_is_applied_once_per_scheduler_tick() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 3,
+                max_dispatches_per_second: 1.0,
+            }),
+            start,
+        );
+        for name in ["first", "second", "third"] {
+            scheduler
+                .enqueue("queue", task(name), TaskRetryConfig::default(), 1)
+                .unwrap();
+        }
+
+        let (dispatches, _) = scheduler.dispatch_ready(
+            start + Duration::from_secs(1),
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            10,
+        );
+
+        assert_eq!(dispatches.len(), 1);
+    }
+
+    #[test]
     fn a_retry_consumes_the_same_fractional_rate_bucket_as_initial_delivery() {
         let start = Instant::now();
         let mut scheduler = TaskScheduler::from_manifest(

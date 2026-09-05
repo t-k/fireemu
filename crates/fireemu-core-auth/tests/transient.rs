@@ -296,6 +296,69 @@ fn a_snapshot_keeps_the_lifecycle_and_refresh_tokens_are_never_swept() {
 }
 
 #[test]
+fn a_default_snapshot_never_restores_pending_raw_credentials() {
+    let mut live = store();
+    let uid = live
+        .create_user(NewUser::email("snapshot-raw@example.com"), t0())
+        .unwrap();
+    let enrollment = live.start_totp_enrollment(&uid, t0()).unwrap();
+    let secret = enrollment.secret_for_test().to_vec();
+    let code = totp_at(&secret, &live.policy().params(), t0());
+    live.finalize_totp_enrollment(&uid, &enrollment.session_id, code, t0())
+        .unwrap();
+    let pending = live
+        .start_mfa_sign_in_with_context(
+            &uid,
+            after(1),
+            PendingSignInContext::new_with_credentials(
+                Some("oidc.example".to_owned()),
+                false,
+                None,
+                Some(PendingSignInCredentials::new(
+                    Some("snapshot-access-sentinel".to_owned()),
+                    Some("snapshot-id-sentinel".to_owned()),
+                    Some("snapshot-refresh-sentinel".to_owned()),
+                )),
+            ),
+        )
+        .unwrap();
+
+    let snapshot = AuthSnapshot::capture(&live);
+    assert!(
+        snapshot.retained_bytes() < live.retained_user_bytes(),
+        "a default snapshot must release raw credential bytes"
+    );
+    assert_eq!(snapshot.users_shared_with(&live), 0);
+    let snapshot_debug = format!("{snapshot:?}");
+    assert!(!snapshot_debug.contains("snapshot-access-sentinel"));
+    assert!(!snapshot_debug.contains("snapshot-id-sentinel"));
+    assert!(!snapshot_debug.contains("snapshot-refresh-sentinel"));
+    let mut restored = live.clone();
+    snapshot.restore_into(&mut restored);
+
+    let context = restored
+        .pending_sign_in_context(&pending)
+        .expect("pending sign-in survives as non-secret provenance");
+    assert_eq!(context.sign_in_provider(), Some("oidc.example"));
+    assert_eq!(context.inbound_credentials(), None);
+    let debug = format!("{restored:?}");
+    assert!(!debug.contains("snapshot-access-sentinel"));
+    assert!(!debug.contains("snapshot-id-sentinel"));
+    assert!(!debug.contains("snapshot-refresh-sentinel"));
+
+    let mut cross_namespace =
+        AuthStore::new("other-project", SplitMix64::new(5), TotpPolicy::default());
+    snapshot.restore_into(&mut cross_namespace);
+    assert_eq!(
+        cross_namespace
+            .pending_sign_in_context(&pending)
+            .expect("cross-namespace restore keeps non-secret provenance")
+            .inbound_credentials(),
+        None
+    );
+}
+
+#[test]
 fn speculative_clones_share_every_unchanged_transient_registry() {
     let mut live = store();
     let uid = live

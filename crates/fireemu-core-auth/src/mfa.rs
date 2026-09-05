@@ -700,6 +700,22 @@ impl MfaState {
         self.totp.iter().all(|f| f.secret.is_detached()) && self.pending_enrollments.is_empty()
     }
 
+    /// Whether no pending sign-in retains raw identity-provider credentials.
+    #[must_use]
+    pub(crate) fn holds_no_inbound_credentials(&self) -> bool {
+        self.pending_sign_ins
+            .values()
+            .all(|pending| pending.context.inbound_credentials.is_none())
+    }
+
+    /// Drops raw identity-provider credentials from pending sign-ins while retaining their
+    /// non-secret first-factor provenance.
+    pub(crate) fn detach_inbound_credentials(&mut self) {
+        for pending in self.pending_sign_ins.values_mut() {
+            pending.context.inbound_credentials = None;
+        }
+    }
+
     /// Rebinds every detached TOTP factor to the secret `live` holds for the same enrollment
     /// id, dropping the factors `live` has no secret for; returns how many were dropped.
     /// The replay boundary keeps the higher of the two accepted steps, so a code accepted

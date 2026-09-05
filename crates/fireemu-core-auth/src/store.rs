@@ -2683,32 +2683,35 @@ pub struct RestoreReport {
     pub totp_factors_dropped: usize,
 }
 
-/// A default snapshot of an Auth store: everything the store owns except TOTP secret
-/// material. Enrolled TOTP factors are kept with a detached secret and pending TOTP
-/// enrollments are not kept at all, so the captured part holds no shared secret
-/// (`INV-AUTH-003`, ADR-034). On restore each factor is rebound to the secret the live
-/// store still holds for the same enrollment; a factor whose secret is gone is dropped and
-/// counted in the [`RestoreReport`], never restored as an unusable factor and never claimed
-/// faithful.
+/// A default snapshot of an Auth store: everything the store owns except TOTP secret material
+/// and raw identity-provider credentials. Enrolled TOTP factors are kept with a detached secret,
+/// pending TOTP enrollments are not kept, and pending MFA sign-ins retain only non-secret
+/// provenance. The captured part therefore holds no raw credential material (`INV-AUTH-003`,
+/// ADR-034). On restore each factor is rebound to the secret the live store still holds for the
+/// same enrollment; a factor whose secret is gone is dropped and counted in the
+/// [`RestoreReport`], never restored as an unusable factor and never claimed faithful.
 #[derive(Debug, Clone)]
 pub struct AuthSnapshot(AuthStore);
 
 impl AuthSnapshot {
-    /// Copies `store` without its TOTP secret material.
+    /// Copies `store` without TOTP secret material or raw identity-provider credentials.
     ///
     /// Copy-on-write per user (`SNAP-MEM-03`): cloning the store bumps each user's `Arc`
-    /// refcount rather than deep-copying it, so a user with no TOTP secret -- the common case --
-    /// is shared by reference with the live store. Only a user that actually holds secret
-    /// material is cloned through [`Arc::make_mut`] and detached, so the snapshot still carries
-    /// no shared secret (`INV-AUTH-003`, ADR-034) while every unchanged user stays shared.
+    /// refcount rather than deep-copying it, so a user with no TOTP secret or raw credential --
+    /// the common case -- is shared by reference with the live store. Only a user that actually
+    /// holds either sensitive value is cloned through [`Arc::make_mut`] and detached, so the
+    /// snapshot still carries no raw credential material (`INV-AUTH-003`, ADR-034) while every
+    /// unchanged user stays shared.
     #[must_use]
     pub fn capture(store: &AuthStore) -> Self {
         let mut copy = store.clone();
         for user in copy.users.values_mut() {
-            if user.mfa.holds_no_totp_secret() {
+            if user.mfa.holds_no_totp_secret() && user.mfa.holds_no_inbound_credentials() {
                 continue;
             }
-            Arc::make_mut(user).mfa.detach_totp_secrets();
+            let mfa = &mut Arc::make_mut(user).mfa;
+            mfa.detach_totp_secrets();
+            mfa.detach_inbound_credentials();
         }
         Self(copy)
     }

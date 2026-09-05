@@ -950,6 +950,42 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[tokio::test]
+    async fn shutting_down_a_runner_removes_its_credential_sandbox() {
+        use std::time::Duration;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-runner-sandbox-probe-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let probe = root.join("config-path");
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+        let runner = super::Runner::spawn(
+            &["python3".to_owned(), script.to_owned()],
+            None,
+            &[(
+                "FIREEMU_SANDBOX_PROBE".to_owned(),
+                probe.display().to_string(),
+            )],
+            Duration::from_secs(20),
+        )
+        .await
+        .expect("runner starts");
+        let config = std::fs::read_to_string(&probe).expect("runner reported its config path");
+        let sandbox = std::path::Path::new(config.trim())
+            .parent()
+            .expect("gcloud config has a sandbox parent")
+            .to_owned();
+        assert!(sandbox.is_dir());
+
+        runner.shutdown().await;
+
+        assert!(!sandbox.exists(), "runner credential sandbox remains");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn log_buffer_evicts_old_lines_and_keeps_a_monotonic_cursor() {
         let mut logs = LogBuffer::default();

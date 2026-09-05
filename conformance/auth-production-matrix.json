@@ -1,0 +1,659 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Identity Toolkit (v1 and v2 REST) with the project's web API key",
+    "officialEmulatorMatrix": {
+      "firebaseTools": "15.28.2"
+    },
+    "note": "The production project id and API key are never recorded. Rows compare HTTP status, the Identity Toolkit error code and the normalized success body; tokens, ids, expiry and timestamps are placeholders and the human sentence production appends to some error codes is not compared."
+  },
+  "summary": {
+    "parity": 13,
+    "emulators-diverge-from-production": 7,
+    "three-way-difference": 2,
+    "fireemu-divergence": 1
+  },
+  "programs": [
+    {
+      "id": "password/sign-up-and-sign-in",
+      "area": "password",
+      "steps": {
+        "sign-up": {
+          "production": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "idToken": "<idToken>",
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "refreshToken": "<refreshToken>",
+              "localId": "<localId>"
+            }
+          },
+          "emulator": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "idToken": "<idToken>",
+              "refreshToken": "<refreshToken>"
+            }
+          },
+          "fireemu": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "idToken": "<idToken>",
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "refreshToken": "<refreshToken>"
+            }
+          },
+          "status": "parity"
+        },
+        "duplicate-email": {
+          "production": {
+            "status": 400,
+            "code": "EMAIL_EXISTS",
+            "message": "EMAIL_EXISTS"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "EMAIL_EXISTS",
+            "message": "EMAIL_EXISTS"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "EMAIL_EXISTS",
+            "message": "EMAIL_EXISTS"
+          },
+          "status": "parity"
+        },
+        "sign-in": {
+          "production": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "displayName": "",
+              "idToken": "<idToken>",
+              "registered": true,
+              "refreshToken": "<refreshToken>"
+            }
+          },
+          "emulator": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "registered": true,
+              "localId": "<localId>",
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "idToken": "<idToken>",
+              "refreshToken": "<refreshToken>"
+            }
+          },
+          "fireemu": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "idToken": "<idToken>",
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "refreshToken": "<refreshToken>",
+              "registered": true
+            }
+          },
+          "status": "emulators-diverge-from-production"
+        },
+        "wrong-password": {
+          "production": {
+            "status": 400,
+            "code": "INVALID_LOGIN_CREDENTIALS",
+            "message": "INVALID_LOGIN_CREDENTIALS"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "INVALID_PASSWORD",
+            "message": "INVALID_PASSWORD"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "INVALID_PASSWORD",
+            "message": "INVALID_PASSWORD"
+          },
+          "status": "emulators-diverge-from-production"
+        },
+        "unknown-email": {
+          "production": {
+            "status": 400,
+            "code": "INVALID_LOGIN_CREDENTIALS",
+            "message": "INVALID_LOGIN_CREDENTIALS"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "EMAIL_NOT_FOUND",
+            "message": "EMAIL_NOT_FOUND"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "EMAIL_NOT_FOUND",
+            "message": "EMAIL_NOT_FOUND"
+          },
+          "status": "emulators-diverge-from-production"
+        },
+        "lookup": {
+          "production": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "users": [
+                {
+                  "localId": "<localId>",
+                  "email": "fireemu-auth-probe-<run>-primary@example.com",
+                  "passwordHash": "UkVEQUNURUQ=",
+                  "emailVerified": false,
+                  "passwordUpdatedAt": "<passwordUpdatedAt>",
+                  "providerUserInfo": [
+                    {
+                      "providerId": "password",
+                      "federatedId": "fireemu-auth-probe-<run>-primary@example.com",
+                      "email": "fireemu-auth-probe-<run>-primary@example.com",
+                      "rawId": "fireemu-auth-probe-<run>-primary@example.com"
+                    }
+                  ],
+                  "validSince": "<validSince>"
+                }
+              ]
+            }
+          },
+          "emulator": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "users": [
+                {
+                  "localId": "<localId>",
+                  "emailVerified": false,
+                  "email": "fireemu-auth-probe-<run>-primary@example.com",
+                  "salt": "fakeSaltOp4uvdDnYtabIJl825Pw",
+                  "passwordHash": "fakeHash:salt=fakeSaltOp4uvdDnYtabIJl825Pw:password=password123",
+                  "passwordUpdatedAt": "<passwordUpdatedAt>",
+                  "validSince": "<validSince>",
+                  "providerUserInfo": [
+                    {
+                      "providerId": "password",
+                      "email": "fireemu-auth-probe-<run>-primary@example.com",
+                      "federatedId": "fireemu-auth-probe-<run>-primary@example.com",
+                      "rawId": "fireemu-auth-probe-<run>-primary@example.com"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "fireemu": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "users": [
+                {
+                  "disabled": false,
+                  "email": "fireemu-auth-probe-<run>-primary@example.com",
+                  "emailVerified": false,
+                  "localId": "<localId>",
+                  "mfaInfo": [],
+                  "providerUserInfo": [
+                    {
+                      "email": "fireemu-auth-probe-<run>-primary@example.com",
+                      "federatedId": "fireemu-auth-probe-<run>-primary@example.com",
+                      "providerId": "password",
+                      "rawId": "fireemu-auth-probe-<run>-primary@example.com"
+                    }
+                  ],
+                  "validSince": "<validSince>"
+                }
+              ]
+            }
+          },
+          "status": "three-way-difference"
+        },
+        "update-display-name": {
+          "production": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "displayName": "Probe User",
+              "providerUserInfo": [
+                {
+                  "providerId": "password",
+                  "displayName": "Probe User",
+                  "federatedId": "fireemu-auth-probe-<run>-primary@example.com",
+                  "email": "fireemu-auth-probe-<run>-primary@example.com",
+                  "rawId": "fireemu-auth-probe-<run>-primary@example.com"
+                }
+              ],
+              "passwordHash": "UkVEQUNURUQ=",
+              "emailVerified": false
+            }
+          },
+          "emulator": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "emailVerified": false,
+              "providerUserInfo": [
+                {
+                  "providerId": "password",
+                  "email": "fireemu-auth-probe-<run>-primary@example.com",
+                  "federatedId": "fireemu-auth-probe-<run>-primary@example.com",
+                  "rawId": "fireemu-auth-probe-<run>-primary@example.com",
+                  "displayName": "Probe User"
+                }
+              ],
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "displayName": "Probe User",
+              "passwordHash": "fakeHash:salt=fakeSaltOp4uvdDnYtabIJl825Pw:password=password123"
+            }
+          },
+          "fireemu": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "displayName": "Probe User",
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "emailVerified": false,
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "providerUserInfo": [
+                {
+                  "displayName": "Probe User",
+                  "email": "fireemu-auth-probe-<run>-primary@example.com",
+                  "federatedId": "fireemu-auth-probe-<run>-primary@example.com",
+                  "providerId": "password",
+                  "rawId": "fireemu-auth-probe-<run>-primary@example.com"
+                }
+              ]
+            }
+          },
+          "status": "three-way-difference"
+        },
+        "delete": {
+          "production": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>"
+            }
+          },
+          "emulator": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>"
+            }
+          },
+          "fireemu": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>"
+            }
+          },
+          "status": "parity"
+        },
+        "sign-in-after-delete": {
+          "production": {
+            "status": 400,
+            "code": "INVALID_LOGIN_CREDENTIALS",
+            "message": "INVALID_LOGIN_CREDENTIALS"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "EMAIL_NOT_FOUND",
+            "message": "EMAIL_NOT_FOUND"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "EMAIL_NOT_FOUND",
+            "message": "EMAIL_NOT_FOUND"
+          },
+          "status": "emulators-diverge-from-production"
+        }
+      }
+    },
+    {
+      "id": "password/validation",
+      "area": "password",
+      "steps": {
+        "invalid-email": {
+          "production": {
+            "status": 400,
+            "code": "INVALID_EMAIL",
+            "message": "INVALID_EMAIL"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "INVALID_EMAIL",
+            "message": "INVALID_EMAIL"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "INVALID_EMAIL",
+            "message": "INVALID_EMAIL"
+          },
+          "status": "parity"
+        },
+        "weak-password": {
+          "production": {
+            "status": 400,
+            "code": "WEAK_PASSWORD",
+            "message": "WEAK_PASSWORD : Password should be at least 6 characters"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "WEAK_PASSWORD",
+            "message": "WEAK_PASSWORD : Password should be at least 6 characters"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "WEAK_PASSWORD",
+            "message": "WEAK_PASSWORD : Password should be at least 6 characters"
+          },
+          "status": "parity"
+        },
+        "missing-password": {
+          "production": {
+            "status": 400,
+            "code": "MISSING_PASSWORD",
+            "message": "MISSING_PASSWORD"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "MISSING_PASSWORD",
+            "message": "MISSING_PASSWORD"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "MISSING_PASSWORD",
+            "message": "MISSING_PASSWORD"
+          },
+          "status": "parity"
+        },
+        "missing-email": {
+          "production": {
+            "status": 400,
+            "code": "MISSING_EMAIL",
+            "message": "MISSING_EMAIL"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "MISSING_EMAIL",
+            "message": "MISSING_EMAIL"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "MISSING_EMAIL",
+            "message": "MISSING_EMAIL"
+          },
+          "status": "parity"
+        }
+      }
+    },
+    {
+      "id": "anonymous/lifecycle",
+      "area": "anonymous",
+      "steps": {
+        "anonymous-sign-up": {
+          "production": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "idToken": "<idToken>",
+              "refreshToken": "<refreshToken>",
+              "localId": "<localId>"
+            }
+          },
+          "emulator": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "idToken": "<idToken>",
+              "refreshToken": "<refreshToken>"
+            }
+          },
+          "fireemu": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "idToken": "<idToken>",
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "refreshToken": "<refreshToken>"
+            }
+          },
+          "status": "parity"
+        },
+        "lookup-anonymous": {
+          "production": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "users": [
+                {
+                  "localId": "<localId>"
+                }
+              ]
+            }
+          },
+          "emulator": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "users": [
+                {
+                  "localId": "<localId>"
+                }
+              ]
+            }
+          },
+          "fireemu": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "users": [
+                {
+                  "disabled": false,
+                  "emailVerified": false,
+                  "localId": "<localId>",
+                  "mfaInfo": [],
+                  "providerUserInfo": [],
+                  "validSince": "<validSince>"
+                }
+              ]
+            }
+          },
+          "status": "fireemu-divergence"
+        },
+        "delete-anonymous": {
+          "production": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>"
+            }
+          },
+          "emulator": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>"
+            }
+          },
+          "fireemu": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>"
+            }
+          },
+          "status": "parity"
+        }
+      }
+    },
+    {
+      "id": "tokens/errors",
+      "area": "tokens",
+      "steps": {
+        "lookup-with-garbage-token": {
+          "production": {
+            "status": 400,
+            "code": "INVALID_ID_TOKEN",
+            "message": "INVALID_ID_TOKEN"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "INVALID_ID_TOKEN",
+            "message": "INVALID_ID_TOKEN"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "INVALID_ID_TOKEN",
+            "message": "INVALID_ID_TOKEN"
+          },
+          "status": "parity"
+        },
+        "custom-token-garbage": {
+          "production": {
+            "status": 400,
+            "code": "INVALID_CUSTOM_TOKEN",
+            "message": "INVALID_CUSTOM_TOKEN : Invalid assertion format. 3 dot separated segments required."
+          },
+          "emulator": {
+            "status": 400,
+            "code": "INVALID_CUSTOM_TOKEN",
+            "message": "INVALID_CUSTOM_TOKEN : Invalid assertion format"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "INVALID_CUSTOM_TOKEN",
+            "message": "INVALID_CUSTOM_TOKEN : Invalid assertion format"
+          },
+          "status": "parity"
+        },
+        "reset-password-bad-code": {
+          "production": {
+            "status": 400,
+            "code": "INVALID_OOB_CODE",
+            "message": "INVALID_OOB_CODE"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "INVALID_OOB_CODE",
+            "message": "INVALID_OOB_CODE"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "INVALID_OOB_CODE",
+            "message": "INVALID_OOB_CODE"
+          },
+          "status": "parity"
+        },
+        "update-with-bad-oob-code": {
+          "production": {
+            "status": 400,
+            "code": "INVALID_OOB_CODE",
+            "message": "INVALID_OOB_CODE"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "INVALID_OOB_CODE",
+            "message": "INVALID_OOB_CODE"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "INVALID_OOB_CODE",
+            "message": "INVALID_OOB_CODE"
+          },
+          "status": "parity"
+        },
+        "unknown-method": {
+          "production": {
+            "status": 404,
+            "code": "non-json"
+          },
+          "emulator": {
+            "status": 404,
+            "code": "Not",
+            "message": "Not Found"
+          },
+          "fireemu": {
+            "status": 404,
+            "code": "Not",
+            "message": "Not Found"
+          },
+          "status": "emulators-diverge-from-production"
+        },
+        "password-reset-for-unknown-email": {
+          "production": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "email": "fireemu-auth-probe-<run>-nobody@example.com"
+            }
+          },
+          "emulator": {
+            "status": 400,
+            "code": "EMAIL_NOT_FOUND",
+            "message": "EMAIL_NOT_FOUND"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "EMAIL_NOT_FOUND",
+            "message": "EMAIL_NOT_FOUND"
+          },
+          "status": "emulators-diverge-from-production"
+        },
+        "mfa-enrollment-start-without-token": {
+          "production": {
+            "status": 400,
+            "code": "INVALID_ID_TOKEN",
+            "message": "INVALID_ID_TOKEN"
+          },
+          "emulator": {
+            "status": 400,
+            "code": "MISSING_ID_TOKEN",
+            "message": "MISSING_ID_TOKEN"
+          },
+          "fireemu": {
+            "status": 400,
+            "code": "MISSING_ID_TOKEN",
+            "message": "MISSING_ID_TOKEN"
+          },
+          "status": "emulators-diverge-from-production"
+        }
+      }
+    }
+  ]
+}

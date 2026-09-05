@@ -3723,3 +3723,68 @@ fn resources_report_the_session_charge_active_transactions_and_refusals() {
     assert_eq!(other.roots.total, 0);
     assert_eq!(gauge(&other, "transactions.active").current, 0);
 }
+
+#[test]
+fn resources_report_history_the_next_compaction_would_reclaim() {
+    use fireemu_core_session::tenancy::Scope;
+    use fireemu_core_types::resources::RootBudget;
+
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let backend = LocalBackend::new(gateway, Arc::clone(&clock), 7);
+    let scope = Scope::AllExcept(std::collections::BTreeSet::new());
+    let reclaimable = |backend: &LocalBackend| {
+        backend
+            .resources(&scope, RootBudget::DEFAULT)
+            .unwrap()
+            .gauges
+            .into_iter()
+            .find(|g| g.id == "history.reclaimable_bytes")
+            .expect("reclaimable gauge")
+    };
+    for value in 1..=3 {
+        backend
+            .commit_with(
+                &history_budget_update("demo-a", "(default)", "a", value),
+                &fireemu_adapter_grpc::rules::allow_all,
+            )
+            .unwrap();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+    }
+    // Every version is still inside the read-time retention window: nothing to reclaim.
+    let fresh = reclaimable(&backend);
+    assert_eq!(fresh.current, 0, "{fresh:?}");
+    assert_eq!(fresh.reclaimable, 0);
+
+    // Past the window, the two superseded versions are what a compaction would release.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(3_601))
+        .unwrap();
+    let aged = reclaimable(&backend);
+    assert!(aged.current > 0, "{aged:?}");
+    assert_eq!(aged.reclaimable, aged.current);
+    let retained = backend
+        .resources(&scope, RootBudget::DEFAULT)
+        .unwrap()
+        .gauges
+        .into_iter()
+        .find(|g| g.id == "history.session_versions")
+        .unwrap();
+    assert_eq!(retained.current, 3);
+}

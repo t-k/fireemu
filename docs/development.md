@@ -48,6 +48,10 @@ FIREEMU_RECOVERY_LONG=1 FIREEMU_RECOVERY_REPORT=docs.local/recovery/$(git rev-pa
 
 Every run writes a JSON artifact (under the target tmpdir unless `FIREEMU_RECOVERY_REPORT` names a file) with the commit, dirty state, machine, toolchain, build profile, dataset, per-phase samples, verdict and the cleanup result. Compare runs only when the profile, dataset and machine match. The long dataset is opt-in and not part of any automatic job.
 
+## Inspecting a running daemon
+
+`fireemu doctor` stays offline. `fireemu doctor --connect http://127.0.0.1:<control port>` adds what the running daemon retains for the default session, read from `GET /v1/sessions/default/resources`: every gauge with its measure (`logical`, `estimate` or `process`), current value, limit and reclaimable part, the refused admissions, and the outstanding retention roots. Only a loopback control URL is accepted. The same report drives the Runtime page of the UI and the `resources:assertQuiescent` assertion tests use.
+
 ## Removing stale artifacts
 
 After renaming a crate, clean every session target that built the old name before continuing. Resolve and clean one exact target at a time:

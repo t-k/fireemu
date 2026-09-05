@@ -251,6 +251,140 @@ pub fn run() -> std::process::ExitCode {
     }
 }
 
+/// `doctor --connect <control url>`: the offline report followed by what a running daemon
+/// retains (`GET /v1/sessions/default/resources`), one line per service. An explicit mode, so
+/// the plain `doctor` stays offline; the control API must be loopback.
+pub fn run_connect(control_url: &str) -> std::process::ExitCode {
+    let (text, problem) = report();
+    print!("{text}");
+    match connect_report(control_url) {
+        Ok(lines) => {
+            println!();
+            println!("connected to {control_url}");
+            for line in lines {
+                println!("{line}");
+            }
+            if problem {
+                std::process::ExitCode::FAILURE
+            } else {
+                std::process::ExitCode::SUCCESS
+            }
+        }
+        Err(error) => {
+            eprintln!("!! connect  {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Fetches the default session's resource report and renders it: every gauge with its
+/// measure and current value against its limit, the refusal counts, and the outstanding roots.
+fn connect_report(control_url: &str) -> Result<Vec<String>, String> {
+    let body = control_get(control_url, "/v1/sessions/default/resources")?;
+    let report: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("the resource report is not JSON: {e}"))?;
+    let mut lines = Vec::new();
+    if report["complete"] != serde_json::Value::Bool(true) {
+        lines.push(format!("!! incomplete report: {}", report["errors"]));
+    }
+    for service in report["services"].as_array().into_iter().flatten() {
+        let name = service["service"].as_str().unwrap_or("?");
+        for gauge in service["gauges"].as_array().into_iter().flatten() {
+            let limit = gauge["limit"]
+                .as_u64()
+                .map_or(String::new(), |limit| format!(" / {limit}"));
+            let reclaimable = gauge["reclaimable"]
+                .as_u64()
+                .filter(|r| *r > 0)
+                .map_or(String::new(), |r| format!(" (reclaimable {r})"));
+            lines.push(format!(
+                "{name:<10} {:<34} {:<8} {}{limit}{reclaimable}",
+                gauge["id"].as_str().unwrap_or("?"),
+                gauge["measure"].as_str().unwrap_or("?"),
+                gauge["current"]
+            ));
+        }
+        for refusal in service["refusals"].as_array().into_iter().flatten() {
+            if refusal["count"].as_u64().unwrap_or(0) > 0 {
+                lines.push(format!(
+                    "{name:<10} refused {} x{}",
+                    refusal["reason"].as_str().unwrap_or("?"),
+                    refusal["count"]
+                ));
+            }
+        }
+        let roots = &service["roots"];
+        let outstanding: Vec<&serde_json::Value> = roots["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|root| root["outstanding"] == serde_json::Value::Bool(true))
+            .collect();
+        for root in &outstanding {
+            lines.push(format!(
+                "{name:<10} outstanding {} {} ({} items, {} bytes)",
+                root["kind"].as_str().unwrap_or("?"),
+                root["id"].as_str().unwrap_or("?"),
+                root["count"],
+                root["bytes"]
+            ));
+        }
+        if roots["truncated"] == serde_json::Value::Bool(true) {
+            lines.push(format!(
+                "{name:<10} root list truncated ({} of {})",
+                roots["items"].as_array().map_or(0, Vec::len),
+                roots["total"]
+            ));
+        }
+    }
+    Ok(lines)
+}
+
+/// One `GET` against the loopback control API over plain HTTP/1.1. Only `http://127.0.0.1`
+/// and `http://localhost` are accepted: the report is privileged, and this command never
+/// forwards it anywhere else.
+fn control_get(control_url: &str, path: &str) -> Result<String, String> {
+    use std::io::{Read, Write};
+    let rest = control_url
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("{control_url}: the control URL must start with http://"))?;
+    let authority = rest.split('/').next().unwrap_or("");
+    let (host, port) = authority
+        .rsplit_once(':')
+        .ok_or_else(|| format!("{control_url}: the control URL must name a port"))?;
+    if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
+        return Err(format!(
+            "{control_url}: only a loopback control API can be inspected"
+        ));
+    }
+    let port: u16 = port
+        .parse()
+        .map_err(|_| format!("{control_url}: the port is not a number"))?;
+    let mut stream = std::net::TcpStream::connect((host.trim_matches(['[', ']']), port))
+        .map_err(|e| format!("cannot connect to {control_url}: {e}"))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .map_err(|e| e.to_string())?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(|e| e.to_string())?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+    let (head, body) = raw
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "the control API answered without a header block".to_owned())?;
+    let status = head.split_whitespace().nth(1).unwrap_or("");
+    if status != "200" {
+        return Err(format!(
+            "GET {path} answered HTTP {status}: {}",
+            body.trim()
+        ));
+    }
+    Ok(body.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{report, runner_supported_majors};

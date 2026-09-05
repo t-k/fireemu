@@ -267,7 +267,22 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail(&e),
         },
-        Some("doctor") => doctor::run(),
+        Some("doctor") => match args.get(1).map(String::as_str) {
+            None => doctor::run(),
+            Some("--connect") => match args.get(2) {
+                Some(url) if args.len() == 3 => doctor::run_connect(url),
+                _ => fail(&CliError {
+                    code: 2,
+                    message: "usage: fireemu doctor [--connect http://127.0.0.1:<control port>]"
+                        .to_owned(),
+                }),
+            },
+            Some(_) => fail(&CliError {
+                code: 2,
+                message: "usage: fireemu doctor [--connect http://127.0.0.1:<control port>]"
+                    .to_owned(),
+            }),
+        },
         // The manifest describes the behaviour of one profile, so the command takes the same
         // options the daemon does and reports the profile they resolve to.
         Some("capabilities") => match parse_options(&args[1..], OptionContext::Start) {
@@ -2228,6 +2243,7 @@ fn control_state(
         Arc::new(resources::Storage(storage.clone())),
         Arc::new(resources::Auth(registry.clone())),
         Arc::new(resources::PubSub(pubsub.clone())),
+        Arc::new(resources::Process),
     ];
     if let Some(runtime) = functions {
         resource_hooks.push(Arc::new(resources::Functions(runtime.clone())));

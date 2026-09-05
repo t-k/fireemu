@@ -2231,6 +2231,14 @@ impl FirestoreState {
         floor.max(self.capacity_floor).min(self.version)
     }
 
+    /// What the next compaction at `now` would release: the logical usage of every retained
+    /// version below the retention floor that no snapshot, transaction or read-time root can
+    /// still reach. Nothing is dropped; the forecast is cached until the store changes.
+    pub fn reclaimable_history_usage(&mut self, now: LogicalInstant) -> HistoryUsage {
+        let floor = self.retention_floor(now);
+        self.base_compaction_reclaim(floor)
+    }
+
     /// Drops every version that no retention root can reach any more and returns the new
     /// compaction floor. Deterministic: the store runs it itself at the end of every commit,
     /// so the floor only depends on the commit sequence and the logical times it was given.

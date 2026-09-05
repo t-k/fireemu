@@ -1282,13 +1282,20 @@ impl LocalBackend {
         let mut historical_bytes = 0u64;
         let mut transactions = 0u64;
         let mut unreadable = 0usize;
+        let mut reclaimable_bytes = 0u64;
+        let now = self.now();
         for ((project, database), handle) in self.handles_of(scope) {
-            let Some((usage, stats)) =
-                handle.read(|state| (state.history_usage(), state.transaction_bookkeeping_stats()))
-            else {
+            let Ok((usage, stats, reclaimable)) = handle.with(|state| {
+                Ok((
+                    state.history_usage(),
+                    state.transaction_bookkeeping_stats(),
+                    state.reclaimable_history_usage(now),
+                ))
+            }) else {
                 unreadable += 1;
                 continue;
             };
+            reclaimable_bytes = reclaimable_bytes.saturating_add(reclaimable.total_bytes);
             live_bytes = live_bytes.saturating_add(usage.live_document_bytes);
             historical_bytes = historical_bytes.saturating_add(usage.historical_document_bytes);
             let active = u64::try_from(stats.active).unwrap_or(u64::MAX);
@@ -1320,6 +1327,14 @@ impl LocalBackend {
                 None,
             ),
             Gauge::logical("transactions.active", Unit::Count, transactions, None),
+            // What the next compaction would release from these databases' retained history.
+            Gauge::logical(
+                "history.reclaimable_bytes",
+                Unit::Bytes,
+                reclaimable_bytes,
+                None,
+            )
+            .with_reclaimable(reclaimable_bytes),
         ];
         (gauges, roots, unreadable)
     }

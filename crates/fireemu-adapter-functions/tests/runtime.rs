@@ -2663,3 +2663,33 @@ async fn the_causality_window_is_bounded_and_a_reset_is_a_gap_not_a_completion()
         0
     );
 }
+
+#[tokio::test]
+async fn refused_source_admissions_are_counted_by_category_until_a_reset() {
+    use fireemu_core_types::resources::RootBudget;
+    let (runtime, _clock) = start().await;
+    let refusals = |runtime: &Arc<FunctionsRuntime>| {
+        runtime
+            .resources(RootBudget::DEFAULT)
+            .unwrap()
+            .refusals
+            .into_iter()
+            .map(|r| (r.reason, r.count))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    assert_eq!(refusals(&runtime).get("admission.unavailable"), None);
+    runtime.begin_shutdown();
+    assert!(runtime
+        .reserve_storage_event(&slow_object("late.txt"))
+        .is_err());
+    assert!(runtime
+        .reserve_commit_events(&commit(vec![DocumentChange {
+            path: doc("items/z", 1).path,
+            before: None,
+            after: Some(doc("items/z", 1).into()),
+        }]))
+        .is_err());
+    assert_eq!(refusals(&runtime).get("admission.unavailable"), Some(&2));
+    assert_eq!(refusals(&runtime).get("admission.capacity"), None);
+    runtime.shutdown().await;
+}

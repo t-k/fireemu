@@ -14,7 +14,7 @@ use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_http::control::{ResourceHook, TransitionFailure};
 use fireemu_core_auth::store::AuthRegistry;
 use fireemu_core_session::tenancy::Scope;
-use fireemu_core_types::resources::{Gauge, RootBudget, ServiceResources, Unit};
+use fireemu_core_types::resources::{Gauge, Measure, RootBudget, ServiceResources, Unit};
 
 /// The session's Firestore databases and history charge.
 pub struct Firestore(pub Arc<LocalBackend>);
@@ -151,6 +151,57 @@ impl ResourceHook for Auth {
                     None,
                 ),
             ],
+            refusals: Vec::new(),
+            roots: budget.bound(Vec::new()),
+        })
+    }
+}
+
+/// The daemon process itself: resident set size as the operating system reports it. This is
+/// a `process` measure, never added to the logical charges; an allocator cache keeps it high
+/// after every logical byte has been released, which is exactly what the two kinds of gauge
+/// exist to tell apart. Reported for the default session only.
+pub struct Process;
+
+impl Process {
+    /// Resident set size in bytes from `ps`, the one portable source without unsafe code.
+    fn resident_set_bytes() -> Result<u64, String> {
+        let pid = std::process::id().to_string();
+        let output = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &pid])
+            .output()
+            .map_err(|error| format!("ps is not available: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("ps exited with {}", output.status));
+        }
+        let kib: u64 = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .map_err(|_| "ps printed no resident set size".to_owned())?;
+        Ok(kib.saturating_mul(1024))
+    }
+}
+
+impl ResourceHook for Process {
+    fn name(&self) -> &'static str {
+        "process"
+    }
+    fn collect(
+        &self,
+        scope: &Scope,
+        budget: RootBudget,
+    ) -> Result<ServiceResources, TransitionFailure> {
+        let mut gauges = Vec::new();
+        if scope.is_default() {
+            let rss = Self::resident_set_bytes()
+                .map_err(|message| TransitionFailure::new("process", message))?;
+            let mut gauge = Gauge::logical("process.resident_set_bytes", Unit::Bytes, rss, None);
+            gauge.measure = Measure::Process;
+            gauges.push(gauge);
+        }
+        Ok(ServiceResources {
+            service: "process".to_owned(),
+            gauges,
             refusals: Vec::new(),
             roots: budget.bound(Vec::new()),
         })

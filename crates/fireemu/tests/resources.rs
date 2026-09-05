@@ -125,9 +125,25 @@ fn the_daemon_reports_every_service_and_a_fresh_session_is_quiescent() {
         .iter()
         .map(|s| s["service"].as_str().unwrap())
         .collect();
-    for expected in ["snapshots", "firestore", "storage", "auth", "pubsub"] {
+    for expected in [
+        "snapshots",
+        "firestore",
+        "storage",
+        "auth",
+        "pubsub",
+        "process",
+    ] {
         assert!(services.contains(&expected), "{services:?}");
     }
+    let process = report["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["service"] == "process")
+        .unwrap();
+    assert_eq!(process["gauges"][0]["id"], "process.resident_set_bytes");
+    assert_eq!(process["gauges"][0]["measure"], "process");
+    assert!(process["gauges"][0]["current"].as_u64().unwrap() > 0);
     for service in report["services"].as_array().unwrap() {
         for gauge in service["gauges"].as_array().unwrap() {
             assert!(
@@ -175,4 +191,48 @@ fn the_daemon_reports_every_service_and_a_fresh_session_is_quiescent() {
 
     drop(daemon);
     census::assert_no_owned_descendants("the resources daemon", Duration::from_secs(10));
+}
+
+#[test]
+fn doctor_connect_reads_the_running_daemon_and_stays_loopback_only() {
+    let daemon = Daemon::start();
+    let url = format!("http://127.0.0.1:{}", daemon.control_port);
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["doctor", "--connect", &url])
+        .output()
+        .expect("doctor runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains(&format!("connected to {url}")), "{stdout}");
+    for expected in [
+        "firestore",
+        "history.session_bytes",
+        "process.resident_set_bytes",
+        "logical",
+        "process",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "{expected} missing from:\n{stdout}"
+        );
+    }
+
+    let refused = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["doctor", "--connect", "http://example.test:80"])
+        .output()
+        .expect("doctor runs");
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("only a loopback control API"));
+
+    let offline = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["doctor"])
+        .output()
+        .expect("doctor runs");
+    assert!(!String::from_utf8_lossy(&offline.stdout).contains("connected to"));
+    drop(daemon);
+    census::assert_no_owned_descendants("the doctor daemon", Duration::from_secs(10));
 }

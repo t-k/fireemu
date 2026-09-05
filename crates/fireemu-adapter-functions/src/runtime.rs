@@ -535,6 +535,8 @@ struct Inner {
     catch_up_steps: u64,
     /// Schedule runs refused by the `reject` overlap policy.
     overlap_rejected: u64,
+    /// Source-event admissions refused since the last reset, by category.
+    admission_refusals: BTreeMap<&'static str, u64>,
     /// Events held back by a `delay` fault until the virtual clock reaches the instant,
     /// with the outcome the same rule set decided for them.
     delayed: BTreeMap<EventId, Held>,
@@ -1059,6 +1061,7 @@ impl FunctionsRuntime {
                 catch_up_pending: false,
                 catch_up_steps: 0,
                 overlap_rejected: 0,
+                admission_refusals: BTreeMap::new(),
                 delayed: BTreeMap::new(),
                 causality: CausalityLog::new(MAX_CAUSALITY_ENTRIES),
             }),
@@ -1423,6 +1426,7 @@ impl FunctionsRuntime {
             return false;
         };
         if !Self::can_admit_events(inner, source, 1, retained_bytes) {
+            *inner.admission_refusals.entry("capacity").or_default() += 1;
             return false;
         }
         inner.next_event += 1;
@@ -1636,8 +1640,31 @@ impl FunctionsRuntime {
     }
 
     /// Reserves the complete Firestore trigger fan-out before the source commit is published.
-    #[allow(clippy::too_many_lines)]
     pub fn reserve_commit_events(
+        self: &Arc<Self>,
+        commit: &CommitEvent,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        let reservation = self.reserve_commit_events_unmetered(commit);
+        if let Err(error) = &reservation {
+            self.note_admission_refusal(*error);
+        }
+        reservation
+    }
+
+    /// Counts a refused source-event admission for the resource report.
+    fn note_admission_refusal(&self, error: SourceEventAdmissionError) {
+        let category = match error {
+            SourceEventAdmissionError::Capacity => "capacity",
+            SourceEventAdmissionError::Unavailable => "unavailable",
+            SourceEventAdmissionError::InvalidEvent => "invalid_event",
+        };
+        if let Ok(mut inner) = self.inner.lock() {
+            *inner.admission_refusals.entry(category).or_default() += 1;
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn reserve_commit_events_unmetered(
         self: &Arc<Self>,
         commit: &CommitEvent,
     ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
@@ -1765,6 +1792,17 @@ impl FunctionsRuntime {
 
     /// Reserves the complete Storage trigger fan-out before the object mutation is published.
     pub fn reserve_storage_event(
+        self: &Arc<Self>,
+        event: &StorageEvent,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        let reservation = self.reserve_storage_event_unmetered(event);
+        if let Err(error) = &reservation {
+            self.note_admission_refusal(*error);
+        }
+        reservation
+    }
+
+    fn reserve_storage_event_unmetered(
         self: &Arc<Self>,
         event: &StorageEvent,
     ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
@@ -2655,6 +2693,7 @@ impl FunctionsRuntime {
                 }
                 inner.outbox.discard_stale(epoch);
                 inner.causality.reset();
+                inner.admission_refusals.clear();
                 inner.payloads.clear();
                 inner.active_event_bytes = 0;
                 inner.reserved_event_records = 0;
@@ -2951,10 +2990,20 @@ impl FunctionsRuntime {
         Ok(ServiceResources {
             service: "functions".to_owned(),
             gauges: self.resource_gauges(&inner),
-            refusals: vec![Refusal {
+            refusals: std::iter::once(Refusal {
                 reason: "schedule.overlap".to_owned(),
                 count: inner.overlap_rejected,
-            }],
+            })
+            .chain(
+                inner
+                    .admission_refusals
+                    .iter()
+                    .map(|(category, count)| Refusal {
+                        reason: format!("admission.{category}"),
+                        count: *count,
+                    }),
+            )
+            .collect(),
             roots: budget.bound(Self::resource_roots(&inner)),
         })
     }

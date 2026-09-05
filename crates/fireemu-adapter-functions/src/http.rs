@@ -987,7 +987,7 @@ fn sanitize_credentials(
     }
 }
 
-/// Answers the three Cloud Tasks routes.
+/// Answers the Cloud Tasks routes, including the emulator diagnostics endpoint.
 ///
 /// There is no queue to create: the official emulator creates one per `onTaskDispatched`
 /// function at load time and fireemu's queue *is* the function, so the create route reports
@@ -1002,6 +1002,16 @@ fn task_route(
 ) -> Response<OutBody> {
     use crate::tasks::Route;
     match route {
+        Route::QueueStats => {
+            if method != hyper::Method::GET {
+                return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
+            }
+            typed(
+                StatusCode::OK,
+                "application/json",
+                &runtime.task_queue_stats().to_string(),
+            )
+        }
         Route::CreateQueue {
             project,
             location,

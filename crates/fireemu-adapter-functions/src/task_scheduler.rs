@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use fireemu_core_functions::manifest::{
     FunctionManifest, TaskRateLimits, TaskRetryConfig, Trigger,
 };
+use serde_json::{json, Value};
 
 use crate::tasks::Task;
 
@@ -65,6 +66,9 @@ struct QueueState {
     names: BTreeSet<Arc<str>>,
     tokens: f64,
     last_refill: Instant,
+    added_times: VecDeque<Instant>,
+    completed_times: VecDeque<Instant>,
+    failed_times: VecDeque<Instant>,
 }
 
 impl QueueState {
@@ -76,6 +80,34 @@ impl QueueState {
             names: BTreeSet::new(),
             tokens: 0.0,
             last_refill: now,
+            added_times: VecDeque::new(),
+            completed_times: VecDeque::new(),
+            failed_times: VecDeque::new(),
+        }
+    }
+
+    fn prune_statistics(&mut self, now: Instant) {
+        let five_minutes = Duration::from_secs(5 * 60);
+        while self
+            .added_times
+            .front()
+            .is_some_and(|time| now.duration_since(*time) > five_minutes)
+        {
+            self.added_times.pop_front();
+        }
+        while self
+            .failed_times
+            .front()
+            .is_some_and(|time| now.duration_since(*time) > five_minutes)
+        {
+            self.failed_times.pop_front();
+        }
+        while self
+            .completed_times
+            .front()
+            .is_some_and(|time| now.duration_since(*time) > Duration::from_secs(60))
+        {
+            self.completed_times.pop_front();
         }
     }
 
@@ -190,6 +222,7 @@ impl TaskScheduler {
             retained_bytes,
             name,
         });
+        state.added_times.push_back(Instant::now());
         self.outstanding = next_outstanding;
         self.retained_bytes = next_bytes;
         Ok(())
@@ -264,7 +297,18 @@ impl TaskScheduler {
         (dispatches, next_wake)
     }
 
+    #[cfg(test)]
     pub(crate) fn finish(&mut self, queue: &str, id: u64, generation: u64) -> bool {
+        self.finish_with_outcome(queue, id, generation, false)
+    }
+
+    pub(crate) fn finish_with_outcome(
+        &mut self,
+        queue: &str,
+        id: u64,
+        generation: u64,
+        failed: bool,
+    ) -> bool {
         if generation != self.generation {
             return false;
         }
@@ -274,6 +318,11 @@ impl TaskScheduler {
         let Some(active) = state.active.remove(&id) else {
             return false;
         };
+        let now = Instant::now();
+        state.completed_times.push_back(now);
+        if failed {
+            state.failed_times.push_back(now);
+        }
         self.outstanding = self.outstanding.saturating_sub(1);
         // The Task and its payload are gone, but the shared name stays in the duplicate index
         // until its completed-history entry expires. The enqueue charge includes that second
@@ -348,6 +397,35 @@ impl TaskScheduler {
         self.queues.values().map(|queue| queue.active.len()).sum()
     }
 
+    pub(crate) fn statistics(
+        &mut self,
+        project: &str,
+        region_for: impl Fn(&str) -> Option<String>,
+    ) -> Value {
+        let now = Instant::now();
+        let mut statistics = serde_json::Map::new();
+        for (function, queue) in &mut self.queues {
+            queue.prune_statistics(now);
+            let key = region_for(function).map_or_else(
+                || function.clone(),
+                |region| crate::tasks::queue_key(project, &region, function),
+            );
+            statistics.insert(
+                key,
+                json!({
+                    "numberOfTasks": queue.pending.len(),
+                    "tasksAdded": f64::from(u32::try_from(queue.added_times.len()).unwrap_or(u32::MAX)) / 5.0,
+                    "completedLastMin": queue.completed_times.len(),
+                    "failedTasks": f64::from(u32::try_from(queue.failed_times.len()).unwrap_or(u32::MAX)) / 5.0,
+                    "runningTasks": queue.limits.max_concurrent_dispatches,
+                    "maxRate": queue.limits.max_dispatches_per_second,
+                    "maxConcurrent": queue.limits.max_concurrent_dispatches,
+                }),
+            );
+        }
+        Value::Object(statistics)
+    }
+
     #[cfg(test)]
     pub(crate) fn retained_bytes(&self) -> usize {
         self.retained_bytes
@@ -366,6 +444,9 @@ impl TaskScheduler {
             queue.names.clear();
             queue.tokens = 0.0;
             queue.last_refill = now;
+            queue.added_times.clear();
+            queue.completed_times.clear();
+            queue.failed_times.clear();
         }
     }
 
@@ -483,6 +564,45 @@ mod tests {
             10,
         );
         assert_eq!(second.len(), 1);
+    }
+
+    #[test]
+    fn queue_statistics_report_pending_work_and_rate_limits() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 3,
+                max_dispatches_per_second: 7.5,
+            }),
+            start,
+        );
+        scheduler
+            .enqueue("queue", task("a"), TaskRetryConfig::default(), 1)
+            .unwrap();
+        scheduler
+            .enqueue("queue", task("b"), TaskRetryConfig::default(), 1)
+            .unwrap();
+
+        let stats = scheduler.statistics("demo-app", |_| Some("us-central1".to_owned()));
+        assert_eq!(
+            stats["queue:demo-app-us-central1-queue"]["numberOfTasks"],
+            2
+        );
+        assert_eq!(stats["queue:demo-app-us-central1-queue"]["tasksAdded"], 0.4);
+        assert_eq!(
+            stats["queue:demo-app-us-central1-queue"]["completedLastMin"],
+            0
+        );
+        assert_eq!(
+            stats["queue:demo-app-us-central1-queue"]["failedTasks"],
+            0.0
+        );
+        assert_eq!(stats["queue:demo-app-us-central1-queue"]["runningTasks"], 3);
+        assert_eq!(stats["queue:demo-app-us-central1-queue"]["maxRate"], 7.5);
+        assert_eq!(
+            stats["queue:demo-app-us-central1-queue"]["maxConcurrent"],
+            3
+        );
     }
 
     #[test]

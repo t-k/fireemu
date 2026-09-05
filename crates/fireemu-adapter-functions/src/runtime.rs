@@ -571,6 +571,7 @@ struct TaskCompletion {
     queue: String,
     id: u64,
     generation: u64,
+    failed: bool,
 }
 
 impl Drop for TaskCompletion {
@@ -579,9 +580,12 @@ impl Drop for TaskCompletion {
             return;
         };
         let finished = runtime.inner.lock().is_ok_and(|mut inner| {
-            inner
-                .task_scheduler
-                .finish(&self.queue, self.id, self.generation)
+            inner.task_scheduler.finish_with_outcome(
+                &self.queue,
+                self.id,
+                self.generation,
+                self.failed,
+            )
         });
         if finished {
             runtime.idle.notify_waiters();
@@ -1450,7 +1454,7 @@ impl FunctionsRuntime {
         self: &Arc<Self>,
         dispatch: &crate::task_scheduler::Dispatch,
         epoch: Epoch,
-    ) {
+    ) -> bool {
         let task = &dispatch.task;
         let mut started = None;
         let mut attempt = 1u32;
@@ -1460,7 +1464,7 @@ impl FunctionsRuntime {
         loop {
             // A reset supersedes every task accepted before it.
             if self.inner.lock().ok().map(|i| i.epoch) != Some(epoch) {
-                return;
+                return false;
             }
             if started.is_some_and(|first_delivery| {
                 task_retry_exhausted(first_delivery, dispatch.retry, attempt)
@@ -1470,7 +1474,7 @@ impl FunctionsRuntime {
                     task.name,
                     attempt - 1
                 );
-                return;
+                return true;
             }
             let Some(target) =
                 self.http_target(&dispatch.project, &dispatch.region, &dispatch.function)
@@ -1479,7 +1483,7 @@ impl FunctionsRuntime {
                     "[functions] task {:?}: {} is no longer served",
                     task.name, dispatch.function
                 );
-                return;
+                return true;
             };
             let headers = crate::tasks::dispatch_headers(
                 task,
@@ -1503,7 +1507,7 @@ impl FunctionsRuntime {
             )
             .await;
             let status = match outcome {
-                Ok(Ok(response)) if (200..300).contains(&response.status) => return,
+                Ok(Ok(response)) if (200..300).contains(&response.status) => return false,
                 Ok(Ok(response)) => Some(response.status),
                 Ok(Err(HttpInvokeError::Capacity { .. })) => {
                     // The task has not reached a runner. Local process contention is
@@ -1521,7 +1525,7 @@ impl FunctionsRuntime {
                         task_retry_deadline(first_delivery, dispatch.retry, attempt)
                     });
                     if !self.wait_for_task_token(dispatch, retry_deadline).await {
-                        return;
+                        return true;
                     }
                     continue;
                 }
@@ -1544,7 +1548,7 @@ impl FunctionsRuntime {
                     task.name,
                     attempt - 1
                 );
-                return;
+                return true;
             }
             tokio::time::sleep(Duration::from_millis(
                 dispatch.retry.backoff_millis(attempt),
@@ -1552,7 +1556,7 @@ impl FunctionsRuntime {
             .await;
             let retry_deadline = task_retry_deadline(first_delivery, dispatch.retry, attempt);
             if !self.wait_for_task_token(dispatch, retry_deadline).await {
-                return;
+                return true;
             }
         }
     }
@@ -2375,6 +2379,19 @@ impl FunctionsRuntime {
         })
     }
 
+    /// Returns the read-only Cloud Tasks `/queueStats` payload for all loaded task queues.
+    #[must_use]
+    pub fn task_queue_stats(&self) -> Value {
+        let Ok(mut inner) = self.inner.lock() else {
+            return json!({});
+        };
+        inner
+            .task_scheduler
+            .statistics(&self.config.project, |function| {
+                self.manifest.get(function).map(|spec| spec.region.clone())
+            })
+    }
+
     /// Waits until the runtime is idle or `timeout` (real time) elapses.
     pub async fn await_idle(&self, timeout: Duration) -> Result<(), Value> {
         let deadline = tokio::time::Instant::now() + timeout;
@@ -3085,13 +3102,14 @@ impl FunctionsRuntime {
         for dispatch in dispatches {
             let runtime = self.clone();
             attempts.spawn(async move {
-                let _completion = TaskCompletion {
+                let mut completion = TaskCompletion {
                     runtime: Arc::downgrade(&runtime),
                     queue: dispatch.queue.clone(),
                     id: dispatch.id,
                     generation: dispatch.generation,
+                    failed: false,
                 };
-                runtime.dispatch_task(&dispatch, epoch).await;
+                completion.failed = runtime.dispatch_task(&dispatch, epoch).await;
             });
         }
         next_wake
@@ -3589,6 +3607,7 @@ mod task_completion_tests {
                 queue: dispatch.queue,
                 id: dispatch.id,
                 generation: dispatch.generation,
+                failed: false,
             };
             let _ = ready.send(());
             assert!(!panic, "exercise task-completion unwind cleanup");
@@ -3656,6 +3675,7 @@ mod task_completion_tests {
             queue: active.queue,
             id: active.id,
             generation: active.generation,
+            failed: false,
         });
         runtime
             .enqueue_task("demo-app", "us-central1", "taskB", &body("process-full"))

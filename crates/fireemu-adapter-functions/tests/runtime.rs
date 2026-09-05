@@ -2511,3 +2511,155 @@ async fn resources_report_running_invocations_as_outstanding_roots() {
         .any(|r| r.reason == "schedule.overlap" && r.count == 0));
     runtime.reset();
 }
+
+#[tokio::test]
+async fn an_await_idle_timeout_explains_the_outstanding_event_and_its_source() {
+    let (runtime, _clock) = start().await;
+    runtime.on_storage_event(&slow_object("held.txt"));
+    let status = runtime
+        .await_idle(Duration::from_millis(600))
+        .await
+        .expect_err("the slow handler keeps the runtime busy");
+    let causality = &status["causality"];
+    assert_eq!(causality["epoch"], runtime.status()["epoch"], "{status}");
+    assert_eq!(causality["truncated"], false);
+    assert_eq!(causality["evicted"], 0);
+    assert_eq!(causality["resetGaps"], 0);
+    let events = causality["events"].as_array().expect("events");
+    let held = events
+        .iter()
+        .find(|e| e["function"] == "slow")
+        .unwrap_or_else(|| panic!("the slow event is listed: {status}"));
+    assert_eq!(held["source"], "storage");
+    assert_eq!(
+        held["eventType"],
+        "google.cloud.storage.object.v1.finalized"
+    );
+    assert!(
+        held["parent"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("storage-generation:")),
+        "{held}"
+    );
+    let phases: Vec<&str> = held["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["phase"].as_str().unwrap())
+        .collect();
+    assert_eq!(phases[0], "registered");
+    assert!(phases.contains(&"running"), "{phases:?}");
+    assert!(!phases.contains(&"completed"));
+    assert_eq!(held["phases"][1]["attempt"], 1);
+    assert!(
+        !status.to_string().contains("held.txt"),
+        "no payload or subject: {status}"
+    );
+    runtime.reset();
+}
+
+#[tokio::test]
+async fn causality_records_retry_and_terminal_failure_and_the_idle_answer_is_unchanged() {
+    let (runtime, clock) = start().await;
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/a", 1).path,
+        before: None,
+        after: Some(doc("items/a", 1).into()),
+    }]));
+    let busy = runtime
+        .await_idle(Duration::from_millis(800))
+        .await
+        .expect_err("the failing handler is retry-waiting");
+    let events = busy["causality"]["events"].as_array().unwrap().clone();
+    let failing = events.iter().find(|e| e["function"] == "fail").unwrap();
+    let phases: Vec<&str> = failing["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["phase"].as_str().unwrap())
+        .collect();
+    assert_eq!(phases, ["registered", "running", "retry"], "{failing}");
+    assert!(failing["parent"]
+        .as_str()
+        .is_some_and(|p| p.starts_with("firestore-commit:")));
+    let ok = events.iter().find(|e| e["function"] == "ok").unwrap();
+    assert!(ok["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["phase"] == "completed"));
+
+    for _ in 0..3 {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(60))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(500)).await;
+    }
+    assert!(runtime.await_idle(Duration::from_secs(2)).await.is_ok());
+    let settled = runtime.status();
+    let failing = settled["causality"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["function"] == "fail")
+        .unwrap()
+        .clone();
+    let phases: Vec<&str> = failing["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["phase"].as_str().unwrap())
+        .collect();
+    assert_eq!(phases.last(), Some(&"failed"), "{phases:?}");
+    assert_eq!(
+        phases.iter().filter(|p| **p == "retry").count(),
+        3,
+        "{phases:?}"
+    );
+    assert_eq!(
+        phases.iter().filter(|p| **p == "running").count(),
+        4,
+        "{phases:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_causality_window_is_bounded_and_a_reset_is_a_gap_not_a_completion() {
+    let (runtime, _clock) = start().await;
+    runtime.set_causality_retention(2);
+    for body in ["a", "b", "c"] {
+        let ids = runtime.publish("jobs", &[json!({"json": {"job": body}})]);
+        assert_eq!(ids.len(), 1);
+        assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    }
+    let status = runtime.status();
+    let causality = &status["causality"];
+    assert_eq!(causality["retained"], 2, "{causality}");
+    assert!(causality["evicted"].as_u64().unwrap() >= 1, "{causality}");
+    assert_eq!(causality["events"].as_array().unwrap().len(), 2);
+
+    runtime.on_storage_event(&slow_object("late.txt"));
+    for _ in 0..200 {
+        if runtime.status()["running"].as_u64().unwrap_or(0) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    runtime.reset();
+    let after = runtime.status();
+    assert_eq!(after["causality"]["resetGaps"], 1, "{after}");
+    assert_eq!(after["causality"]["events"].as_array().unwrap().len(), 0);
+    assert_eq!(after["causality"]["epoch"], after["epoch"]);
+    // The old epoch's slow event is neither completed nor listed as still running.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        runtime.status()["causality"]["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}

@@ -58,6 +58,13 @@ pub const RETRY_BASE_BACKOFF_SECONDS: i64 = 10;
 pub const RETRY_MAX_BACKOFF_SECONDS: i64 = 600;
 /// Maximum non-terminal event records retained by one Functions runtime.
 pub const MAX_ACTIVE_EVENT_RECORDS: usize = 4096;
+/// Logical events whose causal phases the runtime keeps for `await-idle` diagnostics
+/// (spec 10.5). Older entries are evicted and counted; eviction is never a completion.
+pub const MAX_CAUSALITY_ENTRIES: usize = 512;
+/// Phase transitions kept per causal entry; further ones are counted as dropped.
+const MAX_CAUSALITY_PHASES: usize = 32;
+/// Causal entries one status projection lists, unfinished ones first.
+const MAX_CAUSALITY_PROJECTED: usize = 64;
 /// Maximum serialized payload and routing bytes retained by non-terminal event records.
 pub const MAX_ACTIVE_EVENT_BYTES: usize = 64 * 1024 * 1024;
 /// Eventarc's share, leaving capacity for Firestore, Storage, Auth, Pub/Sub and schedules.
@@ -336,6 +343,161 @@ impl RecordLog {
     }
 }
 
+/// One phase of a logical event's life, on the virtual clock.
+#[derive(Debug, Clone)]
+struct CausalPhase {
+    phase: &'static str,
+    attempt: u32,
+    at: LogicalInstant,
+}
+
+/// The bounded causal record of one logical event: what registered it (the source operation,
+/// never a payload), which function it targets, and the phases it went through. It is written
+/// after the event is registered atomically with its source (F1), so it never describes an
+/// event that admission refused.
+#[derive(Debug, Clone)]
+struct CausalEntry {
+    event_id: u128,
+    epoch: u64,
+    source: EventSource,
+    event_type: String,
+    function: String,
+    parent: Option<String>,
+    terminal: bool,
+    phases: Vec<CausalPhase>,
+    phases_dropped: u32,
+}
+
+/// The runtime's bounded causality window.
+#[derive(Debug)]
+struct CausalityLog {
+    entries: BTreeMap<u128, CausalEntry>,
+    order: std::collections::VecDeque<u128>,
+    retention: usize,
+    evicted: u64,
+    reset_gaps: u64,
+}
+
+impl CausalityLog {
+    fn new(retention: usize) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            order: std::collections::VecDeque::new(),
+            retention: retention.max(1),
+            evicted: 0,
+            reset_gaps: 0,
+        }
+    }
+
+    fn register(&mut self, mut entry: CausalEntry, at: LogicalInstant) {
+        entry.phases.push(CausalPhase {
+            phase: "registered",
+            attempt: 0,
+            at,
+        });
+        let id = entry.event_id;
+        if self.entries.insert(id, entry).is_none() {
+            self.order.push_back(id);
+        }
+        while self.order.len() > self.retention {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+                self.evicted = self.evicted.saturating_add(1);
+            }
+        }
+    }
+
+    fn transition(
+        &mut self,
+        id: u128,
+        phase: &'static str,
+        attempt: u32,
+        at: LogicalInstant,
+        terminal: bool,
+    ) {
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        if entry.phases.len() >= MAX_CAUSALITY_PHASES {
+            entry.phases_dropped = entry.phases_dropped.saturating_add(1);
+        } else {
+            entry.phases.push(CausalPhase { phase, attempt, at });
+        }
+        entry.terminal |= terminal;
+    }
+
+    /// A reset discards the old epoch's entries: nothing in them completed, they are a gap.
+    fn reset(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.reset_gaps = self.reset_gaps.saturating_add(1);
+    }
+
+    fn set_retention(&mut self, retention: usize) {
+        self.retention = retention.max(1);
+        while self.order.len() > self.retention {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+                self.evicted = self.evicted.saturating_add(1);
+            }
+        }
+    }
+
+    /// The projection `status()` publishes: unfinished entries first, at most
+    /// [`MAX_CAUSALITY_PROJECTED`], with the counters that say what the window does not show.
+    fn project(&self, epoch: u64) -> Value {
+        let mut listed: Vec<&CausalEntry> = self
+            .order
+            .iter()
+            .filter_map(|id| self.entries.get(id))
+            .filter(|entry| !entry.terminal)
+            .collect();
+        listed.extend(
+            self.order
+                .iter()
+                .filter_map(|id| self.entries.get(id))
+                .filter(|entry| entry.terminal),
+        );
+        let truncated = listed.len() > MAX_CAUSALITY_PROJECTED;
+        listed.truncate(MAX_CAUSALITY_PROJECTED);
+        json!({
+            "epoch": epoch,
+            "retained": self.entries.len(),
+            "retention": self.retention,
+            "evicted": self.evicted,
+            "resetGaps": self.reset_gaps,
+            "truncated": truncated,
+            "events": listed.iter().map(|entry| json!({
+                "eventId": entry.event_id.to_string(),
+                "epoch": entry.epoch,
+                "source": source_name(entry.source),
+                "eventType": entry.event_type,
+                "function": entry.function,
+                "parent": entry.parent,
+                "terminal": entry.terminal,
+                "phasesDropped": entry.phases_dropped,
+                "phases": entry.phases.iter().map(|phase| json!({
+                    "phase": phase.phase,
+                    "attempt": phase.attempt,
+                    "at": phase.at.to_rfc3339().ok(),
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
+fn source_name(source: EventSource) -> &'static str {
+    match source {
+        EventSource::Firestore => "firestore",
+        EventSource::Storage => "storage",
+        EventSource::Scheduler => "scheduler",
+        EventSource::Manual => "manual",
+        EventSource::PubSub => "pubsub",
+        EventSource::Auth => "auth",
+        EventSource::Eventarc => "eventarc",
+    }
+}
+
 struct Inner {
     /// Bounded per-function Cloud Tasks queues and conservative retained-data accounting.
     task_scheduler: crate::task_scheduler::TaskScheduler,
@@ -376,6 +538,8 @@ struct Inner {
     /// Events held back by a `delay` fault until the virtual clock reaches the instant,
     /// with the outcome the same rule set decided for them.
     delayed: BTreeMap<EventId, Held>,
+    /// Bounded causal phases of registered events (`await-idle` diagnostics).
+    causality: CausalityLog,
 }
 
 struct QueuedPayload {
@@ -388,6 +552,9 @@ struct QueuedPayload {
 struct PlannedDelivery {
     event: LogicalEvent,
     payload: QueuedPayload,
+    /// The source operation that produced the event (`firestore-commit:<db>@<version>`,
+    /// `storage-generation:<n>`), for the causality window. Never a payload.
+    parent: Option<String>,
 }
 
 struct DeliveryDraft {
@@ -396,6 +563,7 @@ struct DeliveryDraft {
     subject: String,
     time: LogicalInstant,
     payload: Arc<Value>,
+    parent: Option<String>,
 }
 
 /// A complete, capacity-charged batch of source-trigger deliveries that remains invisible
@@ -441,6 +609,20 @@ impl EventBatchReservation {
         release_event_reservation(&mut inner, deliveries.len(), self.retained_bytes);
         for delivery in deliveries {
             let id = delivery.event.event_id;
+            inner.causality.register(
+                CausalEntry {
+                    event_id: id.value(),
+                    epoch: delivery.event.epoch.value(),
+                    source: delivery.event.source,
+                    event_type: delivery.event.event_type.as_str().to_owned(),
+                    function: delivery.payload.function.clone(),
+                    parent: delivery.parent,
+                    terminal: false,
+                    phases: Vec::new(),
+                    phases_dropped: 0,
+                },
+                delivery.event.logical_time,
+            );
             inner
                 .outbox
                 .enqueue(delivery.event)
@@ -878,6 +1060,7 @@ impl FunctionsRuntime {
                 catch_up_steps: 0,
                 overlap_rejected: 0,
                 delayed: BTreeMap::new(),
+                causality: CausalityLog::new(MAX_CAUSALITY_ENTRIES),
             }),
             task_attempts: Mutex::new(tokio::task::JoinSet::new()),
             wake: Notify::new(),
@@ -1259,7 +1442,19 @@ impl FunctionsRuntime {
             correlation_id: CorrelationId::new(u128::from(inner.next_event)),
             payload: Vec::new(),
         };
+        let causal = CausalEntry {
+            event_id: id.value(),
+            epoch: inner.epoch.value(),
+            source,
+            event_type: event.event_type.as_str().to_owned(),
+            function: function.to_owned(),
+            parent: None,
+            terminal: false,
+            phases: Vec::new(),
+            phases_dropped: 0,
+        };
         if inner.outbox.enqueue(event).is_ok() {
+            inner.causality.register(causal, time);
             inner.payloads.insert(
                 id,
                 QueuedPayload {
@@ -1411,6 +1606,7 @@ impl FunctionsRuntime {
                     retained_bytes,
                     source,
                 },
+                parent: draft.parent,
             });
         }
         debug_assert_eq!(next_event, final_event);
@@ -1549,6 +1745,10 @@ impl FunctionsRuntime {
                         subject: subject.clone(),
                         time,
                         payload: Arc::clone(&payload),
+                        parent: Some(format!(
+                            "firestore-commit:{}@{}",
+                            commit.database, commit.version
+                        )),
                     });
                 }
             }
@@ -1624,6 +1824,7 @@ impl FunctionsRuntime {
                     subject: subject.clone(),
                     time,
                     payload: Arc::clone(&payload),
+                    parent: Some(format!("storage-generation:{}", object.generation)),
                 });
             }
         }
@@ -2277,6 +2478,7 @@ impl FunctionsRuntime {
         }
         for id in inner.outbox.retries_due(now) {
             if inner.outbox.update(id, |r| r.retry_due(now)).is_ok() {
+                inner.causality.transition(id.value(), "due", 0, now, false);
                 enqueued = true;
             }
         }
@@ -2452,6 +2654,7 @@ impl FunctionsRuntime {
                     current.runner.kill_now();
                 }
                 inner.outbox.discard_stale(epoch);
+                inner.causality.reset();
                 inner.payloads.clear();
                 inner.active_event_bytes = 0;
                 inner.reserved_event_records = 0;
@@ -2705,6 +2908,10 @@ impl FunctionsRuntime {
             "timeZoneDatabase": crate::zone::database_version(),
             "runnerAlive": self.runner_alive(),
             "epoch": inner.epoch.value(),
+            // Bounded causal phases of the registered events (spec 10.5 diagnostics): what
+            // an `await-idle` timeout is waiting for and where it came from. Eviction and
+            // resets are counted, never presented as completions.
+            "causality": inner.causality.project(inner.epoch.value()),
             "functions": self.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
             // One entry per loaded codebase, so a multi-codebase project can see which runner
             // is down and which functions went with it.
@@ -2897,6 +3104,14 @@ impl FunctionsRuntime {
             .lock()
             .map(|i| i.history.window())
             .unwrap_or_default()
+    }
+
+    /// Bounds the causality window to `entries` events (tests and embedders; the default is
+    /// [`MAX_CAUSALITY_ENTRIES`]). Entries beyond the bound are evicted oldest first.
+    pub fn set_causality_retention(&self, entries: usize) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.causality.set_retention(entries);
+        }
     }
 
     /// The retained window of dead letters, oldest first ([`MAX_RETAINED_DEAD_LETTERS`]).
@@ -3700,6 +3915,9 @@ impl FunctionsRuntime {
             let Ok(Some((attempt, epoch))) = leased else {
                 continue;
             };
+            inner
+                .causality
+                .transition(id.value(), "running", attempt, now, false);
             let Some(queued) = inner.payloads.get(&id) else {
                 continue;
             };
@@ -3796,6 +4014,53 @@ impl FunctionsRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Applies the outbox's retirement decision to the causality window, the payload and the
+    /// dead-letter log.
+    #[allow(clippy::too_many_arguments)]
+    fn settle_record(
+        inner: &mut Inner,
+        id: EventId,
+        attempt: u32,
+        now: LogicalInstant,
+        outcome: &InvokeOutcome,
+        retirement: Result<Retirement, fireemu_core_events::outbox::OutboxError>,
+        function: &str,
+        text: String,
+    ) {
+        match retirement {
+            Ok(Retirement::Retired) => {
+                inner
+                    .causality
+                    .transition(id.value(), "completed", attempt, now, true);
+                Self::remove_payload(inner, id);
+            }
+            Ok(Retirement::StillActive) => {
+                let phase = if matches!(outcome, InvokeOutcome::RunnerGone(_)) {
+                    "interrupted"
+                } else {
+                    "retry"
+                };
+                inner
+                    .causality
+                    .transition(id.value(), phase, attempt, now, false);
+            }
+            Ok(Retirement::DeadLettered) => {
+                inner
+                    .causality
+                    .transition(id.value(), "failed", attempt, now, true);
+                Self::remove_payload(inner, id);
+                inner.record_dead_letter(InvocationRecord {
+                    event_id: id.value(),
+                    function: function.to_owned(),
+                    attempt,
+                    outcome: text,
+                });
+            }
+            Err(_) => {}
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn complete(
         &self,
         id: EventId,
@@ -3882,21 +4147,16 @@ impl FunctionsRuntime {
                     Retirement::DeadLettered
                 }
             });
-            match outcome_of_record {
-                Ok(Retirement::Retired) => {
-                    Self::remove_payload(&mut inner, id);
-                }
-                Ok(Retirement::DeadLettered) => {
-                    Self::remove_payload(&mut inner, id);
-                    inner.record_dead_letter(InvocationRecord {
-                        event_id: id.value(),
-                        function: function.to_owned(),
-                        attempt,
-                        outcome: text,
-                    });
-                }
-                Ok(Retirement::StillActive) | Err(_) => {}
-            }
+            Self::settle_record(
+                &mut inner,
+                id,
+                attempt,
+                now,
+                outcome,
+                outcome_of_record,
+                function,
+                text,
+            );
         }
         let more_due = self
             .inner

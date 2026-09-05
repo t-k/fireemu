@@ -427,6 +427,9 @@ pub struct QueryStats {
     /// Documents cloned into the result. Execution borrows every value it filters and orders
     /// on, so this is the only place where a document's heap-backed fields are copied.
     pub cloned_documents: u64,
+    /// Heap-backed field bytes copied into projected results. This excludes stored fields
+    /// inspected only for filters, ordering and cursors.
+    pub cloned_field_bytes: u64,
     /// Retained history paths inspected to establish historical listing visibility.
     pub visibility_checks: u64,
 }
@@ -2862,14 +2865,13 @@ impl FirestoreState {
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let mut out: Vec<Document> = Vec::new();
         let mut stats = self.select(query, version, &[], Consumption::Ordered, |doc| {
-            out.push(doc.clone());
+            out.push(project_document(doc, query.projection.as_deref()));
         })?;
         stats.cloned_documents = out.len() as u64;
-        if let Some(projection) = &query.projection {
-            for d in &mut out {
-                d.fields = project(&d.fields, projection);
-            }
-        }
+        stats.cloned_field_bytes = out
+            .iter()
+            .map(|document| fields_retained_bytes(&document.fields))
+            .fold(0u64, u64::saturating_add);
         Ok((out, stats))
     }
 
@@ -2898,13 +2900,8 @@ impl FirestoreState {
             false,
             &[],
             Consumption::Ordered,
-            |document| documents.push(document.clone()),
+            |document| documents.push(project_document(document, query.projection.as_deref())),
         )?;
-        if let Some(projection) = &query.projection {
-            for document in &mut documents {
-                document.fields = project(&document.fields, projection);
-            }
-        }
         Ok(Some(documents))
     }
 
@@ -3786,6 +3783,27 @@ pub fn project(
         }
     }
     out
+}
+
+fn project_document(document: &Document, projection: Option<&[FieldPath]>) -> Document {
+    Document {
+        path: document.path.clone(),
+        fields: projection.map_or_else(
+            || document.fields.clone(),
+            |fields| project(&document.fields, fields),
+        ),
+        create_time: document.create_time,
+        update_time: document.update_time,
+        version: document.version,
+    }
+}
+
+fn fields_retained_bytes(fields: &BTreeMap<String, Value>) -> u64 {
+    fields.iter().fold(0u64, |total, (key, value)| {
+        total
+            .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX))
+            .saturating_add(value_retained_bytes(value))
+    })
 }
 
 #[cfg(test)]

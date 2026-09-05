@@ -977,6 +977,34 @@ fn incremental_query_matches_full_query_on_the_changed_subset() {
 }
 
 #[test]
+fn projection_clones_only_selected_fields_from_a_large_document() {
+    let mut db = FirestoreState::new();
+    db.commit(
+        &[set(
+            "target/large",
+            BTreeMap::from([
+                ("selected".to_owned(), Value::String("small".into())),
+                ("unselected".to_owned(), Value::Bytes(vec![7; 900 * 1024])),
+            ]),
+        )],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let mut query = Query::new(QueryScope::collection(None, collection("target")));
+    query.projection = Some(vec![fp("selected")]);
+
+    let (documents, stats) = db.run_query_with_stats(&query, None).unwrap();
+
+    assert_eq!(documents.len(), 1);
+    assert_eq!(
+        documents[0].fields,
+        BTreeMap::from([("selected".to_owned(), Value::String("small".into()))])
+    );
+    assert!(stats.cloned_field_bytes < 1024);
+}
+
+#[test]
 fn incremental_query_refuses_shapes_with_nonlocal_page_boundaries() {
     let mut db = FirestoreState::new();
     db.commit(

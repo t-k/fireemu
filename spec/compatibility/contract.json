@@ -1182,7 +1182,7 @@
         },
         {
           "id": "FN-CLAIM-EVENTS",
-          "statement": "Firestore document, Storage object, Pub/Sub topic, Auth user, Eventarc custom and Firebase alert events are delivered to v1 and v2 handlers as JSON CloudEvents, and Cloud Tasks queue functions are enqueued through bounded per-queue FIFOs and dispatched under their declared rate and concurrency limits, all with retries, dead letters and bounded diagnostic retention.",
+          "statement": "Firestore document, Storage object, Pub/Sub topic, Auth user, Eventarc custom and Firebase alert events are delivered to v1 and v2 handlers as JSON CloudEvents, and Cloud Tasks queue functions are enqueued through bounded per-queue FIFOs and dispatched under their declared rate and concurrency limits, all with retries, dead letters and bounded diagnostic retention. Queue statistics retain exact per-event timestamps and exclude a sample at the exact five-minute or one-minute boundary, matching the pinned emulator's strict greater-than comparison.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -1194,7 +1194,10 @@
             "integration": [
               "crates/fireemu-adapter-functions/tests/runtime.rs",
               "crates/fireemu-core-events/tests/state_machine.rs",
-              "crates/fireemu-core-events/tests/outbox.rs"
+              "crates/fireemu-core-events/tests/outbox.rs",
+              "crates/fireemu-adapter-functions/src/task_scheduler.rs::tests::queue_statistics_prune_each_record_at_the_exact_window_boundary",
+              "crates/fireemu-adapter-functions/src/task_scheduler.rs::tests::queue_statistics_preserves_same_timestamp_counts_and_window_boundaries",
+              "crates/fireemu-adapter-functions/src/task_scheduler.rs::tests::queue_statistics_history_is_bounded_when_queue_stats_is_never_read"
             ],
             "conformance": []
           },

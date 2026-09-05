@@ -27,7 +27,6 @@ const MAX_COMPLETED_NAMES: usize = 65_536;
 /// Completed-name storage has a tighter subset ceiling because names outlive task bodies.
 const MAX_COMPLETED_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 const TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-const STATISTICS_BUCKET_WIDTH: Duration = Duration::from_secs(1);
 const MAX_STATISTICS_BUCKETS: usize = 512;
 const TASKS_ADDED_WINDOW: Duration = Duration::from_secs(5 * 60);
 const COMPLETED_TASKS_WINDOW: Duration = Duration::from_secs(60);
@@ -64,8 +63,7 @@ struct ActiveTask {
 
 #[derive(Debug)]
 struct StatisticBucket {
-    first: Instant,
-    last: Instant,
+    recorded_at: Instant,
     count: u64,
 }
 
@@ -87,7 +85,7 @@ impl StatisticWindow {
         while self
             .buckets
             .front()
-            .is_some_and(|bucket| now.saturating_duration_since(bucket.last) > self.window)
+            .is_some_and(|bucket| now.saturating_duration_since(bucket.recorded_at) >= self.window)
         {
             self.buckets.pop_front();
         }
@@ -96,20 +94,18 @@ impl StatisticWindow {
     fn record(&mut self, now: Instant) {
         self.prune(now);
         if let Some(bucket) = self.buckets.back_mut() {
-            if now.saturating_duration_since(bucket.first) < STATISTICS_BUCKET_WIDTH {
-                bucket.last = now;
+            if bucket.recorded_at == now {
                 bucket.count = bucket.count.saturating_add(1);
                 return;
             }
         }
-        self.buckets.push_back(StatisticBucket {
-            first: now,
-            last: now,
-            count: 1,
-        });
-        while self.buckets.len() > MAX_STATISTICS_BUCKETS {
+        if self.buckets.len() == MAX_STATISTICS_BUCKETS {
             self.buckets.pop_front();
         }
+        self.buckets.push_back(StatisticBucket {
+            recorded_at: now,
+            count: 1,
+        });
     }
 
     fn count(&mut self, now: Instant) -> u64 {
@@ -751,6 +747,16 @@ mod tests {
     }
 
     #[test]
+    fn queue_statistics_prune_each_record_at_the_exact_window_boundary() {
+        let start = Instant::now();
+        let mut window = super::StatisticWindow::new(Duration::from_secs(60));
+        window.record(start);
+        window.record(start + Duration::from_millis(900));
+
+        assert_eq!(window.count(start + Duration::from_millis(60_500)), 1);
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)] // one scenario covers the exact and adjacent window boundaries
     fn queue_statistics_preserves_same_timestamp_counts_and_window_boundaries() {
         let start = Instant::now();
@@ -810,52 +816,59 @@ mod tests {
             start + Duration::from_secs(60),
         );
 
-        let completed_exact = scheduler.statistics_at(
+        let completed_before_boundary = scheduler.statistics_at(
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            (start + Duration::from_secs(120))
+                .checked_sub(Duration::from_nanos(1))
+                .expect("the boundary is after the test start"),
+        );
+        assert_eq!(
+            completed_before_boundary["queue:demo-app-us-central1-queue"]["tasksAdded"],
+            0.6
+        );
+        assert_eq!(
+            completed_before_boundary["queue:demo-app-us-central1-queue"]["completedLastMin"],
+            2
+        );
+        assert_eq!(
+            completed_before_boundary["queue:demo-app-us-central1-queue"]["failedTasks"],
+            0.2
+        );
+
+        let completed_at_boundary = scheduler.statistics_at(
             "demo-app",
             |_| Some(DEFAULT_REGION.to_owned()),
             start + Duration::from_secs(120),
         );
         assert_eq!(
-            completed_exact["queue:demo-app-us-central1-queue"]["tasksAdded"],
-            0.6
-        );
-        assert_eq!(
-            completed_exact["queue:demo-app-us-central1-queue"]["completedLastMin"],
-            2
-        );
-        assert_eq!(
-            completed_exact["queue:demo-app-us-central1-queue"]["failedTasks"],
-            0.2
-        );
-
-        let after_completed_window = scheduler.statistics_at(
-            "demo-app",
-            |_| Some(DEFAULT_REGION.to_owned()),
-            start + Duration::from_secs(120) + Duration::from_nanos(1),
-        );
-        assert_eq!(
-            after_completed_window["queue:demo-app-us-central1-queue"]["completedLastMin"],
+            completed_at_boundary["queue:demo-app-us-central1-queue"]["completedLastMin"],
             0
         );
 
-        let exact = scheduler.statistics_at(
+        let before_added_boundary = scheduler.statistics_at(
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            (start + Duration::from_secs(5 * 60))
+                .checked_sub(Duration::from_nanos(1))
+                .expect("the boundary is after the test start"),
+        );
+        assert_eq!(
+            before_added_boundary["queue:demo-app-us-central1-queue"]["tasksAdded"],
+            0.6
+        );
+        assert_eq!(
+            before_added_boundary["queue:demo-app-us-central1-queue"]["completedLastMin"],
+            0
+        );
+
+        let at_added_boundary = scheduler.statistics_at(
             "demo-app",
             |_| Some(DEFAULT_REGION.to_owned()),
             start + Duration::from_secs(5 * 60),
         );
-        assert_eq!(exact["queue:demo-app-us-central1-queue"]["tasksAdded"], 0.6);
         assert_eq!(
-            exact["queue:demo-app-us-central1-queue"]["completedLastMin"],
-            0
-        );
-
-        let after_added_window = scheduler.statistics_at(
-            "demo-app",
-            |_| Some(DEFAULT_REGION.to_owned()),
-            start + Duration::from_secs(5 * 60) + Duration::from_nanos(1),
-        );
-        assert_eq!(
-            after_added_window["queue:demo-app-us-central1-queue"]["tasksAdded"],
+            at_added_boundary["queue:demo-app-us-central1-queue"]["tasksAdded"],
             0.2
         );
 

@@ -35,4 +35,4 @@ jobs:
       - name: verify same-size Functions reload and last-known-good retention
         run: cargo test -p fireemu --test functions_environment a_same_size_rewrite_reloads_and_an_invalid_generation_keeps_the_last_good_one -- --exact --nocapture
       - name: verify runner trust boundaries and log attribution
-        run: node --test tools/runner-node/blocking-error.test.mjs tools/runner-node/log-context.test.mjs
+        run: node --test tools/runner-node/blocking-error.test.mjs tools/runner-node/log-context.test.mjs tools/runner-node/inventory.test.mjs

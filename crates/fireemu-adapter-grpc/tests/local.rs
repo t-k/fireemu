@@ -1609,6 +1609,89 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
 }
 
 #[tokio::test]
+async fn run_query_streams_bounded_batches_and_releases_its_snapshot_pin() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| update_write(&format!("paged/{index:03}"), &[("v", i(index))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let responses = client
+        .run_query(query("paged", None))
+        .await
+        .unwrap()
+        .into_inner()
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(
+        responses
+            .iter()
+            .filter(|response| response
+                .as_ref()
+                .is_ok_and(|response| response.document.is_some()))
+            .count(),
+        65
+    );
+    let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+    assert_eq!(
+        backend.read_unadmitted(&parent, |state| state
+            .transaction_bookkeeping_stats()
+            .active),
+        Some(0)
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn dropping_a_slow_query_stream_releases_the_internal_snapshot_pin() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| update_write(&format!("cancel/{index:03}"), &[("v", i(index))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut stream = client
+        .run_query(query("cancel", None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stream.next().await.unwrap().unwrap().document.is_some());
+    drop(stream);
+
+    let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+    for _ in 0..100 {
+        if backend.read_unadmitted(&parent, |state| {
+            state.transaction_bookkeeping_stats().active
+        }) == Some(0)
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        backend.read_unadmitted(&parent, |state| state
+            .transaction_bookkeeping_stats()
+            .active),
+        Some(0)
+    );
+    handle.abort();
+}
+
+#[tokio::test]
 async fn aggregation_transaction_conflicts_when_a_missing_field_becomes_present() {
     let (mut client, _clock, handle) = start().await;
     client

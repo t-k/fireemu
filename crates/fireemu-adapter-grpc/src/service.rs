@@ -26,6 +26,9 @@ use fireemu_core_app_check::header::{classify_app_check_header, is_app_check_hea
 /// Boxed response stream.
 pub type BoxStream<T> = tonic::codegen::BoxStream<T>;
 
+const RUN_QUERY_BATCH_SIZE: i32 = 32;
+const RUN_QUERY_CHANNEL_CAPACITY: usize = 16;
+
 /// Where validated requests go.
 pub enum Backend {
     /// Execute locally.
@@ -549,6 +552,7 @@ impl Firestore for GatewayService {
     }
 
     type RunQueryStream = BoxStream<pb::RunQueryResponse>;
+    #[allow(clippy::too_many_lines)]
     async fn run_query(
         &self,
         request: Request<pb::RunQueryRequest>,
@@ -556,16 +560,137 @@ impl Firestore for GatewayService {
         let caller = self.caller(request.metadata(), &request.get_ref().parent, "RunQuery")?;
         let req = request.into_inner();
         if let Some(local) = self.local_backend() {
-            let (responses, warnings) = blocking_read(
+            let local = Arc::clone(local);
+            let original_limit = req.query_type.as_ref().and_then(|query| match query {
+                pb::run_query_request::QueryType::StructuredQuery(query) => query.limit,
+            });
+            let original_offset = req.query_type.as_ref().map_or(0, |query| match query {
+                pb::run_query_request::QueryType::StructuredQuery(query) => query.offset,
+            });
+            let internal_transaction = req.consistency_selector.is_none();
+            let mut first_request = req.clone();
+            set_run_query_page(&mut first_request, original_offset, original_limit);
+            if internal_transaction {
+                first_request.consistency_selector =
+                    Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+                        pb::TransactionOptions {
+                            mode: Some(pb::transaction_options::Mode::ReadOnly(
+                                pb::transaction_options::ReadOnly::default(),
+                            )),
+                        },
+                    ));
+            }
+            let first_authorization = req.clone();
+            let (mut first, warnings) = blocking_read(
                 local.clone(),
                 self.rules.clone(),
-                caller,
-                move |local, guard| local.run_query(&req, guard),
+                caller.clone(),
+                move |local, guard| {
+                    local.run_query_authorized_as(&first_request, &first_authorization, guard)
+                },
             )
             .await?;
-            let stream: Vec<Result<pb::RunQueryResponse, Status>> =
-                responses.into_iter().map(Ok).collect();
-            let boxed: Self::RunQueryStream = Box::pin(tokio_stream::iter(stream));
+            let transaction = first
+                .iter()
+                .find_map(|response| {
+                    (!response.transaction.is_empty()).then(|| response.transaction.clone())
+                })
+                .or_else(|| match &req.consistency_selector {
+                    Some(pb::run_query_request::ConsistencySelector::Transaction(transaction)) => {
+                        Some(transaction.clone())
+                    }
+                    _ => None,
+                });
+            if internal_transaction {
+                if first.iter().any(|response| response.document.is_some()) {
+                    first.retain(|response| response.document.is_some());
+                } else {
+                    for response in &mut first {
+                        response.transaction.clear();
+                    }
+                }
+            }
+            let first_documents = first
+                .iter()
+                .filter(|response| response.document.is_some())
+                .count();
+            let (sender, receiver) = tokio::sync::mpsc::channel(RUN_QUERY_CHANNEL_CAPACITY);
+            let rules = self.rules.clone();
+            tokio::spawn(async move {
+                let rollback = internal_transaction.then(|| QueryTransactionGuard {
+                    local: local.clone(),
+                    database: database_name_from_query_parent(&req.parent),
+                    transaction: transaction.clone().unwrap_or_default(),
+                });
+                for response in first {
+                    if sender.send(Ok(response)).await.is_err() {
+                        return;
+                    }
+                }
+                let mut delivered = i32::try_from(first_documents).unwrap_or(i32::MAX);
+                let mut batch_documents = delivered;
+                while batch_documents == RUN_QUERY_BATCH_SIZE
+                    && original_limit.is_none_or(|limit| delivered < limit)
+                {
+                    let mut page = req.clone();
+                    if let Some(transaction) = transaction.clone() {
+                        page.consistency_selector = Some(
+                            pb::run_query_request::ConsistencySelector::Transaction(transaction),
+                        );
+                    } else if !matches!(
+                        page.consistency_selector,
+                        Some(pb::run_query_request::ConsistencySelector::ReadTime(_))
+                    ) {
+                        let _ = sender
+                            .send(Err(Status::internal(
+                                "RunQuery snapshot transaction was not returned",
+                            )))
+                            .await;
+                        return;
+                    }
+                    set_run_query_page(
+                        &mut page,
+                        original_offset.saturating_add(delivered),
+                        original_limit.map(|limit| limit.saturating_sub(delivered)),
+                    );
+                    let authorization = req.clone();
+                    let batch = blocking_read(
+                        local.clone(),
+                        rules.clone(),
+                        caller.clone(),
+                        move |local, guard| {
+                            local.run_query_authorized_as(&page, &authorization, guard)
+                        },
+                    )
+                    .await;
+                    let (mut responses, _) = match batch {
+                        Ok(batch) => batch,
+                        Err(error) => {
+                            let _ = sender.send(Err(error)).await;
+                            return;
+                        }
+                    };
+                    for response in &mut responses {
+                        response.skipped_results = 0;
+                    }
+                    batch_documents = i32::try_from(
+                        responses
+                            .iter()
+                            .filter(|response| response.document.is_some())
+                            .count(),
+                    )
+                    .unwrap_or(i32::MAX);
+                    for response in responses {
+                        if sender.send(Ok(response)).await.is_err() {
+                            return;
+                        }
+                    }
+                    delivered = delivered.saturating_add(batch_documents);
+                }
+                drop(rollback);
+            });
+            let boxed: Self::RunQueryStream =
+                Box::pin(tokio_stream::wrappers::ReceiverStream::new(receiver));
             return Ok(with_warnings(Response::new(boxed), &warnings));
         }
         let warnings = self.validate_run_query(&req)?;
@@ -805,9 +930,44 @@ pub fn app_check_denied(reason: &'static str) -> Status {
 }
 
 /// A unary caller: principal and the reset epoch the request started in.
+#[derive(Clone)]
 struct Caller {
     principal: Principal,
     epoch: u64,
+}
+
+fn set_run_query_page(req: &mut pb::RunQueryRequest, offset: i32, remaining: Option<i32>) {
+    let Some(pb::run_query_request::QueryType::StructuredQuery(query)) = &mut req.query_type else {
+        return;
+    };
+    query.offset = offset;
+    query.limit = Some(remaining.map_or(RUN_QUERY_BATCH_SIZE, |remaining| {
+        remaining.min(RUN_QUERY_BATCH_SIZE)
+    }));
+}
+
+fn database_name_from_query_parent(parent: &str) -> String {
+    parent
+        .split_once("/documents")
+        .map_or_else(|| parent.to_owned(), |(database, _)| database.to_owned())
+}
+
+struct QueryTransactionGuard {
+    local: Arc<LocalBackend>,
+    database: String,
+    transaction: Vec<u8>,
+}
+
+impl Drop for QueryTransactionGuard {
+    fn drop(&mut self) {
+        if !self.transaction.is_empty() {
+            let _ = self.local.rollback(&pb::RollbackRequest {
+                database: self.database.clone(),
+                transaction: self.transaction.clone(),
+                ..Default::default()
+            });
+        }
+    }
 }
 
 #[cfg(test)]

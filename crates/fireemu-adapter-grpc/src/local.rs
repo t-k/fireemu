@@ -2414,6 +2414,18 @@ impl LocalBackend {
         req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
+        self.run_query_authorized_as(req, req, guard)
+    }
+
+    /// Executes a bounded page while authorizing the caller's original query shape.
+    /// Synthetic pagination limits and offsets are an adapter implementation detail and must
+    /// not change `request.query` as observed by Security Rules.
+    pub fn run_query_authorized_as(
+        &self,
+        req: &pb::RunQueryRequest,
+        authorization_req: &pb::RunQueryRequest,
+        guard: ReadGuard<'_>,
+    ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
@@ -2422,6 +2434,23 @@ impl LocalBackend {
             ));
         };
         let accepted = self.accepted_query(&parent, sq)?;
+        let authorization_parent = parse_parent(&authorization_req.parent).map_err(status)?;
+        if authorization_parent.project != parent.project
+            || authorization_parent.database != parent.database
+            || authorization_parent.document != parent.document
+        {
+            return Err(Status::invalid_argument(
+                "RunQuery authorization parent does not match the execution page",
+            ));
+        }
+        let Some(pb::run_query_request::QueryType::StructuredQuery(authorization_query)) =
+            &authorization_req.query_type
+        else {
+            return Err(Status::invalid_argument(
+                "RunQuery requires a structured_query",
+            ));
+        };
+        let authorization = self.accepted_query(&authorization_parent, authorization_query)?;
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -2442,8 +2471,8 @@ impl LocalBackend {
                 access.db(),
                 version,
                 ReadCheck::Query {
-                    parent: &parent,
-                    query: &accepted.query,
+                    parent: &authorization_parent,
+                    query: &authorization.query,
                 },
             )?;
             let (docs, stats) = access.run_query_with_stats(&accepted.query)?;
@@ -2453,7 +2482,7 @@ impl LocalBackend {
                 .unwrap_or(i32::MAX);
             Ok((
                 query_responses(&docs, read_time, access.report(), skipped),
-                accepted.warnings.clone(),
+                authorization.warnings.clone(),
             ))
         })
     }

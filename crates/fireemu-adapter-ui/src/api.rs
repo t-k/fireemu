@@ -99,12 +99,24 @@ fn alerts(state: &UiState, req: &UiRequest) -> UiResponse {
         Ok(p) => p,
         Err(why) => return UiResponse::error(400, &format!("INVALID_ARGUMENT : {why}")),
     };
-    let delivered = runtime.publish_custom_event(
+    let delivered = match runtime.publish_registered_custom_events(
         fireemu_adapter_functions::eventarc::GOOGLE_CHANNEL,
-        &published.event_type,
-        &published.attributes,
-        &published.event,
-    );
+        std::slice::from_ref(&published),
+    ) {
+        Ok(delivered) => delivered,
+        Err(fireemu_adapter_functions::runtime::EventarcPublishError::Capacity) => {
+            return UiResponse::error(
+                429,
+                "RESOURCE_EXHAUSTED : Eventarc delivery capacity exceeded",
+            )
+        }
+        Err(fireemu_adapter_functions::runtime::EventarcPublishError::InvalidEvent) => {
+            return UiResponse::error(400, "INVALID_ARGUMENT : invalid Eventarc event")
+        }
+        Err(fireemu_adapter_functions::runtime::EventarcPublishError::Unavailable) => {
+            return UiResponse::error(500, "INTERNAL : Eventarc registry unavailable")
+        }
+    };
     no_store(UiResponse::json(
         200,
         &json!({"delivered": delivered, "alertType": alert_type}),

@@ -1,6 +1,7 @@
 //! End-to-end tests over the real gRPC surface: a tonic client drives create / publish / pull /
 //! ack / filter / redelivery against a served adapter on a loopback port.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_pubsub::{serve_pubsub, PubSubHandle};
@@ -323,4 +324,172 @@ async fn streaming_pull_delivers_and_acks() {
     .await
     .unwrap();
     drop(tx);
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn snapshot_lifecycle_replays_backlog_and_post_creation_messages() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+
+    let topic = "projects/demo-app/topics/snapshots";
+    let source = "projects/demo-app/subscriptions/snapshot-source";
+    let replay = "projects/demo-app/subscriptions/snapshot-replay";
+    let snapshot = "projects/demo-app/snapshots/checkpoint";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for name in [source, replay] {
+        subc.create_subscription(pb::Subscription {
+            name: name.to_owned(),
+            topic: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"acked"), msg(b"backlog")],
+    })
+    .await
+    .unwrap();
+
+    let source_messages = subc
+        .pull(pb::PullRequest {
+            subscription: source.to_owned(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(source_messages.len(), 2);
+    subc.acknowledge(pb::AcknowledgeRequest {
+        subscription: source.to_owned(),
+        ack_ids: vec![source_messages[0].ack_id.clone()],
+    })
+    .await
+    .unwrap();
+
+    let created = subc
+        .create_snapshot(pb::CreateSnapshotRequest {
+            name: snapshot.to_owned(),
+            subscription: source.to_owned(),
+            labels: HashMap::from([(String::from("env"), String::from("test"))]),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(created.name, snapshot);
+    assert_eq!(created.topic, topic);
+    assert!(created.expire_time.is_some());
+
+    let listed = subc
+        .list_snapshots(pb::ListSnapshotsRequest {
+            project: "projects/demo-app".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .snapshots;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, snapshot);
+
+    let topic_snapshots = pubc
+        .list_topic_snapshots(pb::ListTopicSnapshotsRequest {
+            topic: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .snapshots;
+    assert_eq!(topic_snapshots, vec![snapshot]);
+
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"future")],
+    })
+    .await
+    .unwrap();
+    let initial_replay = subc
+        .pull(pb::PullRequest {
+            subscription: replay.to_owned(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(initial_replay.len(), 3);
+    subc.acknowledge(pb::AcknowledgeRequest {
+        subscription: replay.to_owned(),
+        ack_ids: initial_replay
+            .iter()
+            .map(|message| message.ack_id.clone())
+            .collect(),
+    })
+    .await
+    .unwrap();
+
+    subc.seek(pb::SeekRequest {
+        subscription: replay.to_owned(),
+        target: Some(pb::seek_request::Target::Snapshot(snapshot.to_owned())),
+    })
+    .await
+    .unwrap();
+    let replayed = subc
+        .pull(pb::PullRequest {
+            subscription: replay.to_owned(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    let bodies: Vec<Vec<u8>> = replayed
+        .iter()
+        .map(|message| message.message.as_ref().unwrap().data.clone())
+        .collect();
+    assert_eq!(bodies, vec![b"backlog".to_vec(), b"future".to_vec()]);
+
+    let updated = subc
+        .update_snapshot(pb::UpdateSnapshotRequest {
+            snapshot: Some(pb::Snapshot {
+                name: snapshot.to_owned(),
+                labels: HashMap::from([(String::from("env"), String::from("prod"))]),
+                ..Default::default()
+            }),
+            update_mask: Some(prost_types::FieldMask {
+                paths: vec![String::from("labels")],
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(updated.labels.get("env"), Some(&String::from("prod")));
+
+    subc.delete_snapshot(pb::DeleteSnapshotRequest {
+        snapshot: snapshot.to_owned(),
+    })
+    .await
+    .unwrap();
+    let err = subc
+        .get_snapshot(pb::GetSnapshotRequest {
+            snapshot: snapshot.to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound);
 }

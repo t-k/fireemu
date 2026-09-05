@@ -464,6 +464,50 @@ impl SubscriptionState {
         self.rebuild_indexes();
         Ok(())
     }
+
+    /// Returns the stable message IDs that were not acknowledged at the current point in time.
+    #[must_use]
+    pub fn unacknowledged_message_ids(&self) -> BTreeSet<String> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.state != Delivery::Acked)
+            .map(|entry| entry.stored.message_id.clone())
+            .collect()
+    }
+
+    /// Returns the stable message IDs retained by this subscription at the snapshot boundary.
+    #[must_use]
+    pub fn retained_message_ids(&self) -> BTreeSet<String> {
+        self.entries
+            .iter()
+            .map(|entry| entry.stored.message_id.clone())
+            .collect()
+    }
+
+    /// Restores the acknowledgement state captured by a snapshot. Messages that were in the
+    /// source backlog remain available, and messages published after the snapshot was created
+    /// are also available. Older messages that were acknowledged at snapshot creation stay
+    /// acknowledged.
+    pub fn seek_to_snapshot(
+        &mut self,
+        retained_message_ids: &BTreeSet<String>,
+        unacknowledged_message_ids: &BTreeSet<String>,
+        created_at: LogicalInstant,
+        now: LogicalInstant,
+    ) {
+        for entry in &mut self.entries {
+            if unacknowledged_message_ids.contains(&entry.stored.message_id)
+                || (!retained_message_ids.contains(&entry.stored.message_id)
+                    && entry.stored.publish_time >= created_at)
+            {
+                entry.state = Delivery::Available { available_at: now };
+                entry.delivery_attempt = 0;
+            } else {
+                entry.state = Delivery::Acked;
+            }
+        }
+        self.rebuild_indexes();
+    }
 }
 
 #[cfg(test)]

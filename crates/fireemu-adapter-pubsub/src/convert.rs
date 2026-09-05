@@ -7,8 +7,8 @@ use fireemu_core_pubsub::subscription::{
     DeadLetterPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
 };
 use fireemu_core_pubsub::{
-    Code, Filter, PubSubError, PubsubMessage, ReceivedMessage, StoredMessage, SubscriptionConfig,
-    SubscriptionName, TopicName,
+    Code, Filter, PubSubError, PubsubMessage, ReceivedMessage, Snapshot, StoredMessage,
+    SubscriptionConfig, SubscriptionName, TopicName,
 };
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
@@ -189,5 +189,20 @@ pub fn topic_to_proto(name: &TopicName, labels: &BTreeMap<String, String>) -> pb
         name: name.to_full(),
         labels: labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         ..pb::Topic::default()
+    }
+}
+
+/// Renders a core snapshot resource as the Pub/Sub wire representation.
+#[must_use]
+pub fn snapshot_to_proto(snapshot: &Snapshot) -> pb::Snapshot {
+    pb::Snapshot {
+        name: snapshot.name.clone(),
+        topic: snapshot.topic.to_full(),
+        expire_time: Some(to_timestamp(snapshot.expire_at)),
+        labels: snapshot
+            .labels
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
     }
 }

@@ -10,12 +10,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::error::{PubSubError, Result};
 use crate::message::{PubsubMessage, StoredMessage};
-use crate::name::{SubscriptionName, TopicName, DELETED_TOPIC};
-use crate::subscription::{ReceivedMessage, SubscriptionConfig, SubscriptionState};
+use crate::name::{
+    validate_project, validate_resource_id, SubscriptionName, TopicName, DELETED_TOPIC,
+};
+use crate::subscription::{PushConfig, ReceivedMessage, SubscriptionConfig, SubscriptionState};
 
 /// Upper bound on the number of topics one project session keeps.
 pub const MAX_TOPICS: usize = 10_000;
@@ -23,6 +25,31 @@ pub const MAX_TOPICS: usize = 10_000;
 pub const MAX_SUBSCRIPTIONS: usize = 10_000;
 /// Maximum messages accepted in one publish request.
 pub const MAX_MESSAGES_PER_PUBLISH: usize = 1_000;
+/// Maximum snapshots retained by one daemon.
+pub const MAX_SNAPSHOTS: usize = 10_000;
+/// Snapshot lifetime used by the local emulator's deterministic clock.
+pub const SNAPSHOT_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
+
+/// A Pub/Sub snapshot and the acknowledgement state it captures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    /// Fully-qualified snapshot resource name.
+    pub name: String,
+    /// The topic retained by this snapshot.
+    pub topic: TopicName,
+    /// When the snapshot was created.
+    pub created_at: LogicalInstant,
+    /// When the snapshot expires.
+    pub expire_at: LogicalInstant,
+    /// User-provided labels.
+    pub labels: BTreeMap<String, String>,
+    /// Message IDs that were unacknowledged at creation.
+    pub unacknowledged_message_ids: BTreeSet<String>,
+    /// All message IDs retained by the source subscription at creation. Keeping this boundary
+    /// lets seek distinguish an acknowledged message from a later message published at the same
+    /// logical instant.
+    pub retained_message_ids: BTreeSet<String>,
+}
 
 /// A topic and the record of which subscriptions attach to it.
 #[derive(Debug, Clone)]
@@ -40,8 +67,10 @@ pub struct PubSubState {
     subscriptions: BTreeMap<String, SubscriptionState>,
     topic_subs: BTreeMap<String, BTreeSet<String>>,
     function_subscriptions: BTreeSet<String>,
+    snapshots: BTreeMap<String, Snapshot>,
     message_counter: u64,
     ack_rng: SplitMix64,
+    snapshot_counter: u64,
 }
 
 impl PubSubState {
@@ -54,9 +83,11 @@ impl PubSubState {
             subscriptions: BTreeMap::new(),
             topic_subs: BTreeMap::new(),
             function_subscriptions: BTreeSet::new(),
+            snapshots: BTreeMap::new(),
             message_counter: 0,
             // Mix a fixed tag so ack ids never coincide with any other seeded stream.
             ack_rng: SplitMix64::new(seed ^ 0x5053_5542_4143_4b5f),
+            snapshot_counter: 0,
         }
     }
 
@@ -67,8 +98,10 @@ impl PubSubState {
         self.subscriptions.clear();
         self.topic_subs.clear();
         self.function_subscriptions.clear();
+        self.snapshots.clear();
         self.message_counter = 0;
         self.ack_rng = SplitMix64::new(self.seed ^ 0x5053_5542_4143_4b5f);
+        self.snapshot_counter = 0;
     }
 
     /// Drops one project's topics and subscriptions without disturbing other sessions.
@@ -86,6 +119,8 @@ impl PubSubState {
             .retain(|_, entry| entry.name.project() != project);
         self.topic_subs
             .retain(|topic, _| TopicName::parse(topic).is_ok_and(|name| name.project() != project));
+        self.snapshots
+            .retain(|_, snapshot| snapshot.topic.project() != project);
     }
 
     // --- Topics -----------------------------------------------------------------------------
@@ -252,6 +287,175 @@ impl PubSubState {
             ));
         }
         s.set_ack_deadline(seconds);
+        Ok(())
+    }
+
+    /// Replaces a subscription's push endpoint configuration.
+    pub fn update_push_config(
+        &mut self,
+        name: &SubscriptionName,
+        push_config: PushConfig,
+    ) -> Result<()> {
+        let subscription = self.sub_mut(name)?;
+        subscription.set_push_config(push_config);
+        Ok(())
+    }
+
+    fn parse_snapshot_name(name: &str) -> Result<(&str, &str)> {
+        let rest = name.strip_prefix("projects/").ok_or_else(|| {
+            PubSubError::invalid_argument("snapshot name must be projects/{p}/snapshots/{s}")
+        })?;
+        let (project, snapshot) = rest.split_once("/snapshots/").ok_or_else(|| {
+            PubSubError::invalid_argument("snapshot name must be projects/{p}/snapshots/{s}")
+        })?;
+        validate_project(project)?;
+        validate_resource_id(snapshot, "snapshot")?;
+        Ok((project, snapshot))
+    }
+
+    fn remove_expired_snapshots(&mut self, now: LogicalInstant) {
+        self.snapshots
+            .retain(|_, snapshot| snapshot.expire_at > now);
+    }
+
+    /// Creates a snapshot of the unacknowledged messages in a subscription. An empty name is
+    /// assigned a deterministic resource name; REST callers normally provide the name.
+    pub fn create_snapshot(
+        &mut self,
+        requested_name: &str,
+        subscription: &SubscriptionName,
+        labels: BTreeMap<String, String>,
+        now: LogicalInstant,
+    ) -> Result<Snapshot> {
+        self.remove_expired_snapshots(now);
+        let topic = self.subscription_config(subscription)?.topic.clone();
+        if topic.is_deleted_sentinel() || !self.topic_exists(&topic) {
+            return Err(PubSubError::not_found(format!(
+                "topic {} not found",
+                topic.to_full()
+            )));
+        }
+        let name = if requested_name.is_empty() {
+            self.snapshot_counter = self.snapshot_counter.wrapping_add(1).max(1);
+            format!(
+                "projects/{}/snapshots/snapshot-{}",
+                subscription.project(),
+                self.snapshot_counter
+            )
+        } else {
+            requested_name.to_owned()
+        };
+        let (project, _) = Self::parse_snapshot_name(&name)?;
+        if project != subscription.project() {
+            return Err(PubSubError::invalid_argument(
+                "snapshot and subscription must belong to the same project",
+            ));
+        }
+        if self.snapshots.contains_key(&name) {
+            return Err(PubSubError::already_exists(format!(
+                "snapshot {name} already exists"
+            )));
+        }
+        if self.snapshots.len() >= MAX_SNAPSHOTS {
+            return Err(PubSubError::resource_exhausted(format!(
+                "the maximum of {MAX_SNAPSHOTS} snapshots has been reached"
+            )));
+        }
+        let source_subscription =
+            self.subscriptions
+                .get(&subscription.to_full())
+                .ok_or_else(|| {
+                    PubSubError::not_found(format!(
+                        "subscription {} not found",
+                        subscription.to_full()
+                    ))
+                })?;
+        let unacknowledged_message_ids = source_subscription.unacknowledged_message_ids();
+        let retained_message_ids = source_subscription.retained_message_ids();
+        let expire_at = now
+            .checked_add(LogicalDuration::from_seconds(SNAPSHOT_TTL_SECONDS))
+            .unwrap_or(LogicalInstant::MAX);
+        let snapshot = Snapshot {
+            name: name.clone(),
+            topic,
+            created_at: now,
+            expire_at,
+            labels,
+            unacknowledged_message_ids,
+            retained_message_ids,
+        };
+        self.snapshots.insert(name, snapshot.clone());
+        Ok(snapshot)
+    }
+
+    /// Gets a non-expired snapshot.
+    pub fn get_snapshot(&mut self, name: &str, now: LogicalInstant) -> Result<Snapshot> {
+        Self::parse_snapshot_name(name)?;
+        self.remove_expired_snapshots(now);
+        self.snapshots
+            .get(name)
+            .cloned()
+            .ok_or_else(|| PubSubError::not_found(format!("snapshot {name} not found")))
+    }
+
+    /// Lists non-expired snapshots in a project in deterministic resource-name order.
+    pub fn list_snapshots(&mut self, project: &str, now: LogicalInstant) -> Vec<Snapshot> {
+        self.remove_expired_snapshots(now);
+        self.snapshots
+            .values()
+            .filter(|snapshot| snapshot.topic.project() == project)
+            .cloned()
+            .collect()
+    }
+
+    /// Updates snapshot labels. The snapshot name and topic are immutable.
+    pub fn update_snapshot(
+        &mut self,
+        name: &str,
+        labels: BTreeMap<String, String>,
+        now: LogicalInstant,
+    ) -> Result<Snapshot> {
+        Self::parse_snapshot_name(name)?;
+        self.remove_expired_snapshots(now);
+        let snapshot = self
+            .snapshots
+            .get_mut(name)
+            .ok_or_else(|| PubSubError::not_found(format!("snapshot {name} not found")))?;
+        snapshot.labels = labels;
+        Ok(snapshot.clone())
+    }
+
+    /// Deletes a snapshot.
+    pub fn delete_snapshot(&mut self, name: &str, now: LogicalInstant) -> Result<()> {
+        Self::parse_snapshot_name(name)?;
+        self.remove_expired_snapshots(now);
+        self.snapshots
+            .remove(name)
+            .map(|_| ())
+            .ok_or_else(|| PubSubError::not_found(format!("snapshot {name} not found")))
+    }
+
+    /// Seeks a subscription to the acknowledgement state captured by a snapshot.
+    pub fn seek_to_snapshot(
+        &mut self,
+        subscription: &SubscriptionName,
+        snapshot_name: &str,
+        now: LogicalInstant,
+    ) -> Result<()> {
+        Self::parse_snapshot_name(snapshot_name)?;
+        let snapshot = self.get_snapshot(snapshot_name, now)?;
+        let config = self.subscription_config(subscription)?;
+        if config.topic != snapshot.topic {
+            return Err(PubSubError::failed_precondition(
+                "snapshot topic does not match subscription topic",
+            ));
+        }
+        self.sub_mut(subscription)?.seek_to_snapshot(
+            &snapshot.retained_message_ids,
+            &snapshot.unacknowledged_message_ids,
+            snapshot.created_at,
+            now,
+        );
         Ok(())
     }
 
@@ -711,5 +915,60 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn snapshots_replay_the_unacknowledged_backlog_and_messages_published_after_creation() {
+        let mut state = PubSubState::new(11);
+        let topic = topic("p", "events");
+        let source = SubscriptionName::new("p", "source-sub").unwrap();
+        let replay = SubscriptionName::new("p", "replay-sub").unwrap();
+        let before = LogicalInstant::from_unix_seconds(1000);
+        let snapshot_time = LogicalInstant::from_unix_seconds(1001);
+        let after = LogicalInstant::from_unix_seconds(1002);
+        state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+        state
+            .create_subscription(sub_cfg("p", "source-sub", "events", Filter::always()))
+            .unwrap();
+        state
+            .create_subscription(sub_cfg("p", "replay-sub", "events", Filter::always()))
+            .unwrap();
+        state
+            .publish(&topic, vec![data(b"acked"), data(b"backlog")], before)
+            .unwrap();
+
+        let source_messages = state.pull(&source, 10, before).unwrap();
+        assert_eq!(source_messages.len(), 2);
+        state
+            .acknowledge(&source, &[source_messages[0].ack_id.clone()])
+            .unwrap();
+        let snapshot_name = "projects/p/snapshots/checkpoint";
+        state
+            .create_snapshot(snapshot_name, &source, BTreeMap::new(), snapshot_time)
+            .unwrap();
+        state.publish(&topic, vec![data(b"future")], after).unwrap();
+
+        let replayed = state.pull(&replay, 10, after).unwrap();
+        assert_eq!(replayed.len(), 3);
+        state
+            .acknowledge(
+                &replay,
+                &replayed
+                    .iter()
+                    .map(|message| message.ack_id.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        state
+            .seek_to_snapshot(&replay, snapshot_name, after)
+            .unwrap();
+
+        let replayed = state.pull(&replay, 10, after).unwrap();
+        let bodies = replayed
+            .iter()
+            .map(|message| message.message.message.data.as_slice())
+            .collect::<Vec<_>>();
+        assert_eq!(bodies, vec![b"backlog".as_slice(), b"future".as_slice()]);
+        assert_eq!(state.list_snapshots("p", after).len(), 1);
     }
 }

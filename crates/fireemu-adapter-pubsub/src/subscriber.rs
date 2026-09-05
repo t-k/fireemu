@@ -1,18 +1,20 @@
 //! The `google.pubsub.v1.Subscriber` service implementation.
 #![allow(clippy::result_large_err)] // tonic::Status is large by design
 
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::time::Duration;
 
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use fireemu_core_pubsub::SubscriptionName;
+use fireemu_core_pubsub::{PushConfig, SubscriptionName};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::subscriber_server::Subscriber;
 
 use crate::convert::{
-    from_timestamp, received_to_proto, status, subscription_from_proto, subscription_to_proto,
+    from_timestamp, received_to_proto, snapshot_to_proto, status, subscription_from_proto,
+    subscription_to_proto,
 };
 use crate::PubSubHandle;
 
@@ -109,6 +111,17 @@ impl Subscriber for SubscriberService {
             self.handle
                 .state()
                 .update_ack_deadline(&name, secs)
+                .map_err(|e| status(&e))?;
+        }
+        if let Some(push_config) = sub.push_config {
+            self.handle
+                .state()
+                .update_push_config(
+                    &name,
+                    PushConfig {
+                        push_endpoint: push_config.push_endpoint,
+                    },
+                )
                 .map_err(|e| status(&e))?;
         }
         Ok(Response::new(self.subscription_proto(&name)?))
@@ -265,57 +278,114 @@ impl Subscriber for SubscriberService {
 
     async fn modify_push_config(
         &self,
-        _request: Request<pb::ModifyPushConfigRequest>,
+        request: Request<pb::ModifyPushConfigRequest>,
     ) -> Result<Response<()>, Status> {
-        // Push configuration is accepted but push delivery itself is not driven by the core;
-        // pull and streaming pull are the supported delivery paths.
+        let req = request.into_inner();
+        let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
+        let push_endpoint = req
+            .push_config
+            .map_or_else(String::new, |config| config.push_endpoint);
+        self.handle
+            .state()
+            .update_push_config(&name, PushConfig { push_endpoint })
+            .map_err(|e| status(&e))?;
         Ok(Response::new(()))
     }
 
     async fn get_snapshot(
         &self,
-        _request: Request<pb::GetSnapshotRequest>,
+        request: Request<pb::GetSnapshotRequest>,
     ) -> Result<Response<pb::Snapshot>, Status> {
-        Err(Status::unimplemented(
-            "snapshots are not supported by fireemu's Pub/Sub emulator",
-        ))
+        let name = request.into_inner().snapshot;
+        let snapshot = self
+            .handle
+            .state()
+            .get_snapshot(&name, self.handle.now())
+            .map_err(|e| status(&e))?;
+        Ok(Response::new(snapshot_to_proto(&snapshot)))
     }
 
     async fn list_snapshots(
         &self,
-        _request: Request<pb::ListSnapshotsRequest>,
+        request: Request<pb::ListSnapshotsRequest>,
     ) -> Result<Response<pb::ListSnapshotsResponse>, Status> {
+        let req = request.into_inner();
+        let project = project_of(&req.project)?;
+        let snapshots = self
+            .handle
+            .state()
+            .list_snapshots(project, self.handle.now())
+            .iter()
+            .map(snapshot_to_proto)
+            .collect();
         Ok(Response::new(pb::ListSnapshotsResponse {
-            snapshots: Vec::new(),
+            snapshots,
             next_page_token: String::new(),
         }))
     }
 
     async fn create_snapshot(
         &self,
-        _request: Request<pb::CreateSnapshotRequest>,
+        request: Request<pb::CreateSnapshotRequest>,
     ) -> Result<Response<pb::Snapshot>, Status> {
-        Err(Status::unimplemented(
-            "snapshots are not supported by fireemu's Pub/Sub emulator",
-        ))
+        let req = request.into_inner();
+        let subscription = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
+        let snapshot = self
+            .handle
+            .state()
+            .create_snapshot(
+                &req.name,
+                &subscription,
+                req.labels.into_iter().collect::<BTreeMap<_, _>>(),
+                self.handle.now(),
+            )
+            .map_err(|e| status(&e))?;
+        Ok(Response::new(snapshot_to_proto(&snapshot)))
     }
 
     async fn update_snapshot(
         &self,
-        _request: Request<pb::UpdateSnapshotRequest>,
+        request: Request<pb::UpdateSnapshotRequest>,
     ) -> Result<Response<pb::Snapshot>, Status> {
-        Err(Status::unimplemented(
-            "snapshots are not supported by fireemu's Pub/Sub emulator",
-        ))
+        let req = request.into_inner();
+        let snapshot = req
+            .snapshot
+            .ok_or_else(|| Status::invalid_argument("update requires a snapshot"))?;
+        let mask = req
+            .update_mask
+            .ok_or_else(|| Status::invalid_argument("update requires a non-empty update mask"))?;
+        if mask.paths.is_empty()
+            || mask
+                .paths
+                .iter()
+                .any(|path| path != "labels" && !path.starts_with("labels."))
+        {
+            return Err(Status::invalid_argument(
+                "only the labels field can be updated",
+            ));
+        }
+        let updated = self
+            .handle
+            .state()
+            .update_snapshot(
+                &snapshot.name,
+                snapshot.labels.into_iter().collect::<BTreeMap<_, _>>(),
+                self.handle.now(),
+            )
+            .map_err(|e| status(&e))?;
+        Ok(Response::new(snapshot_to_proto(&updated)))
     }
 
     async fn delete_snapshot(
         &self,
-        _request: Request<pb::DeleteSnapshotRequest>,
+        request: Request<pb::DeleteSnapshotRequest>,
     ) -> Result<Response<()>, Status> {
-        Err(Status::unimplemented(
-            "snapshots are not supported by fireemu's Pub/Sub emulator",
-        ))
+        let name = request.into_inner().snapshot;
+        self.handle
+            .state()
+            .delete_snapshot(&name, self.handle.now())
+            .map_err(|e| status(&e))?;
+        Ok(Response::new(()))
     }
 
     async fn seek(
@@ -334,9 +404,13 @@ impl Subscriber for SubscriberService {
                     .map_err(|e| status(&e))?;
                 Ok(Response::new(pb::SeekResponse::default()))
             }
-            Some(pb::seek_request::Target::Snapshot(_)) => Err(Status::unimplemented(
-                "seek to a snapshot is not supported by fireemu's Pub/Sub emulator",
-            )),
+            Some(pb::seek_request::Target::Snapshot(snapshot)) => {
+                self.handle
+                    .state()
+                    .seek_to_snapshot(&name, &snapshot, now)
+                    .map_err(|e| status(&e))?;
+                Ok(Response::new(pb::SeekResponse::default()))
+            }
             None => Err(Status::invalid_argument(
                 "seek requires a time or a snapshot",
             )),

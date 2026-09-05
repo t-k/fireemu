@@ -142,11 +142,20 @@ impl Publisher for PublisherService {
 
     async fn list_topic_snapshots(
         &self,
-        _request: Request<pb::ListTopicSnapshotsRequest>,
+        request: Request<pb::ListTopicSnapshotsRequest>,
     ) -> Result<Response<pb::ListTopicSnapshotsResponse>, Status> {
-        // Snapshots are not supported; report an empty list rather than an error.
+        let name = TopicName::parse(&request.into_inner().topic).map_err(|e| status(&e))?;
+        let now = self.handle.now();
+        let snapshots = self
+            .handle
+            .state()
+            .list_snapshots(name.project(), now)
+            .into_iter()
+            .filter(|snapshot| snapshot.topic == name)
+            .map(|snapshot| snapshot.name)
+            .collect();
         Ok(Response::new(pb::ListTopicSnapshotsResponse {
-            snapshots: Vec::new(),
+            snapshots,
             next_page_token: String::new(),
         }))
     }

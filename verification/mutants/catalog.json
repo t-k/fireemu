@@ -457,6 +457,31 @@
       "id": "M-WEBCHANNEL-COMMIT-001",
       "fault": "a serialized replay batch commits after acknowledgement removed one of its AIDs",
       "critical": false
+    },
+    {
+      "id": "M-EVENTARC-REGISTRY-001",
+      "fault": "removing a trigger leaves its function eligible for Eventarc delivery",
+      "critical": false
+    },
+    {
+      "id": "M-EVENTARC-REGISTRY-002",
+      "fault": "an over-budget Eventarc trigger is inserted before admission fails",
+      "critical": false
+    },
+    {
+      "id": "M-EVENTARC-REGISTRY-003",
+      "fault": "an over-budget Eventarc publish enqueues a prefix before rejecting the batch",
+      "critical": false
+    },
+    {
+      "id": "M-EVENTARC-PROJECT-001",
+      "fault": "custom Eventarc channel matching drops the project-qualified prefix",
+      "critical": true
+    },
+    {
+      "id": "M-EVENTARC-RELOAD-001",
+      "fault": "a successful Functions source reload leaves the old Eventarc trigger generation live",
+      "critical": false
     }
   ]
 }

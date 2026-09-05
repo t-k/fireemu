@@ -153,13 +153,13 @@ These are the gaps currently known and documented by the project, not an exhaust
 
 ## Gap from the official Firebase Emulator Suite
 
-fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions and Cloud Pub/Sub, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Eventarc and Cloud Tasks remain open gaps.
+fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub and Cloud Tasks remain open gaps.
 
 In practical terms:
 
 - the `firebase` profile targets the behavior of the pinned Firebase Emulator Suite release, while `strict` deliberately adds refusals and validation;
 - fireemu serves its own UI, but does not claim workflow parity with the official Emulator Suite UI;
-- Eventarc and Cloud Tasks remain unsupported gaps;
+- Eventarc publication and trigger-management workflows are supported through the Functions runtime; local Eventarc safety limits and reload semantics are recorded in the compatibility contract, while Cloud Tasks queue inspection remains an open gap;
 - Realtime Database, Firebase Hosting, App Hosting, and Data Connect are deferred and not served;
 - Firebase Extensions is not planned.
 

@@ -53,6 +53,16 @@ pub const RETRY_MAX_ATTEMPTS: u32 = 4;
 pub const RETRY_BASE_BACKOFF_SECONDS: i64 = 10;
 /// Cap of the retry backoff (virtual time).
 pub const RETRY_MAX_BACKOFF_SECONDS: i64 = 600;
+/// Maximum non-terminal event records retained by one Functions runtime.
+pub const MAX_ACTIVE_EVENT_RECORDS: usize = 4096;
+/// Maximum serialized payload and routing bytes retained by non-terminal event records.
+pub const MAX_ACTIVE_EVENT_BYTES: usize = 64 * 1024 * 1024;
+/// Eventarc's share, leaving capacity for Firestore, Storage, Auth, Pub/Sub and schedules.
+pub const MAX_ACTIVE_EVENTARC_RECORDS: usize = 3072;
+/// Eventarc's byte share, leaving 16 MiB for other trigger sources.
+pub const MAX_ACTIVE_EVENTARC_BYTES: usize = 48 * 1024 * 1024;
+/// Maximum deliveries one Eventarc publication may add after duplicate fault expansion.
+pub const MAX_EVENTARC_DELIVERIES_PER_PUBLISH: usize = 256;
 
 async fn forward_with_debug_deadline(
     debug_mode: bool,
@@ -327,7 +337,10 @@ struct Inner {
     /// Supplies the id of a task that did not name itself.
     next_task: u64,
     outbox: Outbox,
-    payloads: BTreeMap<EventId, (String, Value)>,
+    payloads: BTreeMap<EventId, QueuedPayload>,
+    active_event_bytes: usize,
+    active_eventarc_records: usize,
+    active_eventarc_bytes: usize,
     /// Invocations occupying a slot, keyed by invocation key (`<event>-<attempt>` or
     /// `http-<n>`) with the function name; a timed-out handler keeps its slot until it
     /// really finishes.
@@ -356,6 +369,24 @@ struct Inner {
     /// Events held back by a `delay` fault until the virtual clock reaches the instant,
     /// with the outcome the same rule set decided for them.
     delayed: BTreeMap<EventId, Held>,
+}
+
+struct QueuedPayload {
+    function: String,
+    payload: Value,
+    retained_bytes: usize,
+    source: EventSource,
+}
+
+/// A bounded Eventarc publication refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventarcPublishError {
+    /// The event type cannot become a logical event.
+    InvalidEvent,
+    /// The per-publication or active-runtime budget would be exceeded.
+    Capacity,
+    /// Runtime state is unavailable.
+    Unavailable,
 }
 
 impl Inner {
@@ -501,6 +532,8 @@ pub struct FunctionsRuntime {
     codebases: Vec<Codebase>,
     /// Function name to its codebase's index in `codebases`.
     owner: BTreeMap<String, usize>,
+    /// Live Eventarc registrations, linearized with publication and source reload.
+    eventarc_registry: Mutex<crate::eventarc::TriggerRegistry>,
     inner: Mutex<Inner>,
     /// Only active Cloud Tasks dispatches own Tokio tasks. Reset and shutdown replace this set,
     /// which aborts every old-generation attempt and its retry timer.
@@ -617,7 +650,16 @@ impl FunctionsRuntime {
         manifest
             .validate()
             .map_err(|e| format!("the loaded Functions codebases: {e}"))?;
-        Ok(Self::build(manifest, owner, codebases, config, clock))
+        let eventarc_registry =
+            crate::eventarc::TriggerRegistry::from_manifest(&config.project, &manifest, 0)?;
+        Ok(Self::build(
+            manifest,
+            owner,
+            codebases,
+            config,
+            clock,
+            eventarc_registry,
+        ))
     }
 
     fn build(
@@ -626,6 +668,7 @@ impl FunctionsRuntime {
         codebases: Vec<CodebaseSpec>,
         config: FunctionsConfig,
         clock: Arc<Mutex<VirtualClock>>,
+        eventarc_registry: crate::eventarc::TriggerRegistry,
     ) -> Arc<Self> {
         let now = clock
             .lock()
@@ -678,11 +721,15 @@ impl FunctionsRuntime {
                 })
                 .collect(),
             owner,
+            eventarc_registry: Mutex::new(eventarc_registry),
             inner: Mutex::new(Inner {
                 task_scheduler,
                 next_task: 0,
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
+                active_event_bytes: 0,
+                active_eventarc_records: 0,
+                active_eventarc_bytes: 0,
                 running: BTreeMap::new(),
                 next_event: 0,
                 epoch: Epoch::initial(),
@@ -838,6 +885,31 @@ impl FunctionsRuntime {
                 spec.name
             ));
         }
+        let Ok(mut eventarc_registry) = self.eventarc_registry.lock() else {
+            spec.runner.kill_now();
+            if let Some(path) = &spec.cleanup_dir {
+                let _ = std::fs::remove_dir_all(path);
+            }
+            return Err("the Eventarc trigger registry is unavailable".to_owned());
+        };
+        let generation = self
+            .trigger_generation
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .saturating_add(1);
+        let next_eventarc_registry = match crate::eventarc::TriggerRegistry::from_manifest(
+            self.project(),
+            &self.manifest,
+            generation,
+        ) {
+            Ok(registry) => registry,
+            Err(error) => {
+                spec.runner.kill_now();
+                if let Some(path) = &spec.cleanup_dir {
+                    let _ = std::fs::remove_dir_all(path);
+                }
+                return Err(error);
+            }
+        };
         let old = {
             let mut generation = codebase.generation_mut();
             if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
@@ -859,10 +931,10 @@ impl FunctionsRuntime {
                 },
             )
         };
-        let generation = self
-            .trigger_generation
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            .saturating_add(1);
+        self.trigger_generation
+            .store(generation, std::sync::atomic::Ordering::SeqCst);
+        *eventarc_registry = next_eventarc_registry;
+        drop(eventarc_registry);
         // In-flight invocations retain their `Arc`; killing after publication prevents any
         // new dispatch from reaching the old generation and reaps it promptly.
         old.runner.kill_now();
@@ -952,7 +1024,23 @@ impl FunctionsRuntime {
         time: LogicalInstant,
         payload: &Value,
     ) {
-        let mut copies = 1u32;
+        let copies = self.delivery_copies(function, event_type);
+        for _ in 0..copies {
+            let _ = Self::enqueue(
+                inner,
+                self.config.session,
+                source,
+                function,
+                event_type,
+                subject,
+                time,
+                payload,
+            );
+        }
+    }
+
+    fn delivery_copies(&self, function: &str, event_type: &str) -> usize {
+        let mut copies = 1usize;
         for action in fireemu_core_session::fault::decide_shared(
             self.faults().as_ref(),
             "functions.deliver",
@@ -960,21 +1048,10 @@ impl FunctionsRuntime {
             Some(event_type),
         ) {
             if let fireemu_core_session::fault::FaultAction::Duplicate { count } = action {
-                copies = copies.saturating_add(count);
+                copies = copies.saturating_add(count as usize);
             }
         }
-        for _ in 0..copies {
-            Self::enqueue(
-                inner,
-                self.config.session,
-                source,
-                function,
-                event_type,
-                subject.to_owned(),
-                time,
-                payload.clone(),
-            );
-        }
+        copies.min(MAX_EVENTARC_DELIVERIES_PER_PUBLISH)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -984,14 +1061,22 @@ impl FunctionsRuntime {
         source: EventSource,
         function: &str,
         event_type: &str,
-        subject: String,
+        subject: &str,
         time: LogicalInstant,
-        payload: Value,
-    ) {
+        payload: &Value,
+    ) -> bool {
+        let Some(retained_bytes) =
+            Self::retained_event_bytes(function, event_type, subject, payload)
+        else {
+            return false;
+        };
+        if !Self::can_admit_events(inner, source, 1, retained_bytes) {
+            return false;
+        }
         inner.next_event += 1;
         let id = EventId::new(u128::from(inner.next_event));
         let Ok(event_type) = EventType::try_new(event_type) else {
-            return;
+            return false;
         };
         let event = LogicalEvent {
             event_id: id,
@@ -999,14 +1084,92 @@ impl FunctionsRuntime {
             epoch: inner.epoch,
             source,
             event_type,
-            subject,
+            subject: subject.to_owned(),
             logical_time: time,
             causation_id: None,
             correlation_id: CorrelationId::new(u128::from(inner.next_event)),
             payload: Vec::new(),
         };
         if inner.outbox.enqueue(event).is_ok() {
-            inner.payloads.insert(id, (function.to_owned(), payload));
+            inner.payloads.insert(
+                id,
+                QueuedPayload {
+                    function: function.to_owned(),
+                    payload: payload.clone(),
+                    retained_bytes,
+                    source,
+                },
+            );
+            inner.active_event_bytes += retained_bytes;
+            if source == EventSource::Eventarc {
+                inner.active_eventarc_records += 1;
+                inner.active_eventarc_bytes += retained_bytes;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn retained_event_bytes(
+        function: &str,
+        event_type: &str,
+        subject: &str,
+        payload: &Value,
+    ) -> Option<usize> {
+        Self::retained_event_bytes_from_payload_len(
+            function,
+            event_type,
+            subject,
+            serde_json::to_vec(payload).ok()?.len(),
+        )
+    }
+
+    fn retained_event_bytes_from_payload_len(
+        function: &str,
+        event_type: &str,
+        subject: &str,
+        payload_bytes: usize,
+    ) -> Option<usize> {
+        payload_bytes
+            .checked_add(function.len())?
+            .checked_add(event_type.len())?
+            .checked_add(subject.len())
+    }
+
+    fn can_admit_events(inner: &Inner, source: EventSource, count: usize, bytes: usize) -> bool {
+        let global = inner
+            .payloads
+            .len()
+            .checked_add(count)
+            .is_some_and(|count| count <= MAX_ACTIVE_EVENT_RECORDS)
+            && inner
+                .active_event_bytes
+                .checked_add(bytes)
+                .is_some_and(|bytes| bytes <= MAX_ACTIVE_EVENT_BYTES);
+        let source = source != EventSource::Eventarc
+            || (inner
+                .active_eventarc_records
+                .checked_add(count)
+                .is_some_and(|count| count <= MAX_ACTIVE_EVENTARC_RECORDS)
+                && inner
+                    .active_eventarc_bytes
+                    .checked_add(bytes)
+                    .is_some_and(|bytes| bytes <= MAX_ACTIVE_EVENTARC_BYTES));
+        global && source
+    }
+
+    fn remove_payload(inner: &mut Inner, id: EventId) {
+        if let Some(payload) = inner.payloads.remove(&id) {
+            inner.active_event_bytes = inner
+                .active_event_bytes
+                .saturating_sub(payload.retained_bytes);
+            if payload.source == EventSource::Eventarc {
+                inner.active_eventarc_records = inner.active_eventarc_records.saturating_sub(1);
+                inner.active_eventarc_bytes = inner
+                    .active_eventarc_bytes
+                    .saturating_sub(payload.retained_bytes);
+            }
         }
     }
 
@@ -1471,6 +1634,152 @@ impl FunctionsRuntime {
         delivered
     }
 
+    /// Returns the live Eventarc trigger table.
+    pub fn eventarc_triggers(&self) -> Result<Value, EventarcPublishError> {
+        self.eventarc_registry
+            .lock()
+            .map(|registry| registry.as_json())
+            .map_err(|_| EventarcPublishError::Unavailable)
+    }
+
+    /// Registers one parsed Eventarc trigger against the exact current Functions key.
+    pub fn register_eventarc_trigger(
+        &self,
+        project: &str,
+        trigger: &str,
+        parsed: crate::eventarc::ParsedTrigger,
+    ) -> Result<(), String> {
+        let mut registry = self
+            .eventarc_registry
+            .lock()
+            .map_err(|_| "Eventarc registry unavailable.".to_owned())?;
+        let generation = self.trigger_generation();
+        let function = (project == self.project())
+            .then(|| {
+                crate::eventarc::registered_function(
+                    project,
+                    &self.manifest,
+                    generation,
+                    trigger,
+                    parsed.event_trigger(),
+                )
+            })
+            .flatten();
+        registry.register_parsed(project, trigger, parsed, function.as_deref())
+    }
+
+    /// Removes the first semantically exact Eventarc registration.
+    pub fn remove_eventarc_trigger(
+        &self,
+        project: &str,
+        trigger: &str,
+        parsed: crate::eventarc::ParsedTrigger,
+    ) -> Result<(), String> {
+        self.eventarc_registry
+            .lock()
+            .map_err(|_| "Eventarc registry unavailable.".to_owned())?
+            .remove_parsed(project, trigger, parsed)
+    }
+
+    /// Atomically admits and enqueues one Eventarc publish request.
+    pub fn publish_registered_custom_events(
+        &self,
+        channel: &str,
+        events: &[crate::eventarc::PublishedEvent],
+    ) -> Result<usize, EventarcPublishError> {
+        if !self.background_triggers_enabled() {
+            return Ok(0);
+        }
+        let time = self.now();
+        let registry = self
+            .eventarc_registry
+            .lock()
+            .map_err(|_| EventarcPublishError::Unavailable)?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| EventarcPublishError::Unavailable)?;
+        let mut planned = Vec::new();
+        let mut delivery_count = 0usize;
+        let mut retained_bytes = 0usize;
+        for event in events {
+            EventType::try_new(&event.event_type)
+                .map_err(|_| EventarcPublishError::InvalidEvent)?;
+            let payload_bytes = serde_json::to_vec(&event.event)
+                .map_err(|_| EventarcPublishError::InvalidEvent)?
+                .len();
+            let remaining = MAX_EVENTARC_DELIVERIES_PER_PUBLISH - delivery_count;
+            let functions = registry
+                .matching_functions(channel, &event.event_type, &event.attributes, remaining)
+                .map_err(|_| EventarcPublishError::Capacity)?;
+            for function in functions {
+                let served = self
+                    .manifest
+                    .get(&function)
+                    .is_some_and(|spec| matches!(spec.trigger, Trigger::Eventarc { .. }));
+                if !served {
+                    continue;
+                }
+                let copies = self.delivery_copies(&function, &event.event_type);
+                delivery_count = delivery_count
+                    .checked_add(copies)
+                    .ok_or(EventarcPublishError::Capacity)?;
+                if delivery_count > MAX_EVENTARC_DELIVERIES_PER_PUBLISH {
+                    return Err(EventarcPublishError::Capacity);
+                }
+                let bytes = Self::retained_event_bytes_from_payload_len(
+                    &function,
+                    &event.event_type,
+                    channel,
+                    payload_bytes,
+                )
+                .and_then(|bytes| bytes.checked_mul(copies))
+                .ok_or(EventarcPublishError::Capacity)?;
+                retained_bytes = retained_bytes
+                    .checked_add(bytes)
+                    .ok_or(EventarcPublishError::Capacity)?;
+                if !Self::can_admit_events(
+                    &inner,
+                    EventSource::Eventarc,
+                    delivery_count,
+                    retained_bytes,
+                ) {
+                    return Err(EventarcPublishError::Capacity);
+                }
+                planned.push((function, event, copies));
+            }
+        }
+        if !Self::can_admit_events(
+            &inner,
+            EventSource::Eventarc,
+            delivery_count,
+            retained_bytes,
+        ) {
+            return Err(EventarcPublishError::Capacity);
+        }
+        for (function, event, copies) in planned {
+            for _ in 0..copies {
+                let admitted = Self::enqueue(
+                    &mut inner,
+                    self.config.session,
+                    EventSource::Eventarc,
+                    &function,
+                    &event.event_type,
+                    channel,
+                    time,
+                    &event.event,
+                );
+                debug_assert!(admitted, "pre-admitted Eventarc delivery must enqueue");
+            }
+        }
+        drop(inner);
+        drop(registry);
+        if delivery_count > 0 {
+            self.wake.notify_one();
+        }
+        Ok(delivery_count)
+    }
+
     /// Turns a user lifecycle event into events for every matching Auth trigger.
     pub fn on_user_event(&self, event: &UserEvent) {
         if !self.background_triggers_enabled() {
@@ -1706,7 +2015,10 @@ impl FunctionsRuntime {
     /// refuse while a run of the function is queued or running.
     fn admit_scheduled_run(&self, inner: &mut Inner, function: &str) -> bool {
         let busy = inner.running.values().any(|f| f == function)
-            || inner.payloads.values().any(|(f, _)| f == function);
+            || inner
+                .payloads
+                .values()
+                .any(|queued| queued.function == function);
         match self.config.overlap {
             OverlapPolicy::Skip if busy => {
                 inner.record_invocation(InvocationRecord {
@@ -1801,6 +2113,9 @@ impl FunctionsRuntime {
                 }
                 inner.outbox.discard_stale(epoch);
                 inner.payloads.clear();
+                inner.active_event_bytes = 0;
+                inner.active_eventarc_records = 0;
+                inner.active_eventarc_bytes = 0;
                 inner.running.clear();
                 inner.delayed.clear();
                 inner.catch_up_pending = false;
@@ -2809,9 +3124,10 @@ impl FunctionsRuntime {
             if inner.running.len() >= self.config.max_running {
                 break;
             }
-            let Some((function_name, _)) = inner.payloads.get(&id) else {
+            let Some(queued) = inner.payloads.get(&id) else {
                 continue;
             };
+            let function_name = &queued.function;
             let function_name = function_name.clone();
             let Some(spec) = self.manifest.get(&function_name) else {
                 continue;
@@ -2864,10 +3180,10 @@ impl FunctionsRuntime {
             let Ok(Some((attempt, epoch))) = leased else {
                 continue;
             };
-            let Some((_, payload)) = inner.payloads.get(&id) else {
+            let Some(queued) = inner.payloads.get(&id) else {
                 continue;
             };
-            let request = self.invoke_request(id, spec, attempt, epoch, payload);
+            let request = self.invoke_request(id, spec, attempt, epoch, &queued.payload);
             let key = format!("{}-{attempt}", id.value());
             inner.running.insert(key.clone(), function_name.clone());
             let runtime = self.clone();
@@ -2978,7 +3294,7 @@ impl FunctionsRuntime {
             // appends neither an invocation record nor a dead letter to the new epoch; only
             // the payload kept for the running invocation goes.
             if inner.epoch != epoch {
-                inner.payloads.remove(&id);
+                Self::remove_payload(&mut inner, id);
                 drop(inner);
                 self.idle.notify_waiters();
                 self.wake.notify_one();
@@ -3048,10 +3364,10 @@ impl FunctionsRuntime {
             });
             match outcome_of_record {
                 Ok(Retirement::Retired) => {
-                    inner.payloads.remove(&id);
+                    Self::remove_payload(&mut inner, id);
                 }
                 Ok(Retirement::DeadLettered) => {
-                    inner.payloads.remove(&id);
+                    Self::remove_payload(&mut inner, id);
                     inner.record_dead_letter(InvocationRecord {
                         event_id: id.value(),
                         function: function.to_owned(),
@@ -3344,6 +3660,131 @@ mod task_completion_tests {
         runtime
             .enqueue_task("demo-app", "us-central1", "taskB", &body("process-full"))
             .expect("a count-refused name remains reusable after capacity is released");
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn active_event_admission_is_bounded_and_retirement_refunds_its_bytes() {
+        let runtime = runtime().await;
+        let now = runtime.now();
+        let payload = json!({"ok": true});
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            for _ in 0..super::MAX_ACTIVE_EVENTARC_RECORDS {
+                assert!(FunctionsRuntime::enqueue(
+                    &mut inner,
+                    SessionId::new(7),
+                    super::EventSource::Eventarc,
+                    "customEvent",
+                    "com.example.done",
+                    "projects/demo-app/locations/us-central1/channels/custom",
+                    now,
+                    &payload,
+                ));
+            }
+            let retained = inner.active_event_bytes;
+            assert!(!FunctionsRuntime::enqueue(
+                &mut inner,
+                SessionId::new(7),
+                super::EventSource::Eventarc,
+                "customEvent",
+                "com.example.done",
+                "projects/demo-app/locations/us-central1/channels/custom",
+                now,
+                &payload,
+            ));
+            assert!(FunctionsRuntime::enqueue(
+                &mut inner,
+                SessionId::new(7),
+                super::EventSource::Firestore,
+                "customEvent",
+                "com.example.done",
+                "documents/reserved-for-other-sources",
+                now,
+                &payload,
+            ));
+            FunctionsRuntime::remove_payload(&mut inner, super::EventId::new(1));
+            assert!(inner.active_event_bytes < retained);
+            assert!(FunctionsRuntime::enqueue(
+                &mut inner,
+                SessionId::new(7),
+                super::EventSource::Eventarc,
+                "customEvent",
+                "com.example.done",
+                "projects/demo-app/locations/us-central1/channels/custom",
+                now,
+                &payload,
+            ));
+
+            inner.active_event_bytes = super::MAX_ACTIVE_EVENT_BYTES - 1;
+            assert!(FunctionsRuntime::can_admit_events(
+                &inner,
+                super::EventSource::Firestore,
+                0,
+                1
+            ));
+            assert!(!FunctionsRuntime::can_admit_events(
+                &inner,
+                super::EventSource::Firestore,
+                0,
+                2
+            ));
+            inner.active_event_bytes = 0;
+            inner.active_eventarc_bytes = super::MAX_ACTIVE_EVENTARC_BYTES - 1;
+            assert!(FunctionsRuntime::can_admit_events(
+                &inner,
+                super::EventSource::Eventarc,
+                0,
+                1
+            ));
+            assert!(!FunctionsRuntime::can_admit_events(
+                &inner,
+                super::EventSource::Eventarc,
+                0,
+                2
+            ));
+        }
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn reload_replaces_manual_eventarc_registrations_with_the_manifest_generation() {
+        let runtime = runtime().await;
+        let trigger = "us-central1-customEvent-manual";
+        let body = br#"{"eventTrigger":{"eventType":"com.example.done","channel":"locations/us-central1/channels/custom","eventFilters":{"region":"eu"}}}"#;
+        let parsed = crate::eventarc::parse_event_trigger("demo-app", trigger, body).unwrap();
+        runtime
+            .register_eventarc_trigger("demo-app", trigger, parsed)
+            .unwrap();
+        assert!(runtime
+            .eventarc_triggers()
+            .unwrap()
+            .to_string()
+            .contains(trigger));
+
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(20),
+        };
+        let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        let manifest = runtime.manifest().clone();
+        runtime
+            .reload_codebase(super::CodebaseSpec {
+                name: "default".to_owned(),
+                manifest,
+                runner: replacement,
+                spawn: Some(spec),
+                cleanup_dir: None,
+            })
+            .unwrap();
+        let table = runtime.eventarc_triggers().unwrap().to_string();
+        assert!(!table.contains(trigger));
+        assert!(table.contains("us-central1-customEvent-1-locations/us-central1/channels/custom"));
         runtime.shutdown().await;
     }
 }

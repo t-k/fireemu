@@ -1590,13 +1590,22 @@
     },
     {
       "id": "FN-EVENTARC-001",
-      "statement": "A custom event published on an Eventarc channel reaches every trigger whose type, channel and event filters match it, converted from the proto form on a custom channel and forwarded verbatim on the google channel that carries Firebase alerts.",
+      "statement": "A custom event published on an Eventarc channel reaches every current-generation live registration whose type, full project-qualified channel and event filters match it, converted from the proto form on a custom channel and forwarded verbatim on the google channel that carries Firebase alerts; exact removal stops delivery, reload replaces the trigger generation, registration and whole-publish admission are atomically bounded, and getTriggers exposes the same table.",
       "criticality": "important",
       "owner": "adapter-functions",
       "status": "implemented",
+      "note": "Registration bodies are parsed once under an expanded 256 KiB bound. The live registry is owned by FunctionsRuntime, so publish, removal and reload share the registry-first lock order; custom channels compare full project-qualified resources. Registry lookup is indexed by event type and canonical channel. A publish accepts at most 256 input events, serializes each converted payload once for planning, and reserves its complete fault-expanded batch before enqueue against 256-delivery, 4096-active-record and 64 MiB active-byte ceilings; Eventarc's 3072-record and 48 MiB share leaves a reservation for other trigger sources. Removal intentionally compares semantic JSON objects instead of the firebase-tools JSON.stringify member-order accident, and reload publishes only the current exact region/name/generation keys.",
       "artifacts": {
         "integration": [
-          "crates/fireemu-adapter-functions/src/eventarc.rs"
+          "crates/fireemu-adapter-functions/src/eventarc.rs",
+          "crates/fireemu-adapter-functions/tests/app_check_callable.rs"
+        ],
+        "mutation": [
+          "M-EVENTARC-REGISTRY-001",
+          "M-EVENTARC-REGISTRY-002",
+          "M-EVENTARC-REGISTRY-003",
+          "M-EVENTARC-PROJECT-001",
+          "M-EVENTARC-RELOAD-001"
         ]
       }
     },

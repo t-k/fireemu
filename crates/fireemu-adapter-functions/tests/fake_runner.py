@@ -127,6 +127,7 @@ send({
             {"name": "nightly", "trigger": {"type": "schedule", "schedule": "0 3 * * *"}},
             {"name": "failSchedule", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "retryConfig": {"retryCount": 2, "minBackoffSeconds": 3, "maxBackoffSeconds": 30, "maxDoublings": 1, "maxRetrySeconds": 60}}, "retry": True},
             {"name": "onJob", "trigger": {"type": "pubsub", "topic": "jobs"}},
+            {"name": "customEvent", "generation": 2, "trigger": {"type": "eventarc", "eventType": "com.example.done", "channel": "locations/us-central1/channels/custom", "filters": {"region": "eu"}}},
             {"name": "onUser", "trigger": {"type": "auth", "eventType": "google.firebase.auth.user.v1.created"}},
             {"name": "onGone", "trigger": {"type": "auth", "eventType": "providers/firebase.auth/eventTypes/user.delete"}},
             {"name": "withAuth", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.written.withAuthContext", "document": "audited/{id}"}},

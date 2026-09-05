@@ -121,6 +121,13 @@ impl RequestAdmission {
 fn request_body_limit(surface: HttpSurface, path: &str) -> usize {
     if surface == HttpSurface::Tasks && crate::tasks::route(path).is_some() {
         MAX_TASK_BODY_BYTES
+    } else if surface == HttpSurface::Eventarc
+        && matches!(
+            crate::eventarc::route(path),
+            Some(crate::eventarc::Route::Register { .. } | crate::eventarc::Route::Remove { .. })
+        )
+    {
+        crate::eventarc::MAX_TRIGGER_DEFINITION_BYTES
     } else {
         MAX_FUNCTION_BODY_BYTES
     }
@@ -850,7 +857,14 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
     let Some(events) = parsed.get("events").and_then(serde_json::Value::as_array) else {
         return simple(StatusCode::BAD_REQUEST, "Bad Request");
     };
+    if events.len() > crate::eventarc::MAX_EVENTS_PER_PUBLISH {
+        return simple(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Eventarc event count exceeded",
+        );
+    }
     let google = channel == crate::eventarc::GOOGLE_CHANNEL;
+    let mut published = Vec::with_capacity(events.len());
     for event in events {
         // The sentinel `google` channel forwards verbatim; a custom channel converts the
         // proto form the Admin SDK publishes. That branch is the official one, and it is why
@@ -862,22 +876,30 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
             crate::eventarc::convert(event)
         };
         match converted {
-            Ok(published) => {
-                let delivered = runtime.publish_custom_event(
-                    channel,
-                    &published.event_type,
-                    &published.attributes,
-                    &published.event,
-                );
-                eprintln!(
-                    "[functions] eventarc: {} on {channel} reached {delivered} function(s)",
-                    published.event_type
-                );
-            }
+            Ok(event) => published.push(event),
             Err(why) => return simple(StatusCode::BAD_REQUEST, &why),
         }
     }
-    simple(StatusCode::OK, "OK")
+    match runtime.publish_registered_custom_events(channel, &published) {
+        Ok(delivered) => {
+            eprintln!(
+                "[functions] eventarc: {} event(s) on {channel} reached {delivered} function(s)",
+                published.len()
+            );
+            simple(StatusCode::OK, "OK")
+        }
+        Err(crate::runtime::EventarcPublishError::Capacity) => simple(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Eventarc delivery capacity exceeded",
+        ),
+        Err(crate::runtime::EventarcPublishError::InvalidEvent) => {
+            simple(StatusCode::BAD_REQUEST, "Bad Request")
+        }
+        Err(crate::runtime::EventarcPublishError::Unavailable) => simple(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Eventarc registry unavailable",
+        ),
+    }
 }
 
 /// An answer produced instead of proxying: a 404, a denial, a refused origin.
@@ -1080,28 +1102,108 @@ async fn drain_refused_body(mut body: Incoming) {
     let _ = tokio::time::timeout(REQUEST_READ_TIMEOUT, drain).await;
 }
 
+fn eventarc_mutation_response(result: Result<(), String>) -> Response<OutBody> {
+    match result {
+        Ok(()) => typed(
+            StatusCode::OK,
+            "application/json",
+            &serde_json::json!({"res": "OK"}).to_string(),
+        ),
+        Err(error) => typed(
+            if error == "Eventarc registry unavailable." {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::BAD_REQUEST
+            },
+            "application/json",
+            &serde_json::json!({"error": error}).to_string(),
+        ),
+    }
+}
+
+async fn respond_eventarc_surface(
+    runtime: &FunctionsRuntime,
+    req: Request<Incoming>,
+    body_limit: usize,
+    origin: Option<&str>,
+) -> Response<OutBody> {
+    let Some(route) = crate::eventarc::route(req.uri().path()) else {
+        drain_refused_body(req.into_body()).await;
+        return simple(StatusCode::NOT_FOUND, "Not Found");
+    };
+    match route {
+        crate::eventarc::Route::GetTriggers if req.method() == hyper::Method::GET => {
+            let response = runtime.eventarc_triggers().map_or_else(
+                |_| {
+                    simple(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Eventarc registry unavailable",
+                    )
+                },
+                |body| typed(StatusCode::OK, "application/json", &body.to_string()),
+            );
+            with_local_cors(response, origin)
+        }
+        crate::eventarc::Route::Publish {
+            project: _,
+            channel,
+        } if req.method() == hyper::Method::POST => {
+            let response = match collect_body(req.into_body(), body_limit).await {
+                Ok(body) => publish_events(runtime, &channel, &body),
+                Err(answer) => *answer,
+            };
+            with_local_cors(
+                response,
+                (channel == crate::eventarc::GOOGLE_CHANNEL)
+                    .then_some(origin)
+                    .flatten(),
+            )
+        }
+        crate::eventarc::Route::Register { project, trigger }
+            if req.method() == hyper::Method::POST =>
+        {
+            let body = match collect_body(req.into_body(), body_limit).await {
+                Ok(body) => body,
+                Err(answer) => return *answer,
+            };
+            let parsed = match crate::eventarc::parse_event_trigger(&project, &trigger, &body) {
+                Ok(parsed) => parsed,
+                Err(error) => return eventarc_mutation_response(Err(error)),
+            };
+            eventarc_mutation_response(
+                runtime.register_eventarc_trigger(&project, &trigger, parsed),
+            )
+        }
+        crate::eventarc::Route::Remove { project, trigger }
+            if req.method() == hyper::Method::POST =>
+        {
+            let body = match collect_body(req.into_body(), body_limit).await {
+                Ok(body) => body,
+                Err(answer) => return *answer,
+            };
+            let parsed = match crate::eventarc::parse_event_trigger(&project, &trigger, &body) {
+                Ok(parsed) => parsed,
+                Err(error) => return eventarc_mutation_response(Err(error)),
+            };
+            eventarc_mutation_response(runtime.remove_eventarc_trigger(&project, &trigger, parsed))
+        }
+        _ => {
+            drain_refused_body(req.into_body()).await;
+            simple(StatusCode::NOT_FOUND, "Not Found")
+        }
+    }
+}
+
 async fn respond_support_surface(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
     body_limit: usize,
     surface: HttpSurface,
+    origin: Option<&str>,
 ) -> Response<OutBody> {
     let path = req.uri().path().to_owned();
     match surface {
-        HttpSurface::Eventarc => {
-            if req.method() != hyper::Method::POST {
-                drain_refused_body(req.into_body()).await;
-                return simple(StatusCode::NOT_FOUND, "Not Found");
-            }
-            let Some(channel) = crate::eventarc::publish_channel(&path) else {
-                drain_refused_body(req.into_body()).await;
-                return simple(StatusCode::NOT_FOUND, "Not Found");
-            };
-            match collect_body(req.into_body(), body_limit).await {
-                Ok(body) => publish_events(&runtime, &channel, &body),
-                Err(answer) => *answer,
-            }
-        }
+        HttpSurface::Eventarc => respond_eventarc_surface(&runtime, req, body_limit, origin).await,
         HttpSurface::Tasks => {
             let Some(route) = crate::tasks::route(&path) else {
                 drain_refused_body(req.into_body()).await;
@@ -1180,7 +1282,9 @@ async fn respond(
         Err(refusal) => return Ok(*refusal),
     };
     if surface != HttpSurface::Functions {
-        return Ok(respond_support_surface(runtime, req, body_limit, surface).await);
+        return Ok(
+            respond_support_surface(runtime, req, body_limit, surface, origin.as_deref()).await,
+        );
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
         Ok(resolved) => resolved,
@@ -1200,18 +1304,14 @@ async fn respond(
     // whole method list), so a callable's request is forwarded untouched.
     let (callable, plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
     let streaming = streaming_callable && accepts_callable_stream(req.headers());
-    if callable && method == "OPTIONS" {
-        return Ok(match callable_preflight(req.headers()) {
-            Some(answer) => answer,
-            None => simple(StatusCode::FORBIDDEN, "forbidden callable preflight"),
-        });
-    }
-    if plain_http && method == "OPTIONS" {
-        if let Some(origin) = &origin {
-            if req.headers().contains_key("access-control-request-method") {
-                return Ok(preflight_answer(origin, req.headers()));
-            }
-        }
+    if let Some(answer) = function_preflight(
+        callable,
+        plain_http,
+        &method,
+        req.headers(),
+        origin.as_deref(),
+    ) {
+        return Ok(answer);
     }
     let headers: Vec<(String, String)> = req
         .headers()
@@ -1307,6 +1407,25 @@ fn preflight_answer(origin: &str, headers: &hyper::HeaderMap) -> Response<OutBod
     builder
         .body(full(Bytes::new()))
         .unwrap_or_else(|_| Response::new(full(Bytes::new())))
+}
+
+fn function_preflight(
+    callable: bool,
+    plain_http: bool,
+    method: &str,
+    headers: &hyper::HeaderMap,
+    origin: Option<&str>,
+) -> Option<Response<OutBody>> {
+    if callable && method == "OPTIONS" {
+        return Some(
+            callable_preflight(headers)
+                .unwrap_or_else(|| simple(StatusCode::FORBIDDEN, "forbidden callable preflight")),
+        );
+    }
+    if plain_http && method == "OPTIONS" && headers.contains_key("access-control-request-method") {
+        return origin.map(|origin| preflight_answer(origin, headers));
+    }
+    None
 }
 
 /// A proxy-owned callable preflight response.
@@ -1480,6 +1599,13 @@ mod admission_tests {
         assert_eq!(
             request_body_limit(HttpSurface::Eventarc, route),
             MAX_FUNCTION_BODY_BYTES
+        );
+        assert_eq!(
+            request_body_limit(
+                HttpSurface::Eventarc,
+                "/emulator/v1/projects/demo-app/triggers/us-central1-worker-0"
+            ),
+            crate::eventarc::MAX_TRIGGER_DEFINITION_BYTES
         );
         assert_eq!(
             request_body_limit(HttpSurface::Functions, "/demo-app/us-central1/ordinary"),

@@ -173,7 +173,7 @@ fn emails_and_phone_numbers_are_validated_and_unique_across_users() {
 }
 
 #[test]
-fn duplicate_email_mode_creates_a_distinct_idp_account_but_keeps_password_signup_unique() {
+fn duplicate_email_mode_allows_distinct_accounts_and_keeps_the_latest_lookup_target() {
     let mut s = store();
     let password_user = s
         .create_user(NewUser::email("shared@example.com"), t0())
@@ -183,10 +183,14 @@ fn duplicate_email_mode_creates_a_distinct_idp_account_but_keeps_password_signup
         ..ProjectAuthConfig::default()
     });
 
+    let password_user_2 = s
+        .create_user(NewUser::email("shared@example.com"), t(1))
+        .expect("duplicate-email mode permits another password/Admin account");
+    assert_ne!(password_user, password_user_2);
     assert_eq!(
-        s.create_user(NewUser::email("shared@example.com"), t(1)),
-        Err(AuthError::EmailExists),
-        "the official emulator keeps password and Admin account creation unique"
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        password_user_2,
+        "the latest password/Admin account is the active email lookup target"
     );
 
     let result = s

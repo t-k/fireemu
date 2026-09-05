@@ -134,7 +134,7 @@
     "upgradePolicy": "Bumping the pin in conformance/package.json and re-recording turns every newly detected difference into a debt row in conformance/DEBT.md, because a row can only become a documented divergence once a human writes it into conformance/divergences.json. Any surface the new baseline adds is absent from this contract, so compat-check fails until it is enumerated with a scope; until then the claim sentence names the old version and is therefore false, which is the intended fail-closed behaviour."
   },
   "claim": {
-    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub and Cloud Tasks remain open gaps.",
+    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.",
     "documents": [
       "README.md"
     ],
@@ -805,8 +805,8 @@
       ],
       "notes": [],
       "gaps": [
-        "multi-tenancy (tenant-scoped projects and the tenant admin forms); the official emulator has no Game Center sign-in route and Firebase Auth has no passkey provider, so neither is a gap. SAML / OIDC sign-in (accounts:signInWithIdp) and the identity-provider widget pages (/emulator/auth/handler and /emulator/auth/iframe) are served; the official emulator stores no SAML / OIDC provider configuration, so there is none to round-trip.",
-        "signIn.allowDuplicateEmails is recorded and exported but does not yet admit duplicate accounts"
+        "raw inbound OAuth credentials remain intentionally unavailable to the synchronous Auth hook bridge because forwardInboundCredentials is not enabled; the local emulator accepts the provider assertion and exposes its normalized claims instead",
+        "Android, Apple and Unity SDK matrices are outside the current Node/Web/REST/gRPC compatibility scope"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
@@ -1573,21 +1573,53 @@
       "officialTraits": [
         "downloadable"
       ],
-      "state": "gap",
-      "decision": "Active supported surface with an open gap: fireemu serves its own Emulator UI, but no capability manifest entry claims parity with the official UI's workflows and none is recorded in the conformance corpus.",
+      "state": "claimed",
+      "decision": "Active supported surface with a scoped workflow claim. The fireemu UI covers the supported Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts journeys; the official UI v1.15.0 Logs browser boundary is separately verified against the Hub and the same Logging WebSocket. Android, Apple and Unity matrices and optional accessibility/visual snapshots remain outside this claim.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite"
       ],
       "issues": [
         "docs.local/issues/open/match-emulator-suite-ui-workflows.md"
       ],
-      "notes": [],
+      "notes": [
+        "the fireemu UI is an independent Solid application, so workflow parity is measured by reachable state and operation results rather than pixel identity",
+        "the official UI is a downloadable artifact (ui.main 1.15.0); its Logs page is verified through the Hub and fireemu's Logging WebSocket, while fireemu's own UI uses its bounded SSE log view"
+      ],
       "gaps": [
-        "the official UI's Firestore, Auth, Storage, Functions and Extensions workflows are not compared against any oracle",
-        "the official UI is a downloadable artifact (ui.main 1.15.0); fireemu embeds its own Solid application instead"
+        "Android, Apple and Unity SDK/browser matrices",
+        "optional accessibility and visual-snapshot coverage",
+        "Realtime Database and Extensions remain deferred or not planned product surfaces"
       ],
       "prohibitedClaimTerms": [],
-      "claims": []
+      "claims": [
+        {
+          "id": "UI-CLAIM-WORKFLOWS",
+          "statement": "The fireemu UI supports the scoped active-product workflows for Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts, labels deferred and not-planned products, and exposes the same Hub-discovered Logging endpoint used by the official UI Logs browser journey.",
+          "capabilities": [],
+          "evidence": {
+            "integration": [
+              "ui/e2e/overview.spec.ts",
+              "ui/e2e/rules.spec.ts",
+              "ui/e2e/alerts.spec.ts",
+              "ui/e2e/official-logging.spec.ts",
+              "crates/fireemu-adapter-ui/tests/ui.rs",
+              "ui/e2e/security.spec.ts"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official UI is a downloadable browser artifact and its visual layout is not a stable API contract"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "the fireemu UI exposes deterministic runtime controls and a bounded SSE log view in addition to the scoped product workflows",
+              "precision": "explicit-extension"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "cli",
@@ -1891,7 +1923,10 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [
-        "not yet implemented and reported UNIMPLEMENTED: snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / DeleteSnapshot and seek-to-snapshot), push delivery to an endpoint (pull and streaming pull are the delivery paths), UpdateTopic, and REST/JSON transcoding on the port (the surface is gRPC-only, which is what the @google-cloud/pubsub and firebase-admin clients speak through PUBSUB_EMULATOR_HOST)"
+        "Pub/Sub snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / ListTopicSnapshots / UpdateSnapshot / DeleteSnapshot and seek-to-snapshot) are implemented over the shared broker state, and validated by the adapter lifecycle test",
+        "push delivery is implemented for loopback HTTP endpoints with bounded workers, acknowledgement on 2xx, finite retry and nack on failure; remote, HTTPS and redirect endpoints are refused as a local safety boundary",
+        "REST/JSON transcoding on the Pub/Sub port is not implemented; the pinned client and downloadable emulator evidence for this baseline use the gRPC google.pubsub.v1 surface",
+        "Avro/protobuf schema management and BigQuery / Cloud Storage subscription delivery remain outside the active implementation; the official emulator's documented unsupported delivery limitations are preserved"
       ],
       "gaps": [],
       "prohibitedClaimTerms": [],
@@ -2035,9 +2070,7 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [],
-      "gaps": [
-        "the emulator-internal queueStats diagnostic route"
-      ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
       "claims": [
         {

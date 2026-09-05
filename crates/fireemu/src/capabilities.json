@@ -171,7 +171,7 @@
       "GET /v1/projects and /v1/recaptchaParams (the fixed documents the official emulator serves)",
       "securetoken token (JSON and form)",
       "Admin: projects/{p}/accounts create/lookup/update/delete/batchGet/batchCreate/batchDelete/query/sendOobCode and projects/{p}:createSessionCookie; mfaInfo / mfa.enrollments (phone), linkProviderUserInfo / deleteProvider",
-      "Emulator routes: /emulator/v1/projects/{p}/oobCodes, verificationCodes, accounts (DELETE), config (GET and PATCH: signIn.allowDuplicateEmails is recorded for export, emailPrivacyConfig.enableImprovedEmailPrivacy changes what signInWithPassword, sendOobCode PASSWORD_RESET and createAuthUri reveal)"
+      "Emulator routes: /emulator/v1/projects/{p}/oobCodes, verificationCodes, accounts (DELETE), config (GET and PATCH: signIn.allowDuplicateEmails changes password-account uniqueness and lookup/sign-in selection, emailPrivacyConfig.enableImprovedEmailPrivacy changes what signInWithPassword, sendOobCode PASSWORD_RESET and createAuthUri reveal)"
     ],
     "notes": [
       "nothing is mailed or texted: codes are read from the emulator routes and are deterministic from the session seed",
@@ -309,6 +309,7 @@
       "Firebase alerts (the whole onAlertPublished family) fed by POST /google/publishEvents, which is the only door the official emulator has for them too: an alert trigger is an Eventarc trigger on the sentinel google channel, and the CloudEvent is forwarded verbatim",
       "the Eventarc listener maintains the live Functions trigger table through POST /emulator/v1/projects/{project}/triggers/{trigger}, its exact removal counterpart and GET /google/getTriggers; duplicate definitions remain visible and dispatch independently, removal stops delivery immediately, ${PROJECT_ID} is substituted, and count and retained-byte admission are atomic and bounded",
       "Cloud Tasks queue functions (onTaskDispatched) enqueued with the Admin SDK's getFunctions().taskQueue(name).enqueue(payload) against CLOUD_TASKS_EMULATOR_HOST, which names the dedicated Tasks port; the queue is the function, its defaultUri is that function's own URL, and a dispatch carries the official X-CloudTasks-* header set, starts from the official empty token bucket, enforces maxConcurrentDispatches and production's maxDispatchesPerSecond contract across initial and retry attempts, and retries on the official backoff",
+      "GET /queueStats on the Tasks listener reports the pinned queue statistics shape (pending count, five-minute added/failed rates, completed-last-minute count, running slots and configured limits) without mutating queue state",
       "retries with virtual-time backoff, dead letters, await-idle",
       "bounded diagnostic retention: the 1000 most recent invocation records, 500 dead letters and 1000 terminal event records are kept (older ones are dropped) while the succeeded / deadLettered / overlapRejected counters stay cumulative; every retained record carries a monotonic sequence inside a generation the reset bumps, and the UI log stream consumes cursor deltas and resyncs when its cursor is expired or from an older generation"
     ],
@@ -336,21 +337,21 @@
       "the google.pubsub.v1 Publisher and Subscriber services over gRPC on the loopback port PUBSUB_EMULATOR_HOST names (default 8085): CreateTopic / GetTopic / ListTopics / ListTopicSubscriptions / DeleteTopic, CreateSubscription / GetSubscription / UpdateSubscription / ListSubscriptions / DeleteSubscription, Publish, Pull, StreamingPull, Acknowledge, ModifyAckDeadline and Seek (to a timestamp)",
       "topic and subscription state: publish fans a message out to every subscription whose filter admits it; a subscription reports _deleted-topic_ once its topic is deleted",
       "delivery semantics: ack ids and message ids assigned deterministically under the daemon seed, ack deadlines and redelivery of unacked messages on the virtual clock, nack (ModifyAckDeadline 0) for immediate redelivery, ordering keys that hold a key's later messages until the earlier one is acked, subscription filters over attributes (equality, inequality, existence, hasPrefix, NOT/AND/OR), dead-letter forwarding after maxDeliveryAttempts, and seek-to-timestamp replay",
+      "Pub/Sub-native subscription snapshots: CreateSnapshot / GetSnapshot / ListSnapshots / ListTopicSnapshots / UpdateSnapshot / DeleteSnapshot and seek-to-snapshot preserve the captured acknowledgement boundary with a bounded seven-day local lifetime",
+      "loopback HTTP push delivery for configured subscriptions: the Pub/Sub JSON push envelope is sent sequentially by bounded workers, a 2xx response acknowledges the message, and finite failures nack the message for pull-compatible redelivery",
       "input hardening: resource names validated against the documented Pub/Sub rules (3..=255, leading letter, the [A-Za-z0-9._~%+-] alphabet, no goog prefix), message size and attribute count bounds, and NUL rejection in attribute keys/values and ordering keys; topics, subscriptions and retained messages are bounded so a client cannot exhaust memory",
       "a message published through the wire protocol also reaches subscribed Cloud Functions (onMessagePublished v2, topic().onPublish v1) through the existing FunctionsRuntime delivery path, so EVTINFRA-02 flows through real topic state without regressing the control publish route"
     ],
     "unimplemented": [
-      "snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / DeleteSnapshot) and seek-to-snapshot: reported UNIMPLEMENTED",
-      "push delivery to an endpoint: a push config is accepted and returned but delivery uses pull and streaming pull",
       "UpdateTopic: reported UNIMPLEMENTED, as the official emulator does not support it either",
-      "REST/JSON transcoding on the port: the surface is gRPC-only, which is what the @google-cloud/pubsub and firebase-admin clients speak",
+      "REST/JSON transcoding on the port: the active wire surface is gRPC-only, which is what the @google-cloud/pubsub and firebase-admin clients speak",
       "schemas (Avro or protobuf) and BigQuery / Cloud Storage subscription delivery"
     ],
     "notes": [
       "conformance: the pubsub-probe records 22 parity steps and 1 documented divergence against the official pubsub-emulator 0.8.35 (conformance/pubsub-matrix.json, conformance/PUBSUB-MATRIX.md, conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
       "the one documented divergence is a superset: fireemu retains acknowledged messages for seek even when retainAckedMessages is false, so a seek never returns fewer messages than the official emulator (conformance divergences.json pubsub-probe/seek-to-time#replayed)",
       "ack deadlines and redelivery run on the virtual clock, so a test advances time with the control clock rather than sleeping, and await-idle stays deterministic",
-      "the Pub/Sub broker state lives for the daemon's lifetime and is not yet wiped by a session reset or captured by a snapshot"
+      "the Pub/Sub broker state lives for the daemon's lifetime and is not yet wiped by a session reset or captured by a fireemu session snapshot; Pub/Sub-native snapshots are scoped to broker subscription acknowledgement state"
     ]
   },
   "FN-HTTP-1": {

@@ -313,6 +313,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         tenancy.clone(),
         app_check_gate.clone(),
         &pubsub_state,
+        &pubsub_handle,
         &pubsub_resources,
     ));
     Ok(ServiceAssembly {

@@ -484,17 +484,98 @@ impl SubscriptionState {
             .collect()
     }
 
+    /// Returns the shared message records retained at the snapshot boundary, in subscription
+    /// order. The returned arcs let snapshots keep the payload alive without copying it.
+    #[must_use]
+    pub fn retained_messages(&self) -> Vec<Arc<StoredMessage>> {
+        self.entries
+            .iter()
+            .map(|entry| Arc::clone(&entry.stored))
+            .collect()
+    }
+
     /// Restores the acknowledgement state captured by a snapshot. Messages that were in the
     /// source backlog remain available, and messages published after the snapshot was created
     /// are also available. Older messages that were acknowledged at snapshot creation stay
     /// acknowledged.
     pub fn seek_to_snapshot(
         &mut self,
+        captured_messages: &[Arc<StoredMessage>],
         retained_message_ids: &BTreeSet<String>,
         unacknowledged_message_ids: &BTreeSet<String>,
         created_at: LogicalInstant,
         now: LogicalInstant,
-    ) {
+    ) -> Result<()> {
+        let existing_ids = self
+            .entries
+            .iter()
+            .map(|entry| entry.stored.message_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let missing_messages = captured_messages
+            .iter()
+            .filter(|message| {
+                retained_message_ids.contains(&message.message_id)
+                    && !existing_ids.contains(message.message_id.as_str())
+                    && self.admits(&message.message.attributes)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let acked_count = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == Delivery::Acked)
+            .count();
+        let acked_bytes = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == Delivery::Acked)
+            .map(|entry| Self::message_bytes(&entry.stored))
+            .sum::<usize>();
+        let missing_bytes = missing_messages
+            .iter()
+            .map(|message| Self::message_bytes(message))
+            .sum::<usize>();
+        let entries_without_acked = self.entries.len().saturating_sub(acked_count);
+        let bytes_without_acked = self.retained_bytes.saturating_sub(acked_bytes);
+        let entries_after = self.entries.len().saturating_add(missing_messages.len());
+        let bytes_after = self.retained_bytes.saturating_add(missing_bytes);
+        let can_reclaim_acked =
+            entries_after > MAX_RETAINED_PER_SUB || bytes_after > MAX_RETAINED_BYTES_PER_SUB;
+        if can_reclaim_acked {
+            if entries_without_acked.saturating_add(missing_messages.len()) > MAX_RETAINED_PER_SUB
+                || bytes_without_acked.saturating_add(missing_bytes) > MAX_RETAINED_BYTES_PER_SUB
+            {
+                return Err(PubSubError::resource_exhausted(format!(
+                    "subscription {} cannot restore the snapshot within its retention bounds",
+                    self.config.name.to_full()
+                )));
+            }
+            self.entries.retain(|entry| entry.state != Delivery::Acked);
+            self.rebuild_indexes();
+        } else if entries_after > MAX_RETAINED_PER_SUB || bytes_after > MAX_RETAINED_BYTES_PER_SUB {
+            return Err(PubSubError::resource_exhausted(format!(
+                "subscription {} cannot restore the snapshot within its retention bounds",
+                self.config.name.to_full()
+            )));
+        }
+
+        let insertion_index = self
+            .entries
+            .iter()
+            .position(|entry| {
+                !retained_message_ids.contains(&entry.stored.message_id)
+                    && entry.stored.publish_time >= created_at
+            })
+            .unwrap_or(self.entries.len());
+        self.entries.splice(
+            insertion_index..insertion_index,
+            missing_messages.into_iter().map(|stored| Entry {
+                stored,
+                state: Delivery::Available { available_at: now },
+                delivery_attempt: 0,
+            }),
+        );
         for entry in &mut self.entries {
             if unacknowledged_message_ids.contains(&entry.stored.message_id)
                 || (!retained_message_ids.contains(&entry.stored.message_id)
@@ -507,6 +588,7 @@ impl SubscriptionState {
             }
         }
         self.rebuild_indexes();
+        Ok(())
     }
 }
 

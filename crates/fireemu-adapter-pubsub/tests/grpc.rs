@@ -1,7 +1,7 @@
 //! End-to-end tests over the real gRPC surface: a tonic client drives create / publish / pull /
 //! ack / filter / redelivery against a served adapter on a loopback port.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -73,12 +73,27 @@ type PushSink = (
     thread::JoinHandle<()>,
 );
 
+type BarrierPushSink = (
+    String,
+    Arc<Mutex<Vec<Vec<u8>>>>,
+    tokio::sync::oneshot::Receiver<()>,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    thread::JoinHandle<()>,
+);
+
 fn push_sink(status: u16) -> PushSink {
+    push_sink_sequence(vec![status])
+}
+
+fn push_sink_sequence(statuses: Vec<u16>) -> PushSink {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let received = bodies.clone();
+    let statuses = Arc::new(Mutex::new(VecDeque::from(statuses)));
+    let response_statuses = statuses.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let should_stop = stop.clone();
     let worker = thread::spawn(move || {
@@ -129,6 +144,7 @@ fn push_sink(status: u16) -> PushSink {
                     .unwrap()
                     .push(request[body_start..body_start + content_length].to_vec());
             }
+            let status = response_statuses.lock().unwrap().pop_front().unwrap_or(204);
             let response =
                 format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             let _ = stream.write_all(response.as_bytes());
@@ -136,6 +152,93 @@ fn push_sink(status: u16) -> PushSink {
         }
     });
     (format!("http://{address}/push"), bodies, stop, worker)
+}
+
+fn barrier_push_sink() -> BarrierPushSink {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let received = bodies.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let should_stop = stop.clone();
+    let release = Arc::new(AtomicBool::new(false));
+    let can_release = release.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let worker = thread::spawn(move || {
+        let mut first = true;
+        let mut started_tx = Some(started_tx);
+        while !should_stop.load(Ordering::Acquire) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                thread::sleep(std::time::Duration::from_millis(2));
+                continue;
+            };
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let body_start = loop {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break None;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break Some(index + 4);
+                }
+            };
+            let Some(body_start) = body_start else {
+                continue;
+            };
+            let content_length = request
+                .windows(b"content-length:".len())
+                .position(|window| window.eq_ignore_ascii_case(b"content-length:"))
+                .and_then(|index| {
+                    let line = request[index..].split(|byte| *byte == b'\n').next()?;
+                    std::str::from_utf8(line)
+                        .ok()?
+                        .split(':')
+                        .nth(1)?
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                })
+                .unwrap_or_default();
+            while request.len() < body_start.saturating_add(content_length) {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+            }
+            if request.len() < body_start.saturating_add(content_length) {
+                continue;
+            }
+            received
+                .lock()
+                .unwrap()
+                .push(request[body_start..body_start + content_length].to_vec());
+            if first {
+                first = false;
+                if let Some(sender) = started_tx.take() {
+                    let _ = sender.send(());
+                }
+                while !can_release.load(Ordering::Acquire) && !should_stop.load(Ordering::Acquire) {
+                    thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.flush();
+        }
+    });
+    (
+        format!("http://{address}/push"),
+        bodies,
+        started_rx,
+        release,
+        stop,
+        worker,
+    )
 }
 
 #[tokio::test]
@@ -627,4 +730,203 @@ async fn push_subscription_delivers_json_and_acknowledges_the_message() {
     assert!(pulled.is_empty());
     stop.store(true, Ordering::Release);
     worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn push_subscription_retries_after_failures_without_a_new_publish() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![500, 500, 500, 204]);
+    let topic = "projects/demo-app/topics/push-retry";
+    let subscription = "projects/demo-app/subscriptions/push-retry";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"retry-me")],
+    })
+    .await
+    .unwrap();
+
+    for _ in 0..200 {
+        if bodies.lock().unwrap().len() >= 4 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(bodies.lock().unwrap().len(), 4);
+    let pulled = subc
+        .pull(pb::PullRequest {
+            subscription: subscription.to_owned(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert!(pulled.is_empty());
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn push_endpoint_update_only_changes_deliveries_not_started_before_the_update() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (old_endpoint, old_bodies, started, release, stop_old, worker_old) = barrier_push_sink();
+    let (new_endpoint, new_bodies, stop_new, worker_new) = push_sink(204);
+    let topic = "projects/demo-app/topics/push-update";
+    let subscription = "projects/demo-app/subscriptions/push-update";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: old_endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"first"), msg(b"second")],
+    })
+    .await
+    .unwrap();
+    started.await.unwrap();
+
+    subc.modify_push_config(pb::ModifyPushConfigRequest {
+        subscription: subscription.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: new_endpoint,
+            ..Default::default()
+        }),
+    })
+    .await
+    .unwrap();
+    release.store(true, Ordering::Release);
+
+    for _ in 0..200 {
+        if !new_bodies.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(old_bodies.lock().unwrap().len(), 1);
+    assert_eq!(new_bodies.lock().unwrap().len(), 1);
+    stop_old.store(true, Ordering::Release);
+    stop_new.store(true, Ordering::Release);
+    worker_old.join().unwrap();
+    worker_new.join().unwrap();
+}
+
+#[tokio::test]
+async fn deleting_and_recreating_a_subscription_invalidates_the_old_push_generation() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (old_endpoint, old_bodies, started, release, stop_old, worker_old) = barrier_push_sink();
+    let (new_endpoint, new_bodies, stop_new, worker_new) = push_sink(204);
+    let topic = "projects/demo-app/topics/push-recreate";
+    let subscription = "projects/demo-app/subscriptions/push-recreate";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: old_endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"old-generation")],
+    })
+    .await
+    .unwrap();
+    started.await.unwrap();
+
+    subc.delete_subscription(pb::DeleteSubscriptionRequest {
+        subscription: subscription.to_owned(),
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: new_endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"new-generation")],
+    })
+    .await
+    .unwrap();
+    release.store(true, Ordering::Release);
+
+    for _ in 0..200 {
+        if !new_bodies.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(old_bodies.lock().unwrap().len(), 1);
+    assert_eq!(new_bodies.lock().unwrap().len(), 1);
+    let pulled = subc
+        .pull(pb::PullRequest {
+            subscription: subscription.to_owned(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert!(pulled.is_empty());
+    stop_old.store(true, Ordering::Release);
+    stop_new.store(true, Ordering::Release);
+    worker_old.join().unwrap();
+    worker_new.join().unwrap();
 }

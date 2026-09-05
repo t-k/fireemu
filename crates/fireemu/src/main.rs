@@ -2175,6 +2175,7 @@ fn control_state(
     tenancy: fireemu_core_session::tenancy::SharedTenancy,
     app_check: Option<fireemu_core_app_check::AppCheckGate>,
     pubsub: &Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
+    pubsub_handle: &fireemu_adapter_pubsub::PubSubHandle,
     pubsub_resources: &[functions::FunctionPubSubResource],
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
@@ -2211,9 +2212,11 @@ fn control_state(
         reset_hooks.push(Arc::new(move || runtime.reset()) as Arc<dyn Fn() + Send + Sync>);
     }
     let pubsub = pubsub.clone();
+    let pubsub_handle = pubsub_handle.clone();
     let pubsub_resources = pubsub_resources.to_vec();
     let pubsub_project = cfg.auth_project.clone();
     reset_hooks.push(Arc::new(move || {
+        pubsub_handle.invalidate_all_push_workers();
         if let Ok(mut state) = pubsub.lock() {
             state.clear_project(&pubsub_project);
             functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)

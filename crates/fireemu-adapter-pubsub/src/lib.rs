@@ -21,9 +21,10 @@
 mod convert;
 mod publisher;
 mod push;
+mod rest;
 mod subscriber;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_pubsub::PubSubState;
@@ -42,6 +43,7 @@ pub use subscriber::SubscriberService;
 pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PUSH_WORKERS: usize = 256;
 const MAX_PUSH_ATTEMPTS: usize = 3;
+const PUSH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// A message handed to the functions bridge for topic-trigger delivery.
 #[derive(Debug, Clone)]
@@ -67,6 +69,7 @@ pub struct PubSubHandle {
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
     push_workers: Arc<Mutex<BTreeSet<String>>>,
+    push_generations: Arc<Mutex<BTreeMap<String, u64>>>,
     push_notify: Arc<Notify>,
 }
 
@@ -83,6 +86,7 @@ impl PubSubHandle {
             clock,
             bridge,
             push_workers: Arc::new(Mutex::new(BTreeSet::new())),
+            push_generations: Arc::new(Mutex::new(BTreeMap::new())),
             push_notify: Arc::new(Notify::new()),
         }
     }
@@ -106,13 +110,65 @@ impl PubSubHandle {
         }
     }
 
+    fn push_generation(&self, subscription: &str) -> u64 {
+        self.push_generations
+            .lock()
+            .expect("push generation lock")
+            .entry(subscription.to_owned())
+            .or_insert(0)
+            .to_owned()
+    }
+
+    fn is_current_push_generation(&self, subscription: &str, generation: u64) -> bool {
+        self.push_generations
+            .lock()
+            .expect("push generation lock")
+            .get(subscription)
+            .copied()
+            .unwrap_or_default()
+            == generation
+    }
+
+    /// Invalidates a worker for a deleted subscription incarnation. An update keeps the
+    /// incarnation so a delivery that already crossed its start point may still acknowledge the
+    /// message; the next message reads the updated endpoint immediately before it starts.
+    pub(crate) fn invalidate_push_worker(
+        &self,
+        subscription: &fireemu_core_pubsub::SubscriptionName,
+    ) {
+        let key = subscription.to_full();
+        let mut generations = self.push_generations.lock().expect("push generation lock");
+        let generation = generations.entry(key).or_insert(0);
+        *generation = generation.wrapping_add(1);
+        self.push_notify.notify_waiters();
+    }
+
+    /// Invalidates all known workers before a project or session reset.
+    pub fn invalidate_all_push_workers(&self) {
+        let keys = self
+            .push_workers
+            .lock()
+            .expect("push worker lock")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut generations = self.push_generations.lock().expect("push generation lock");
+        for key in keys {
+            let generation = generations.entry(key).or_insert(0);
+            *generation = generation.wrapping_add(1);
+        }
+        self.push_notify.notify_waiters();
+    }
+
     /// Starts at most one bounded push worker per subscription. Pull and push share the same
     /// core delivery state, so a successful push acknowledges the same record a pull would see.
     fn schedule_push(&self, topic: &fireemu_core_pubsub::TopicName) {
         self.push_notify.notify_waiters();
         let subscriptions = self.state().push_subscriptions(topic);
         for (subscription, endpoint) in subscriptions {
+            let _ = endpoint;
             let key = subscription.to_full();
+            let generation = self.push_generation(&key);
             let claimed = {
                 let mut workers = self.push_workers.lock().expect("push worker lock");
                 if workers.len() >= MAX_PUSH_WORKERS {
@@ -126,13 +182,24 @@ impl PubSubHandle {
             }
             let handle = self.clone();
             tokio::spawn(async move {
-                handle.run_push_worker(subscription, endpoint).await;
+                handle
+                    .run_push_worker(subscription.clone(), generation)
+                    .await;
                 handle
                     .push_workers
                     .lock()
                     .expect("push worker lock")
                     .remove(&key);
                 handle.push_notify.notify_waiters();
+                let topic = handle
+                    .state()
+                    .subscription_config(&subscription)
+                    .ok()
+                    .filter(|config| config.is_push())
+                    .map(|config| config.topic.clone());
+                if let Some(topic) = topic {
+                    handle.schedule_push(&topic);
+                }
             });
         }
     }
@@ -140,9 +207,13 @@ impl PubSubHandle {
     async fn run_push_worker(
         &self,
         subscription: fireemu_core_pubsub::SubscriptionName,
-        endpoint: String,
+        generation: u64,
     ) {
+        let key = subscription.to_full();
         loop {
+            if !self.is_current_push_generation(&key, generation) {
+                return;
+            }
             let now = self.now();
             let received = {
                 self.state()
@@ -156,11 +227,7 @@ impl PubSubHandle {
                     () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {},
                     () = self.push_notify.notified() => {},
                 }
-                let still_configured = self
-                    .state()
-                    .subscription_config(&subscription)
-                    .is_ok_and(fireemu_core_pubsub::SubscriptionConfig::is_push);
-                if !still_configured {
+                if !self.is_current_push_generation(&key, generation) {
                     return;
                 }
                 let retry = self
@@ -171,7 +238,7 @@ impl PubSubHandle {
                     return;
                 }
                 if !self
-                    .deliver_push_messages(&subscription, &endpoint, retry)
+                    .deliver_push_messages(&subscription, &key, generation, retry)
                     .await
                 {
                     return;
@@ -179,7 +246,7 @@ impl PubSubHandle {
                 continue;
             }
             if !self
-                .deliver_push_messages(&subscription, &endpoint, received)
+                .deliver_push_messages(&subscription, &key, generation, received)
                 .await
             {
                 return;
@@ -190,13 +257,32 @@ impl PubSubHandle {
     async fn deliver_push_messages(
         &self,
         subscription: &fireemu_core_pubsub::SubscriptionName,
-        endpoint: &str,
+        key: &str,
+        generation: u64,
         received: Vec<fireemu_core_pubsub::ReceivedMessage>,
     ) -> bool {
         for (index, message) in received.iter().enumerate() {
+            if !self.is_current_push_generation(key, generation) {
+                return false;
+            }
             let mut delivered = false;
             for attempt in 0..MAX_PUSH_ATTEMPTS {
-                if push::deliver(endpoint, subscription, message).await.is_ok() {
+                if !self.is_current_push_generation(key, generation) {
+                    return false;
+                }
+                let Some(endpoint) = self
+                    .state()
+                    .subscription_config(subscription)
+                    .ok()
+                    .filter(|config| config.is_push())
+                    .map(|config| config.push_config.push_endpoint.clone())
+                else {
+                    return false;
+                };
+                if push::deliver(&endpoint, subscription, message)
+                    .await
+                    .is_ok()
+                {
                     delivered = true;
                     break;
                 }
@@ -205,22 +291,30 @@ impl PubSubHandle {
                 }
             }
             if delivered {
-                let _ = self
-                    .state()
-                    .acknowledge(subscription, std::slice::from_ref(&message.ack_id));
+                if self.is_current_push_generation(key, generation) {
+                    let _ = self
+                        .state()
+                        .acknowledge(subscription, std::slice::from_ref(&message.ack_id));
+                }
                 continue;
             }
-            let now = self.now();
-            let mut state = self.state();
-            for remaining in &received[index..] {
-                let _ = state.modify_ack_deadline(
-                    subscription,
-                    std::slice::from_ref(&remaining.ack_id),
-                    0,
-                    now,
-                );
+            if !self.is_current_push_generation(key, generation) {
+                return false;
             }
-            return false;
+            let now = self.now();
+            {
+                let mut state = self.state();
+                for remaining in &received[index..] {
+                    let _ = state.modify_ack_deadline(
+                        subscription,
+                        std::slice::from_ref(&remaining.ack_id),
+                        0,
+                        now,
+                    );
+                }
+            }
+            tokio::time::sleep(PUSH_RETRY_DELAY).await;
+            return true;
         }
         true
     }
@@ -236,12 +330,23 @@ pub async fn serve_pubsub(
     let publisher = PublisherServer::new(PublisherService::new(handle.clone()))
         .max_decoding_message_size(MAX_MESSAGE_BYTES)
         .max_encoding_message_size(MAX_MESSAGE_BYTES);
-    let subscriber = SubscriberServer::new(SubscriberService::new(handle))
+    let subscriber = SubscriberServer::new(SubscriberService::new(handle.clone()))
         .max_decoding_message_size(MAX_MESSAGE_BYTES)
         .max_encoding_message_size(MAX_MESSAGE_BYTES);
+    let mut route_builder = tonic::service::Routes::builder();
+    route_builder.add_service(publisher).add_service(subscriber);
+    let routes = route_builder.routes();
+    let rest_handle = handle;
+    let mut prepared_router = routes.into_axum_router().with_state(());
+    prepared_router = prepared_router.fallback(move |request| {
+        let handle = rest_handle.clone();
+        async move { rest::handle(request, handle).await }
+    });
     tonic::transport::Server::builder()
-        .add_service(publisher)
-        .add_service(subscriber)
-        .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+        .accept_http1(true)
+        .serve_with_incoming(
+            prepared_router,
+            tokio_stream::wrappers::TcpListenerStream::new(listener),
+        )
         .await
 }

@@ -6,11 +6,11 @@
 //! request.
 
 use std::fmt::Write as _;
-use std::io::{Read as _, Write as _};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use fireemu_core_pubsub::{ReceivedMessage, SubscriptionName};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::lookup_host;
 
 const PUSH_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
@@ -48,10 +48,15 @@ fn parse_endpoint(value: &str) -> Result<Endpoint, String> {
             .ok_or_else(|| "push endpoint has an invalid IPv6 host".to_owned())?;
         let host = &bracketed[..end];
         let suffix = &bracketed[end + 1..];
-        let port = suffix.strip_prefix(':').map_or(Ok(80), |port| {
-            port.parse::<u16>()
-                .map_err(|_| "push endpoint has an invalid port".to_owned())
-        })?;
+        let port = if suffix.is_empty() {
+            80
+        } else {
+            suffix
+                .strip_prefix(':')
+                .ok_or_else(|| "push endpoint has an invalid port".to_owned())?
+                .parse::<u16>()
+                .map_err(|_| "push endpoint has an invalid port".to_owned())?
+        };
         (host, port)
     } else if let Some((host, port)) = authority.rsplit_once(':') {
         if host.contains(':') {
@@ -88,28 +93,31 @@ pub(crate) async fn deliver(
     subscription: &SubscriptionName,
     received: &ReceivedMessage,
 ) -> Result<(), String> {
-    let endpoint = parse_endpoint(endpoint)?;
-    let body = push_body(subscription, received);
-    tokio::task::spawn_blocking(move || deliver_blocking(&endpoint, &body))
-        .await
-        .map_err(|error| format!("push worker failed: {error}"))?
+    deliver_with_timeout(endpoint, subscription, received, PUSH_TIMEOUT).await
 }
 
-fn deliver_blocking(endpoint: &Endpoint, body: &str) -> Result<(), String> {
-    let address = (endpoint.host.as_str(), endpoint.port);
-    let stream = TcpStream::connect_timeout(
-        &address
-            .to_socket_addrs()
-            .map_err(|error| format!("push endpoint lookup failed: {error}"))?
-            .next()
-            .ok_or_else(|| "push endpoint has no address".to_owned())?,
-        PUSH_TIMEOUT,
-    )
-    .map_err(|error| format!("push endpoint connection failed: {error}"))?;
-    stream
-        .set_read_timeout(Some(PUSH_TIMEOUT))
-        .and_then(|()| stream.set_write_timeout(Some(PUSH_TIMEOUT)))
-        .map_err(|error| format!("push endpoint timeout setup failed: {error}"))?;
+async fn deliver_with_timeout(
+    endpoint: &str,
+    subscription: &SubscriptionName,
+    received: &ReceivedMessage,
+    timeout: Duration,
+) -> Result<(), String> {
+    let endpoint = parse_endpoint(endpoint)?;
+    let body = push_body(subscription, received);
+    tokio::time::timeout(timeout, deliver_async(&endpoint, &body))
+        .await
+        .map_err(|_| "push endpoint deadline exceeded".to_owned())?
+}
+
+async fn deliver_async(endpoint: &Endpoint, body: &str) -> Result<(), String> {
+    let address = lookup_host((endpoint.host.as_str(), endpoint.port))
+        .await
+        .map_err(|error| format!("push endpoint lookup failed: {error}"))?
+        .find(|address| address.ip().is_loopback())
+        .ok_or_else(|| "push endpoint has no loopback address".to_owned())?;
+    let mut stream = tokio::net::TcpStream::connect(address)
+        .await
+        .map_err(|error| format!("push endpoint connection failed: {error}"))?;
     let request = format!(
         "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         endpoint.path,
@@ -117,15 +125,19 @@ fn deliver_blocking(endpoint: &Endpoint, body: &str) -> Result<(), String> {
         body.len(),
         body
     );
-    let mut stream = stream;
     stream
         .write_all(request.as_bytes())
-        .and_then(|()| stream.flush())
+        .await
+        .map_err(|error| format!("push endpoint write failed: {error}"))?;
+    stream
+        .flush()
+        .await
         .map_err(|error| format!("push endpoint write failed: {error}"))?;
     let mut response = Vec::new();
     stream
         .take((MAX_RESPONSE_BYTES + 1) as u64)
         .read_to_end(&mut response)
+        .await
         .map_err(|error| format!("push endpoint read failed: {error}"))?;
     if response.len() > MAX_RESPONSE_BYTES {
         return Err("push endpoint response is too large".to_owned());
@@ -231,24 +243,17 @@ fn base64(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64, parse_endpoint, push_body};
+    use super::{base64, deliver_with_timeout, parse_endpoint, push_body};
     use fireemu_core_pubsub::{PubsubMessage, ReceivedMessage, StoredMessage, SubscriptionName};
     use fireemu_core_types::time::LogicalInstant;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::sync::Arc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
-    #[test]
-    fn endpoint_validation_is_loopback_only_and_does_not_follow_redirects() {
-        assert!(parse_endpoint("http://127.0.0.1:8080/push").is_ok());
-        assert!(parse_endpoint("http://localhost/push").is_ok());
-        assert!(parse_endpoint("https://127.0.0.1:8080/push").is_err());
-        assert!(parse_endpoint("http://169.254.169.254/latest").is_err());
-        assert!(parse_endpoint("http://127.0.0.1:8080/a#redirect").is_err());
-    }
-
-    #[test]
-    fn push_body_uses_pubsub_base64_and_subscription_shape() {
-        let subscription = SubscriptionName::new("demo-app", "push").unwrap();
-        let received = ReceivedMessage {
+    fn received() -> ReceivedMessage {
+        ReceivedMessage {
             ack_id: "ack".to_owned(),
             message: Arc::new(StoredMessage {
                 message_id: "7".to_owned(),
@@ -259,8 +264,96 @@ mod tests {
                 },
             }),
             delivery_attempt: 1,
-        };
-        let body = push_body(&subscription, &received);
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_bytewise_response_is_stopped_by_the_absolute_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+            let mut request = [0_u8; 4096];
+            let mut received = Vec::new();
+            while !received.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut request).unwrap();
+                if count == 0 {
+                    return;
+                }
+                received.extend_from_slice(&request[..count]);
+            }
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n");
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < deadline {
+                if stream.write_all(b"x").is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let subscription = SubscriptionName::new("demo-app", "push").unwrap();
+        let endpoint = format!("http://{address}/push");
+        let started = Instant::now();
+        let outcome = deliver_with_timeout(
+            &endpoint,
+            &subscription,
+            &received(),
+            Duration::from_millis(250),
+        )
+        .await;
+        assert!(outcome.is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_response_is_rejected_without_retaining_the_response_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            let payload = vec![b'x'; super::MAX_RESPONSE_BYTES + 1];
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&payload);
+        });
+        let subscription = SubscriptionName::new("demo-app", "push").unwrap();
+        let endpoint = format!("http://{address}/push");
+        let error = deliver_with_timeout(
+            &endpoint,
+            &subscription,
+            &received(),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("an oversized response must be refused");
+        assert!(error.contains("too large"));
+        assert!(!error.contains('x'));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn endpoint_validation_is_loopback_only_and_does_not_follow_redirects() {
+        assert!(parse_endpoint("http://127.0.0.1:8080/push").is_ok());
+        assert!(parse_endpoint("http://localhost/push").is_ok());
+        assert!(parse_endpoint("https://127.0.0.1:8080/push").is_err());
+        assert!(parse_endpoint("http://169.254.169.254/latest").is_err());
+        assert!(parse_endpoint("http://127.0.0.1:8080/a#redirect").is_err());
+        assert!(parse_endpoint("http://[::1]garbage/push").is_err());
+    }
+
+    #[test]
+    fn push_body_uses_pubsub_base64_and_subscription_shape() {
+        let subscription = SubscriptionName::new("demo-app", "push").unwrap();
+        let body = push_body(&subscription, &received());
         assert!(body.contains("\"data\":\"aGVsbG8=\""));
         assert!(body.contains("projects/demo-app/subscriptions/push"));
         assert_eq!(base64(b""), "");

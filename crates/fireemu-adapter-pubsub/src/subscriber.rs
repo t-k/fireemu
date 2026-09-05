@@ -168,6 +168,7 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<()>, Status> {
         let name =
             SubscriptionName::parse(&request.into_inner().subscription).map_err(|e| status(&e))?;
+        self.handle.invalidate_push_worker(&name);
         self.handle
             .state()
             .delete_subscription(&name)

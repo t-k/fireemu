@@ -629,15 +629,13 @@ async fn snapshot_lifecycle_replays_backlog_and_post_creation_messages() {
     })
     .await
     .unwrap();
-    for name in [source, replay] {
-        subc.create_subscription(pb::Subscription {
-            name: name.to_owned(),
-            topic: topic.to_owned(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    }
+    subc.create_subscription(pb::Subscription {
+        name: source.to_owned(),
+        topic: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     pubc.publish(pb::PublishRequest {
         topic: topic.to_owned(),
         messages: vec![msg(b"acked"), msg(b"backlog")],
@@ -706,23 +704,15 @@ async fn snapshot_lifecycle_replays_backlog_and_post_creation_messages() {
     })
     .await
     .unwrap();
-    let initial_replay = subc
-        .pull(pb::PullRequest {
-            subscription: replay.to_owned(),
-            max_messages: 10,
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .into_inner()
-        .received_messages;
-    assert_eq!(initial_replay.len(), 3);
-    subc.acknowledge(pb::AcknowledgeRequest {
-        subscription: replay.to_owned(),
-        ack_ids: initial_replay
-            .iter()
-            .map(|message| message.ack_id.clone())
-            .collect(),
+    subc.delete_subscription(pb::DeleteSubscriptionRequest {
+        subscription: source.to_owned(),
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: replay.to_owned(),
+        topic: topic.to_owned(),
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -777,6 +767,34 @@ async fn snapshot_lifecycle_replays_backlog_and_post_creation_messages() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test]
+async fn list_topic_snapshots_rejects_a_deleted_topic() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let topic = "projects/demo-app/topics/deleted-snapshot-topic";
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.delete_topic(pb::DeleteTopicRequest {
+        topic: topic.to_owned(),
+    })
+    .await
+    .unwrap();
+
+    let status = pubc
+        .list_topic_snapshots(pb::ListTopicSnapshotsRequest {
+            topic: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::NotFound);
+    h.shutdown().await;
 }
 
 #[tokio::test]

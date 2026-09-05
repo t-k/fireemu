@@ -148,6 +148,22 @@ impl PushDispatchState {
         self.ready.clear();
         self.active.clear();
     }
+
+    fn invalidate_projects_where(&mut self, matches: impl Fn(&str) -> bool) {
+        let keys = self
+            .generations
+            .keys()
+            .filter_map(|key| {
+                fireemu_core_pubsub::SubscriptionName::parse(key)
+                    .ok()
+                    .filter(|name| matches(name.project()))
+                    .map(|_| key.clone())
+            })
+            .collect::<Vec<_>>();
+        for key in keys {
+            self.invalidate(&key);
+        }
+    }
 }
 
 /// A message handed to the functions bridge for topic-trigger delivery.
@@ -247,6 +263,20 @@ impl PubSubHandle {
             .invalidate_all();
         self.push_cancel_notify.notify_waiters();
         self.push_ready_notify.notify_one();
+    }
+
+    /// Invalidates queued and active push work owned by matching subscription projects.
+    pub fn invalidate_push_workers_where(
+        &self,
+        matches: impl Fn(&str) -> bool,
+    ) -> Result<(), String> {
+        self.push_dispatch
+            .lock()
+            .map_err(|_| "the Pub/Sub push dispatcher is poisoned".to_owned())?
+            .invalidate_projects_where(matches);
+        self.push_cancel_notify.notify_waiters();
+        self.push_ready_notify.notify_one();
+        Ok(())
     }
 
     /// Starts at most one bounded push worker per subscription. Pull and push share the same
@@ -739,6 +769,32 @@ mod dispatch_tests {
                 .unwrap()
                 .acknowledge(&subscription, &[new_message.ack_id]),
             Ok(1)
+        );
+    }
+
+    #[test]
+    fn project_scoped_invalidation_replaces_only_owned_push_generations() {
+        let first = SubscriptionName::new("project-a", "push-sub").unwrap();
+        let second = SubscriptionName::new("project-b", "push-sub").unwrap();
+        let mut dispatch = PushDispatchState::default();
+        dispatch.enqueue(first.clone());
+        dispatch.enqueue(second.clone());
+        let old_first = dispatch.claim().unwrap();
+        let old_second = dispatch.claim().unwrap();
+
+        dispatch.invalidate_projects_where(|project| project == "project-a");
+        dispatch.enqueue(first.clone());
+        let new_first = dispatch.claim().unwrap();
+
+        assert_ne!(old_first.generation, new_first.generation);
+        assert_eq!(
+            dispatch.generations.get(&second.to_full()),
+            Some(&old_second.generation)
+        );
+        dispatch.complete(&old_first, false);
+        assert_eq!(
+            dispatch.active.get(&first.to_full()),
+            Some(&new_first.generation)
         );
     }
 

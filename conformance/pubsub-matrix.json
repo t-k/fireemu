@@ -7,8 +7,8 @@
   },
   "project": "demo-pubsub-probe",
   "summary": {
-    "parity": 27,
-    "documented-divergence": 2,
+    "parity": 28,
+    "documented-divergence": 3,
     "debt": 0
   },
   "programs": [
@@ -74,6 +74,41 @@
           "value": {
             "rejected": true
           }
+        }
+      ]
+    },
+    {
+      "id": "snapshot-future-retention",
+      "area": "snapshots",
+      "faults": [],
+      "steps": [
+        {
+          "id": "created",
+          "status": "parity",
+          "value": {
+            "publishStatus": 200,
+            "snapshotStatus": 200,
+            "futureStatus": 200
+          }
+        },
+        {
+          "id": "restored",
+          "status": "documented-divergence",
+          "oracle": {
+            "seekStatus": 200,
+            "pullStatus": 200,
+            "messages": []
+          },
+          "fireemu": {
+            "seekStatus": 200,
+            "pullStatus": 200,
+            "messages": [
+              "future",
+              "initial"
+            ]
+          },
+          "documents": "Google Cloud Pub/Sub replay overview, 'Replay and purge messages with seek'; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "Production retains both the source subscription's unacknowledged messages at snapshot creation and every later message published to the topic, and permits applying that snapshot to a newly created subscription on the topic. fireemu restores both messages. The pinned official emulator accepts the same create, publish, delete, create, seek, and pull sequence but returns no messages."
         }
       ]
     },

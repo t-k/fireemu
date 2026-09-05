@@ -275,6 +275,57 @@ impl SubscriptionState {
         self.rebuild_indexes();
     }
 
+    /// Checks whether a whole publish batch can be appended without partial mutation.
+    pub fn ensure_enqueue_capacity<'a>(
+        &self,
+        mut messages: impl Iterator<Item = &'a StoredMessage>,
+    ) -> Result<()> {
+        let (additional_count, additional_bytes) =
+            messages.try_fold((0_usize, 0_usize), |(count, bytes), message| {
+                Ok::<_, PubSubError>((
+                    count.checked_add(1).ok_or_else(|| {
+                        PubSubError::resource_exhausted("subscription entry count overflow")
+                    })?,
+                    bytes
+                        .checked_add(Self::message_bytes(message))
+                        .ok_or_else(|| {
+                            PubSubError::resource_exhausted("subscription byte count overflow")
+                        })?,
+                ))
+            })?;
+        let fits = |count: usize, bytes: usize| {
+            count
+                .checked_add(additional_count)
+                .is_some_and(|total| total <= MAX_RETAINED_PER_SUB)
+                && bytes
+                    .checked_add(additional_bytes)
+                    .is_some_and(|total| total <= MAX_RETAINED_BYTES_PER_SUB)
+        };
+        if fits(self.entries.len(), self.retained_bytes) {
+            return Ok(());
+        }
+        let (acked_count, acked_bytes) = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == Delivery::Acked)
+            .fold((0_usize, 0_usize), |(count, bytes), entry| {
+                (
+                    count.saturating_add(1),
+                    bytes.saturating_add(Self::message_bytes(&entry.stored)),
+                )
+            });
+        if fits(
+            self.entries.len().saturating_sub(acked_count),
+            self.retained_bytes.saturating_sub(acked_bytes),
+        ) {
+            return Ok(());
+        }
+        Err(PubSubError::resource_exhausted(format!(
+            "subscription {} cannot retain the complete publish batch",
+            self.config.name.to_full()
+        )))
+    }
+
     /// Appends a message that already passed the subscription filter. Returns
     /// `RESOURCE_EXHAUSTED` when the retention bound is reached and no acked entry can be
     /// reclaimed.
@@ -523,6 +574,16 @@ impl SubscriptionState {
             .collect()
     }
 
+    /// Oldest publish time among entries that were not acknowledged at the snapshot boundary.
+    #[must_use]
+    pub fn oldest_unacknowledged_publish_time(&self) -> Option<LogicalInstant> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.state != Delivery::Acked)
+            .map(|entry| entry.stored.publish_time)
+            .min()
+    }
+
     /// Restores the acknowledgement state captured by a snapshot. Messages that were in the
     /// source backlog remain available, and messages published after the snapshot was created
     /// are also available. Older messages that were acknowledged at snapshot creation stay
@@ -723,6 +784,21 @@ mod tests {
         assert!(s.enqueue(stored("1", b"a", 100), now).is_ok());
         let error = s.enqueue(stored("2", b"b", 100), now).unwrap_err();
         assert_eq!(error.code(), crate::error::Code::ResourceExhausted);
+    }
+
+    #[test]
+    fn batch_admission_rejects_before_reclaim_or_enqueue_mutation() {
+        let mut subscription = SubscriptionState::new(cfg());
+        subscription.retained_bytes = MAX_RETAINED_BYTES_PER_SUB - 1;
+        let incoming = [stored("1", b"a", 100), stored("2", b"b", 100)];
+
+        let error = subscription
+            .ensure_enqueue_capacity(incoming.iter())
+            .unwrap_err();
+
+        assert_eq!(error.code(), crate::error::Code::ResourceExhausted);
+        assert!(subscription.entries.is_empty());
+        assert_eq!(subscription.retained_bytes, MAX_RETAINED_BYTES_PER_SUB - 1);
     }
 
     #[test]

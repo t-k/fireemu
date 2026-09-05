@@ -150,11 +150,8 @@ impl Publisher for PublisherService {
         let snapshots = self
             .handle
             .state()
-            .list_snapshots(name.project(), now)
-            .into_iter()
-            .filter(|snapshot| snapshot.topic == name)
-            .map(|snapshot| snapshot.name)
-            .collect();
+            .list_topic_snapshots(&name, now)
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListTopicSnapshotsResponse {
             snapshots,
             next_page_token: String::new(),

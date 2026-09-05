@@ -2211,13 +2211,11 @@ fn control_state(
         let runtime = runtime.clone();
         reset_hooks.push(Arc::new(move || runtime.reset()) as Arc<dyn Fn() + Send + Sync>);
     }
-    let pubsub = pubsub.clone();
-    let pubsub_handle = pubsub_handle.clone();
+    let pubsub_for_reset = pubsub.clone();
     let pubsub_resources = pubsub_resources.to_vec();
     let pubsub_project = cfg.auth_project.clone();
     reset_hooks.push(Arc::new(move || {
-        pubsub_handle.invalidate_all_push_workers();
-        if let Ok(mut state) = pubsub.lock() {
+        if let Ok(mut state) = pubsub_for_reset.lock() {
             state.clear_project(&pubsub_project);
             functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)
                 .expect("validated Functions Pub/Sub resources reprovision after reset");
@@ -2250,6 +2248,8 @@ fn control_state(
             registry: registry.clone(),
             seed: cfg.seed,
             app_check: app_check.clone(),
+            pubsub: pubsub.clone(),
+            pubsub_handle: pubsub_handle.clone(),
         })),
         functions: functions.map(|r| {
             Arc::new(functions::Hook(r.clone()))

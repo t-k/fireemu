@@ -22,6 +22,15 @@ parity: 5 &middot; documented-divergence: 1
 | `rest-resource-wire` | `snapshotPut` | documented-divergence |
 | `rest-resource-wire` | `snapshotPost` | parity |
 
+## snapshots
+
+parity: 1 &middot; documented-divergence: 1
+
+| program | step | status |
+| --- | --- | --- |
+| `snapshot-future-retention` | `created` | parity |
+| `snapshot-future-retention` | `restored` | documented-divergence |
+
 ## topics
 
 parity: 7

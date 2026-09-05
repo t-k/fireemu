@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "pubsub/snapshot-lifetime-production",
+  "product": "pubsub",
+  "title": "Production Cloud Pub/Sub snapshot lifetime boundaries",
+  "sdks": ["google.pubsub.v1-rest", "google.pubsub.v1-rpc"],
+  "variant": "production-documentation-oracle",
+  "ownership": "external-oracle",
+  "oracle": "Google Cloud Pub/Sub Snapshot REST/RPC reference and replay overview, checked 2026-09-05",
+  "summary": {
+    "parity": 6,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "empty-backlog",
+      "status": "parity",
+      "value": { "lifetimeNanos": "604800000000000", "created": true }
+    },
+    {
+      "id": "old-acknowledged-message",
+      "status": "parity",
+      "value": { "lifetimeNanos": "604800000000000", "created": true }
+    },
+    {
+      "id": "oldest-unacknowledged-message",
+      "status": "parity",
+      "value": { "formula": "7 days - oldest unacknowledged message age" }
+    },
+    {
+      "id": "exactly-one-hour-remaining",
+      "status": "parity",
+      "value": { "lifetimeNanos": "3600000000000", "created": true }
+    },
+    {
+      "id": "one-nanosecond-above-one-hour",
+      "status": "parity",
+      "value": { "lifetimeNanos": "3600000000001", "created": true }
+    },
+    {
+      "id": "one-nanosecond-below-one-hour",
+      "status": "parity",
+      "value": { "lifetimeNanos": "3599999999999", "created": false, "code": "FAILED_PRECONDITION" }
+    }
+  ]
+}

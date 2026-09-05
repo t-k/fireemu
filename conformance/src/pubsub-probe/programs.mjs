@@ -108,6 +108,49 @@ export const PROGRAMS = [
     },
   },
   {
+    id: "snapshot-future-retention",
+    area: "snapshots",
+    async run(ctx) {
+      const { project } = ctx;
+      const root = `/v1/projects/${project}`;
+      const topicName = `projects/${project}/topics/snapshot-retention`;
+      const sourceName = `projects/${project}/subscriptions/snapshot-source`;
+      const snapshotName = `projects/${project}/snapshots/snapshot-retention`;
+
+      await ctx.rest("PUT", `${root}/topics/snapshot-retention`);
+      await ctx.rest("PUT", `${root}/subscriptions/snapshot-source`, { topic: topicName });
+      const initial = await ctx.rest("POST", `${root}/topics/snapshot-retention:publish`, {
+        messages: [{ data: Buffer.from("initial").toString("base64") }],
+      });
+      const snapshot = await ctx.rest("PUT", `${root}/snapshots/snapshot-retention`, {
+        subscription: sourceName,
+      });
+      const future = await ctx.rest("POST", `${root}/topics/snapshot-retention:publish`, {
+        messages: [{ data: Buffer.from("future").toString("base64") }],
+      });
+      await ctx.rest("DELETE", `${root}/subscriptions/snapshot-source`);
+      await ctx.rest("PUT", `${root}/subscriptions/snapshot-target`, { topic: topicName });
+      const seek = await ctx.rest("POST", `${root}/subscriptions/snapshot-target:seek`, {
+        snapshot: snapshotName,
+      });
+      const pull = await ctx.rest("POST", `${root}/subscriptions/snapshot-target:pull`, {
+        maxMessages: 10,
+        returnImmediately: true,
+      });
+      const messages = (pull.body.receivedMessages ?? [])
+        .map((received) => Buffer.from(received.message?.data ?? "", "base64").toString())
+        .toSorted();
+      return {
+        created: {
+          publishStatus: initial.status,
+          snapshotStatus: snapshot.status,
+          futureStatus: future.status,
+        },
+        restored: { seekStatus: seek.status, pullStatus: pull.status, messages },
+      };
+    },
+  },
+  {
     id: "topics-lifecycle",
     area: "topics",
     async run(ctx) {

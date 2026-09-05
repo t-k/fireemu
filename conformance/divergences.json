@@ -166,6 +166,10 @@
       "documents": "vendored google/pubsub/v1/pubsub.proto Snapshot.labels; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
       "reason": "The production Snapshot resource includes the labels supplied to CreateSnapshot in its response. fireemu preserves and returns those labels; the pinned official emulator accepts the labels but omits them from the response."
     },
+    "pubsub-probe/snapshot-future-retention#restored": {
+      "documents": "Google Cloud Pub/Sub replay overview, 'Replay and purge messages with seek'; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "Production retains both the source subscription's unacknowledged messages at snapshot creation and every later message published to the topic, and permits applying that snapshot to a newly created subscription on the topic. fireemu restores both messages. The pinned official emulator accepts the same create, publish, delete, create, seek, and pull sequence but returns no messages."
+    },
     "storage-probe/fb-resumable-upload#upload-with-wrong-offset": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
       "reason": "fireemu checks X-Goog-Upload-Offset against the bytes already received and refuses a mismatch with 400, as production does. The official emulator never reads the offset: it appends whatever arrives, so a chunk sent with a wrong offset was measured to commit a corrupt object."

@@ -1923,7 +1923,7 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [
-        "Pub/Sub snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / ListTopicSnapshots / UpdateSnapshot / DeleteSnapshot and seek-to-snapshot) are implemented over the shared broker state, and validated by the adapter lifecycle test",
+        "Pub/Sub snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / ListTopicSnapshots / UpdateSnapshot / DeleteSnapshot and seek-to-snapshot) retain the source backlog and subsequent topic publications for replay into another same-topic subscription; lifetime is seven days minus the oldest unacknowledged message age and creation is refused below one remaining hour",
         "push delivery is implemented for loopback HTTP endpoints with bounded workers, acknowledgement on 2xx, finite retry and nack on failure; remote, HTTPS and redirect endpoints are refused as a local safety boundary",
         "REST/JSON transcoding on the Pub/Sub port implements the documented topic, subscription, snapshot, publish, pull, acknowledge, modify-ack-deadline and seek subset over the same broker state as gRPC; unsupported fields and update-mask paths are diagnosed explicitly",
         "Avro/protobuf schema management and BigQuery / Cloud Storage subscription delivery remain outside the active implementation; the official emulator's documented unsupported delivery limitations are preserved"
@@ -1946,13 +1946,16 @@
               "redelivery_after_ack_deadline_on_virtual_clock",
               "streaming_pull_delivers_and_acks",
               "rest_put_routes_preserve_every_supported_subscription_field",
-              "rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields"
+              "rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields",
+              "snapshot_lifecycle_replays_backlog_and_post_creation_messages"
             ],
             "integration": [
               "crates/fireemu-adapter-pubsub/tests/grpc.rs",
               "conformance/pubsub-matrix.json"
             ],
-            "conformance": []
+            "conformance": [
+              "pubsub/snapshot-lifetime-production"
+            ]
           },
           "officialLimitations": [
             "the official Pub/Sub emulator supports no IAM operations",

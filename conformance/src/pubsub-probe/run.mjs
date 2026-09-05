@@ -21,6 +21,7 @@ import { join } from "node:path";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { deepEqual } from "../diff.mjs";
+import { readValidatedDivergenceRegister } from "../divergence-authority.mjs";
 
 const PROJECT = "demo-pubsub-probe";
 // The official side binds the port in pubsub-probe.firebase.json (32460).
@@ -172,8 +173,7 @@ async function probeFireemu(outPath) {
 }
 
 async function annotations() {
-  const parsed = JSON.parse(await readFile(join(CONFORMANCE_DIR, "divergences.json"), "utf8"));
-  return parsed.divergences;
+  return readValidatedDivergenceRegister().divergences;
 }
 
 function classify(oracle, fireemu, notes) {

@@ -25,6 +25,7 @@ import { join } from "node:path";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { deepEqual } from "../diff.mjs";
+import { readValidatedDivergenceRegister } from "../divergence-authority.mjs";
 
 const PROJECT = "demo-storage-probe";
 // The official side's ports live in storage-probe.firebase.json (32380 / 32399 / 32301).
@@ -189,8 +190,7 @@ async function probeFireemu(outPath) {
 }
 
 async function annotations() {
-  const parsed = JSON.parse(await readFile(join(CONFORMANCE_DIR, "divergences.json"), "utf8"));
-  return parsed.divergences;
+  return readValidatedDivergenceRegister().divergences;
 }
 
 /** Folds the two runs into matrix rows, program by program, step by step. */

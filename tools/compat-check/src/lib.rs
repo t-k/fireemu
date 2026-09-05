@@ -15,6 +15,7 @@
 //! | `CC-07` | contradictory public statements: an item one entry calls `unimplemented` that another entry, or the contract's shared vocabulary, calls `implemented` |
 //! | `CC-08` | a compatibility profile that sets or declares a configuration key the canonical schema does not define, or a value it does not allow; a declared key without a `hand-written` / `not-implemented` status and a note, or one that is also set; and a profile name the schema's `profile` key does not accept (or accepts and the contract does not declare) |
 //! | `CC-09` | a conformance fixture cited as evidence that records unresolved `debt`, unless the claim excludes that step by name with the issue that owns it; a fixture with no `parity` or `documented-divergence` step (so nothing the local oracle answered); a stale exclusion, and a step status the suite does not define |
+//! | `CC-10` | a documented divergence without a complete, verified oracle authority record, or a stale authority that names no documented-divergence artifact row |
 //!
 //! Artifact names resolve the way `tools/traceability-check` resolves them, so the two gates
 //! agree on what "an existing test" means: a `tests` name is a function defined in a Rust file
@@ -37,6 +38,8 @@ pub const MANIFEST_PATH: &str = "crates/fireemu/src/capabilities.json";
 pub const README_PATH: &str = "README.md";
 /// The canonical configuration schema the profile key sets are checked against.
 pub const CONFIG_SCHEMA_PATH: &str = "spec/config/fireemu.schema.json";
+/// Structured authority for every intentionally different conformance row.
+pub const DIVERGENCES_PATH: &str = "conformance/divergences.json";
 
 /// The scopes a surface may declare.
 const SCOPES: [&str; 3] = ["active", "deferred", "not-planned"];
@@ -94,6 +97,7 @@ pub fn check(root: &Path) -> Report {
     check_scope_leakage(root, &contract, surfaces, entries, &mut report.problems);
     check_contradictions(root, &contract, entries, &statuses, &mut report.problems);
     check_profiles(root, &contract, &mut report.problems);
+    check_divergence_authorities(root, &contract, &mut report.problems);
     let excluded = excluded_debt_steps(surfaces);
     if excluded > 0 {
         report.notes.push(format!(
@@ -102,6 +106,306 @@ pub fn check(root: &Path) -> Report {
     }
 
     report
+}
+
+// ---------------------------------------------------------------------------------------------
+// CC-10: divergence authority
+
+const AUTHORITY_KINDS: [&str; 4] = [
+    "production-spec",
+    "official-emulator",
+    "intentional-local-policy",
+    "unverified",
+];
+
+fn check_divergence_authorities(root: &Path, contract: &Value, problems: &mut Vec<String>) {
+    let Some(register) = read_json(root, DIVERGENCES_PATH, problems) else {
+        return;
+    };
+    if register.get("schemaVersion").and_then(Value::as_u64) != Some(2) {
+        problems.push(format!("CC-10: {DIVERGENCES_PATH} needs schemaVersion 2"));
+        return;
+    }
+    let mut entries = BTreeMap::new();
+    for section in ["divergences", "firestoreMatrixDivergences"] {
+        let Some(section_entries) = register.get(section).and_then(Value::as_object) else {
+            problems.push(format!("CC-10: {DIVERGENCES_PATH} has no {section} object"));
+            continue;
+        };
+        for (key, entry) in section_entries {
+            if entries.insert(key.as_str(), entry).is_some() {
+                problems.push(format!("CC-10: divergence {key} is declared twice"));
+            }
+        }
+    }
+
+    let baseline_version = contract
+        .get("baseline")
+        .and_then(|baseline| str_field(baseline, "version"))
+        .unwrap_or("");
+    for (key, entry) in &entries {
+        validate_authority_entry(root, key, entry, baseline_version, problems);
+    }
+    for divergence in contract
+        .pointer("/profiles/firebase/officialEmulatorDivergences")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let contract_key = str_field(divergence, "key").unwrap_or("<unnamed>");
+        for reference in strings(divergence, "authorityRefs") {
+            if !entries.contains_key(reference) {
+                problems.push(format!(
+                    "CC-10: contract divergence {contract_key} names unknown authority {reference}"
+                ));
+            }
+        }
+    }
+
+    let fixtures = root.join("conformance/fixtures");
+    let mut files = Vec::new();
+    collect_json(&fixtures, &mut files);
+    for path in files {
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(fixture) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let Some(id) = str_field(&fixture, "id") else {
+            continue;
+        };
+        for step in fixture
+            .get("steps")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            if str_field(step, "status") == Some("documented-divergence") {
+                let step_id = str_field(step, "id").unwrap_or("<unnamed>");
+                let key = format!("{id}#{step_id}");
+                if !entries.contains_key(key.as_str()) {
+                    problems.push(format!("CC-10: {key} has no authority entry"));
+                }
+            }
+        }
+    }
+    check_matrix_authorities(root, &entries, problems);
+}
+
+fn check_matrix_authorities(
+    root: &Path,
+    entries: &BTreeMap<&str, &Value>,
+    problems: &mut Vec<String>,
+) {
+    for (path, prefix) in [
+        ("conformance/firestore-matrix.json", ""),
+        ("conformance/pubsub-matrix.json", "pubsub-probe/"),
+        ("conformance/storage-matrix.json", "storage-probe/"),
+    ] {
+        let Ok(text) = fs::read_to_string(root.join(path)) else {
+            continue;
+        };
+        let Ok(matrix) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        for program in matrix
+            .get("programs")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            let program_id = str_field(program, "id").unwrap_or("<unnamed>");
+            let Some(steps) = program.get("steps") else {
+                continue;
+            };
+            let documented: Vec<&str> = match steps {
+                Value::Array(rows) => rows
+                    .iter()
+                    .filter(|row| str_field(row, "status") == Some("documented-divergence"))
+                    .filter_map(|row| str_field(row, "id"))
+                    .collect(),
+                Value::Object(rows) => rows
+                    .iter()
+                    .filter(|(_, row)| row.get("divergence").is_some())
+                    .map(|(id, _)| id.as_str())
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for step_id in documented {
+                let key = format!("{prefix}{program_id}#{step_id}");
+                if !entries.contains_key(key.as_str()) {
+                    problems.push(format!("CC-10: {path} row {key} has no authority entry"));
+                }
+            }
+        }
+    }
+}
+
+fn validate_authority_entry(
+    root: &Path,
+    key: &str,
+    entry: &Value,
+    baseline_version: &str,
+    problems: &mut Vec<String>,
+) {
+    let Some(authority) = entry.get("authority") else {
+        problems.push(format!("CC-10: {key} has no authority object"));
+        return;
+    };
+    let kind = str_field(authority, "kind").unwrap_or("");
+    if !AUTHORITY_KINDS.contains(&kind) {
+        problems.push(format!(
+            "CC-10: {key} has authority kind {kind:?}, not one of {AUTHORITY_KINDS:?}"
+        ));
+    }
+    if kind == "unverified" {
+        problems.push(format!(
+            "CC-10: {key} is unverified and cannot justify a documented divergence"
+        ));
+        if str_field(authority, "issue").is_none_or(str::is_empty) {
+            problems.push(format!("CC-10: unverified authority {key} names no issue"));
+        }
+    }
+    let urls = strings(authority, "sourceUrls");
+    if urls.is_empty()
+        || urls
+            .iter()
+            .any(|url| !url.starts_with("https://") || url.chars().any(char::is_whitespace))
+    {
+        problems.push(format!(
+            "CC-10: {key} authority sourceUrls must contain only non-empty HTTPS URLs"
+        ));
+    }
+    let checked = str_field(authority, "checkedOn").unwrap_or("");
+    if !valid_calendar_date(checked) {
+        problems.push(format!(
+            "CC-10: {key} authority checkedOn {checked:?} is not a valid YYYY-MM-DD date"
+        ));
+    }
+    let official = authority.get("officialBaseline");
+    if official.and_then(|value| str_field(value, "package")) != Some("firebase-tools")
+        || official.and_then(|value| str_field(value, "version")) != Some(baseline_version)
+    {
+        problems.push(format!(
+            "CC-10: {key} official baseline must separately name firebase-tools {baseline_version}"
+        ));
+    }
+    if str_field(authority, "decidedBy").is_none_or(str::is_empty)
+        && str_field(authority, "approvalRecord").is_none_or(str::is_empty)
+    {
+        problems.push(format!(
+            "CC-10: {key} authority needs decidedBy or approvalRecord"
+        ));
+    }
+    let Some(fixture) = str_field(authority, "fixture") else {
+        problems.push(format!("CC-10: {key} authority names no fixture"));
+        return;
+    };
+    let Some(fixture_key) = fixture_row_key(root, fixture) else {
+        problems.push(format!(
+            "CC-10: {key} authority fixture {fixture:?} does not name an existing documented-divergence row"
+        ));
+        return;
+    };
+    if fixture_key != key {
+        problems.push(format!(
+            "CC-10: {key} authority fixture points to different row {fixture_key}"
+        ));
+    }
+}
+
+fn fixture_row_key(root: &Path, reference: &str) -> Option<String> {
+    let mut parts = reference.split('#');
+    let path = parts.next()?;
+    let fragments: Vec<&str> = parts.collect();
+    let text = fs::read_to_string(root.join(path)).ok()?;
+    let value = serde_json::from_str::<Value>(&text).ok()?;
+    match fragments.as_slice() {
+        [step] => value
+            .get("steps")
+            .and_then(Value::as_array)
+            .is_some_and(|steps| {
+                steps.iter().any(|row| {
+                    str_field(row, "id") == Some(step)
+                        && str_field(row, "status") == Some("documented-divergence")
+                })
+            })
+            .then(|| format!("{}#{step}", str_field(&value, "id").unwrap_or(""))),
+        [program, step] => value
+            .get("programs")
+            .and_then(Value::as_array)
+            .and_then(|programs| {
+                programs
+                    .iter()
+                    .find(|candidate| str_field(candidate, "id") == Some(program))
+            })
+            .and_then(|program| program.get("steps"))
+            .is_some_and(|steps| match steps {
+                Value::Array(rows) => rows.iter().any(|row| {
+                    str_field(row, "id") == Some(step)
+                        && str_field(row, "status") == Some("documented-divergence")
+                }),
+                // Matrix files retain the measured oracle row while the canonical register
+                // supplies the current divergence and authority metadata at classification
+                // time. Existence of the named program/step is therefore the stable link.
+                Value::Object(rows) => rows.contains_key(*step),
+                _ => false,
+            })
+            .then(|| {
+                let prefix = if path.ends_with("pubsub-matrix.json") {
+                    "pubsub-probe/"
+                } else if path.ends_with("storage-matrix.json") {
+                    "storage-probe/"
+                } else {
+                    ""
+                };
+                format!("{prefix}{program}#{step}")
+            }),
+        _ => None,
+    }
+}
+
+fn valid_calendar_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    let Ok(year) = value[0..4].parse::<u32>() else {
+        return false;
+    };
+    let Ok(month) = value[5..7].parse::<u32>() else {
+        return false;
+    };
+    let Ok(day) = value[8..10].parse::<u32>() else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let maximum = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=maximum).contains(&day)
+}
+
+fn collect_json(dir: &Path, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_json(&path, files);
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            files.push(path);
+        }
+    }
 }
 
 /// How many fixture steps the claims exclude from their scope (`CC-09`), so every run prints

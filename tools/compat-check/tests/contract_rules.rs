@@ -1,4 +1,4 @@
-//! Table-driven fixtures for the compatibility gate (CC-01..CC-09).
+//! Table-driven fixtures for the compatibility gate (CC-01..CC-10).
 //!
 //! Each case builds a throw-away repository root that passes every rule, mutates exactly one
 //! thing, runs the checker over it and asserts on the reported problems. The last test runs the
@@ -43,6 +43,11 @@ impl Fixture {
             &json!({"dependencies": {"firebase-tools": "15.28.2"}}).to_string(),
         );
         fixture.write_config_schema(&json!(["firebase"]));
+        fixture.write_divergences(&json!({
+            "schemaVersion": 2,
+            "divergences": {},
+            "firestoreMatrixDivergences": {},
+        }));
         fixture.write(
             "README.md",
             &format!("# fixture\n\nSome prose.\n\n{CLAIM}\n\nRealtime Database is deferred.\n"),
@@ -95,6 +100,10 @@ impl Fixture {
 
     fn write_contract(&self, contract: &Value) {
         self.write("spec/compatibility/contract.json", &contract.to_string());
+    }
+
+    fn write_divergences(&self, divergences: &Value) {
+        self.write("conformance/divergences.json", &divergences.to_string());
     }
 }
 
@@ -634,9 +643,9 @@ fn cases() -> Vec<Case> {
                 "CC-09: claim FS-CLAIM-RPC: excluded step read of firestore/a-scenario is parity, not debt; the exclusion is stale",
             ),
         },
-        // CC-09: a documented divergence is evidence: it is gated against the recorded value.
+        // CC-10: a documented divergence without structured authority is not justified.
         Case {
-            name: "documented-divergence-is-evidence",
+            name: "documented-divergence-without-authority-is-refused",
             mutate: |_, _, fixture| {
                 fixture.write_fixture(
                     "firestore/a-scenario",
@@ -649,7 +658,115 @@ fn cases() -> Vec<Case> {
                     }]),
                 );
             },
+            expect: Some("CC-10: firestore/a-scenario#read has no authority entry"),
+        },
+        // CC-10: a justified divergence remains evidence when its authority is complete.
+        Case {
+            name: "documented-divergence-with-authority-is-evidence",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{
+                        "id": "read",
+                        "status": "documented-divergence",
+                        "documents": "README.md",
+                        "oracle": {"status": 200},
+                        "testd": {"status": 404},
+                    }]),
+                );
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "documents": "README.md",
+                            "reason": "the local policy is intentionally stricter",
+                            "authority": {
+                                "kind": "intentional-local-policy",
+                                "sourceUrls": ["https://firebase.google.com/docs/emulator-suite"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/a-scenario.json#read",
+                                "approvalRecord": "README.md#policy"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                }));
+            },
             expect: None,
+        },
+        Case {
+            name: "unverified-authority-cannot-justify-a-documented-divergence",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{"id": "read", "status": "documented-divergence"}]),
+                );
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "documents": "README.md",
+                            "reason": "not yet verified",
+                            "authority": {
+                                "kind": "unverified",
+                                "sourceUrls": ["https://firebase.google.com/docs/emulator-suite"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/a-scenario.json#read",
+                                "issue": "docs.local/issues/open/verify.md",
+                                "approvalRecord": "README.md#policy"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                }));
+            },
+            expect: Some("CC-10: firestore/a-scenario#read is unverified and cannot justify a documented divergence"),
+        },
+        Case {
+            name: "authority-source-must-be-https",
+            mutate: |_, _, fixture| {
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "authority": {
+                                "kind": "production-spec",
+                                "sourceUrls": ["http://example.test/spec"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/a-scenario.json#read",
+                                "decidedBy": "fireemu maintainers"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                }));
+            },
+            expect: Some("authority sourceUrls must contain only non-empty HTTPS URLs"),
+        },
+        Case {
+            name: "authority-must-name-an-existing-divergence-row",
+            mutate: |_, _, fixture| {
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "authority": {
+                                "kind": "production-spec",
+                                "sourceUrls": ["https://firebase.google.com/docs/firestore"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/missing.json#read",
+                                "decidedBy": "fireemu maintainers"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                }));
+            },
+            expect: Some("does not name an existing documented-divergence row"),
         },
         // CC-09: a row no local oracle can answer (production-only) is not emulator evidence,
         // so a fixture made only of such rows proves nothing.

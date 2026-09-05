@@ -208,6 +208,13 @@
           "key": "firestore.indexValidationPolicy",
           "profileValue": "emulator",
           "emulatorValue": "emulator",
+          "authorityRefs": [
+            "firestore/missing-composite-index#admin-two-equality-filters",
+            "firestore/missing-composite-index#admin-equality-plus-inequality",
+            "firestore/missing-composite-index#client-two-equality-filters",
+            "firestore/lite-rest-transport#query-needing-a-composite-index",
+            "firestore/rest-error-shapes#runQuery-needing-a-composite-index"
+          ],
           "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs and reports each assumption as FS_EMULATOR_INDEX_ASSUMED. The firebase value reproduces the Firebase backend instead, which refuses the same query; a run whose oracle is production rather than the emulator sets it explicitly. Both values are official behaviour of a different oracle; conservative is neither and belongs to the strict profile."
         },
         {
@@ -224,9 +231,28 @@
         },
         {
           "key": "firestore.semantics",
-          "profileValue": "the 324-row Firestore semantics matrix (conformance/firestore-matrix.json), with 17 rows pinned to fireemu's own answer in conformance/src/firestore-probe/divergences.mjs",
+          "profileValue": "the 324-row Firestore semantics matrix (conformance/firestore-matrix.json), with 17 rows pinned to fireemu's own answer and authority in conformance/divergences.json",
           "emulatorValue": "the same rows as the official emulator records them",
-          "note": "Measured against the pinned suite over the REST surface both emulators serve (last recorded 2026-08-31). The pinned divergence rows fall into four families: (1) the transaction model -- fireemu is optimistic (the reading transaction is ABORTED at commit and the out-of-band write succeeds) where the official emulator is pessimistic, locks the read set and refuses the out-of-band writer with ABORTED 'Transaction lock timeout.'; (2) official REST-adapter defects fireemu does not reproduce -- a bytes-typed query parameter (?transaction=) hangs the connection without a response, ?readTime= misparses, a malformed page token and a fileless :securityRules body answer HTTP 500; (3) official leniencies fireemu refuses -- a query without a collection selector, a write addressed to another database than the route, an uppercase database id; (4) capabilities fireemu serves that the official emulator refuses -- orderBy(__name__, desc) and PartitionQuery. Everything else in the matrix is parity, gated on status, canonical code and normalized body."
+          "authorityRefs": [
+            "values/type-order#descending-name-only",
+            "queries/collection-group#partition-query",
+            "transactions/lifecycle#get-with-transaction-query-parameter",
+            "transactions/lifecycle#out-of-band-write",
+            "transactions/lifecycle#contended-commit-is-aborted",
+            "transactions/lifecycle#counter-keeps-the-out-of-band-value",
+            "transactions/lifecycle#phantom-write",
+            "transactions/lifecycle#commit-after-a-phantom-row",
+            "errors/rest-shapes#run-query-without-from",
+            "errors/rest-shapes#from-with-empty-collection-id",
+            "errors/rest-shapes#write-to-another-database",
+            "errors/rest-shapes#list-with-bad-page-token",
+            "emulator/routes#put-rules-without-files",
+            "emulator/routes#write-to-a-named-database",
+            "emulator/routes#database-with-uppercase-name",
+            "reads/read-time#read-at-the-first-update-time",
+            "reads/read-time#list-at-the-first-update-time"
+          ],
+          "note": "Measured against the pinned suite over the REST surface both emulators serve (authority checked 2026-09-05). The pinned divergence rows fall into four families: (1) the transaction model -- fireemu is optimistic (the reading transaction is ABORTED at commit and the out-of-band write succeeds) where the official emulator is pessimistic, locks the read set and refuses the out-of-band writer with ABORTED 'Transaction lock timeout.'; (2) official REST-adapter defects fireemu does not reproduce -- a bytes-typed query parameter (?transaction=) hangs the connection without a response, ?readTime= misparses, a malformed page token and a fileless :securityRules body answer HTTP 500; (3) official leniencies fireemu refuses -- a query without a collection selector, a write addressed to another database than the route, an uppercase database id; (4) capabilities fireemu serves that the official emulator refuses -- orderBy(__name__, desc) and PartitionQuery. Everything else in the matrix is parity, gated on status, canonical code and normalized body."
         }
       ]
     },
@@ -1195,9 +1221,7 @@
               "crates/fireemu-adapter-functions/tests/runtime.rs",
               "crates/fireemu-core-events/tests/state_machine.rs",
               "crates/fireemu-core-events/tests/outbox.rs",
-              "crates/fireemu-adapter-functions/src/task_scheduler.rs::tests::queue_statistics_prune_each_record_at_the_exact_window_boundary",
-              "crates/fireemu-adapter-functions/src/task_scheduler.rs::tests::queue_statistics_preserves_same_timestamp_counts_and_window_boundaries",
-              "crates/fireemu-adapter-functions/src/task_scheduler.rs::tests::queue_statistics_history_is_bounded_when_queue_stats_is_never_read"
+              "crates/fireemu-adapter-functions/src/task_scheduler.rs"
             ],
             "conformance": []
           },
@@ -1951,11 +1975,11 @@
               "rest_put_routes_preserve_every_supported_subscription_field",
               "rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields",
               "snapshot_lifecycle_replays_backlog_and_post_creation_messages",
-              "functions_bridge_receives_the_full_source_topic_resource",
-              "pubsub_bridge_accepts_only_the_runtime_projects_full_topic_resource"
+              "functions_bridge_receives_the_full_source_topic_resource"
             ],
             "integration": [
               "crates/fireemu-adapter-pubsub/tests/grpc.rs",
+              "crates/fireemu/src/functions.rs",
               "conformance/pubsub-matrix.json"
             ],
             "conformance": [

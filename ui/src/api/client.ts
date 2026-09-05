@@ -81,7 +81,7 @@ export const request = <T = Json>(
   method: string,
   path: string,
   body?: unknown,
-  init?: { headers?: Record<string, string>; raw?: BodyInit },
+  init?: { headers?: Record<string, string>; raw?: BodyInit; accept?: number[] },
 ): ResultAsync<T, ApiError> =>
   ResultAsync.fromPromise(
     (async (): Promise<Result<T, ApiError>> => {
@@ -97,7 +97,9 @@ export const request = <T = Json>(
         body: payload ?? null,
       });
       const parsed = await parseBody(response);
-      if (!response.ok) {
+      // `accept` names non-2xx statuses whose body is an answer, not a failure (a 409 from
+      // a quiescence assertion carries the leaks).
+      if (!response.ok && !init?.accept?.includes(response.status)) {
         return err(parseApiError(response.status, parsed));
       }
       return ok(parsed as T);

@@ -66,4 +66,32 @@ test.describe("Runtime controls", () => {
     await page.getByTestId("session-delete-demo-b-confirm").click();
     await expect(table).not.toContainText("demo-b");
   });
+
+  test("reports what every service retains and asserts quiescence", async ({ page, request }) => {
+    await api(request, "PATCH", `${DOCS}/retained/a`, { fields: { v: { integerValue: "1" } } });
+    await gotoApp(page, "/runtime");
+    const report = page.getByTestId("resources-report");
+    await expect(report).toBeVisible();
+    for (const service of ["snapshots", "firestore", "storage", "auth", "pubsub", "functions"]) {
+      await expect(page.getByTestId(`resources-${service}`)).toBeVisible();
+    }
+    const firestore = page.getByTestId("resources-firestore");
+    await expect(firestore).toContainText("history.session_bytes");
+    await expect(firestore).toContainText("demo-app/(default)");
+    await expect(firestore.locator("tr[data-outstanding='true']")).toHaveCount(0);
+
+    // Nothing is outstanding on an idle daemon.
+    await page.getByTestId("resources-assert").click();
+    await expect(page.getByRole("status").filter({ hasText: "Quiescent" })).toBeVisible();
+
+    // An allowance that excuses nothing is reported, never silently accepted.
+    await page
+      .getByTestId("resources-allowances")
+      .fill("firestore transactions demo-app/(default) held by nobody");
+    await page.getByTestId("resources-assert").click();
+    const failure = page.getByTestId("quiescence-failure");
+    await expect(failure).toContainText("Not quiescent");
+    await expect(failure).toContainText("matched nothing");
+    await expect(failure).toContainText("demo-app/(default)");
+  });
 });

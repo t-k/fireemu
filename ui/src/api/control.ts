@@ -1,6 +1,7 @@
 import type { ResultAsync } from "neverthrow";
 import { request, type ApiError, type Json } from "./client";
 import type { Session } from "../config";
+import type { Allowance, QuiescenceResult, ResourceReport } from "../lib/resources";
 
 export type ClockInfo = { clock: string; backwardsSets: number };
 export type SessionInfo = {
@@ -127,6 +128,27 @@ export const awaitIdle = (
   timeoutSeconds: number,
 ): ResultAsync<{ idle: boolean }, ApiError> =>
   request("POST", `${base(session)}:awaitIdle`, { timeoutSeconds });
+
+/** The session's resource diagnostics (privileged: the page sends the control token). */
+export const sessionResources = (session: string): ResultAsync<ResourceReport, ApiError> =>
+  request<ResourceReport>("GET", `${base(session)}/resources`);
+
+/**
+ * Asserts that nothing beyond the exact allow-list is outstanding. A 409 is a valid answer
+ * (the leaks), so it is mapped to a result rather than an error.
+ */
+export const assertQuiescent = (
+  session: string,
+  allow: Allowance[],
+): ResultAsync<QuiescenceResult, ApiError> =>
+  request<QuiescenceResult>(
+    "POST",
+    `${base(session)}/resources:assertQuiescent`,
+    { allow },
+    {
+      accept: [200, 409],
+    },
+  );
 
 export const capabilities = (): ResultAsync<Json, ApiError> =>
   request("GET", "control/v1/capabilities");

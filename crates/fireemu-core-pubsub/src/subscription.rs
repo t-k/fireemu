@@ -255,6 +255,11 @@ impl SubscriptionState {
         }
     }
 
+    fn reclaim_acked_entries(&mut self) {
+        self.entries.retain(|entry| entry.state != Delivery::Acked);
+        self.rebuild_indexes();
+    }
+
     /// Appends a message that already passed the subscription filter. Returns
     /// `RESOURCE_EXHAUSTED` when the retention bound is reached and no acked entry can be
     /// reclaimed.
@@ -265,18 +270,27 @@ impl SubscriptionState {
     ) -> Result<()> {
         let stored = stored.into();
         let message_bytes = Self::message_bytes(&stored);
-        if self.entries.len() >= MAX_RETAINED_PER_SUB {
+        let exceeds_entry_limit = self.entries.len() >= MAX_RETAINED_PER_SUB;
+        let exceeds_byte_limit = self
+            .retained_bytes
+            .checked_add(message_bytes)
+            .is_none_or(|total| total > MAX_RETAINED_BYTES_PER_SUB);
+        if (exceeds_entry_limit || exceeds_byte_limit)
+            && self
+                .entries
+                .iter()
+                .any(|entry| entry.state == Delivery::Acked)
+        {
             // Reclaim the oldest acked entries first; a backlog of live messages cannot be
             // dropped, so a subscription that is never drained is bounded and refuses further
             // publishes rather than growing without limit.
-            self.entries.retain(|e| e.state != Delivery::Acked);
-            self.rebuild_indexes();
-            if self.entries.len() >= MAX_RETAINED_PER_SUB {
-                return Err(PubSubError::resource_exhausted(format!(
-                    "subscription {} retains the maximum of {MAX_RETAINED_PER_SUB} messages",
-                    self.config.name.to_full()
-                )));
-            }
+            self.reclaim_acked_entries();
+        }
+        if self.entries.len() >= MAX_RETAINED_PER_SUB {
+            return Err(PubSubError::resource_exhausted(format!(
+                "subscription {} retains the maximum of {MAX_RETAINED_PER_SUB} messages",
+                self.config.name.to_full()
+            )));
         }
         if self
             .retained_bytes
@@ -713,6 +727,25 @@ mod tests {
         s.enqueue(stored("new", b"b", 100), now).unwrap();
         assert_eq!(s.entries.len(), 1);
         assert_eq!(s.entries[0].stored.message_id, "new");
+    }
+
+    #[test]
+    fn byte_pressure_reclaims_acked_tombstones_before_refusing_a_publish() {
+        let mut s = SubscriptionState::new(cfg());
+        s.entries.push(Entry {
+            stored: Arc::new(stored("acked", b"a", 100)),
+            state: Delivery::Acked,
+            delivery_attempt: 1,
+        });
+        s.rebuild_indexes();
+        s.retained_bytes = MAX_RETAINED_BYTES_PER_SUB;
+
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("new", b"b", 100), now).unwrap();
+
+        assert_eq!(s.entries.len(), 1);
+        assert_eq!(s.entries[0].stored.message_id, "new");
+        assert_eq!(s.retained_bytes, 1);
     }
 
     #[test]

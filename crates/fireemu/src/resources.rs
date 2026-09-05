@@ -28,7 +28,9 @@ impl ResourceHook for Firestore {
         scope: &Scope,
         budget: RootBudget,
     ) -> Result<ServiceResources, TransitionFailure> {
-        Ok(self.0.resources(scope, budget))
+        self.0
+            .resources(scope, budget)
+            .map_err(|message| TransitionFailure::new("firestore", message))
     }
 }
 
@@ -53,7 +55,9 @@ impl ResourceHook for Functions {
                 roots: budget.bound(Vec::new()),
             });
         }
-        Ok(self.0.resources(budget))
+        self.0
+            .resources(budget)
+            .map_err(|message| TransitionFailure::new("functions", message))
     }
 }
 

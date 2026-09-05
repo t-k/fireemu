@@ -3,13 +3,8 @@
 // the executable expectation and reason consumed by the probe; authority metadata remains in
 // the canonical JSON register and is validated before classification.
 
-import { readValidatedDivergenceRegister } from "../divergence-authority.mjs";
+import { frozenExpectations, readValidatedDivergenceRegister } from "../divergence-authority.mjs";
 
-const register = readValidatedDivergenceRegister();
-
-export const DIVERGENCES = Object.fromEntries(
-  Object.entries(register.firestoreMatrixDivergences ?? {}).map(([key, entry]) => [
-    key,
-    { fireemu: entry.fireemu, reason: entry.reason },
-  ]),
+export const DIVERGENCES = frozenExpectations(
+  readValidatedDivergenceRegister().firestoreMatrixDivergences,
 );

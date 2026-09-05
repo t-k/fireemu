@@ -342,8 +342,17 @@ fn validate_authority_entry(
             problems.push(format!("CC-10: unverified authority {key} names no issue"));
         }
     }
-    let urls = strings(authority, "sourceUrls");
-    if urls.is_empty() || urls.iter().any(|url| !valid_https_url(url)) {
+    // Every element must be a string: a non-string element is a malformed list, never an
+    // element to skip.
+    let urls: Option<Vec<&str>> = authority
+        .get("sourceUrls")
+        .and_then(Value::as_array)
+        .map(|list| list.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
+        .unwrap_or_default();
+    if urls
+        .as_ref()
+        .is_none_or(|urls| urls.is_empty() || urls.iter().any(|url| !valid_https_url(url)))
+    {
         problems.push(format!(
             "CC-10: {key} authority sourceUrls must contain only non-empty HTTPS URLs"
         ));
@@ -376,7 +385,19 @@ fn validate_authority_entry(
         problems.push(format!("CC-10: {key} authority names no fixture"));
         return;
     };
-    let Some(fixture_key) = fixture_row_key(root, fixture) else {
+    if !well_formed_fixture(fixture) {
+        problems.push(format!(
+            "CC-10: {key} authority fixture must be a repository-relative conformance file ({fixture:?})"
+        ));
+        return;
+    }
+    if fixture_escapes_root(root, fixture) {
+        problems.push(format!(
+            "CC-10: {key} authority fixture must stay inside the repository ({fixture:?})"
+        ));
+        return;
+    }
+    let Some(fixture_key) = fixture_row_key(root, fixture, entry.get("fireemu")) else {
         problems.push(format!(
             "CC-10: {key} authority fixture {fixture:?} does not name an existing documented-divergence row"
         ));
@@ -397,10 +418,50 @@ fn valid_https_url(value: &str) -> bool {
     !authority.is_empty()
         && !authority.contains('@')
         && authority.contains('.')
-        && !value.chars().any(char::is_whitespace)
+        && !value.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
-fn fixture_row_key(root: &Path, reference: &str) -> Option<String> {
+/// `conformance/<path>.json#<row>` or `conformance/<path>.json#<program>#<row>`, with plain
+/// path segments only: no absolute path, no `..`, no backslash, nothing outside `conformance/`.
+/// The same rule the Node validator (`conformance/src/divergence-authority.mjs`) applies, so
+/// neither gate accepts what the other refuses.
+fn well_formed_fixture(value: &str) -> bool {
+    let Some((path, fragments)) = value.split_once('#') else {
+        return false;
+    };
+    let fragments: Vec<&str> = fragments.split('#').collect();
+    (1..=2).contains(&fragments.len())
+        && fragments.iter().all(|fragment| !fragment.is_empty())
+        && path.starts_with("conformance/")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        && path.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && segment != ".."
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        })
+}
+
+/// Whether the fixture file, once symbolic links are resolved, lies outside the repository.
+/// A missing file is not an escape; `fixture_row_key` reports it as a missing row.
+fn fixture_escapes_root(root: &Path, reference: &str) -> bool {
+    let path = reference.split('#').next().unwrap_or(reference);
+    match (root.join(path).canonicalize(), root.canonicalize()) {
+        (Ok(file), Ok(root)) => !file.starts_with(&root),
+        _ => false,
+    }
+}
+
+/// Resolves an authority's fixture reference to the register key it justifies, or `None`
+/// when no documented-divergence row exists there. `pinned` is the register entry's
+/// `fireemu` value: an object-shaped matrix row binds only when its recorded oracle answer
+/// differs from it, because the matrix's own `divergence` marks are regenerated from the
+/// register and a pinned answer equal to the oracle documents no divergence at all.
+fn fixture_row_key(root: &Path, reference: &str, pinned: Option<&Value>) -> Option<String> {
     let mut parts = reference.split('#');
     let path = parts.next()?;
     let fragments: Vec<&str> = parts.collect();
@@ -423,8 +484,11 @@ fn fixture_row_key(root: &Path, reference: &str) -> Option<String> {
             {
                 Some(format!("{id}#{step}"))
             } else {
-                value
-                    .get("claims")
+                // Claim rows are keyed by their id alone, so only the Rules matrix may carry
+                // them: another file with a same-named claim must not bind.
+                (path == "conformance/rules-matrix.json")
+                    .then(|| value.get("claims"))
+                    .flatten()
                     .and_then(Value::as_array)
                     .is_some_and(|claims| {
                         claims.iter().any(|row| {
@@ -448,10 +512,13 @@ fn fixture_row_key(root: &Path, reference: &str) -> Option<String> {
                     str_field(row, "id") == Some(step)
                         && str_field(row, "status") == Some("documented-divergence")
                 }),
-                // Matrix files retain the measured oracle row while the canonical register
-                // supplies the current divergence and authority metadata at classification
-                // time. Existence of the named program/step is therefore the stable link.
-                Value::Object(rows) => rows.contains_key(*step),
+                // Matrix files retain the measured oracle answer; the canonical register
+                // supplies the pinned fireemu answer and the authority. The two must differ,
+                // or the entry documents no divergence.
+                Value::Object(rows) => rows
+                    .get(*step)
+                    .and_then(|row| row.get("oracle"))
+                    .is_some_and(|oracle| pinned.is_some_and(|pinned| pinned != oracle)),
                 _ => false,
             })
             .then(|| {

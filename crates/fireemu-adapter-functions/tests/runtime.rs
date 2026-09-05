@@ -2463,7 +2463,7 @@ async fn history_cursors_deliver_deltas_and_resync_across_eviction_and_reset() {
 async fn resources_report_running_invocations_as_outstanding_roots() {
     use fireemu_core_types::resources::RootBudget;
     let (runtime, _clock) = start().await;
-    let idle = runtime.resources(RootBudget::DEFAULT);
+    let idle = runtime.resources(RootBudget::DEFAULT).unwrap();
     assert_eq!(idle.service, "functions");
     assert_eq!(idle.roots.total, 0);
     let gauge = |report: &fireemu_core_types::resources::ServiceResources, id: &str| {
@@ -2491,7 +2491,7 @@ async fn resources_report_running_invocations_as_outstanding_roots() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let busy = runtime.resources(RootBudget::DEFAULT);
+    let busy = runtime.resources(RootBudget::DEFAULT).unwrap();
     assert_eq!(gauge(&busy, "invocations.running").current, 1);
     assert_eq!(
         gauge(&busy, "invocations.running").limit,

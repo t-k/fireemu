@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -30,6 +30,20 @@ function repositoryRoot() {
     { id: "agreed", status: "parity", value: {} },
   ]);
   write("other.json", "firestore/other", [{ id: "step", status: "documented-divergence" }]);
+  writeFileSync(
+    join(root, "conformance", "firestore-matrix.json"),
+    JSON.stringify({
+      programs: [
+        {
+          id: "values/type-order",
+          steps: {
+            "descending-name-only": { oracle: { status: 200 } },
+            ascending: { oracle: { status: 200 } },
+          },
+        },
+      ],
+    }),
+  );
   mkdirSync(join(root, "docs"), { recursive: true });
   writeFileSync(
     join(root, "docs", "not-a-fixture.json"),
@@ -251,4 +265,58 @@ test("the checked-in register is frozen after validation and cannot be promoted 
     annotations: copy,
   });
   assert.equal(promoted[0].status, STATUS.debt);
+});
+
+test("an object-shaped matrix row binds only when the pinned answer differs from the oracle", () => {
+  const pinned = {
+    fireemu: { status: 409 },
+    reason: "pinned",
+    authority: {
+      ...entry().authority,
+      fixture: "conformance/firestore-matrix.json#values/type-order#descending-name-only",
+    },
+  };
+  const register = {
+    schemaVersion: 2,
+    divergences: {},
+    firestoreMatrixDivergences: { "values/type-order#descending-name-only": pinned },
+    rulesMatrixDivergences: {},
+  };
+  assert.deepEqual(validate(register), []);
+
+  const parity = {
+    ...pinned,
+    fireemu: { status: 200 },
+    authority: {
+      ...pinned.authority,
+      fixture: "conformance/firestore-matrix.json#values/type-order#ascending",
+    },
+  };
+  const promoted = {
+    ...register,
+    firestoreMatrixDivergences: { "values/type-order#ascending": parity },
+  };
+  assert.match(problemsOf(promoted), /does not name an existing documented-divergence row/);
+});
+
+test("a fixture reached through a symbolic link out of the repository is refused", () => {
+  const outside = join(tmpdir(), `fireemu-outside-${process.pid}.json`);
+  writeFileSync(
+    outside,
+    JSON.stringify({
+      id: "firestore/example",
+      steps: [{ id: "step", status: "documented-divergence" }],
+    }),
+  );
+  const link = join(root, "conformance", "fixtures", "firestore", "linked.json");
+  symlinkSync(outside, link);
+  try {
+    assert.match(
+      problemsOf(register(entry({ fixture: "conformance/fixtures/firestore/linked.json#step" }))),
+      /must stay inside the repository/,
+    );
+  } finally {
+    rmSync(link, { force: true });
+    rmSync(outside, { force: true });
+  }
 });

@@ -3651,10 +3651,12 @@ fn resources_report_the_session_charge_active_transactions_and_refusals() {
         })
         .unwrap();
 
-    let default = backend.resources(
-        &Scope::AllExcept(std::collections::BTreeSet::new()),
-        RootBudget::DEFAULT,
-    );
+    let default = backend
+        .resources(
+            &Scope::AllExcept(std::collections::BTreeSet::new()),
+            RootBudget::DEFAULT,
+        )
+        .unwrap();
     assert_eq!(default.service, "firestore");
     let gauge = |report: &fireemu_core_types::resources::ServiceResources, id: &str| {
         report
@@ -3703,7 +3705,9 @@ fn resources_report_the_session_charge_active_transactions_and_refusals() {
     );
 
     // A project session sees its own databases and never the backend-wide totals.
-    let project = backend.resources(&Scope::Project("demo-a".to_owned()), RootBudget::DEFAULT);
+    let project = backend
+        .resources(&Scope::Project("demo-a".to_owned()), RootBudget::DEFAULT)
+        .unwrap();
     assert!(project
         .gauges
         .iter()
@@ -3713,7 +3717,9 @@ fn resources_report_the_session_charge_active_transactions_and_refusals() {
         .roots
         .iter()
         .any(|r| r.id == "demo-a/(default)"));
-    let other = backend.resources(&Scope::Project("demo-z".to_owned()), RootBudget::DEFAULT);
+    let other = backend
+        .resources(&Scope::Project("demo-z".to_owned()), RootBudget::DEFAULT)
+        .unwrap();
     assert_eq!(other.roots.total, 0);
     assert_eq!(gauge(&other, "transactions.active").current, 0);
 }

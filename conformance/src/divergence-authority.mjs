@@ -7,8 +7,8 @@
 // cannot accept what the repository gate would refuse, and freezes the validated register so
 // nothing can promote a row after validation.
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { resolve, sep } from "node:path";
 
 import { REPO_ROOT } from "./config.mjs";
 
@@ -71,6 +71,18 @@ const wellFormedFixture = (value) =>
     .split("/")
     .some((segment) => segment === "." || segment === "..");
 
+/** Whether the fixture file, symbolic links resolved, lies outside `root`. */
+const fixtureEscapesRoot = (root, reference) => {
+  const path = reference.split("#")[0];
+  try {
+    const file = realpathSync(resolve(root, path));
+    const real = realpathSync(root);
+    return file !== real && !file.startsWith(real + sep);
+  } catch {
+    return false;
+  }
+};
+
 const readJson = (path) => {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -81,12 +93,26 @@ const readJson = (path) => {
 
 const rowId = (row) => (row && typeof row === "object" ? row.id : undefined);
 
+/** Structural equality over JSON values, independent of object key order. */
+const sameJson = (a, b) => {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((v, i) => sameJson(v, b[i]));
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((k) => Object.hasOwn(b, k) && sameJson(a[k], b[k]))
+  );
+};
+
 /**
  * Resolves a fixture reference to the register key it identifies, mirroring
- * `fixture_row_key` in the Rust gate. Returns `undefined` when no documented-divergence row
- * exists at that reference.
+ * `fixture_row_key` in the Rust gate. `pinned` is the entry's `fireemu` value: an
+ * object-shaped matrix row binds only when its recorded oracle answer differs from it,
+ * because the matrix's own `divergence` marks are regenerated from the register.
  */
-export function fixtureRowKey(root, reference) {
+export function fixtureRowKey(root, reference, pinned) {
   const [path, ...fragments] = reference.split("#");
   const value = readJson(resolve(root, path));
   if (!value || typeof value !== "object") return undefined;
@@ -96,7 +122,11 @@ export function fixtureRowKey(root, reference) {
     if (steps?.some((row) => rowId(row) === step && row.status === "documented-divergence")) {
       return `${value.id ?? ""}#${step}`;
     }
-    const claims = Array.isArray(value.claims) ? value.claims : undefined;
+    // Claim rows are keyed by their id alone, so only the Rules matrix may carry them.
+    const claims =
+      path === "conformance/rules-matrix.json" && Array.isArray(value.claims)
+        ? value.claims
+        : undefined;
     if (claims?.some((row) => rowId(row) === step && row.divergence !== undefined)) {
       return step;
     }
@@ -108,9 +138,12 @@ export function fixtureRowKey(root, reference) {
   const steps = program?.steps;
   const present = Array.isArray(steps)
     ? steps.some((row) => rowId(row) === step && row.status === "documented-divergence")
-    : // Matrix files retain the measured oracle row while the canonical register supplies
-      // the current divergence and authority metadata at classification time.
-      steps !== null && typeof steps === "object" && Object.hasOwn(steps, step);
+    : steps !== null &&
+      typeof steps === "object" &&
+      Object.hasOwn(steps, step) &&
+      steps[step]?.oracle !== undefined &&
+      pinned !== undefined &&
+      !sameJson(steps[step].oracle, pinned);
   if (!present) return undefined;
   const prefix = path.endsWith("pubsub-matrix.json")
     ? "pubsub-probe/"
@@ -120,7 +153,7 @@ export function fixtureRowKey(root, reference) {
   return `${prefix}${programId}#${step}`;
 }
 
-function validateAuthority(key, authority, baselineVersion, root, problems) {
+function validateAuthority(key, authority, baselineVersion, root, problems, pinned) {
   if (!KINDS.has(authority.kind)) problems.push(`${key}: unknown authority kind`);
   if (authority.kind === "unverified") {
     problems.push(`${key}: unverified authority cannot justify a divergence`);
@@ -157,7 +190,11 @@ function validateAuthority(key, authority, baselineVersion, root, problems) {
     problems.push(`${key}: fixture must be a repository-relative conformance file`);
     return;
   }
-  const fixtureKey = fixtureRowKey(root, authority.fixture);
+  if (fixtureEscapesRoot(root, authority.fixture)) {
+    problems.push(`${key}: fixture must stay inside the repository`);
+    return;
+  }
+  const fixtureKey = fixtureRowKey(root, authority.fixture, pinned);
   if (fixtureKey === undefined) {
     problems.push(
       `${key}: fixture ${authority.fixture} does not name an existing documented-divergence row`,
@@ -209,7 +246,7 @@ export function validateDivergenceRegister(register, baselineVersion, { root = R
         problems.push(`${key}: authority is required`);
         continue;
       }
-      validateAuthority(key, authority, baselineVersion, root, problems);
+      validateAuthority(key, authority, baselineVersion, root, problems, entry.fireemu);
     }
   }
   return problems;
@@ -240,3 +277,17 @@ export function readValidatedDivergenceRegister() {
 }
 
 export const isValidatedDivergenceMap = (value) => validatedMaps.has(value);
+
+/**
+ * A frozen `{key: {fireemu, reason}}` view of one matrix section for the probes that pin
+ * expectations, so a derived map is as immutable as the register it came from.
+ */
+export const frozenExpectations = (section) =>
+  deepFreeze(
+    Object.fromEntries(
+      Object.entries(section ?? {}).map(([key, entry]) => [
+        key,
+        { fireemu: entry.fireemu, reason: entry.reason },
+      ]),
+    ),
+  );

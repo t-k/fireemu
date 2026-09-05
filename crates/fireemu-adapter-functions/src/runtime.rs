@@ -26,7 +26,7 @@ use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
 use fireemu_core_types::resources::{
-    Gauge, Refusal, RetentionRoot, RetentionRoots, RootBudget, ServiceResources, Unit,
+    Gauge, Refusal, RetentionRoot, RootBudget, ServiceResources, Unit,
 };
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
@@ -2938,17 +2938,17 @@ impl FunctionsRuntime {
     /// Eventarc records and bytes, the retained history windows and running work, each against
     /// its limit, with one outstanding root per queued event and running invocation. Payloads
     /// are never included; an event root carries its identifier and retained byte count only.
-    #[must_use]
-    pub fn resources(&self, budget: RootBudget) -> ServiceResources {
-        let Ok(inner) = self.inner.lock() else {
-            return ServiceResources {
-                service: "functions".to_owned(),
-                gauges: Vec::new(),
-                refusals: Vec::new(),
-                roots: RetentionRoots::default(),
-            };
-        };
-        ServiceResources {
+    ///
+    /// # Errors
+    ///
+    /// A poisoned runtime lock is an error, never an empty report: an empty report would read
+    /// as "quiescent" while work may still be outstanding.
+    pub fn resources(&self, budget: RootBudget) -> Result<ServiceResources, String> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| "the functions runtime state is poisoned".to_owned())?;
+        Ok(ServiceResources {
             service: "functions".to_owned(),
             gauges: self.resource_gauges(&inner),
             refusals: vec![Refusal {
@@ -2956,7 +2956,7 @@ impl FunctionsRuntime {
                 count: inner.overlap_rejected,
             }],
             roots: budget.bound(Self::resource_roots(&inner)),
-        }
+        })
     }
 
     fn resource_roots(inner: &Inner) -> Vec<RetentionRoot> {

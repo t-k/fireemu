@@ -127,8 +127,10 @@ jobs:
         run: cargo check --workspace --all-targets
 
   # The platforms fireemu publishes binaries for, so a change that only breaks one of them is
-  # caught before a tag is cut rather than during a release. The Ubuntu `pr` status above joins
-  # the full lint, test and verification gates, while these two run the tests only.
+  # caught before a tag is cut rather than during a release. The automatic Ubuntu `pr` status
+  # above only formats and compiles (`cargo check`); it runs no test. Runtime tests run here and
+  # in the manual `lint`, `test` and `verify` jobs, and locally through
+  # scripts/local-regression-gate (docs/development.md).
   #
   # Linux arm64 is not here: it shares this source with linux x64 and is exercised in the
   # release workflow, which builds and tests it on a native arm64 runner.

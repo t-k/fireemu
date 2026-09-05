@@ -286,12 +286,45 @@ pub const APP_CHECK_OBSERVATIONS_SUFFIX: &str = "/appCheck/observations";
 /// Where one session's resource diagnostics are served. Privileged for every method: the
 /// report names retention roots and refusal counts a page must not read without the token.
 pub const RESOURCES_SUFFIX: &str = "/resources";
+/// The quiescence assertion on the same report.
+pub const RESOURCES_ASSERT_SUFFIX: &str = "/resources:assertQuiescent";
 
 /// Whether a response to `path` must carry `Cache-Control: no-store`.
 #[must_use]
 pub fn is_no_store_path(path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
-    path.starts_with("/v1/sessions/") && path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX)
+    path.starts_with("/v1/sessions/")
+        && (path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX) || is_resources_path(path))
+}
+
+/// The resource report is privileged for pages on every method (see [`RESOURCES_SUFFIX`]);
+/// this check is repeated after the query string is stripped so it cannot depend on the
+/// browser guard's spelling alone.
+fn resources_guard(
+    state: &ControlState,
+    path: &str,
+    headers: &RequestHeaders,
+) -> Option<JsonResponse> {
+    if !is_resources_path(path) || headers.origin.is_none() {
+        return None;
+    }
+    let presented = headers
+        .authorization
+        .as_deref()
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .map(str::trim);
+    (!token_matches(presented, &state.control_token)).then(|| {
+        error(
+            403,
+            "CONTROL_TOKEN_REQUIRED : resource diagnostics need Authorization: Bearer <control token> on every method",
+        )
+    })
+}
+
+/// Whether a query-stripped path is one of the resource diagnostics routes.
+fn is_resources_path(path: &str) -> bool {
+    path.starts_with("/v1/sessions/")
+        && (path.ends_with(RESOURCES_SUFFIX) || path.ends_with(RESOURCES_ASSERT_SUFFIX))
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -412,6 +445,9 @@ pub fn handle_with(
         return refusal;
     }
     let path = path.split('?').next().unwrap_or(path);
+    if let Some(refusal) = resources_guard(state, path, headers) {
+        return refusal;
+    }
     match (method, path) {
         ("GET", "/health/live" | "/health/ready") => ok(json!({"status": "ok"})),
         ("GET", "/v1/capabilities") => ok(state.capabilities.value()),
@@ -2053,9 +2089,19 @@ fn allowance_field(entry: &Value, field: &str) -> Result<String, String> {
             "allow[].{field} must be 1 to {MAX_ALLOWANCE_FIELD} bytes"
         ));
     }
-    if value.chars().any(char::is_control) {
+    if value.chars().any(|c| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{200B}'..='\u{200F}'
+                    | '\u{202A}'..='\u{202E}'
+                    | '\u{2060}'..='\u{2064}'
+                    | '\u{2066}'..='\u{2069}'
+                    | '\u{FEFF}'
+            )
+    }) {
         return Err(format!(
-            "allow[].{field} must not contain control characters"
+            "allow[].{field} must not contain control or bidi formatting characters"
         ));
     }
     Ok(value.to_owned())
@@ -2273,8 +2319,10 @@ pub fn browser_guard(
     if !crate::identity_toolkit::origin_is_local(origin) {
         return Some(error(403, "FORBIDDEN_ORIGIN"));
     }
-    let privileged = (method != "GET" && !path.starts_with("/health/"))
-        || (path.starts_with("/v1/sessions/") && path.ends_with(RESOURCES_SUFFIX));
+    // Decide on the same path the router matches: a query string must not change which
+    // routes are privileged.
+    let path = path.split('?').next().unwrap_or(path);
+    let privileged = (method != "GET" && !path.starts_with("/health/")) || is_resources_path(path);
     let presented = headers
         .authorization
         .as_deref()

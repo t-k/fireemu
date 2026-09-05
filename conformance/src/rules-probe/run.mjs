@@ -14,7 +14,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
-import { readValidatedDivergenceRegister } from "../divergence-authority.mjs";
+import { frozenExpectations, readValidatedDivergenceRegister } from "../divergence-authority.mjs";
 import { CLAIMS, AREA_NAMES } from "./matrix.mjs";
 import { PROGRAMS } from "./programs.mjs";
 import { programExpectation } from "./program-expectations.mjs";
@@ -146,13 +146,7 @@ async function probeFireemu(inPath, outPath, script = "src/rules-probe/session.m
   return JSON.parse(await readFile(outPath, "utf8"));
 }
 
-const register = readValidatedDivergenceRegister();
-const DIVERGENCES = Object.fromEntries(
-  Object.entries(register.rulesMatrixDivergences).map(([key, entry]) => [
-    key,
-    { fireemu: entry.fireemu, reason: entry.reason },
-  ]),
-);
+const DIVERGENCES = frozenExpectations(readValidatedDivergenceRegister().rulesMatrixDivergences);
 
 const claimList = () => [...CLAIMS, ...generated(SEED, GENERATED)];
 

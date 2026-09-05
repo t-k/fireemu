@@ -1920,3 +1920,54 @@ fn quiescence_assertions_need_exact_allowances_and_refuse_incomplete_reports() {
     let r = handle(&s, "POST", path, &json!({}));
     assert_eq!(r.status, 500, "{}", r.body);
 }
+
+#[test]
+fn the_resources_guard_holds_with_query_strings_and_the_report_is_never_cached() {
+    let hook = FakeResources::new(1, false);
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.resource_hooks = vec![hook.clone()];
+    let page = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        ..RequestHeaders::default()
+    };
+    for path in [
+        "/v1/sessions/default/resources?",
+        "/v1/sessions/default/resources?x=1",
+        "/v1/sessions/default/resources?%2F",
+    ] {
+        let r = handle_with(&s, "GET", path, &page, &json!({}));
+        assert_eq!(r.status, 403, "{path}: {}", r.body);
+    }
+    let r = handle_with(
+        &s,
+        "POST",
+        "/v1/sessions/default/resources:assertQuiescent?",
+        &page,
+        &json!({}),
+    );
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert!(
+        hook.scopes.lock().unwrap().is_empty(),
+        "a refused request collects nothing"
+    );
+    assert!(fireemu_adapter_http::control::is_no_store_path(
+        "/v1/sessions/default/resources"
+    ));
+    assert!(fireemu_adapter_http::control::is_no_store_path(
+        "/v1/sessions/default/resources?x=1"
+    ));
+    assert!(!fireemu_adapter_http::control::is_no_store_path(
+        "/v1/sessions/default/snapshots"
+    ));
+
+    // Allowances reject Unicode bidi and zero-width formatting characters as well as C0.
+    for bad in ["reason\u{202E}", "id\u{200B}", "\u{2066}kind"] {
+        let r = handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/resources:assertQuiescent",
+            &json!({"allow": [{"service": "fake", "kind": "transaction", "id": "tx-default", "reason": bad}]}),
+        );
+        assert_eq!(r.status, 400, "{bad:?} => {}", r.body);
+    }
+}

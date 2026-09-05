@@ -1174,17 +1174,23 @@ impl LocalBackend {
     }
 
     /// One session's Firestore retention report for the resource diagnostics: the session's
-    /// logical history charge against its limits (and the backend-wide charge for the default
-    /// session only, so a session never reads another session's totals), the refusals the
-    /// ledger counted by limit, and one root per database plus one per database with active
-    /// transactions. Each database is read under its own lock, one after another; the report
-    /// never holds two databases' locks or the catalog lock while reading a database.
-    #[must_use]
+    /// logical history charge against its limits (the backend-wide charge for the default
+    /// session only, so a session never reads another session's byte or version totals), the
+    /// ledger's refusal counts by limit (backend-wide counts by category, carrying no
+    /// identifier), and one root per database plus one per database with active transactions.
+    /// Each database is read under its own lock, one after another; the report never holds
+    /// two databases' locks or the catalog lock while reading a database.
+    ///
+    /// # Errors
+    ///
+    /// A database whose lock is poisoned or that was detached while the report was collected
+    /// is an error, never a silently missing root: its transactions would otherwise vanish
+    /// from a report that claims to be complete.
     pub fn resources(
         &self,
         scope: &fireemu_core_session::tenancy::Scope,
         budget: RootBudget,
-    ) -> ServiceResources {
+    ) -> Result<ServiceResources, String> {
         let owner = match scope {
             fireemu_core_session::tenancy::Scope::Project(project) => {
                 HistoryBudgetOwner::Project(project.clone())
@@ -1192,14 +1198,19 @@ impl LocalBackend {
             fireemu_core_session::tenancy::Scope::AllExcept(_) => HistoryBudgetOwner::Default,
         };
         let (mut gauges, refusals) = self.history_budget_gauges(&owner, scope.is_default());
-        let (database_gauges, roots) = self.database_roots(scope);
+        let (database_gauges, roots, unreadable) = self.database_roots(scope);
+        if unreadable > 0 {
+            return Err(format!(
+                "{unreadable} database(s) could not be read (poisoned or detached during the report)"
+            ));
+        }
         gauges.extend(database_gauges);
-        ServiceResources {
+        Ok(ServiceResources {
             service: "firestore".to_owned(),
             gauges,
             refusals,
             roots: budget.bound(roots),
-        }
+        })
     }
 
     /// The ledger's view: the owner's charge against the session limits, the backend-wide
@@ -1264,15 +1275,17 @@ impl LocalBackend {
     fn database_roots(
         &self,
         scope: &fireemu_core_session::tenancy::Scope,
-    ) -> (Vec<Gauge>, Vec<RetentionRoot>) {
+    ) -> (Vec<Gauge>, Vec<RetentionRoot>, usize) {
         let mut roots = Vec::new();
         let mut live_bytes = 0u64;
         let mut historical_bytes = 0u64;
         let mut transactions = 0u64;
+        let mut unreadable = 0usize;
         for ((project, database), handle) in self.handles_of(scope) {
             let Some((usage, stats)) =
                 handle.read(|state| (state.history_usage(), state.transaction_bookkeeping_stats()))
             else {
+                unreadable += 1;
                 continue;
             };
             live_bytes = live_bytes.saturating_add(usage.live_document_bytes);
@@ -1307,7 +1320,7 @@ impl LocalBackend {
             ),
             Gauge::logical("transactions.active", Unit::Count, transactions, None),
         ];
-        (gauges, roots)
+        (gauges, roots, unreadable)
     }
 
     /// Aggregate logical Firestore history retained by the backend.

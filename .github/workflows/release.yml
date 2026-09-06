@@ -312,7 +312,7 @@ jobs:
           # download-artifact writes `<path>/package-<name>/...`; the scripts want `<name>/`.
           cd npm/platforms/build
           for dir in package-*; do mv "$dir" "${dir#package-}"; done
-          ls -R . | head -50
+          find . -maxdepth 2 -print | sort | head -50
 
       - name: stamp the version
         run: node npm/scripts/stamp-version.mjs ${{ needs.plan.outputs.version }}

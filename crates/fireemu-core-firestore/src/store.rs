@@ -2498,9 +2498,10 @@ impl FirestoreState {
     /// times are strictly monotonic per database even when the clock did not advance, so
     /// `update_time` preconditions cannot be satisfied by a stale timestamp.
     ///
-    /// Transaction concurrency is optimistic: independent writes commit immediately, while a
-    /// transaction whose document or query snapshot changed is aborted before any staged
-    /// write is published. SDKs retry that attempt against a new snapshot.
+    /// Transaction concurrency is pessimistic, as in production: what an active read-write
+    /// transaction read is locked (see `check_contention`), and a transaction whose read set
+    /// nevertheless changed is aborted before any staged write is published. SDKs retry that
+    /// attempt against a new snapshot.
     pub fn commit(
         &mut self,
         writes: &[Write],
@@ -2785,6 +2786,34 @@ impl FirestoreState {
             }
         }
         Err(FirestoreError::Aborted(TOO_MUCH_CONTENTION.into()))
+    }
+
+    /// The active read-write transactions whose locks `writes` would collide with, other than
+    /// `own`: what a refused writer is waiting on.
+    #[must_use]
+    pub fn lock_holders(
+        &self,
+        writes: &[Write],
+        own: Option<&TransactionId>,
+    ) -> Vec<TransactionId> {
+        self.transactions
+            .iter()
+            .filter(|(id, holder)| {
+                holder.state == TransactionState::Active
+                    && !holder.read_only
+                    && holder.read_version >= self.compaction_floor
+                    && own != Some(*id)
+                    && writes.iter().any(|write| {
+                        let path = write.op.path();
+                        holder.read_set.contains_key(path)
+                            || holder
+                                .queries
+                                .iter()
+                                .any(|(query, _)| path_in_scope(path, &query.scope))
+                    })
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 
     /// Whether `id` names a transaction that is still active (a commit refused for lock

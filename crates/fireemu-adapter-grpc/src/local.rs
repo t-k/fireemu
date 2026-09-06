@@ -60,6 +60,10 @@ struct DatabaseEntry {
     cell: RwLock<DatabaseCell>,
     /// Wakes writers refused for lock contention when a transaction finishes.
     releases: TransactionReleases,
+    /// When each transaction first blocked a writer (wall clock). A transaction that keeps
+    /// writers blocked for the lock lease is rolled back the way production expires an idle
+    /// transaction, so a virtual clock that does not move cannot hold a lock forever.
+    blocking_since: Mutex<BTreeMap<TransactionId, std::time::Instant>>,
 }
 
 impl DatabaseEntry {
@@ -71,6 +75,7 @@ impl DatabaseEntry {
                 state,
             }),
             releases: TransactionReleases::default(),
+            blocking_since: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -219,6 +224,9 @@ pub struct LocalBackend {
     /// transaction holds on what it read before it is refused with `ABORTED` (production:
     /// "Too much contention on these documents"). Zero refuses at once.
     contention_wait: std::time::Duration,
+    /// How long (wall clock) a transaction may keep writers blocked before it is rolled back
+    /// the way production expires an idle transaction (see [`DEFAULT_LOCK_LEASE`]).
+    lock_lease: std::time::Duration,
     /// Unpinned compatibility runs sample wall time for each Firestore write while every
     /// other product and explicitly pinned run continues to use the virtual clock.
     wall_clock_write_time: bool,
@@ -579,6 +587,13 @@ impl CommitPublication for NoopCommitPublication {
 /// transactions/lifecycle#out-of-band-write); the official emulator answers "Transaction lock
 /// timeout." on the same shape. fireemu waits this long.
 pub const DEFAULT_CONTENTION_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// How long (wall clock) a transaction may keep other writers blocked on its locks before it
+/// is rolled back: production expires a transaction idle for 60 seconds, which is what
+/// releases a lock a client stopped driving. The lease is wall time even under a pinned
+/// virtual clock, so a client awaiting a write that its own transaction blocks (a pattern
+/// the SDKs' commit retries turn into a long wait in production too) eventually proceeds.
+pub const DEFAULT_LOCK_LEASE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Commit notifications retained for slow Listen and UI subscribers. Lag is recoverable by
 /// reading one current database snapshot, so a small ring bounds retained path metadata.
@@ -972,6 +987,7 @@ impl LocalBackend {
         Self {
             created_at,
             contention_wait: std::time::Duration::ZERO,
+            lock_lease: DEFAULT_LOCK_LEASE,
             gateway,
             indexes,
             clock,
@@ -1008,6 +1024,13 @@ impl LocalBackend {
     #[must_use]
     pub const fn contention_wait(&self) -> std::time::Duration {
         self.contention_wait
+    }
+
+    /// How long a transaction may keep writers blocked before it is rolled back.
+    #[must_use]
+    pub const fn with_lock_lease(mut self, lease: std::time::Duration) -> Self {
+        self.lock_lease = lease;
+        self
     }
 
     /// Uses host wall time for Firestore commit timestamps. This is selected only when the
@@ -2846,11 +2869,56 @@ impl LocalBackend {
             let (handle, marker) = self.release_marker(req)?;
             match self.commit_once(req, guard) {
                 Err(status) if self.should_wait_for_release(req, &handle, &status, deadline) => {
-                    handle.wait_for_release(marker, deadline);
+                    if !self.expire_lock_leases(req, &handle) {
+                        handle.wait_for_release(marker, deadline);
+                    }
                 }
                 outcome => return outcome,
             }
         }
+    }
+
+    /// Bookkeeping for a commit refused for lock contention: notes when each holder first
+    /// blocked a writer and rolls back a holder that has blocked writers for the lock lease.
+    /// `true` when a holder was rolled back, so the commit is worth trying again at once.
+    pub fn expire_lock_leases(&self, req: &pb::CommitRequest, handle: &DatabaseHandle) -> bool {
+        let Ok((parent, writes)) = Self::plan_commit(req) else {
+            return false;
+        };
+        let own = Self::txn(&parent, &req.transaction).ok().flatten();
+        let holders = handle
+            .read(|db| db.lock_holders(&writes, own.as_ref()))
+            .unwrap_or_default();
+        let now = std::time::Instant::now();
+        let expired: Vec<TransactionId> = {
+            let Ok(mut since) = handle.0.blocking_since.lock() else {
+                return false;
+            };
+            since.retain(|id, _| holders.contains(id));
+            holders
+                .iter()
+                .filter(|id| {
+                    now.duration_since(*since.entry((*id).clone()).or_insert(now))
+                        >= self.lock_lease
+                })
+                .cloned()
+                .collect()
+        };
+        if expired.is_empty() {
+            return false;
+        }
+        let _ = handle.with(|db| {
+            for id in &expired {
+                let _ = db.rollback(id);
+            }
+            Ok(())
+        });
+        if let Ok(mut since) = handle.0.blocking_since.lock() {
+            for id in &expired {
+                since.remove(id);
+            }
+        }
+        true
     }
 
     /// One attempt at `Commit`: no waiting for lock contention.

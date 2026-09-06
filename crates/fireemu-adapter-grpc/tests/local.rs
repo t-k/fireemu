@@ -415,6 +415,17 @@ async fn start_with_contention_wait(
     FirestoreClient<tonic::transport::Channel>,
     tokio::task::JoinHandle<()>,
 ) {
+    start_with_contention_wait_and_lease(wait, std::time::Duration::from_secs(60)).await
+}
+
+/// As [`start_with_contention_wait`], with the lock lease a blocking transaction is allowed.
+async fn start_with_contention_wait_and_lease(
+    wait: std::time::Duration,
+    lease: std::time::Duration,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -429,7 +440,11 @@ async fn start_with_contention_wait(
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
-    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock, 7).with_contention_wait(wait));
+    let backend = Arc::new(
+        LocalBackend::new(gateway.clone(), clock, 7)
+            .with_contention_wait(wait)
+            .with_lock_lease(lease),
+    );
     let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -515,6 +530,77 @@ async fn a_contended_commit_waits_for_the_lock_release() {
         .unwrap()
         .into_inner();
     assert_eq!(doc.fields.get("v"), Some(&i(3)));
+    handle.abort();
+}
+
+/// A transaction that keeps a writer blocked for the lock lease is rolled back, the way
+/// production expires an idle transaction, and the writer then goes through; the holder's own
+/// commit is refused afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_transaction_blocking_writers_past_the_lock_lease_is_rolled_back() {
+    let (mut client, handle) = start_with_contention_wait_and_lease(
+        std::time::Duration::from_millis(100),
+        std::time::Duration::from_millis(400),
+    )
+    .await;
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let _ = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/lease/doc"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                txn.clone(),
+            )),
+            ..Default::default()
+        })
+        .await;
+    // The SDKs retry a commit outside a transaction on ABORTED; so does this writer.
+    let started = std::time::Instant::now();
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let outcome = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("lease/doc", &[("v", i(1))])],
+                ..Default::default()
+            })
+            .await;
+        match outcome {
+            Ok(_) => break,
+            Err(status) if status.code() == tonic::Code::Aborted && attempts < 50 => {}
+            Err(status) => panic!("unexpected refusal: {status}"),
+        }
+    }
+    assert!(attempts >= 2, "the first attempts were refused");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(400));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    let expired = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("lease/doc", &[("v", i(2))])],
+            transaction: txn,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(expired.code(), tonic::Code::Aborted);
+    let doc = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/lease/doc"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(doc.fields.get("v"), Some(&i(1)));
     handle.abort();
 }
 

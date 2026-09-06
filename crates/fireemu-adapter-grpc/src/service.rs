@@ -549,7 +549,9 @@ impl Firestore for GatewayService {
                             deadline,
                         ) =>
                     {
-                        LocalBackend::await_release(handle, marker, deadline).await;
+                        if !local.expire_lock_leases(request.get_ref(), &handle) {
+                            LocalBackend::await_release(handle, marker, deadline).await;
+                        }
                     }
                     outcome => return outcome.map(Response::new),
                 }

@@ -33,6 +33,15 @@ assert(pr_runs.include?("cargo check --workspace --all-targets"), "the minimal p
   assert(!pr_runs.include?(expensive), "the automatic pr job must not run #{expensive}")
 end
 
+release = load_workflow("release.yml")
+release.fetch("jobs").each do |job, definition|
+  definition.fetch("steps", []).select { |step| step["uses"] == "actions/setup-node@v4" }.each do |step|
+    assert(step.dig("with", "node-version").to_s == "24", "release #{job} must use Node 24")
+  end
+end
+publish_runs = release.dig("jobs", "publish", "steps").map { |step| step["run"] }.compact.join("\n")
+assert(publish_runs.include?("npm@11.9.0"), "release publish must pin an npm version that supports Trusted Publishing")
+
 %w[lint test verify platforms package ui].each do |name|
   assert(jobs.fetch(name).fetch("if") == "${{ github.event_name == 'workflow_dispatch' }}", "#{name} must be manual-only before publication")
 end

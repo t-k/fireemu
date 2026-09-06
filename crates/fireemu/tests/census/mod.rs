@@ -218,6 +218,27 @@ pub fn kill_pid(pid: i32) {
         .status();
 }
 
+/// Terminates exactly the process observed by a prior census, without signaling a process
+/// group or a different process that later reused the numeric PID.
+pub fn terminate_exact_process(expected: &Proc, grace: Duration) {
+    for signal in [rustix::process::Signal::TERM, rustix::process::Signal::KILL] {
+        if find(expected.pid).as_ref() != Some(expected) {
+            return;
+        }
+        let Some(pid) = rustix::process::Pid::from_raw(expected.pid) else {
+            return;
+        };
+        let _ = rustix::process::kill_process(pid, signal);
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            if !alive(expected.pid) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
 /// Whether `pid` is alive.
 #[must_use]
 pub fn alive(pid: i32) -> bool {

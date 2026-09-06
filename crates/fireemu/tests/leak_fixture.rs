@@ -18,7 +18,6 @@
 
 mod census;
 
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
@@ -46,7 +45,6 @@ fn fixture_child_keeps_captured_stdout() {
         // Inheriting means holding the pipe nextest captured this test's output with.
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .process_group(0)
         .spawn()
         .expect("the fixture child must start");
     record_child(child.id());
@@ -65,7 +63,6 @@ fn fixture_child_redirects_output() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .process_group(0)
         .spawn()
         .expect("the fixture child must start");
     record_child(child.id());
@@ -79,10 +76,9 @@ fn record_child(pid: u32) {
 
 // --- the nested driver ------------------------------------------------------------------
 
-/// A nested nextest run in its own process group. Dropping it terminates the verified fixture
-/// child group, whatever happened to the assertions.
+/// A nested nextest run. Dropping it terminates the verified fixture child, whatever happened
+/// to the assertions.
 struct NestedRun {
-    pgid: i32,
     pidfile: PathBuf,
     stdout_file: PathBuf,
     stderr_file: PathBuf,
@@ -132,10 +128,7 @@ impl NestedRun {
             // captured test handles. Piped output would make `wait_with_output` wait for the
             // very leak this driver must clean up.
             .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            // Keep nested cargo separate from the outer test. Each fixture child creates its
-            // own group and is cleaned through the PID file after nested cargo has exited.
-            .process_group(0);
+            .stderr(Stdio::from(stderr));
         for inherited in [
             "NEXTEST",
             "NEXTEST_PROFILE",
@@ -146,7 +139,6 @@ impl NestedRun {
             command.env_remove(inherited);
         }
         let mut child = command.spawn().expect("the nested nextest run must start");
-        let pgid = i32::try_from(child.id()).expect("pid fits in i32");
         let status = child.wait().expect("the nested nextest run must finish");
         let output = Output {
             status,
@@ -154,7 +146,6 @@ impl NestedRun {
             stderr: std::fs::read(&stderr_file).expect("the nested stderr must be readable"),
         };
         Some(Self {
-            pgid,
             pidfile,
             stdout_file,
             stderr_file,
@@ -178,7 +169,7 @@ impl NestedRun {
             .and_then(|s| s.trim().parse().ok())
     }
 
-    /// Terminates the verified fixture child group. Idempotent; also runs from `Drop`.
+    /// Terminates the verified fixture child. Idempotent; also runs from `Drop`.
     ///
     /// Nested cargo has already been waited and its numeric process group can be reused. Only
     /// signal a currently live fixture child whose PID, process group and command still match
@@ -190,8 +181,8 @@ impl NestedRun {
         self.cleaned = true;
         let cleanup_grace = Duration::from_millis(250);
         if let Some(process) = self.fixture_child().and_then(census::find) {
-            if process.pgid == process.pid && process.command.contains("sleep") {
-                census::kill_process_group_with_grace(process.pgid, cleanup_grace);
+            if process.command == format!("sleep {FIXTURE_CHILD_SECONDS}") {
+                census::terminate_exact_process(&process, cleanup_grace);
             }
         }
         for path in [&self.pidfile, &self.stdout_file, &self.stderr_file] {
@@ -255,11 +246,6 @@ fn nested_run_fails_when_a_child_keeps_captured_stdout() {
         "the leaked child survived cleanup\n{}",
         census::table(&census::find(child).into_iter().collect::<Vec<_>>())
     );
-    census::assert_process_group_empty(
-        run.pgid,
-        "nested_run_fails_when_a_child_keeps_captured_stdout",
-        Duration::from_secs(1),
-    );
 }
 
 #[test]
@@ -298,10 +284,5 @@ fn the_census_sees_a_child_that_redirected_its_output() {
     assert!(
         !census::alive(child),
         "the surviving child was not reaped by the cleanup guard"
-    );
-    census::assert_process_group_empty(
-        run.pgid,
-        "the_census_sees_a_child_that_redirected_its_output",
-        Duration::from_secs(1),
     );
 }

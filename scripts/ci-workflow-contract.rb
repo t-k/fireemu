@@ -56,8 +56,12 @@ assert(!release_build_runs.include?("cargo nextest"), "release platform builds m
 assert(release_build.fetch("needs").include?("test"), "release platform builds must depend on the dedicated test job")
 release_test_runs = release.dig("jobs", "test", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(
-  release_test_runs.include?("cargo nextest run --workspace --profile pr"),
-  "release test job must run the canonical workspace suite"
+  release_test_runs.include?("cargo nextest run --workspace --profile pr -E 'not binary(leak_fixture)'"),
+  "release test job must run the workspace suite outside the process leak fixture"
+)
+assert(
+  release_test_runs.include?("cargo nextest run -p fireemu --test leak_fixture --profile pr"),
+  "release test job must run the process leak fixture in isolation"
 )
 assert(release.dig("jobs", "publish", "environment") == "npm-release", "release publish must use the protected npm-release environment")
 assert(release.dig("concurrency", "cancel-in-progress") == false, "release publication must never be cancelled in progress")

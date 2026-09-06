@@ -112,7 +112,8 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
         with:
           key: release-test
-      - run: cargo nextest run --workspace --profile pr
+      - run: cargo nextest run --workspace --profile pr -E 'not binary(leak_fixture)'
+      - run: cargo nextest run -p fireemu --test leak_fixture --profile pr
 
   build:
     needs: [plan, ui, test]

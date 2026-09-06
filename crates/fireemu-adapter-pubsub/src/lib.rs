@@ -338,11 +338,11 @@ impl PubSubHandle {
             let mut state = self.state();
             state.pull_with_dead_letters(subscription, max, now)?
         };
-        self.commit_dead_letters(outcome.dead_lettered);
+        self.commit_dead_letters(&outcome.dead_lettered);
         Ok(outcome.received)
     }
 
-    fn commit_dead_letter(&self, forward: DeadLetterForward) {
+    fn commit_dead_letter(&self, forward: &DeadLetterForward) {
         let _publication = self.lock_publication();
         let published = self.publish_locked(
             &forward.dead_letter_topic,
@@ -355,7 +355,7 @@ impl PubSubHandle {
         }
     }
 
-    fn commit_dead_letters(&self, forwards: Vec<DeadLetterForward>) {
+    fn commit_dead_letters(&self, forwards: &[DeadLetterForward]) {
         for forward in forwards {
             self.commit_dead_letter(forward);
         }
@@ -366,7 +366,7 @@ impl PubSubHandle {
     /// destination retention capacity.
     pub(crate) fn retry_pending_dead_letters(&self) {
         let pending = self.state().pending_dead_letters();
-        self.commit_dead_letters(pending);
+        self.commit_dead_letters(&pending);
     }
 
     pub(crate) fn acknowledge(

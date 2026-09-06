@@ -231,6 +231,7 @@ async fn bridge_capacity_refusal_does_not_publish_to_the_broker() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Keep the admission failure and retry lifecycle in one scenario.
 async fn dead_letter_transfer_retries_after_destination_admission_recovers() {
     let destination = "projects/demo-app/topics/retry-dead".to_owned();
     let accept_destination = Arc::new(AtomicBool::new(false));
@@ -715,6 +716,7 @@ async fn creating_subscription_for_missing_topic_is_not_found() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // The table covers every unsupported wire-level option.
 async fn grpc_rejects_unsupported_subscription_options_before_creation() {
     let h = start().await;
     let mut pubc = h.publisher().await;

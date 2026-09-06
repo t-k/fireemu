@@ -49,6 +49,97 @@ fn project_of(resource: &str) -> Result<&str, Status> {
         .ok_or_else(|| Status::invalid_argument("project must be projects/{project}"))
 }
 
+fn validate_update_paths(paths: &[String]) -> Result<(), Status> {
+    for path in paths {
+        match path.as_str() {
+            "ack_deadline_seconds" | "push_config" => {}
+            "dead_letter_policy"
+            | "retry_policy"
+            | "filter"
+            | "enable_message_ordering"
+            | "bigquery_config"
+            | "cloud_storage_config"
+            | "bigtable_config"
+            | "retain_acked_messages"
+            | "message_retention_duration"
+            | "expiration_policy"
+            | "detached"
+            | "enable_exactly_once_delivery"
+            | "topic_message_retention_duration"
+            | "analytics_hub_subscription_info"
+            | "message_transforms"
+            | "tags" => {
+                return Err(Status::unimplemented(format!(
+                    "updating {path} is not supported by the Pub/Sub emulator"
+                )))
+            }
+            path if path.starts_with("push_config.") => {
+                return Err(Status::unimplemented(format!(
+                    "updating {path} is not supported by the Pub/Sub emulator"
+                )))
+            }
+            _ => {
+                return Err(Status::invalid_argument(format!(
+                    "unknown update_mask path {path}"
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn update_ack_deadline(paths: &[String], sub: &pb::Subscription) -> Result<Option<u32>, Status> {
+    paths
+        .iter()
+        .any(|path| path == "ack_deadline_seconds")
+        .then(|| {
+            if sub.ack_deadline_seconds == 0 {
+                Ok(DEFAULT_ACK_DEADLINE_SECONDS)
+            } else {
+                u32::try_from(sub.ack_deadline_seconds)
+                    .map_err(|_| Status::invalid_argument("ackDeadlineSeconds must be positive"))
+            }
+        })
+        .transpose()
+}
+
+fn update_push_config(
+    paths: &[String],
+    sub: &pb::Subscription,
+) -> Result<Option<PushConfig>, Status> {
+    paths
+        .iter()
+        .any(|path| path == "push_config")
+        .then(|| {
+            if let Some(push) = sub.push_config.as_ref() {
+                if !push.attributes.is_empty() {
+                    return Err(Status::unimplemented(
+                        "subscription.push_config.attributes is not supported by the Pub/Sub emulator",
+                    ));
+                }
+                if push.authentication_method.is_some() {
+                    return Err(Status::unimplemented(
+                        "subscription.push_config.authentication_method is not supported by the Pub/Sub emulator",
+                    ));
+                }
+                if push.wrapper.is_some() {
+                    return Err(Status::unimplemented(
+                        "subscription.push_config.wrapper is not supported by the Pub/Sub emulator",
+                    ));
+                }
+            }
+            let endpoint = sub
+                .push_config
+                .as_ref()
+                .map_or_else(String::new, |config| config.push_endpoint.clone());
+            crate::push::validate_endpoint(&endpoint).map_err(Status::invalid_argument)?;
+            Ok(PushConfig {
+                push_endpoint: endpoint,
+            })
+        })
+        .transpose()
+}
+
 /// Applies the acks and modify-ack-deadlines carried by one streaming-pull request.
 fn apply_stream_request(
     handle: &PubSubHandle,
@@ -114,85 +205,9 @@ impl Subscriber for SubscriberService {
         if paths.is_empty() {
             return Err(Status::invalid_argument("update_mask must not be empty"));
         }
-        for path in &paths {
-            match path.as_str() {
-                "ack_deadline_seconds" | "push_config" => {}
-                "dead_letter_policy"
-                | "retry_policy"
-                | "filter"
-                | "enable_message_ordering"
-                | "bigquery_config"
-                | "cloud_storage_config"
-                | "bigtable_config"
-                | "retain_acked_messages"
-                | "message_retention_duration"
-                | "expiration_policy"
-                | "detached"
-                | "enable_exactly_once_delivery"
-                | "topic_message_retention_duration"
-                | "analytics_hub_subscription_info"
-                | "message_transforms"
-                | "tags" => {
-                    return Err(Status::unimplemented(format!(
-                        "updating {path} is not supported by the Pub/Sub emulator"
-                    )))
-                }
-                path if path.starts_with("push_config.") => {
-                    return Err(Status::unimplemented(format!(
-                        "updating {path} is not supported by the Pub/Sub emulator"
-                    )))
-                }
-                _ => {
-                    return Err(Status::invalid_argument(format!(
-                        "unknown update_mask path {path}"
-                    )))
-                }
-            }
-        }
-        let ack_deadline_seconds = paths
-            .iter()
-            .any(|path| path == "ack_deadline_seconds")
-            .then(|| {
-                if sub.ack_deadline_seconds == 0 {
-                    Ok(DEFAULT_ACK_DEADLINE_SECONDS)
-                } else {
-                    u32::try_from(sub.ack_deadline_seconds).map_err(|_| {
-                        Status::invalid_argument("ackDeadlineSeconds must be positive")
-                    })
-                }
-            })
-            .transpose()?;
-        let push_config = paths
-            .iter()
-            .any(|path| path == "push_config")
-            .then(|| {
-                if let Some(push) = sub.push_config.as_ref() {
-                    if !push.attributes.is_empty() {
-                        return Err(Status::unimplemented(
-                            "subscription.push_config.attributes is not supported by the Pub/Sub emulator",
-                        ));
-                    }
-                    if push.authentication_method.is_some() {
-                        return Err(Status::unimplemented(
-                            "subscription.push_config.authentication_method is not supported by the Pub/Sub emulator",
-                        ));
-                    }
-                    if push.wrapper.is_some() {
-                        return Err(Status::unimplemented(
-                            "subscription.push_config.wrapper is not supported by the Pub/Sub emulator",
-                        ));
-                    }
-                }
-                let endpoint = sub
-                    .push_config
-                    .as_ref()
-                    .map_or_else(String::new, |config| config.push_endpoint.clone());
-                crate::push::validate_endpoint(&endpoint).map_err(Status::invalid_argument)?;
-                Ok::<_, Status>(PushConfig {
-                    push_endpoint: endpoint,
-                })
-            })
-            .transpose()?;
+        validate_update_paths(&paths)?;
+        let ack_deadline_seconds = update_ack_deadline(&paths, &sub)?;
+        let push_config = update_push_config(&paths, &sub)?;
         self.handle
             .state()
             .update_subscription(&name, ack_deadline_seconds, push_config)

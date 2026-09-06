@@ -2599,7 +2599,7 @@ impl FirestoreState {
                 "transaction observed data exceeds the retained conflict-detection budget".into(),
             ));
         }
-        let observation = (!already_recorded).then(|| query_observation(&docs));
+        let observation = (!already_recorded).then(|| query_observation(docs));
         if let Some(t) = self.transactions.get_mut(id) {
             for d in docs {
                 t.read_set.insert(d.path.clone(), Some(d.version));

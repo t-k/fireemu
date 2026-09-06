@@ -11,7 +11,7 @@ use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_firestore::index::IndexValidationPolicy;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// The compatibility profile (`profile`), the one switch that decides whether fireemu
 /// reproduces the pinned official emulators or adds its own validation.
@@ -102,6 +102,31 @@ pub const DEFAULT_UI_PORT: u16 = 4000;
 
 /// The Logging emulator's official default port (`firebase-tools` `Constants.getDefaultPort`).
 pub const DEFAULT_LOGGING_PORT: u16 = 4500;
+
+const LIMIT_KEYS: [&str; 9] = [
+    "catalog",
+    "queryCatalog",
+    "rulesCatalog",
+    "enforcement",
+    "warningThresholds",
+    "perLimitWarningThresholds",
+    "warningsAsErrors",
+    "quotaAccounting",
+    "firestorePlan",
+];
+
+const FIRESTORE_PLAN_KEYS: [&str; 4] = [
+    "billingEnabled",
+    "compositeIndexLimitOverride",
+    "singleFieldConfigLimitOverride",
+    "enterpriseIndexLimitOverride",
+];
+
+const FIRESTORE_PLAN_OVERRIDE_KEYS: [&str; 3] = [
+    "compositeIndexLimitOverride",
+    "singleFieldConfigLimitOverride",
+    "enterpriseIndexLimitOverride",
+];
 
 /// Effective daemon configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -880,21 +905,161 @@ impl RuntimeConfig {
         Ok(!thresholds.is_empty())
     }
 
+    fn parse_limit_enforcement(limits: &Map<String, Value>) -> Result<(), ConfigError> {
+        let Some(value) = limits.get("enforcement") else {
+            return Ok(());
+        };
+        let value = value
+            .as_str()
+            .ok_or_else(|| ConfigError("limits.enforcement must be a string".to_owned()))?;
+        match value {
+            "observe" => Ok(()),
+            "strict" => Err(ConfigError(
+                "limits.enforcement is not implemented; use \"observe\"".to_owned(),
+            )),
+            _ => Err(ConfigError(format!(
+                "limits.enforcement has an unsupported value {value:?}"
+            ))),
+        }
+    }
+
+    fn parse_warning_thresholds(limits: &Map<String, Value>) -> Result<(), ConfigError> {
+        let Some(value) = limits.get("warningThresholds") else {
+            return Ok(());
+        };
+        if Self::parse_limit_thresholds(value, "limits.warningThresholds")? {
+            return Err(ConfigError(
+                "limits.warningThresholds is not implemented; use an empty array".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn parse_per_limit_warning_thresholds(limits: &Map<String, Value>) -> Result<(), ConfigError> {
+        let Some(value) = limits.get("perLimitWarningThresholds") else {
+            return Ok(());
+        };
+        let per_limit = value.as_object().ok_or_else(|| {
+            ConfigError("limits.perLimitWarningThresholds must be an object".to_owned())
+        })?;
+        for (key, thresholds) in per_limit {
+            if key.is_empty()
+                || !key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-')
+            {
+                return Err(ConfigError(format!(
+                    "limits.perLimitWarningThresholds has an invalid limit id {key:?}"
+                )));
+            }
+            if Self::parse_limit_thresholds(
+                thresholds,
+                &format!("limits.perLimitWarningThresholds.{key}"),
+            )? {
+                return Err(ConfigError(
+                    "limits.perLimitWarningThresholds is not implemented; use an empty object"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_warnings_as_errors(limits: &Map<String, Value>) -> Result<(), ConfigError> {
+        let Some(value) = limits.get("warningsAsErrors") else {
+            return Ok(());
+        };
+        let values = value
+            .as_array()
+            .ok_or_else(|| ConfigError("limits.warningsAsErrors must be an array".to_owned()))?;
+        for (index, item) in values.iter().enumerate() {
+            let item = item.as_str().ok_or_else(|| {
+                ConfigError(format!("limits.warningsAsErrors[{index}] must be a string"))
+            })?;
+            if !["notice", "warning", "critical"].contains(&item)
+                && (item.is_empty()
+                    || !item.bytes().all(|byte| {
+                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-'
+                    }))
+            {
+                return Err(ConfigError(format!(
+                    "limits.warningsAsErrors[{index}] has an unsupported value {item:?}"
+                )));
+            }
+        }
+        if values.is_empty() {
+            return Ok(());
+        }
+        Err(ConfigError(
+            "limits.warningsAsErrors is not implemented; use an empty array".to_owned(),
+        ))
+    }
+
+    fn parse_quota_accounting(limits: &Map<String, Value>) -> Result<(), ConfigError> {
+        let Some(value) = limits.get("quotaAccounting") else {
+            return Ok(());
+        };
+        let value = value
+            .as_str()
+            .ok_or_else(|| ConfigError("limits.quotaAccounting must be a string".to_owned()))?;
+        match value {
+            "off" => Ok(()),
+            "observe" | "enforce" => Err(ConfigError(
+                "limits.quotaAccounting is not implemented; use \"off\"".to_owned(),
+            )),
+            _ => Err(ConfigError(format!(
+                "limits.quotaAccounting has an unsupported value {value:?}"
+            ))),
+        }
+    }
+
+    fn parse_firestore_plan(limits: &Map<String, Value>) -> Result<(), ConfigError> {
+        let Some(value) = limits.get("firestorePlan") else {
+            return Ok(());
+        };
+        let plan = value
+            .as_object()
+            .ok_or_else(|| ConfigError("limits.firestorePlan must be an object".to_owned()))?;
+        for key in plan.keys() {
+            if !FIRESTORE_PLAN_KEYS.contains(&key.as_str()) {
+                return Err(ConfigError(format!(
+                    "unknown config key limits.firestorePlan.{key}"
+                )));
+            }
+        }
+        if let Some(value) = plan.get("billingEnabled") {
+            let enabled = value.as_bool().ok_or_else(|| {
+                ConfigError("limits.firestorePlan.billingEnabled must be a boolean".to_owned())
+            })?;
+            if enabled {
+                return Err(ConfigError(
+                    "limits.firestorePlan.billingEnabled is not implemented; use false".to_owned(),
+                ));
+            }
+        }
+        for key in FIRESTORE_PLAN_OVERRIDE_KEYS {
+            let Some(value) = plan.get(key) else {
+                continue;
+            };
+            if value.is_null() {
+                continue;
+            }
+            if value.as_u64().is_none() {
+                return Err(ConfigError(format!(
+                    "limits.firestorePlan.{key} must be a non-negative integer or null"
+                )));
+            }
+            return Err(ConfigError(format!(
+                "limits.firestorePlan.{key} is not implemented; use null"
+            )));
+        }
+        Ok(())
+    }
+
     fn parse_limits(limits: &Value) -> Result<(), ConfigError> {
         let limits = limits
             .as_object()
             .ok_or_else(|| ConfigError("limits must be an object".to_owned()))?;
-        const LIMIT_KEYS: [&str; 9] = [
-            "catalog",
-            "queryCatalog",
-            "rulesCatalog",
-            "enforcement",
-            "warningThresholds",
-            "perLimitWarningThresholds",
-            "warningsAsErrors",
-            "quotaAccounting",
-            "firestorePlan",
-        ];
         for key in limits.keys() {
             if !LIMIT_KEYS.contains(&key.as_str()) {
                 return Err(ConfigError(format!("unknown config key limits.{key}")));
@@ -908,153 +1073,12 @@ impl RuntimeConfig {
         )?;
         Self::parse_limit_catalog(limits, "queryCatalog", &["firestore-standard-query-"], true)?;
         Self::parse_limit_catalog(limits, "rulesCatalog", &["firebase-rules-"], false)?;
-
-        if let Some(value) = limits.get("enforcement") {
-            let value = value
-                .as_str()
-                .ok_or_else(|| ConfigError("limits.enforcement must be a string".to_owned()))?;
-            match value {
-                "observe" => {}
-                "strict" => {
-                    return Err(ConfigError(
-                        "limits.enforcement is not implemented; use \"observe\"".to_owned(),
-                    ))
-                }
-                _ => {
-                    return Err(ConfigError(format!(
-                        "limits.enforcement has an unsupported value {value:?}"
-                    )))
-                }
-            }
-        }
-
-        if let Some(value) = limits.get("warningThresholds") {
-            if Self::parse_limit_thresholds(value, "limits.warningThresholds")? {
-                return Err(ConfigError(
-                    "limits.warningThresholds is not implemented; use an empty array".to_owned(),
-                ));
-            }
-        }
-
-        if let Some(value) = limits.get("perLimitWarningThresholds") {
-            let per_limit = value.as_object().ok_or_else(|| {
-                ConfigError("limits.perLimitWarningThresholds must be an object".to_owned())
-            })?;
-            for (key, thresholds) in per_limit {
-                if key.is_empty()
-                    || !key.bytes().all(|byte| {
-                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-'
-                    })
-                {
-                    return Err(ConfigError(format!(
-                        "limits.perLimitWarningThresholds has an invalid limit id {key:?}"
-                    )));
-                }
-                if Self::parse_limit_thresholds(
-                    thresholds,
-                    &format!("limits.perLimitWarningThresholds.{key}"),
-                )? {
-                    return Err(ConfigError(
-                        "limits.perLimitWarningThresholds is not implemented; use an empty object"
-                            .to_owned(),
-                    ));
-                }
-            }
-        }
-
-        if let Some(value) = limits.get("warningsAsErrors") {
-            let values = value.as_array().ok_or_else(|| {
-                ConfigError("limits.warningsAsErrors must be an array".to_owned())
-            })?;
-            for (index, item) in values.iter().enumerate() {
-                let item = item.as_str().ok_or_else(|| {
-                    ConfigError(format!("limits.warningsAsErrors[{index}] must be a string"))
-                })?;
-                if !["notice", "warning", "critical"].contains(&item)
-                    && (item.is_empty()
-                        || !item.bytes().all(|byte| {
-                            byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-'
-                        }))
-                {
-                    return Err(ConfigError(format!(
-                        "limits.warningsAsErrors[{index}] has an unsupported value {item:?}"
-                    )));
-                }
-            }
-            if !values.is_empty() {
-                return Err(ConfigError(
-                    "limits.warningsAsErrors is not implemented; use an empty array".to_owned(),
-                ));
-            }
-        }
-
-        if let Some(value) = limits.get("quotaAccounting") {
-            let value = value
-                .as_str()
-                .ok_or_else(|| ConfigError("limits.quotaAccounting must be a string".to_owned()))?;
-            match value {
-                "off" => {}
-                "observe" | "enforce" => {
-                    return Err(ConfigError(
-                        "limits.quotaAccounting is not implemented; use \"off\"".to_owned(),
-                    ))
-                }
-                _ => {
-                    return Err(ConfigError(format!(
-                        "limits.quotaAccounting has an unsupported value {value:?}"
-                    )))
-                }
-            }
-        }
-
-        if let Some(value) = limits.get("firestorePlan") {
-            let plan = value
-                .as_object()
-                .ok_or_else(|| ConfigError("limits.firestorePlan must be an object".to_owned()))?;
-            const PLAN_KEYS: [&str; 4] = [
-                "billingEnabled",
-                "compositeIndexLimitOverride",
-                "singleFieldConfigLimitOverride",
-                "enterpriseIndexLimitOverride",
-            ];
-            for key in plan.keys() {
-                if !PLAN_KEYS.contains(&key.as_str()) {
-                    return Err(ConfigError(format!(
-                        "unknown config key limits.firestorePlan.{key}"
-                    )));
-                }
-            }
-            if let Some(value) = plan.get("billingEnabled") {
-                let enabled = value.as_bool().ok_or_else(|| {
-                    ConfigError("limits.firestorePlan.billingEnabled must be a boolean".to_owned())
-                })?;
-                if enabled {
-                    return Err(ConfigError(
-                        "limits.firestorePlan.billingEnabled is not implemented; use false"
-                            .to_owned(),
-                    ));
-                }
-            }
-            for key in [
-                "compositeIndexLimitOverride",
-                "singleFieldConfigLimitOverride",
-                "enterpriseIndexLimitOverride",
-            ] {
-                if let Some(value) = plan.get(key) {
-                    if !value.is_null() {
-                        if value.as_u64().is_none() {
-                            return Err(ConfigError(format!(
-                                "limits.firestorePlan.{key} must be a non-negative integer or null"
-                            )));
-                        }
-                        return Err(ConfigError(format!(
-                            "limits.firestorePlan.{key} is not implemented; use null"
-                        )));
-                    }
-                }
-            }
-        }
-        Ok(())
+        Self::parse_limit_enforcement(limits)?;
+        Self::parse_warning_thresholds(limits)?;
+        Self::parse_per_limit_warning_thresholds(limits)?;
+        Self::parse_warnings_as_errors(limits)?;
+        Self::parse_quota_accounting(limits)?;
+        Self::parse_firestore_plan(limits)
     }
 
     /// Applies the parts of a `firebase.json` the daemon can honour. Paths are relative to

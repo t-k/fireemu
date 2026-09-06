@@ -4,9 +4,9 @@ Every row of `firestore-matrix.json` run against production Firestore (Native mo
 
 ## Evidence
 
-Fireemu observation: live artifact fireemu (sha256-3675ba99f1d7f1bed36cca9e31de11a8d11d10ee8332e6a465f20bb82eb4e864), source ed782b0131f53e9659f1ae9bcd7c1308a66990c1, profile firebase.
+Fireemu observation: live artifact fireemu (sha256-2ffd6ff2d7bb0ffc1980b29836973ac4c8a97870cd6fb593509496c0e13063f1), source 199f4717130a28c2b58fe02047d8eea94e44e98b, profile firebase.
 Inputs: corpus sha256-d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b, SDK lock sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432, indexes sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a.
-Official emulator values: stored expectation from firestore-matrix.json (sha256-eecf8ac11a90c691aff3031f48bec2154f651812913cda75ed9a8058121323c3).
+Official emulator values: stored expectation from firestore-matrix.json (sha256-9d76eed5d9163797af135a757d6c4dbdcc31efdfa025a896569f7e25a2e2f6cb).
 Evidence status: verified.
 
 | status | rows | meaning |

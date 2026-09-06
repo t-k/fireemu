@@ -270,30 +270,37 @@ fn commit_query_aggregation_and_transactions_over_rest() {
     assert_eq!(status, 200, "{got}");
     assert!(got[0]["found"].is_object());
     assert!(got[1]["missing"].as_str().unwrap().ends_with("/n/none"));
-    // Optimistic concurrency: an out-of-band write is not blocked by a reader.
-    let (status, concurrent) = call(
+    // Production (PESSIMISTIC): the documents the transaction read are locked, so the
+    // out-of-band write is refused with production's wording (this backend waits zero
+    // seconds for a release), and the transaction commits.
+    let (status, contended) = call(
         &s,
         "POST",
         &format!("{DOCS}:commit"),
         json!({"writes": [{"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/1"), "fields": {"v": {"integerValue": "99"}}}}]}),
     );
-    assert_eq!(status, 200, "{concurrent}");
-    // The stale transaction aborts before its unrelated staged delete is published.
-    let (status, aborted) = call(
+    assert_eq!(status, 409, "{contended}");
+    assert_eq!(contended["error"]["status"], "ABORTED");
+    assert_eq!(
+        contended["error"]["message"],
+        "Too much contention on these documents. Please try again."
+    );
+    let (status, committed) = call(
         &s,
         "POST",
         &format!("{DOCS}:commit"),
         json!({"transaction": txn, "writes": [{"delete": format!("projects/demo-app/databases/(default)/documents/n/2")}]}),
     );
-    assert_eq!(status, 409, "{aborted}");
-    assert_eq!(aborted["error"]["status"], "ABORTED");
-    assert_eq!(
-        aborted["error"]["message"],
-        "Transaction was aborted due to a concurrent modification."
+    assert_eq!(status, 200, "{committed}");
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/n/2"), json!({}));
+    assert_eq!(status, 404);
+    let (status, released) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/1"), "fields": {"v": {"integerValue": "99"}}}}]}),
     );
-    let (status, preserved) = call(&s, "GET", &format!("{DOCS}/n/2"), json!({}));
-    assert_eq!(status, 200, "{preserved}");
-    assert_eq!(preserved["fields"]["v"]["integerValue"], "2");
+    assert_eq!(status, 200, "{released}");
 
     let (status, ids) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), json!({}));
     assert_eq!(status, 200);
@@ -921,4 +928,69 @@ fn rest_kindless_queries_and_transform_budget_follow_production() {
         body["error"]["message"], "cannot have more than 500 field transforms on a single document",
         "{body}"
     );
+}
+
+/// Over REST the contended writer blocks its (blocking-pool) thread until the transaction
+/// finishes, then goes through.
+#[test]
+fn a_contended_rest_commit_waits_for_the_transaction_to_finish() {
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let local = Arc::new(
+        LocalBackend::new(gateway.clone(), clock, 7).with_contention_wait(Duration::from_secs(10)),
+    );
+    let s = RestState {
+        local,
+        gateway: Arc::new(gateway),
+        rules: None,
+        app_check: None,
+    };
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let txn = begun["transaction"].clone();
+    let (status, _) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/blocked/doc?transaction={}", txn.as_str().unwrap()),
+        Value::Null,
+    );
+    assert_eq!(status, 404);
+    let started = std::time::Instant::now();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(200));
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({"transaction": txn, "writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/blocked/doc", "fields": {"v": {"integerValue": "1"}}}}]}),
+            );
+            assert_eq!(status, 200, "{body}");
+        });
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/blocked/doc", "fields": {"v": {"integerValue": "2"}}}}]}),
+        );
+        assert_eq!(status, 200, "{body}");
+    });
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let (_, doc) = call(&s, "GET", &format!("{DOCS}/blocked/doc"), Value::Null);
+    assert_eq!(doc["fields"]["v"]["integerValue"], "2", "{doc}");
 }

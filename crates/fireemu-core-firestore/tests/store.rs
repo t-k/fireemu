@@ -7,6 +7,7 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
     CommitVersion, FieldTransform, FirestoreError, FirestoreState, Precondition, TransformKind,
     Write, WriteOp, MAX_TRANSACTION_CONFLICT_LEDGER_BYTES, MAX_TRANSACTION_QUERY_RECORDS,
+    TOO_MUCH_CONTENTION,
 };
 use fireemu_core_firestore::value::Value;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
@@ -425,7 +426,7 @@ fn limit_violations_reject_the_whole_commit_atomically() {
 }
 
 #[test]
-fn a_concurrent_write_invalidates_the_transaction_read_set() {
+fn a_read_write_transaction_locks_what_it_read_until_it_finishes() {
     let mut s = FirestoreState::new();
     s.commit(
         &[set("acct/a", &[("balance", Value::Integer(100))])],
@@ -439,29 +440,53 @@ fn a_concurrent_write_invalidates_the_transaction_read_set() {
         .unwrap()
         .unwrap();
     assert_eq!(doc.fields.get("balance"), Some(&Value::Integer(100)));
+    // Production (PESSIMISTIC): the out-of-band write collides with the lock the read took
+    // and is refused with production's wording; nothing of it is published.
+    let releases = s.transaction_releases();
+    let refused = s
+        .commit(
+            &[set("acct/a", &[("balance", Value::Integer(90))])],
+            None,
+            t(2),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{refused}"
+    );
+    assert_eq!(
+        s.get(&path("acct/a")).unwrap().fields.get("balance"),
+        Some(&Value::Integer(100))
+    );
+    assert_eq!(
+        s.transaction_releases(),
+        releases,
+        "a refusal releases nothing"
+    );
+    // A write to an unlocked document is not held up by the transaction.
+    assert!(s.commit(&[set("acct/other", &[])], None, t(2)).is_ok());
+    // The transaction itself commits; its read set was protected.
+    let write = set("acct/a", &[("balance", Value::Integer(80))]);
+    s.commit(std::slice::from_ref(&write), Some(&txn), t(3))
+        .unwrap();
+    assert_eq!(
+        s.get(&path("acct/a")).unwrap().fields.get("balance"),
+        Some(&Value::Integer(80))
+    );
+    assert_eq!(
+        s.transaction_releases(),
+        releases + 1,
+        "the commit released the locks"
+    );
+    // Released: the out-of-band write goes through now.
     s.commit(
         &[set("acct/a", &[("balance", Value::Integer(90))])],
         None,
-        t(2),
+        t(4),
     )
     .unwrap();
-    assert_eq!(
-        s.get(&path("acct/a")).unwrap().fields.get("balance"),
-        Some(&Value::Integer(90)),
-        "the independent write commits immediately"
-    );
-    let write = set("acct/a", &[("balance", Value::Integer(80))]);
-    assert!(matches!(
-        s.commit(std::slice::from_ref(&write), Some(&txn), t(3)),
-        Err(FirestoreError::Aborted(_))
-    ));
-    assert_eq!(
-        s.get(&path("acct/a")).unwrap().fields.get("balance"),
-        Some(&Value::Integer(90)),
-        "an aborted attempt publishes none of its writes"
-    );
-    // A finished transaction is ABORTED on reuse, the code the SDKs retry on and the one the
-    // official emulator answers (conformance/src/firestore-probe, transactions/lifecycle).
+    // A finished transaction is ABORTED on reuse, the code the SDKs retry on and the one
+    // production answers (conformance/firestore-production-matrix.json, transactions/lifecycle).
     assert!(
         matches!(
             s.commit(std::slice::from_ref(&write), Some(&txn), t(5)),
@@ -470,24 +495,87 @@ fn a_concurrent_write_invalidates_the_transaction_read_set() {
         "a finished transaction cannot be reused"
     );
 
-    // A missing-document read conflicts with a later create.
+    // Reading a missing document locks its path too, and a rollback releases it.
     let txn3 = s.begin_transaction(false, t(6)).unwrap();
     let _ = s.get_in_transaction(&txn3, &path("acct/missing")).unwrap();
-    s.commit(&[set("acct/missing", &[("x", Value::Null)])], None, t(7))
-        .unwrap();
-    assert!(s.commit(&[set("acct/other", &[])], None, t(8)).is_ok());
     assert!(matches!(
-        s.commit(&[set("acct/txn", &[])], Some(&txn3), t(9)),
+        s.commit(&[set("acct/missing", &[("x", Value::Null)])], None, t(7)),
         Err(FirestoreError::Aborted(_))
     ));
+    s.rollback(&txn3).unwrap();
+    s.commit(&[set("acct/missing", &[("x", Value::Null)])], None, t(8))
+        .unwrap();
 
+    // A read-only transaction takes no locks and cannot write.
     let ro = s.begin_transaction(true, t(10)).unwrap();
+    let _ = s.get_in_transaction(&ro, &path("acct/a")).unwrap();
+    assert!(s.commit(&[set("acct/a", &[])], None, t(10)).is_ok());
     assert!(matches!(
         s.commit(&[set("acct/a", &[])], Some(&ro), t(11)),
         Err(FirestoreError::InvalidArgument(_))
     ));
     s.rollback(&ro).unwrap();
     assert!(s.rollback(&ro).is_err());
+}
+
+#[test]
+fn two_transactions_contending_for_one_document_abort_the_first_committer() {
+    // Both read the lock document, so both hold a read lock on it. The first to commit finds
+    // the other's lock and is aborted for its client to retry; the second then commits, and
+    // the retried first transaction reads the committed state.
+    let mut s = FirestoreState::new();
+    s.commit(
+        &[set("locks/l", &[("locked", Value::Boolean(false))])],
+        None,
+        t(0),
+    )
+    .unwrap();
+    let first = s.begin_transaction(false, t(1)).unwrap();
+    let second = s.begin_transaction(false, t(1)).unwrap();
+    let _ = s.get_in_transaction(&first, &path("locks/l")).unwrap();
+    let _ = s.get_in_transaction(&second, &path("locks/l")).unwrap();
+    let take = set("locks/l", &[("locked", Value::Boolean(true))]);
+    let refused = s
+        .commit(std::slice::from_ref(&take), Some(&first), t(2))
+        .unwrap_err();
+    assert!(
+        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{refused}"
+    );
+    assert_eq!(
+        s.get(&path("locks/l")).unwrap().fields.get("locked"),
+        Some(&Value::Boolean(false))
+    );
+    // The aborted transaction is finished (its locks are gone) and cannot be reused.
+    assert!(matches!(
+        s.get_in_transaction(&first, &path("locks/l")),
+        Err(FirestoreError::Aborted(_))
+    ));
+    s.commit(std::slice::from_ref(&take), Some(&second), t(3))
+        .unwrap();
+    let retry = s.retry_transaction(&first, t(4)).unwrap();
+    let seen = s
+        .get_in_transaction(&retry, &path("locks/l"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(seen.fields.get("locked"), Some(&Value::Boolean(true)));
+}
+
+#[test]
+fn an_expired_transaction_releases_its_locks() {
+    let mut s = FirestoreState::new();
+    let txn = s.begin_transaction(false, t(0)).unwrap();
+    let _ = s.get_in_transaction(&txn, &path("held/doc")).unwrap();
+    assert!(matches!(
+        s.commit(&[set("held/doc", &[])], None, t(30)),
+        Err(FirestoreError::Aborted(_))
+    ));
+    // Past the idle deadline the transaction is gone and the write goes through.
+    s.commit(&[set("held/doc", &[])], None, t(61)).unwrap();
+    assert!(matches!(
+        s.commit(&[set("held/doc", &[])], Some(&txn), t(62)),
+        Err(FirestoreError::Aborted(_))
+    ));
 }
 
 #[test]
@@ -675,7 +763,7 @@ fn array_transforms_report_null_results_and_transform_limit_is_per_document() {
 }
 
 #[test]
-fn a_query_phantom_aborts_the_transaction_without_partial_writes() {
+fn a_query_in_a_transaction_locks_its_range() {
     use fireemu_core_firestore::query::{Query, QueryScope};
     use fireemu_core_types::ids::CollectionId;
     let mut s = FirestoreState::new();
@@ -687,22 +775,32 @@ fn a_query_phantom_aborts_the_transaction_without_partial_writes() {
     .unwrap();
     let txn = s.begin_transaction(false, t(0)).unwrap();
     assert!(s.run_query_in_transaction(&txn, &q).unwrap().is_empty());
-    s.commit(&[set("ph/new", &[("v", Value::Integer(1))])], None, t(1))
-        .unwrap();
+    // A document that would appear in the queried range cannot be created out of band while
+    // the transaction is active (production blocks the phantom writer); a document in another
+    // collection, or deeper than the range, can.
+    let refused = s
+        .commit(&[set("ph/new", &[("v", Value::Integer(1))])], None, t(1))
+        .unwrap_err();
+    assert!(
+        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{refused}"
+    );
     assert!(s.commit(&[set("other/x", &[])], None, t(1)).is_ok());
-    assert!(matches!(
-        s.commit(
-            &[set("ph/mine", &[]), set("other/txn", &[])],
-            Some(&txn),
-            t(2)
-        ),
-        Err(FirestoreError::Aborted(_))
-    ));
-    assert!(s.get(&path("ph/mine")).is_none());
-    assert!(s.get(&path("other/txn")).is_none());
-
+    assert!(s.commit(&[set("ph/new/sub/deep", &[])], None, t(1)).is_ok());
+    // The transaction commits into its own range and every write of it is published.
+    s.commit(
+        &[set("ph/mine", &[]), set("other/txn", &[])],
+        Some(&txn),
+        t(2),
+    )
+    .unwrap();
+    assert!(s.get(&path("ph/mine")).is_some());
+    assert!(s.get(&path("other/txn")).is_some());
+    // Released: the phantom write goes through and a later transaction sees both rows.
+    s.commit(&[set("ph/new", &[("v", Value::Integer(1))])], None, t(3))
+        .unwrap();
     let txn2 = s.begin_transaction(false, t(4)).unwrap();
-    assert_eq!(s.run_query_in_transaction(&txn2, &q).unwrap().len(), 1);
+    assert_eq!(s.run_query_in_transaction(&txn2, &q).unwrap().len(), 2);
     assert!(s.commit(&[set("other/y", &[])], Some(&txn2), t(5)).is_ok());
 }
 

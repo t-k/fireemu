@@ -922,8 +922,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         };
         let backend = Arc::new(if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
+                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
         } else {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
+                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
                 .with_wall_clock_write_time()
         });
         for (database, files) in &cfg.firestore_databases {

@@ -58,6 +58,8 @@ pub const READ_TIME_RETENTION_SECONDS: i64 = 3600;
 #[derive(Debug, Default)]
 struct DatabaseEntry {
     cell: RwLock<DatabaseCell>,
+    /// Wakes writers refused for lock contention when a transaction finishes.
+    releases: TransactionReleases,
 }
 
 impl DatabaseEntry {
@@ -68,6 +70,50 @@ impl DatabaseEntry {
                 detached: false,
                 state,
             }),
+            releases: TransactionReleases::default(),
+        }
+    }
+}
+
+/// The last observed value of the store's transaction release counter, with a condition a
+/// contended writer can sleep on until a transaction finishes and its locks are gone.
+#[derive(Debug, Default)]
+struct TransactionReleases {
+    seen: Mutex<u64>,
+    changed: std::sync::Condvar,
+}
+
+impl TransactionReleases {
+    fn publish(&self, releases: u64) {
+        if let Ok(mut seen) = self.seen.lock() {
+            if *seen != releases {
+                *seen = releases;
+                self.changed.notify_all();
+            }
+        }
+    }
+
+    fn current(&self) -> u64 {
+        self.seen.lock().map_or(0, |seen| *seen)
+    }
+
+    /// Blocks until the counter moves past `seen` or `deadline` passes; `true` when it moved.
+    fn wait_past(&self, seen: u64, deadline: std::time::Instant) -> bool {
+        let Ok(mut current) = self.seen.lock() else {
+            return false;
+        };
+        loop {
+            if *current != seen {
+                return true;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            match self.changed.wait_timeout(current, deadline - now) {
+                Ok((guard, _)) => current = guard,
+                Err(_) => return false,
+            }
         }
     }
 }
@@ -111,7 +157,21 @@ impl DatabaseHandle {
         if cell.detached {
             return Err(detached());
         }
-        f(&mut cell.state)
+        let outcome = f(&mut cell.state);
+        // Published under the database lock, so a waiter that read the marker before this
+        // operation cannot miss the release it caused.
+        self.0.releases.publish(cell.state.transaction_releases());
+        outcome
+    }
+
+    /// The transaction release marker a contended writer records before trying again.
+    fn release_marker(&self) -> u64 {
+        self.0.releases.current()
+    }
+
+    /// Blocks until a transaction finishes after `marker` was read, or until `deadline`.
+    fn wait_for_release(&self, marker: u64, deadline: std::time::Instant) -> bool {
+        self.0.releases.wait_past(marker, deadline)
     }
 
     /// Reads under this database's own lock; `None` once detached or poisoned.
@@ -155,6 +215,10 @@ pub struct LocalBackend {
     /// When this backend's databases came into being: a `read_time` before it is refused as
     /// production refuses one before the database's creation time.
     created_at: fireemu_core_types::time::LogicalInstant,
+    /// How long a commit outside a transaction waits for the locks an active read-write
+    /// transaction holds on what it read before it is refused with `ABORTED` (production:
+    /// "Too much contention on these documents"). Zero refuses at once.
+    contention_wait: std::time::Duration,
     /// Unpinned compatibility runs sample wall time for each Firestore write while every
     /// other product and explicitly pinned run continues to use the virtual clock.
     wall_clock_write_time: bool,
@@ -508,6 +572,13 @@ struct NoopCommitPublication;
 impl CommitPublication for NoopCommitPublication {
     fn publish(self: Box<Self>) {}
 }
+
+/// The lock contention wait the daemon runs with. Production makes a colliding writer wait
+/// for the transaction's locks and refuses it with `ABORTED` after a bound of its own
+/// (measured under a minute in conformance/firestore-production-matrix.json,
+/// transactions/lifecycle#out-of-band-write); the official emulator answers "Transaction lock
+/// timeout." on the same shape. fireemu waits this long.
+pub const DEFAULT_CONTENTION_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Commit notifications retained for slow Listen and UI subscribers. Lag is recoverable by
 /// reading one current database snapshot, so a small ring bounds retained path metadata.
@@ -900,6 +971,7 @@ impl LocalBackend {
             .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH);
         Self {
             created_at,
+            contention_wait: std::time::Duration::ZERO,
             gateway,
             indexes,
             clock,
@@ -921,6 +993,21 @@ impl LocalBackend {
             change_admission: Mutex::new(None),
             barrier: Arc::new(AdmissionBarrier::new()),
         }
+    }
+
+    /// How long a commit outside a transaction waits for the locks an active read-write
+    /// transaction holds before it is refused (see [`DEFAULT_CONTENTION_WAIT`]). The
+    /// constructor's default is zero: the refusal is immediate and deterministic.
+    #[must_use]
+    pub const fn with_contention_wait(mut self, wait: std::time::Duration) -> Self {
+        self.contention_wait = wait;
+        self
+    }
+
+    /// The configured lock contention wait.
+    #[must_use]
+    pub const fn contention_wait(&self) -> std::time::Duration {
+        self.contention_wait
     }
 
     /// Uses host wall time for Firestore commit timestamps. This is selected only when the
@@ -2725,8 +2812,29 @@ impl LocalBackend {
         self.commit_with(req, &allow_all)
     }
 
-    /// `Commit` with a write guard.
+    /// `Commit` with a write guard. A commit outside a transaction that collides with the
+    /// locks of an active read-write transaction waits for a release up to the configured
+    /// contention wait (blocking the calling thread; the REST surface runs on a blocking
+    /// thread) and is then refused the way production refuses it.
     pub fn commit_with(
+        &self,
+        req: &pb::CommitRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::CommitResponse, Status> {
+        let deadline = std::time::Instant::now() + self.contention_wait;
+        loop {
+            let (handle, marker) = self.release_marker(req)?;
+            match self.commit_once(req, guard) {
+                Err(status) if Self::should_wait_for_release(req, &status, deadline) => {
+                    handle.wait_for_release(marker, deadline);
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    /// One attempt at `Commit`: no waiting for lock contention.
+    pub fn commit_once(
         &self,
         req: &pb::CommitRequest,
         guard: WriteGuard<'_>,
@@ -2741,6 +2849,44 @@ impl LocalBackend {
             Ok(result)
         })?;
         Ok(encode_commit(&result))
+    }
+
+    /// The database a commit addresses and its current release marker, read before an
+    /// attempt so a release during the attempt is never missed.
+    pub fn release_marker(&self, req: &pb::CommitRequest) -> Result<(DatabaseHandle, u64), Status> {
+        let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        let handle = self.database_handle(&parent)?;
+        let marker = handle.release_marker();
+        Ok((handle, marker))
+    }
+
+    /// Whether a refused commit should wait for a transaction to finish and try again: only
+    /// a commit outside a transaction refused for lock contention before the deadline. A
+    /// contended transactional commit is the deadlock production resolves by aborting one
+    /// side, and the store has already aborted it.
+    #[must_use]
+    pub fn should_wait_for_release(
+        req: &pb::CommitRequest,
+        status: &Status,
+        deadline: std::time::Instant,
+    ) -> bool {
+        req.transaction.is_empty()
+            && Self::is_contention(status)
+            && std::time::Instant::now() < deadline
+    }
+
+    /// Whether `status` is the lock contention refusal.
+    #[must_use]
+    pub fn is_contention(status: &Status) -> bool {
+        status.code() == tonic::Code::Aborted
+            && status.message() == fireemu_core_firestore::store::TOO_MUCH_CONTENTION
+    }
+
+    /// Waits off the async runtime for a transaction of the commit's database to finish
+    /// after `marker` was read, or for `deadline`.
+    pub async fn await_release(handle: DatabaseHandle, marker: u64, deadline: std::time::Instant) {
+        let _ =
+            tokio::task::spawn_blocking(move || handle.wait_for_release(marker, deadline)).await;
     }
 
     /// `Rollback`.

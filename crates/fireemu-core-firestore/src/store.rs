@@ -780,6 +780,10 @@ pub struct FirestoreState {
     next_transaction: u64,
     transactions: BTreeMap<TransactionId, Transaction>,
     active_transaction_count: usize,
+    /// How many transactions have left the active state (commit, abort, rollback, expiry):
+    /// every one releases the locks its reads held, so a writer refused for contention can
+    /// tell when trying again may succeed.
+    transaction_releases: u64,
     active_transaction_deadlines: BTreeSet<(LogicalInstant, TransactionId)>,
     active_transaction_versions: BTreeMap<CommitVersion, usize>,
     active_transaction_conflict_ledger_bytes: u64,
@@ -826,6 +830,7 @@ impl Default for FirestoreState {
             next_transaction: 0,
             transactions: BTreeMap::new(),
             active_transaction_count: 0,
+            transaction_releases: 0,
             active_transaction_deadlines: BTreeSet::new(),
             active_transaction_versions: BTreeMap::new(),
             active_transaction_conflict_ledger_bytes: 0,
@@ -879,6 +884,9 @@ const TRANSACTION_NO_LONGER_VALID: &str =
     "The referenced transaction has expired or is no longer valid.";
 const TRANSACTION_CONCURRENT_MODIFICATION: &str =
     "Transaction was aborted due to a concurrent modification.";
+/// Production's answer to a write that collides with the locks an active read-write
+/// transaction holds on what it read (`concurrencyMode: PESSIMISTIC`).
+pub const TOO_MUCH_CONTENTION: &str = "Too much contention on these documents. Please try again.";
 const MAX_FINISHED_TRANSACTION_LINEAGE: usize = 8_192;
 
 fn transaction_ttl() -> LogicalDuration {
@@ -966,31 +974,34 @@ impl QueryObserver {
 }
 
 fn document_in_scope(document: &Document, scope: &QueryScope) -> bool {
+    path_in_scope(&document.path, scope)
+}
+
+/// Whether a document at `path` belongs to the range `scope` selects.
+fn path_in_scope(path: &DocumentPath, scope: &QueryScope) -> bool {
     let parent_len = scope.parent().map_or(0, |parent| parent.pairs().len());
     match scope {
         QueryScope::Collection {
             parent,
             collection_id,
         } => {
-            document.path.pairs().len() == parent_len + 1
-                && document.path.collection_id() == collection_id
+            path.pairs().len() == parent_len + 1
+                && path.collection_id() == collection_id
                 && parent
                     .as_ref()
-                    .is_none_or(|path| document.path.pairs()[..parent_len] == *path.pairs())
+                    .is_none_or(|prefix| path.pairs()[..parent_len] == *prefix.pairs())
         }
         QueryScope::CollectionGroup {
             parent,
             collection_id,
         } => {
-            document.path.collection_id() == collection_id
-                && parent.as_ref().is_none_or(|path| {
-                    document.path.pairs().len() > parent_len
-                        && document.path.pairs()[..parent_len] == *path.pairs()
+            path.collection_id() == collection_id
+                && parent.as_ref().is_none_or(|prefix| {
+                    path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
                 })
         }
-        QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|path| {
-            document.path.pairs().len() > parent_len
-                && document.path.pairs()[..parent_len] == *path.pairs()
+        QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|prefix| {
+            path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
         }),
     }
 }
@@ -1522,6 +1533,7 @@ impl FirestoreState {
             next_transaction: self.next_transaction,
             transactions: BTreeMap::new(),
             active_transaction_count: 0,
+            transaction_releases: 0,
             active_transaction_deadlines: BTreeSet::new(),
             active_transaction_versions: BTreeMap::new(),
             active_transaction_conflict_ledger_bytes: 0,
@@ -1801,6 +1813,7 @@ impl FirestoreState {
         self.active_transaction_deadlines
             .remove(&(deadline, id.clone()));
         self.active_transaction_count = self.active_transaction_count.saturating_sub(1);
+        self.transaction_releases = self.transaction_releases.wrapping_add(1);
         if let Some(transaction) = self.transactions.get(id) {
             decrement_version_count(
                 &mut self.active_transaction_versions,
@@ -2515,9 +2528,7 @@ impl FirestoreState {
         if let Some(id) = transaction {
             self.validate_transaction_commit(id, writes, now)?;
         }
-        // The transform budget is production's alone: the official emulator applies any
-        // number of transforms (measured by `conformance/src/firestore-probe`), so only the
-        // production scope refuses the commit.
+        self.check_contention(writes, transaction, now)?;
         Self::check_transform_budget(writes)?;
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
@@ -2701,6 +2712,53 @@ impl FirestoreState {
             ));
         }
         Ok(())
+    }
+
+    /// Pessimistic locking, as production runs it (`concurrencyMode: PESSIMISTIC`, measured
+    /// in conformance/firestore-production-matrix.json, transactions/lifecycle): every
+    /// document an active read-write transaction read, and every query range it executed,
+    /// is locked until that transaction finishes. A commit outside the transaction that
+    /// touches a locked document is refused with `ABORTED` and production's wording (the
+    /// adapter waits for the release before giving that answer); a commit by another
+    /// transaction is the deadlock production resolves by aborting one side, so the
+    /// committing transaction is aborted and left for its client to retry.
+    fn check_contention(
+        &mut self,
+        writes: &[Write],
+        own: Option<&TransactionId>,
+        now: LogicalInstant,
+    ) -> Result<(), FirestoreError> {
+        if writes.is_empty() {
+            return Ok(());
+        }
+        self.prune_transactions(now);
+        let contended = self.transactions.iter().any(|(id, holder)| {
+            holder.state == TransactionState::Active
+                && !holder.read_only
+                && holder.read_version >= self.compaction_floor
+                && own != Some(id)
+                && writes.iter().any(|write| {
+                    let path = write.op.path();
+                    holder.read_set.contains_key(path)
+                        || holder
+                            .queries
+                            .iter()
+                            .any(|(query, _)| path_in_scope(path, &query.scope))
+                })
+        });
+        if !contended {
+            return Ok(());
+        }
+        if let Some(id) = own {
+            self.finish_transaction(id, TransactionState::RetryableAborted);
+        }
+        Err(FirestoreError::Aborted(TOO_MUCH_CONTENTION.into()))
+    }
+
+    /// How many transactions have finished so far; a change means locks were released.
+    #[must_use]
+    pub const fn transaction_releases(&self) -> u64 {
+        self.transaction_releases
     }
 
     fn transaction_conflicted(&self, id: &TransactionId) -> Result<bool, FirestoreError> {

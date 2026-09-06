@@ -530,10 +530,29 @@ impl Firestore for GatewayService {
     ) -> Result<Response<pb::CommitResponse>, Status> {
         if let Some(local) = self.local_backend() {
             let caller = self.caller(request.metadata(), &request.get_ref().database, "Commit")?;
-            let guard = self.write_guard(&caller);
-            return local
-                .commit_with(request.get_ref(), &*guard)
-                .map(Response::new);
+            // A commit outside a transaction that collides with an active transaction's locks
+            // waits (off the runtime) for a release, then tries again; the guard is rebuilt
+            // per attempt so nothing non-Send is held across the wait.
+            let deadline = std::time::Instant::now() + local.contention_wait();
+            loop {
+                let (handle, marker) = local.release_marker(request.get_ref())?;
+                let attempt = {
+                    let guard = self.write_guard(&caller);
+                    local.commit_once(request.get_ref(), &*guard)
+                };
+                match attempt {
+                    Err(status)
+                        if LocalBackend::should_wait_for_release(
+                            request.get_ref(),
+                            &status,
+                            deadline,
+                        ) =>
+                    {
+                        LocalBackend::await_release(handle, marker, deadline).await;
+                    }
+                    outcome => return outcome.map(Response::new),
+                }
+            }
         }
         self.client()?.commit(request.into_inner()).await
     }

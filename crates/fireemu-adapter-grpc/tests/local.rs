@@ -407,6 +407,158 @@ async fn start_with_backend_and_policy(
     (FirestoreClient::new(channel), clock, backend, handle)
 }
 
+/// A server whose backend waits `wait` for a transaction to release its locks before
+/// refusing a contended commit.
+async fn start_with_contention_wait(
+    wait: std::time::Duration,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock, 7).with_contention_wait(wait));
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(svc)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    (FirestoreClient::new(channel), handle)
+}
+
+/// A contended commit outside a transaction waits for the transaction to finish and then
+/// goes through (production's normal path); one that waits past the bound is refused with
+/// production's wording.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_contended_commit_waits_for_the_lock_release() {
+    let (mut client, handle) = start_with_contention_wait(std::time::Duration::from_secs(10)).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("wait/doc", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/wait/doc"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                txn.clone(),
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut releaser = client.clone();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        releaser
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("wait/doc", &[("v", i(2))])],
+                transaction: txn,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    });
+    let started = std::time::Instant::now();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("wait/doc", &[("v", i(3))])],
+            ..Default::default()
+        })
+        .await
+        .expect("the writer proceeds once the transaction released its locks");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "the writer was woken by the release, not by the deadline"
+    );
+    release.await.unwrap();
+    let doc = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/wait/doc"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(doc.fields.get("v"), Some(&i(3)));
+    handle.abort();
+}
+
+/// A contended commit that waits past the bound is refused with production's wording.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_contended_commit_is_refused_after_the_wait_bound() {
+    let (mut client, handle) =
+        start_with_contention_wait(std::time::Duration::from_millis(100)).await;
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let _ = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/wait/held"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                txn,
+            )),
+            ..Default::default()
+        })
+        .await;
+    let started = std::time::Instant::now();
+    let refused = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("wait/held", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(started.elapsed() >= std::time::Duration::from_millis(100));
+    assert_eq!(refused.code(), tonic::Code::Aborted);
+    assert_eq!(
+        refused.message(),
+        "Too much contention on these documents. Please try again."
+    );
+    handle.abort();
+}
+
 async fn start() -> (
     FirestoreClient<tonic::transport::Channel>,
     Arc<Mutex<VirtualClock>>,
@@ -1108,7 +1260,8 @@ async fn create_update_with_mask_transforms_and_preconditions() {
 }
 
 #[tokio::test]
-async fn a_concurrent_write_aborts_the_stale_transaction_and_batch_get_reports_missing() {
+#[allow(clippy::too_many_lines)]
+async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() {
     let (mut client, _clock, handle) = start().await;
     client
         .commit(pb::CommitRequest {
@@ -1149,10 +1302,38 @@ async fn a_concurrent_write_aborts_the_stale_transaction_and_batch_get_reports_m
         }
     }
     assert_eq!((found, missing), (1, 1));
-    client
+    // Production (PESSIMISTIC): the read locked both paths, so the out-of-band write is refused
+    // with production's wording (the test backend waits zero seconds for a release).
+    let contended = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("acct/a", &[("balance", i(90))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(contended.code(), tonic::Code::Aborted);
+    assert_eq!(
+        contended.message(),
+        "Too much contention on these documents. Please try again."
+    );
+    // A second transaction reading the same document shares the lock; the first to commit
+    // is aborted for its client to retry.
+    let other = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/acct/a"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                other.clone(),
+            )),
             ..Default::default()
         })
         .await
@@ -1167,6 +1348,15 @@ async fn a_concurrent_write_aborts_the_stale_transaction_and_batch_get_reports_m
         .await
         .unwrap_err();
     assert_eq!(conflict.code(), tonic::Code::Aborted);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("acct/a", &[("balance", i(90))])],
+            transaction: other,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     let retry = || pb::BeginTransactionRequest {
         database: DB.to_owned(),
         options: Some(pb::TransactionOptions {
@@ -1595,6 +1785,7 @@ async fn malformed_wire_shapes_are_rejected_before_any_mutation() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     let (mut client, _clock, handle) = start().await;
     client
@@ -1629,14 +1820,17 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     assert!(second.transaction.is_empty());
     assert!(stream.next().await.is_none());
 
-    client
+    // The queried range is locked: a phantom row cannot be written out of band while the
+    // transaction is active (production blocks the writer and aborts it).
+    let phantom = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("snap/2", &[("v", i(2))])],
             ..Default::default()
         })
         .await
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(phantom.code(), tonic::Code::Aborted);
     let mut stream = client
         .run_aggregation_query(pb::RunAggregationQueryRequest {
             parent: DOCS.to_owned(),
@@ -1655,7 +1849,7 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
         .into_inner();
     let result = stream.next().await.unwrap().unwrap().result.unwrap();
     assert_eq!(result.aggregate_fields.get("n"), Some(&i(1)));
-    let conflict = client
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("snap/3", &[("v", i(3))])],
@@ -1663,15 +1857,23 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(conflict.code(), tonic::Code::Aborted);
+        .unwrap();
     assert!(client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/snap/3"),
             ..Default::default()
         })
         .await
-        .is_err());
+        .is_ok());
+    // Released: the phantom row can be written now.
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("snap/2", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
 
     // An empty BatchGet with new_transaction still returns the token.
     let mut stream = client
@@ -1778,7 +1980,7 @@ async fn dropping_a_slow_query_stream_releases_the_internal_snapshot_pin() {
 }
 
 #[tokio::test]
-async fn aggregation_transaction_conflicts_when_a_missing_field_becomes_present() {
+async fn aggregation_transaction_locks_the_aggregated_range() {
     let (mut client, _clock, handle) = start().await;
     client
         .commit(pb::CommitRequest {
@@ -1821,6 +2023,27 @@ async fn aggregation_transaction_conflicts_when_a_missing_field_becomes_present(
     assert!(!response.transaction.is_empty());
     assert!(stream.next().await.is_none());
 
+    // Giving the missing field a value would change the aggregate, and the range is locked
+    // while the transaction is active: the out-of-band write is refused, the transaction
+    // commits into the range.
+    let refused = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("aggregation-conflict/missing", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::Aborted);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("aggregation-conflict/inside", &[("v", i(3))])],
+            transaction: response.transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -1829,16 +2052,6 @@ async fn aggregation_transaction_conflicts_when_a_missing_field_becomes_present(
         })
         .await
         .unwrap();
-    let error = client
-        .commit(pb::CommitRequest {
-            database: DB.to_owned(),
-            writes: vec![update_write("aggregation-conflict/inside", &[("v", i(3))])],
-            transaction: response.transaction,
-            ..Default::default()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(error.code(), tonic::Code::Aborted);
 
     handle.abort();
 }
@@ -2514,15 +2727,18 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
         .unwrap()
         .into_inner();
     assert_eq!(listed.documents.len(), 1);
-    client
+    // The listed range is locked like a queried one: a new row cannot be written out of band
+    // while the transaction is active, and the transaction commits into the range.
+    let refused = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("scan/b", &[("v", i(2))])],
             ..Default::default()
         })
         .await
-        .unwrap();
-    let conflict = client
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::Aborted);
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("scan/a", &[("v", i(3))])],
@@ -2530,8 +2746,7 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(conflict.code(), tonic::Code::Aborted);
+        .unwrap();
     let current = client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/scan/a"),
@@ -2540,7 +2755,7 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(current.fields.get("v"), Some(&i(1)));
+    assert_eq!(current.fields.get("v"), Some(&i(3)));
     handle.abort();
 }
 

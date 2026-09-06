@@ -9,12 +9,12 @@
     "firestore",
     "testing"
   ],
-  "homepage": "https://github.com/reckona/fireemu#readme",
-  "bugs": "https://github.com/reckona/fireemu/issues",
+  "homepage": "https://github.com/t-k/fireemu#readme",
+  "bugs": "https://github.com/t-k/fireemu/issues",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/reckona/fireemu.git"
+    "url": "git+https://github.com/t-k/fireemu.git"
   },
   "bin": {
     "fireemu": "bin/fireemu.mjs"

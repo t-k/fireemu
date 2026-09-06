@@ -67,6 +67,7 @@ assert(release.dig("jobs", "publish", "environment") == "npm-release", "release 
 assert(release.dig("concurrency", "cancel-in-progress") == false, "release publication must never be cancelled in progress")
 publish_runs = release.dig("jobs", "publish", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(publish_runs.include?("npm@11.9.0"), "release publish must pin an npm version that supports Trusted Publishing")
+assert(publish_runs.include?("npm publish ./npm/fireemu"), "release publish must treat the launcher as a local path")
 
 %w[lint test verify platforms package ui].each do |name|
   assert(jobs.fetch(name).fetch("if") == "${{ github.event_name == 'workflow_dispatch' }}", "#{name} must be manual-only before publication")

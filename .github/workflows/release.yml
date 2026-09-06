@@ -394,9 +394,9 @@ jobs:
           PUBLISH: ${{ needs.plan.outputs.publish }}
         run: |
           if [ "$PUBLISH" = "true" ]; then
-            npm publish npm/fireemu --provenance --access public
+            npm publish ./npm/fireemu --provenance --access public
           else
-            npm publish npm/fireemu --dry-run --access public
+            npm publish ./npm/fireemu --dry-run --access public
           fi
 
       - name: the GitHub Release

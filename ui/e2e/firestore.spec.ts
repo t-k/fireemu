@@ -307,4 +307,53 @@ test.describe("Firestore data browser", () => {
     };
     expect(ids.collectionIds ?? []).not.toContain("bulk");
   });
+
+  test("deletes every paginated subcollection before deleting its parent", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const resourceRoot = "projects/demo-app/databases/(default)/documents";
+    const parentPath = "paged-delete/parent";
+    const parent = resourceRoot + "/" + parentPath;
+    const writes = Array.from({ length: 601 }, (_, index) => ({
+      update: {
+        name: parent + "/child-" + index + "/leaf",
+        fields: {},
+      },
+    }));
+    await api(request, "PATCH", DOCS + "/" + parentPath, { fields: {} });
+    for (let offset = 0; offset < writes.length; offset += 250) {
+      await api(request, "POST", DOCS + ":commit", {
+        writes: writes.slice(offset, offset + 250),
+      });
+    }
+
+    const first = (await api(request, "POST", DOCS + "/paged-delete/parent:listCollectionIds", {
+      pageSize: 300,
+    })) as { collectionIds?: string[]; nextPageToken?: string };
+    expect(first.collectionIds ?? []).toHaveLength(300);
+    expect(first.nextPageToken).toBeTruthy();
+    const second = (await api(request, "POST", DOCS + "/paged-delete/parent:listCollectionIds", {
+      pageSize: 300,
+      pageToken: first.nextPageToken,
+    })) as { collectionIds?: string[]; nextPageToken?: string };
+    expect(second.collectionIds ?? []).toHaveLength(300);
+    expect(second.nextPageToken).toBeTruthy();
+    const third = (await api(request, "POST", DOCS + "/paged-delete/parent:listCollectionIds", {
+      pageSize: 300,
+      pageToken: second.nextPageToken,
+    })) as { collectionIds?: string[]; nextPageToken?: string };
+    expect(third.collectionIds ?? []).toHaveLength(1);
+    expect(third.nextPageToken).toBeUndefined();
+
+    await gotoApp(page, "/firestore/paged-delete");
+    await page.getByTestId("collection-delete").click();
+    await page.getByTestId("collection-delete-confirm").click();
+    await expect(page).toHaveURL(/\/ui\/firestore\/?\?db=/);
+    const ids = (await api(request, "POST", DOCS + ":listCollectionIds", {})) as {
+      collectionIds?: string[];
+    };
+    expect(ids.collectionIds ?? []).not.toContain("paged-delete");
+  });
 });

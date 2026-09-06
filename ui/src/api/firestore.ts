@@ -21,8 +21,12 @@ export type DocumentPage = { documents?: FsDocument[]; nextPageToken?: string };
 export const listCollectionIds = (
   root: string,
   parent: string,
+  pageToken?: string,
 ): ResultAsync<{ collectionIds?: string[]; nextPageToken?: string }, ApiError> =>
-  request("POST", `${url(root, parent)}:listCollectionIds`, { pageSize: 300 });
+  request("POST", `${url(root, parent)}:listCollectionIds`, {
+    pageSize: 300,
+    ...(pageToken ? { pageToken } : {}),
+  });
 
 /** One page of documents of a collection (missing documents included). */
 export const listDocuments = (
@@ -109,6 +113,23 @@ const chunk = <T>(items: T[], size: number): T[][] => {
 
 const exists = (d: FsDocument): boolean => d.createTime !== undefined || d.fields !== undefined;
 
+const listAllCollectionIds = async (
+  root: string,
+  parent: string,
+): Promise<Result<string[], ApiError>> => {
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+  do {
+    const page = await listCollectionIds(root, parent, pageToken);
+    if (page.isErr()) {
+      return err(page.error);
+    }
+    ids.push(...(page.value.collectionIds ?? []));
+    pageToken = page.value.nextPageToken;
+  } while (pageToken);
+  return ok(ids);
+};
+
 /**
  * Deletes every document of a collection and, recursively, their subcollections, in
  * commits of at most 100 deletes. Resolves to the number of documents deleted.
@@ -129,11 +150,14 @@ export const deleteCollection = (
       const docs = page.value.documents ?? [];
       for (const d of docs) {
         const rel = d.name.slice(d.name.indexOf("/documents/") + "/documents/".length);
-        const subs = await listCollectionIds(root, rel);
+        // Collect every child collection page before deleting any descendant. Deleting a
+        // collection changes the paginated listing, so fetching the next page afterward can
+        // skip IDs that moved into the first page.
+        const subs = await listAllCollectionIds(root, rel);
         if (subs.isErr()) {
           return subs.error;
         }
-        for (const id of subs.value.collectionIds ?? []) {
+        for (const id of subs.value) {
           const failure = await walk(`${rel}/${id}`);
           if (failure) {
             return failure;

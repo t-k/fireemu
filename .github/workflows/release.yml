@@ -301,7 +301,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
-      contents: write # create the release and attach its assets
+      contents: read
       id-token: write # npm publish --provenance, and build attestations
       attestations: write
     steps:
@@ -398,16 +398,6 @@ jobs:
           else
             npm publish ./npm/fireemu --dry-run --access public
           fi
-
-      - name: the GitHub Release
-        if: needs.plan.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes \
-            dist/*
 
       - name: the dry run's artifacts
         if: needs.plan.outputs.publish != 'true'

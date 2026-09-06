@@ -862,7 +862,9 @@ fn totp_enrollment_checks_first_factor_and_email_before_allocating_state() {
         assert_eq!(status, 400, "{body}");
         assert_eq!(body["error"]["message"], message);
         let claims = claims(token);
-        let uid = claims["user_id"].as_str().expect("the token names its user");
+        let uid = claims["user_id"]
+            .as_str()
+            .expect("the token names its user");
         assert_eq!(
             state
                 .store

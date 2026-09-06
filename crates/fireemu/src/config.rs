@@ -835,7 +835,9 @@ impl RuntimeConfig {
         {
             Ok(())
         } else {
-            Err(ConfigError(format!("limits.{key} has an invalid catalog id")))
+            Err(ConfigError(format!(
+                "limits.{key} has an invalid catalog id"
+            )))
         }
     }
 
@@ -844,17 +846,22 @@ impl RuntimeConfig {
             .as_array()
             .ok_or_else(|| ConfigError(format!("{path} must be an array")))?;
         for (index, threshold) in thresholds.iter().enumerate() {
-            let threshold = threshold.as_object().ok_or_else(|| {
-                ConfigError(format!("{path}[{index}] must be an object"))
-            })?;
+            let threshold = threshold
+                .as_object()
+                .ok_or_else(|| ConfigError(format!("{path}[{index}] must be an object")))?;
             for key in threshold.keys() {
                 if !["basisPoints", "severity"].contains(&key.as_str()) {
-                    return Err(ConfigError(format!("unknown config key {path}[{index}].{key}")));
+                    return Err(ConfigError(format!(
+                        "unknown config key {path}[{index}].{key}"
+                    )));
                 }
             }
-            let basis_points = threshold.get("basisPoints").and_then(Value::as_u64).ok_or_else(|| {
-                ConfigError(format!("{path}[{index}].basisPoints must be an integer"))
-            })?;
+            let basis_points = threshold
+                .get("basisPoints")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    ConfigError(format!("{path}[{index}].basisPoints must be an integer"))
+                })?;
             if !(1..=10_000).contains(&basis_points) {
                 return Err(ConfigError(format!(
                     "{path}[{index}].basisPoints must be an integer from 1 through 10000"
@@ -863,9 +870,7 @@ impl RuntimeConfig {
             let severity = threshold
                 .get("severity")
                 .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    ConfigError(format!("{path}[{index}].severity must be a string"))
-                })?;
+                .ok_or_else(|| ConfigError(format!("{path}[{index}].severity must be a string")))?;
             if !["notice", "warning", "critical"].contains(&severity) {
                 return Err(ConfigError(format!(
                     "{path}[{index}].severity has an unsupported value {severity:?}"
@@ -937,9 +942,9 @@ impl RuntimeConfig {
             })?;
             for (key, thresholds) in per_limit {
                 if key.is_empty()
-                    || !key
-                        .bytes()
-                        .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-')
+                    || !key.bytes().all(|byte| {
+                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-'
+                    })
                 {
                     return Err(ConfigError(format!(
                         "limits.perLimitWarningThresholds has an invalid limit id {key:?}"
@@ -958,9 +963,9 @@ impl RuntimeConfig {
         }
 
         if let Some(value) = limits.get("warningsAsErrors") {
-            let values = value
-                .as_array()
-                .ok_or_else(|| ConfigError("limits.warningsAsErrors must be an array".to_owned()))?;
+            let values = value.as_array().ok_or_else(|| {
+                ConfigError("limits.warningsAsErrors must be an array".to_owned())
+            })?;
             for (index, item) in values.iter().enumerate() {
                 let item = item.as_str().ok_or_else(|| {
                     ConfigError(format!("limits.warningsAsErrors[{index}] must be a string"))
@@ -1014,14 +1019,14 @@ impl RuntimeConfig {
             ];
             for key in plan.keys() {
                 if !PLAN_KEYS.contains(&key.as_str()) {
-                    return Err(ConfigError(format!("unknown config key limits.firestorePlan.{key}")));
+                    return Err(ConfigError(format!(
+                        "unknown config key limits.firestorePlan.{key}"
+                    )));
                 }
             }
             if let Some(value) = plan.get("billingEnabled") {
                 let enabled = value.as_bool().ok_or_else(|| {
-                    ConfigError(
-                        "limits.firestorePlan.billingEnabled must be a boolean".to_owned(),
-                    )
+                    ConfigError("limits.firestorePlan.billingEnabled must be a boolean".to_owned())
                 })?;
                 if enabled {
                     return Err(ConfigError(
@@ -2544,7 +2549,10 @@ mod tests {
                 json!({"warningsAsErrors": ["warning"]}),
                 "limits.warningsAsErrors",
             ),
-            (json!({"quotaAccounting": "observe"}), "limits.quotaAccounting"),
+            (
+                json!({"quotaAccounting": "observe"}),
+                "limits.quotaAccounting",
+            ),
             (
                 json!({"firestorePlan": {"billingEnabled": true}}),
                 "limits.firestorePlan.billingEnabled",
@@ -2565,14 +2573,26 @@ mod tests {
     fn malformed_limits_are_rejected_before_runtime_configuration_is_built() {
         for (limits, expected) in [
             (json!(true), "limits must be an object"),
-            (json!({"enforcement": true}), "limits.enforcement must be a string"),
-            (json!({"warningThresholds": {}}), "limits.warningThresholds must be an array"),
+            (
+                json!({"enforcement": true}),
+                "limits.enforcement must be a string",
+            ),
+            (
+                json!({"warningThresholds": {}}),
+                "limits.warningThresholds must be an array",
+            ),
             (
                 json!({"perLimitWarningThresholds": []}),
                 "limits.perLimitWarningThresholds must be an object",
             ),
-            (json!({"warningsAsErrors": {}}), "limits.warningsAsErrors must be an array"),
-            (json!({"quotaAccounting": true}), "limits.quotaAccounting must be a string"),
+            (
+                json!({"warningsAsErrors": {}}),
+                "limits.warningsAsErrors must be an array",
+            ),
+            (
+                json!({"quotaAccounting": true}),
+                "limits.quotaAccounting must be a string",
+            ),
             (
                 json!({"firestorePlan": []}),
                 "limits.firestorePlan must be an object",
@@ -2581,10 +2601,17 @@ mod tests {
                 json!({"firestorePlan": {"billingEnabled": "yes"}}),
                 "limits.firestorePlan.billingEnabled must be a boolean",
             ),
-            (json!({"unknown": null}), "unknown config key limits.unknown"),
+            (
+                json!({"unknown": null}),
+                "unknown config key limits.unknown",
+            ),
         ] {
             let error = with_profile(json!({"limits": limits})).expect_err("malformed limits");
-            assert!(error.0.contains(expected), "expected {expected}, got {}", error.0);
+            assert!(
+                error.0.contains(expected),
+                "expected {expected}, got {}",
+                error.0
+            );
         }
     }
 

@@ -32,6 +32,7 @@ const url = (path) => `${SCHEME}://${HOST}${path.replaceAll("PROJECT", PROJECT)}
 const substituteProject = (value) =>
   JSON.parse(JSON.stringify(value ?? null).replaceAll("PROJECT", PROJECT));
 const authorized = (headers = {}) => ({ ...headers, authorization: `Bearer ${TOKEN}` });
+const timeoutSignal = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
 /** Wipes the emulator's documents so one program never sees another's writes. */
 async function clear(database = "(default)") {
@@ -41,6 +42,7 @@ async function clear(database = "(default)") {
   }
   await fetch(`http://${HOST}/emulator/v1/projects/${PROJECT}/databases/${database}/documents`, {
     method: "DELETE",
+    signal: timeoutSignal(),
   });
 }
 
@@ -72,6 +74,7 @@ async function listCollectionIds(base, parentPath) {
       method: "POST",
       headers: authorized({ "content-type": "application/json" }),
       body: JSON.stringify(pageToken ? { pageToken } : {}),
+      signal: timeoutSignal(),
     });
     if (listed.status === 404) return null;
     if (!listed.ok) {
@@ -98,7 +101,10 @@ async function deleteCollection(base, parentPath, collectionId) {
       pageSize: "300",
       ...(pageToken ? { pageToken } : {}),
     });
-    const listed = await fetch(`${parent}/${collectionId}?${query}`, { headers: authorized() });
+    const listed = await fetch(`${parent}/${collectionId}?${query}`, {
+      headers: authorized(),
+      signal: timeoutSignal(),
+    });
     if (!listed.ok) throw new Error(`clear: list ${listed.status} ${await listed.text()}`);
     const page = await listed.json();
     for (const document of page.documents ?? []) {
@@ -118,6 +124,7 @@ async function deleteCollection(base, parentPath, collectionId) {
       method: "POST",
       headers: authorized({ "content-type": "application/json" }),
       body: JSON.stringify({ writes }),
+      signal: timeoutSignal(),
     });
     if (!commit.ok) throw new Error(`clear: commit ${commit.status} ${await commit.text()}`);
   }
@@ -129,6 +136,7 @@ async function seed(documents) {
       method: "PATCH",
       headers: authorized({ "content-type": "application/json" }),
       body: JSON.stringify({ fields: substituteProject(document.fields) }),
+      signal: timeoutSignal(),
     });
     if (!response.ok) {
       throw new Error(`seed ${document.path}: ${response.status} ${await response.text()}`);

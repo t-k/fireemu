@@ -822,6 +822,70 @@ async fn a_busy_holder_keeps_its_locks_past_the_lease() {
     handle.abort();
 }
 
+/// A transaction token is authenticated: a token with an adjacent id, or one with its
+/// authenticator changed, names no transaction, so a client cannot roll back or commit a
+/// transaction it was never handed.
+#[tokio::test]
+async fn a_transaction_token_cannot_be_forged_from_a_neighbouring_id() {
+    let (mut client, _clock, handle) = start().await;
+    let mine = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let other = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    assert_ne!(mine, other);
+    // The id sits in the leading bytes; the neighbouring id is what the other client holds.
+    let mut forged = mine.clone();
+    let handle_len = forged.len() - 16;
+    forged[handle_len - 1] = forged[handle_len - 1].wrapping_add(1);
+    let refused = client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction: forged,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+    let mut tampered = mine.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+    let refused = client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction: tampered,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+    // Both genuine tokens still work.
+    for txn in [mine, other] {
+        client
+            .rollback(pb::RollbackRequest {
+                database: DB.to_owned(),
+                transaction: txn,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    handle.abort();
+}
+
 /// A contended commit that waits past the bound is refused with production's wording.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_contended_commit_is_refused_after_the_wait_bound() {

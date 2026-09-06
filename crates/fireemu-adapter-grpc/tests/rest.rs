@@ -1045,3 +1045,94 @@ fn a_read_at_the_latest_commit_time_is_served() {
     );
     assert_eq!(status, 400, "{body}");
 }
+
+/// The REST connection task runs a request on a blocking-pool thread with waits disabled:
+/// a contended write comes back at once, flagged, and the task waits for a release without
+/// holding the pool slot; a release wakes that wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rest_request_does_not_wait_for_locks_on_the_blocking_pool_thread() {
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let local = Arc::new(
+        LocalBackend::new(gateway.clone(), clock, 7).with_contention_wait(Duration::from_secs(30)),
+    );
+    let s = Arc::new(RestState {
+        local: local.clone(),
+        gateway: Arc::new(gateway),
+        rules: None,
+        app_check: None,
+    });
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let txn = begun["transaction"].as_str().unwrap().to_owned();
+    let (status, _) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/pool/doc?transaction={txn}"),
+        Value::Null,
+    );
+    assert_eq!(status, 404);
+
+    let seen = local.release_count();
+    let started = std::time::Instant::now();
+    let attempt = Arc::clone(&s);
+    let ((status, body), contended) = tokio::task::spawn_blocking(move || {
+        LocalBackend::without_waiting(|| {
+            call(
+                &attempt,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/pool/doc", "fields": {"v": {"integerValue": "1"}}}}]}),
+            )
+        })
+    })
+    .await
+    .unwrap();
+    assert!(contended);
+    assert_eq!(status, 409, "{body}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the pool thread did not wait out the contention"
+    );
+
+    // The task-side wait wakes when the holder finishes.
+    let releaser = Arc::clone(&s);
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let (status, _) = call(
+            &releaser,
+            "POST",
+            &format!("{DOCS}:rollback"),
+            json!({"transaction": txn}),
+        );
+        assert_eq!(status, 200);
+    });
+    let woke = local
+        .await_any_release(seen, std::time::Instant::now() + Duration::from_secs(10))
+        .await;
+    assert!(woke);
+    assert!(started.elapsed() < Duration::from_secs(5));
+    release.await.unwrap();
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/pool/doc", "fields": {"v": {"integerValue": "1"}}}}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+}

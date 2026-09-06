@@ -546,7 +546,7 @@ impl Firestore for GatewayService {
             // runtime) for a release, then tries again; the guard is rebuilt per attempt so
             // nothing non-Send is held across the wait.
             let (parent, writes) = LocalBackend::plan_commit(request.get_ref())?;
-            let own = LocalBackend::txn_of(&parent, &request.get_ref().transaction)?;
+            let own = local.txn_of(&parent, &request.get_ref().transaction)?;
             return local
                 .retry_on_contention_async(&parent, own.as_ref(), &writes, || {
                     let guard = self.write_guard(&caller);

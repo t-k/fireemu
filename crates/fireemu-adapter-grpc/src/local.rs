@@ -252,6 +252,13 @@ pub struct LocalBackend {
     /// Draws the starting transaction id of each database; separate from `ids` so that the
     /// generated document ids stay what they were for a given seed.
     transaction_ids: Mutex<SplitMix64>,
+    /// Keys the authenticator appended to every transaction token, so a client cannot name a
+    /// transaction it was never handed (production tokens are opaque).
+    token_key: [u8; 32],
+    /// How many transactions have finished across every database, and the signal a REST
+    /// writer refused for lock contention waits on without holding a blocking-pool slot.
+    release_count: std::sync::atomic::AtomicU64,
+    release_notify: tokio::sync::Notify,
     commits: tokio::sync::broadcast::Sender<CommitNotification>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
     epoch: std::sync::atomic::AtomicU64,
@@ -753,6 +760,14 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+thread_local! {
+    /// Set while a REST request runs on a blocking-pool thread: a write refused for lock
+    /// contention is not waited on there (that would hold the pool slot), it is reported
+    /// through this slot and the connection task waits without the slot instead.
+    static NO_WAIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static CONTENDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Clears the operation-local actor slot on entry and on the way out.
 struct ActorScope;
 
@@ -1007,6 +1022,16 @@ impl LocalBackend {
             generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
             transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
+            token_key: {
+                let mut key_source = SplitMix64::new(seed ^ 0x544f_4b45_4e4b_4559);
+                let mut key = [0_u8; 32];
+                for chunk in key.chunks_mut(8) {
+                    chunk.copy_from_slice(&key_source.next_u64().to_be_bytes());
+                }
+                key
+            },
+            release_count: std::sync::atomic::AtomicU64::new(0),
+            release_notify: tokio::sync::Notify::new(),
             commits: tokio::sync::broadcast::channel(COMMIT_NOTIFICATION_CAPACITY).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
             change_sink: Mutex::new(None),
@@ -2163,14 +2188,21 @@ impl LocalBackend {
         // Attribution is confined to this operation: whatever a previous one left on this
         // thread is dropped here, and whatever this one stages is dropped on the way out.
         let _actor = ActorScope::enter();
-        handle.with(|state| {
+        let releases_before = handle.release_marker();
+        let outcome = handle.with(|state| {
             let outcome = f(state);
             // Core operations may legally release an expired retention root even when the
             // requested operation returns an error. Reconcile before releasing this database
             // lock so a later same-database commit cannot be overwritten by stale accounting.
             self.reconcile_history(parent, state.history_usage());
             outcome
-        })
+        });
+        if handle.release_marker() != releases_before {
+            self.release_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.release_notify.notify_waiters();
+        }
+        outcome
     }
 
     fn read_db<T>(
@@ -2193,22 +2225,51 @@ impl LocalBackend {
 
     /// Wire token for a transaction: the handle plus a tag binding it to its database, so a
     /// token issued by one database is rejected by another.
-    fn token(parent: &Parent, id: &TransactionId) -> Vec<u8> {
+    fn token(&self, parent: &Parent, id: &TransactionId) -> Vec<u8> {
         let mut bytes = encode_transaction(id);
         bytes.extend_from_slice(&database_tag(parent).to_be_bytes());
+        let mac = self.token_mac(&bytes);
+        bytes.extend_from_slice(&mac);
         bytes
     }
 
-    /// The transaction a wire token names, if any (public form of the token check).
-    pub fn txn_of(parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
-        Self::txn(parent, bytes)
+    /// The authenticator of a token's handle and database tag: the first 8 bytes of
+    /// SHA-256 over the backend's token key and those bytes.
+    fn token_mac(&self, handle_and_tag: &[u8]) -> [u8; 8] {
+        let mut digest = fireemu_core_types::hash::Sha256::new();
+        digest.update(&self.token_key);
+        digest.update(handle_and_tag);
+        let full = digest.finalize();
+        let mut mac = [0_u8; 8];
+        mac.copy_from_slice(&full[..8]);
+        mac
     }
 
-    fn txn(parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
+    /// The transaction a wire token names, if any (public form of the token check).
+    pub fn txn_of(&self, parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
+        self.txn(parent, bytes)
+    }
+
+    fn txn(&self, parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
         if bytes.is_empty() {
             return Ok(None);
         }
-        let (handle, tag) = bytes.split_at(bytes.len().saturating_sub(8));
+        // [handle][database tag: 8][authenticator: 8]; a token this backend did not issue,
+        // for this database, is invalid whatever else it decodes to.
+        let (authenticated, mac) = bytes.split_at(bytes.len().saturating_sub(8));
+        let expected = self.token_mac(authenticated);
+        let authentic = mac.len() == 8
+            && mac
+                .iter()
+                .zip(expected.iter())
+                .fold(0_u8, |difference, (left, right)| {
+                    difference | (left ^ right)
+                })
+                == 0;
+        if !authentic {
+            return Err(Status::invalid_argument("Invalid transaction."));
+        }
+        let (handle, tag) = authenticated.split_at(authenticated.len().saturating_sub(8));
         let tag: Option<[u8; 8]> = tag.try_into().ok();
         if tag.map(u64::from_be_bytes) != Some(database_tag(parent)) {
             return Err(Status::invalid_argument(
@@ -2218,8 +2279,9 @@ impl LocalBackend {
         decode_transaction(handle).map(Some).map_err(status)
     }
 
-    fn required_txn(parent: &Parent, bytes: &[u8]) -> Result<TransactionId, Status> {
-        Self::txn(parent, bytes)?.ok_or_else(|| Status::invalid_argument("missing transaction"))
+    fn required_txn(&self, parent: &Parent, bytes: &[u8]) -> Result<TransactionId, Status> {
+        self.txn(parent, bytes)?
+            .ok_or_else(|| Status::invalid_argument("missing transaction"))
     }
 
     /// Rejects document names outside the request's database.
@@ -2321,7 +2383,7 @@ impl LocalBackend {
                 if read_write.retry_transaction.is_empty() {
                     db.begin_transaction(false, now)
                 } else {
-                    let previous = Self::required_txn(parent, &read_write.retry_transaction)?;
+                    let previous = self.required_txn(parent, &read_write.retry_transaction)?;
                     db.retry_transaction(&previous, now)
                 }
             }
@@ -2346,7 +2408,7 @@ impl LocalBackend {
     ) -> Result<SelectedSnapshot, Status> {
         match selector {
             SnapshotSelector::Transaction(bytes) => {
-                let transaction = Self::required_txn(parent, bytes)?;
+                let transaction = self.required_txn(parent, bytes)?;
                 db.touch_transaction(&transaction, now)
                     .map_err(|error| status_from_error(&error))?;
                 Ok(SelectedSnapshot {
@@ -2357,7 +2419,7 @@ impl LocalBackend {
             }
             SnapshotSelector::NewTransaction(options) => {
                 let transaction = self.new_transaction(parent, db, options, now)?;
-                let report = Self::token(parent, &transaction);
+                let report = self.token(parent, &transaction);
                 Ok(SelectedSnapshot {
                     transaction: Some(transaction),
                     report,
@@ -2441,7 +2503,7 @@ impl LocalBackend {
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::get_document_request::ConsistencySelector::Transaction(t)) => {
-                (Some(Self::required_txn(&parent, t)?), None)
+                (Some(self.required_txn(&parent, t)?), None)
             }
             Some(pb::get_document_request::ConsistencySelector::ReadTime(ts)) => (
                 None,
@@ -2924,13 +2986,13 @@ impl LocalBackend {
                 Some(pb::transaction_options::Mode::ReadWrite(read_write))
                     if !read_write.retry_transaction.is_empty() =>
                 {
-                    let previous = Self::required_txn(&parent, &read_write.retry_transaction)?;
+                    let previous = self.required_txn(&parent, &read_write.retry_transaction)?;
                     db.retry_transaction(&previous, now)
                 }
                 _ => db.begin_transaction(false, now),
             }
             .map_err(|e| status_from_error(&e))?;
-            Ok(Self::token(&parent, &id))
+            Ok(self.token(&parent, &id))
         })
     }
 
@@ -2949,7 +3011,7 @@ impl LocalBackend {
         guard: WriteGuard<'_>,
     ) -> Result<pb::CommitResponse, Status> {
         let (parent, writes) = Self::plan_commit(req)?;
-        let own = Self::txn(&parent, &req.transaction)?;
+        let own = self.txn(&parent, &req.transaction)?;
         self.retry_on_contention(&parent, own.as_ref(), &writes, || {
             self.commit_once(req, guard)
         })
@@ -2963,7 +3025,7 @@ impl LocalBackend {
     ) -> Result<pb::CommitResponse, Status> {
         let (parent, writes) = Self::plan_commit(req)?;
         self.fault(parent.project.as_str(), "firestore.commit")?;
-        let txn = Self::txn(&parent, &req.transaction)?;
+        let txn = self.txn(&parent, &req.transaction)?;
         let now = self.write_time();
         let result = self.with_db(&parent, |db| {
             guard(db, &writes, now)?;
@@ -2993,6 +3055,14 @@ impl LocalBackend {
             match attempt() {
                 Err(status) if Self::is_contention(&status) => {
                     let released = self.expire_lock_leases(&handle, lease_writes, own);
+                    if NO_WAIT.with(std::cell::Cell::get) {
+                        // A blocking-pool thread never waits here; the caller does.
+                        CONTENDED.with(|slot| slot.set(true));
+                        if released {
+                            continue;
+                        }
+                        return Err(status);
+                    }
                     if !Self::should_wait_for_release(&handle, own, deadline) {
                         return Err(status);
                     }
@@ -3001,6 +3071,45 @@ impl LocalBackend {
                     }
                 }
                 outcome => return outcome,
+            }
+        }
+    }
+
+    /// Runs `f` with lock-contention waits disabled on this thread and reports whether a
+    /// write was refused for contention: for a blocking-pool thread that must not hold its
+    /// slot while waiting. The caller then waits with [`Self::await_any_release`] and repeats.
+    pub fn without_waiting<T>(f: impl FnOnce() -> T) -> (T, bool) {
+        let previous = NO_WAIT.with(|slot| slot.replace(true));
+        CONTENDED.with(|slot| slot.set(false));
+        let value = f();
+        let contended = CONTENDED.with(|slot| slot.replace(false));
+        NO_WAIT.with(|slot| slot.set(previous));
+        (value, contended)
+    }
+
+    /// How many transactions have finished across every database so far.
+    #[must_use]
+    pub fn release_count(&self) -> u64 {
+        self.release_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Waits, without blocking a thread, until a transaction of any database finishes after
+    /// `seen` was read or until `deadline`; `true` when one finished.
+    pub async fn await_any_release(&self, seen: u64, deadline: std::time::Instant) -> bool {
+        loop {
+            if self.release_count() != seen {
+                return true;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let notified = self.release_notify.notified();
+            if tokio::time::timeout(deadline - now, notified)
+                .await
+                .is_err()
+            {
+                return self.release_count() != seen;
             }
         }
     }
@@ -3132,7 +3241,7 @@ impl LocalBackend {
     /// `Rollback`.
     pub fn rollback(&self, req: &pb::RollbackRequest) -> Result<(), Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
-        let txn = Self::required_txn(&parent, &req.transaction)?;
+        let txn = self.required_txn(&parent, &req.transaction)?;
         let now = self.write_time();
         self.with_db(&parent, |db| {
             db.rollback(&txn).map_err(|e| status_from_error(&e))?;
@@ -3315,7 +3424,7 @@ impl LocalBackend {
                 Some(self.read_time_selector(ts, now, self.read_time_horizon(&parent, now))?),
             ),
             Some(pb::list_documents_request::ConsistencySelector::Transaction(t)) => {
-                (Some(Self::required_txn(&parent, t)?), None)
+                (Some(self.required_txn(&parent, t)?), None)
             }
             None => (None, None),
         };

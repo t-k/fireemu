@@ -133,7 +133,8 @@ impl NestedRun {
             // very leak this driver must clean up.
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
-            // Its own group: the fixture children inherit it, so cleanup is one signal.
+            // Keep nested cargo separate from the outer test. Each fixture child creates its
+            // own group and is cleaned through the PID file after nested cargo has exited.
             .process_group(0);
         for inherited in [
             "NEXTEST",
@@ -188,7 +189,6 @@ impl NestedRun {
         }
         self.cleaned = true;
         let cleanup_grace = Duration::from_millis(250);
-        census::kill_process_group_with_grace(self.pgid, cleanup_grace);
         if let Some(pid) = self.fixture_child() {
             census::kill_process_group_with_grace(pid, cleanup_grace);
             census::kill_pid(pid);

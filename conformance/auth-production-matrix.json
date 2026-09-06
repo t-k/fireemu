@@ -7,7 +7,7 @@
       "evidenceSchema": 1,
       "evidence": {
         "identity": {
-          "sourceSha": "sha256-8b93b5490ff8472d0f331fc12a9dd9b19b8ffb8bd8ac14b26f8a40a2a2df941a",
+          "sourceSha": "sha256-e76a31a51681cc7de1d88b22f70d50a8d69761b26c4d6756b88a51ab091fec03",
           "packageVersion": "0.0.0-dev",
           "packageManifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
           "packageIntegrity": null,
@@ -36,15 +36,15 @@
         "observation": {
           "side": "production",
           "mode": "live",
-          "startedAt": "2026-09-06T16:25:39.566Z",
-          "finishedAt": "2026-09-06T16:25:47.194Z",
+          "startedAt": "2026-09-06T17:20:55.327Z",
+          "finishedAt": "2026-09-06T17:21:03.597Z",
           "database": {
             "target": "production Identity Toolkit"
           }
         },
         "source": {
-          "gitSha": "20cbe388028990626d843cd57dd27c57a85b711e",
-          "sourceTreeDigest": "sha256-8b93b5490ff8472d0f331fc12a9dd9b19b8ffb8bd8ac14b26f8a40a2a2df941a",
+          "gitSha": "19f5078488e2ac85294a8c7e072267be1200d497",
+          "sourceTreeDigest": "sha256-e76a31a51681cc7de1d88b22f70d50a8d69761b26c4d6756b88a51ab091fec03",
           "trackedTreeClean": true
         },
         "package": {
@@ -52,7 +52,7 @@
           "version": "0.0.0-dev",
           "manifest": "fireemu/package.json",
           "manifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
-          "integrity": "sha512-h/NuvCiqdh85r/7po/juywICrWHWfItFvUlaHDttZ2c86WkqDw/RSppbT3PwEh7PfX1j3siINz3cco39cj9H9w=="
+          "integrity": "sha512-h4/C6SpcJm2YcgGFMgbw4+NWLozPy/80vOgdPpQb/9prQ3OqPdKmzkAdmnZh0Jc9JwjDPfzgtenBe8HfZ9EGFw=="
         },
         "artifact": null,
         "runtime": {
@@ -76,30 +76,30 @@
         "observation": {
           "side": "fireemu",
           "mode": "live",
-          "startedAt": "2026-09-06T16:25:47.212Z",
-          "finishedAt": "2026-09-06T16:25:47.278Z",
+          "startedAt": "2026-09-06T17:21:03.617Z",
+          "finishedAt": "2026-09-06T17:21:03.908Z",
           "database": {
             "target": "fireemu local Auth"
           }
         },
         "source": {
-          "gitSha": "20cbe388028990626d843cd57dd27c57a85b711e",
-          "sourceTreeDigest": "sha256-8b93b5490ff8472d0f331fc12a9dd9b19b8ffb8bd8ac14b26f8a40a2a2df941a",
+          "gitSha": "19f5078488e2ac85294a8c7e072267be1200d497",
+          "sourceTreeDigest": "sha256-e76a31a51681cc7de1d88b22f70d50a8d69761b26c4d6756b88a51ab091fec03",
           "trackedTreeClean": true
         },
         "package": {
           "name": "fireemu",
           "version": "0.0.0-dev",
-          "manifest": "@fireemu/darwin-arm64/package.json",
-          "manifestDigest": "sha256-3d77a32c7bd9262ba29526bed2c4bf8df57cfdbfa1186e7e725ed484e8500a68",
-          "integrity": "sha512-h/NuvCiqdh85r/7po/juywICrWHWfItFvUlaHDttZ2c86WkqDw/RSppbT3PwEh7PfX1j3siINz3cco39cj9H9w=="
+          "manifest": "fireemu/package.json",
+          "manifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
+          "integrity": "sha512-h4/C6SpcJm2YcgGFMgbw4+NWLozPy/80vOgdPpQb/9prQ3OqPdKmzkAdmnZh0Jc9JwjDPfzgtenBe8HfZ9EGFw=="
         },
         "artifact": {
           "file": "fireemu",
-          "bytes": 11905760,
-          "sha256": "sha256-2ffd6ff2d7bb0ffc1980b29836973ac4c8a97870cd6fb593509496c0e13063f1",
+          "bytes": 11905776,
+          "sha256": "sha256-04aa18e44b1da5ea56f41cce3038bae542e2f222e95e8d4c5e63782d26ae5da8",
           "platform": "darwin-arm64",
-          "packageIntegrity": "sha512-h/NuvCiqdh85r/7po/juywICrWHWfItFvUlaHDttZ2c86WkqDw/RSppbT3PwEh7PfX1j3siINz3cco39cj9H9w=="
+          "packageIntegrity": "sha512-h4/C6SpcJm2YcgGFMgbw4+NWLozPy/80vOgdPpQb/9prQ3OqPdKmzkAdmnZh0Jc9JwjDPfzgtenBe8HfZ9EGFw=="
         },
         "runtime": {
           "profile": "firebase",
@@ -120,7 +120,7 @@
       "officialEmulator": {
         "side": "official-emulator",
         "mode": "stored",
-        "matrixDigest": "sha256-e3593851ca728db0fb53fe152c2538739ef1316c88dce694bfd259004985d7cd",
+        "matrixDigest": "sha256-1f3ec8f4697a5710e10f545a8a95bd5b87149cfbc3dc72fb064d67bdc844f3d1",
         "source": "auth-matrix.json"
       }
     }
@@ -302,8 +302,8 @@
                   "localId": "<localId>",
                   "emailVerified": false,
                   "email": "fireemu-auth-probe-<run>-primary@example.com",
-                  "salt": "fakeSaltOp4uvdDnYtabIJl825Pw",
-                  "passwordHash": "fakeHash:salt=fakeSaltOp4uvdDnYtabIJl825Pw:password=password123",
+                  "salt": "fakeSaltqNeDrzCSAy6hZs1freX6",
+                  "passwordHash": "fakeHash:salt=fakeSaltqNeDrzCSAy6hZs1freX6:password=password123",
                   "passwordUpdatedAt": "<passwordUpdatedAt>",
                   "validSince": "<validSince>",
                   "providerUserInfo": [
@@ -385,7 +385,7 @@
               ],
               "email": "fireemu-auth-probe-<run>-primary@example.com",
               "displayName": "Probe User",
-              "passwordHash": "fakeHash:salt=fakeSaltOp4uvdDnYtabIJl825Pw:password=password123"
+              "passwordHash": "fakeHash:salt=fakeSaltqNeDrzCSAy6hZs1freX6:password=password123"
             }
           },
           "fireemu": {

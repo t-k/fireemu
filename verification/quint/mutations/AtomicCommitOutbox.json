@@ -7,7 +7,7 @@
       "property": "AtomicCommit",
       "operator": "publish-staged-document-before-commit",
       "from": "observable' = observable,\n    staged' = staged.union(Set(doc)),",
-      "to": "observable' = {\n      documents: observable.documents.set(doc, observable.documents.get(doc) + 1),\n      outbox: observable.outbox,\n      transactionState: observable.transactionState,\n    },\n    staged' = staged.union(Set(doc)),"
+      "to": "observable' = {\n      documents: observable.documents.set(doc, observable.documents.get(doc) + 1),\n      outbox: observable.outbox,\n      transactionState: observable.transactionState,\n      reservedEvents: observable.reservedEvents,\n      publishedEvents: observable.publishedEvents,\n      eventGeneration: observable.eventGeneration,\n    },\n    staged' = staged.union(Set(doc)),"
     },
     {
       "id": "M-FORMAL-OUTBOX-COMPLETE-001",
@@ -29,6 +29,34 @@
       "operator": "allow-conflicted-transaction-to-commit",
       "from": "not(hasConflict),\n      staged.size() > 0,",
       "to": "true,\n      staged.size() > 0,"
+    },
+    {
+      "id": "M-FORMAL-RESERVE-PARTIAL-001",
+      "property": "CompleteReservation",
+      "operator": "reserve-only-one-delivery",
+      "from": "reservedEvents: stagedEvents.size() * FANOUT,\n      publishedEvents: observable.publishedEvents,",
+      "to": "reservedEvents: 1,\n      publishedEvents: observable.publishedEvents,"
+    },
+    {
+      "id": "M-FORMAL-PUBLISH-WITHOUT-RESERVE-001",
+      "property": "PublicationConsumesReservation",
+      "operator": "publish-without-consuming-owned-reservation",
+      "from": "publishedEvents: observable.publishedEvents + observable.reservedEvents,\n        eventGeneration: observable.eventGeneration,",
+      "to": "publishedEvents: observable.publishedEvents,\n        eventGeneration: observable.eventGeneration,"
+    },
+    {
+      "id": "M-FORMAL-CANCEL-LEAK-001",
+      "property": "CancellationRefundsCapacity",
+      "operator": "retain-reservation-after-cancel",
+      "from": "action cancel = all {\n    observable.transactionState == \"Staging\",\n    observable.reservedEvents > 0,\n    record(\"Cancel\", \"\"),\n    observable' = {\n      documents: observable.documents,\n      outbox: observable.outbox,\n      transactionState: \"Aborted\",\n      reservedEvents: 0,",
+      "to": "action cancel = all {\n    observable.transactionState == \"Staging\",\n    observable.reservedEvents > 0,\n    record(\"Cancel\", \"\"),\n    observable' = {\n      documents: observable.documents,\n      outbox: observable.outbox,\n      transactionState: \"Aborted\",\n      reservedEvents: observable.reservedEvents,"
+    },
+    {
+      "id": "M-FORMAL-RESET-STALE-001",
+      "property": "ResetInvalidatesEventOwnership",
+      "operator": "retain-reserved-events-across-reset",
+      "from": "reservedEvents: 0,\n      publishedEvents: 0,\n      eventGeneration: observable.eventGeneration + 1,",
+      "to": "reservedEvents: observable.reservedEvents,\n      publishedEvents: 0,\n      eventGeneration: observable.eventGeneration + 1,"
     }
   ]
 }

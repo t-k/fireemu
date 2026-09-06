@@ -5,10 +5,13 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_grpc::gateway::Gateway;
-use fireemu_adapter_grpc::local::LocalBackend;
+use fireemu_adapter_grpc::local::{
+    AtomicChangeSink, CommitPublication, HistoryBudgetLimits, LocalBackend,
+};
 use fireemu_adapter_grpc::rules::ReadCheck;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_firestore::field_path::FieldPath;
@@ -17,6 +20,7 @@ use fireemu_core_firestore::index::{
     PlanningContext,
 };
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::tenancy::Tenancy;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::ids::CollectionId;
@@ -30,6 +34,304 @@ use tokio_stream::StreamExt;
 
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
+
+fn history_budget_write(project: &str, database: &str, document: &str) -> pb::CommitRequest {
+    history_budget_update(project, database, document, 1)
+}
+
+fn history_budget_update(
+    project: &str,
+    database: &str,
+    document: &str,
+    value: i64,
+) -> pb::CommitRequest {
+    pb::CommitRequest {
+        database: format!("projects/{project}/databases/{database}"),
+        writes: vec![pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("projects/{project}/databases/{database}/documents/items/{document}"),
+                fields: [("v".to_owned(), i(value))].into_iter().collect(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn observing_transaction_expiry_releases_aggregate_history_capacity() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let backend = LocalBackend::new(gateway, Arc::clone(&clock), 7).with_history_budget_limits(
+        HistoryBudgetLimits {
+            session_bytes: u64::MAX,
+            session_versions: u64::MAX,
+            global_bytes: u64::MAX,
+            global_versions: 2,
+        },
+    );
+    backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "a", 1),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(1))
+        .unwrap();
+    backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "a", 2),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    let transaction = backend
+        .begin_transaction(&pb::BeginTransactionRequest {
+            database: "projects/demo-a/databases/(default)".to_owned(),
+            ..Default::default()
+        })
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(3_601))
+        .unwrap();
+
+    let expired = backend
+        .get_document(
+            &pb::GetDocumentRequest {
+                name: "projects/demo-a/databases/(default)/documents/items/a".to_owned(),
+                consistency_selector: Some(
+                    pb::get_document_request::ConsistencySelector::Transaction(transaction),
+                ),
+                ..Default::default()
+            },
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        )
+        .unwrap_err();
+    assert_eq!(expired.code(), tonic::Code::Aborted);
+
+    backend
+        .commit_with(
+            &history_budget_write("demo-b", "(default)", "b"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .expect("the expired transaction's unreachable version was released");
+    assert_eq!(backend.history_usage().versions, 2);
+}
+
+fn history_budget_backend(session_versions: u64, global_versions: u64) -> LocalBackend {
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    LocalBackend::new(
+        gateway,
+        Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ))),
+        7,
+    )
+    .with_history_budget_limits(HistoryBudgetLimits {
+        session_bytes: u64::MAX,
+        session_versions,
+        global_bytes: u64::MAX,
+        global_versions,
+    })
+}
+
+#[test]
+fn unregistered_projects_and_named_databases_share_the_default_session_history_budget() {
+    let backend = history_budget_backend(1, 10);
+    let tenancy = Arc::new(RwLock::new(Tenancy::new("demo-a")));
+    tenancy
+        .write()
+        .unwrap()
+        .register("demo-b", &[], &[])
+        .unwrap();
+    backend.set_tenancy(tenancy);
+
+    backend
+        .commit_with(
+            &history_budget_write("demo-a", "(default)", "a"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    let refused = backend
+        .commit_with(
+            &history_budget_write("demo-c", "analytics", "c"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::ResourceExhausted);
+
+    backend
+        .commit_with(
+            &history_budget_write("demo-b", "analytics", "b"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    assert_eq!(backend.history_usage().versions, 2);
+}
+
+#[test]
+fn reset_refunds_aggregate_history_capacity() {
+    let backend = history_budget_backend(1, 1);
+    backend
+        .commit_with(
+            &history_budget_write("demo-a", "(default)", "a"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    assert_eq!(backend.history_usage().versions, 1);
+    let refused = backend
+        .commit_with(
+            &history_budget_write("demo-c", "analytics", "c"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::ResourceExhausted);
+
+    backend.reset();
+    assert_eq!(backend.history_usage().versions, 0);
+    backend
+        .commit_with(
+            &history_budget_write("demo-c", "analytics", "c"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+}
+
+#[test]
+fn an_over_budget_restore_is_all_or_nothing() {
+    use fireemu_core_session::tenancy::Scope;
+
+    let source = history_budget_backend(10, 10);
+    for document in ["a", "b"] {
+        source
+            .commit_with(
+                &history_budget_write("demo-a", "(default)", document),
+                &fireemu_adapter_grpc::rules::allow_all,
+            )
+            .unwrap();
+    }
+    let scope = Scope::AllExcept(std::collections::BTreeSet::new());
+    let snapshot = source.snapshot_scope(&scope);
+    let target = history_budget_backend(1, 1);
+    target
+        .commit_with(
+            &history_budget_write("demo-a", "(default)", "original"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    let before = target.snapshot_scope(&scope);
+
+    let error = target.restore_scope(&scope, &snapshot).unwrap_err();
+
+    assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+    let names = |snapshot: &fireemu_adapter_grpc::local::FirestoreSnapshot| {
+        snapshot
+            .databases
+            .values()
+            .flat_map(|state| {
+                state
+                    .documents()
+                    .into_iter()
+                    .map(|document| document.path.resource_name())
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&target.snapshot_scope(&scope)), names(&before));
+    assert_eq!(target.history_usage().versions, 1);
+}
+
+struct RejectEveryCommit;
+
+struct AcceptEveryCommit;
+struct AcceptedPublication;
+
+struct CountReservations(Arc<AtomicUsize>);
+
+impl CommitPublication for AcceptedPublication {
+    fn publish(self: Box<Self>) {}
+}
+
+impl AtomicChangeSink for CountReservations {
+    fn reserve(
+        &self,
+        _event: &CommitEvent,
+    ) -> Result<Box<dyn CommitPublication>, fireemu_core_types::admission::EventAdmissionError>
+    {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(AcceptedPublication))
+    }
+}
+
+#[test]
+fn history_refusal_precedes_functions_event_reservation() {
+    let backend = history_budget_backend(1, 1);
+    backend
+        .commit_with(
+            &history_budget_write("demo-a", "(default)", "a"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    let reservations = Arc::new(AtomicUsize::new(0));
+    backend.set_atomic_change_sink(Arc::new(CountReservations(reservations.clone())));
+
+    let refused = backend
+        .commit_with(
+            &history_budget_write("demo-a", "analytics", "b"),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap_err();
+
+    assert_eq!(refused.code(), tonic::Code::ResourceExhausted);
+    assert_eq!(reservations.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.history_usage().versions, 1);
+}
+
+impl AtomicChangeSink for AcceptEveryCommit {
+    fn reserve(
+        &self,
+        _event: &CommitEvent,
+    ) -> Result<Box<dyn CommitPublication>, fireemu_core_types::admission::EventAdmissionError>
+    {
+        Ok(Box::new(AcceptedPublication))
+    }
+}
+
+impl AtomicChangeSink for RejectEveryCommit {
+    fn reserve(
+        &self,
+        _event: &CommitEvent,
+    ) -> Result<Box<dyn CommitPublication>, fireemu_core_types::admission::EventAdmissionError>
+    {
+        Err(
+            fireemu_core_types::admission::EventAdmissionError::Capacity(
+                "logical outbox capacity is exhausted".to_owned(),
+            ),
+        )
+    }
+}
 
 fn deny_read(
     _: &fireemu_core_firestore::store::FirestoreState,
@@ -105,12 +407,616 @@ async fn start_with_backend_and_policy(
     (FirestoreClient::new(channel), clock, backend, handle)
 }
 
+/// A server whose backend waits `wait` for a transaction to release its locks before
+/// refusing a contended commit.
+async fn start_with_contention_wait(
+    wait: std::time::Duration,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
+    start_with_contention_wait_and_lease(wait, std::time::Duration::from_secs(60)).await
+}
+
+/// As [`start_with_contention_wait`], with the lock lease a blocking transaction is allowed.
+async fn start_with_contention_wait_and_lease(
+    wait: std::time::Duration,
+    lease: std::time::Duration,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = Arc::new(
+        LocalBackend::new(gateway.clone(), clock, 7)
+            .with_contention_wait(wait)
+            .with_lock_lease(lease),
+    );
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(svc)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    (FirestoreClient::new(channel), handle)
+}
+
+/// A contended commit outside a transaction waits for the transaction to finish and then
+/// goes through (production's normal path); one that waits past the bound is refused with
+/// production's wording.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_contended_commit_waits_for_the_lock_release() {
+    let (mut client, handle) = start_with_contention_wait(std::time::Duration::from_secs(10)).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("wait/doc", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/wait/doc"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                txn.clone(),
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut releaser = client.clone();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        releaser
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("wait/doc", &[("v", i(2))])],
+                transaction: txn,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    });
+    let started = std::time::Instant::now();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("wait/doc", &[("v", i(3))])],
+            ..Default::default()
+        })
+        .await
+        .expect("the writer proceeds once the transaction released its locks");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "the writer was woken by the release, not by the deadline"
+    );
+    release.await.unwrap();
+    let doc = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/wait/doc"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(doc.fields.get("v"), Some(&i(3)));
+    handle.abort();
+}
+
+/// A transaction that keeps a writer blocked for the lock lease is rolled back, the way
+/// production expires an idle transaction, and the writer then goes through; the holder's own
+/// commit is refused afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_transaction_blocking_writers_past_the_lock_lease_is_rolled_back() {
+    let (mut client, handle) = start_with_contention_wait_and_lease(
+        std::time::Duration::from_millis(100),
+        std::time::Duration::from_millis(400),
+    )
+    .await;
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let _ = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/lease/doc"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                txn.clone(),
+            )),
+            ..Default::default()
+        })
+        .await;
+    // The SDKs retry a commit outside a transaction on ABORTED; so does this writer.
+    let started = std::time::Instant::now();
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let outcome = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("lease/doc", &[("v", i(1))])],
+                ..Default::default()
+            })
+            .await;
+        match outcome {
+            Ok(_) => break,
+            Err(status) if status.code() == tonic::Code::Aborted && attempts < 50 => {}
+            Err(status) => panic!("unexpected refusal: {status}"),
+        }
+    }
+    assert!(attempts >= 2, "the first attempts were refused");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(400));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    let expired = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("lease/doc", &[("v", i(2))])],
+            transaction: txn,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(expired.code(), tonic::Code::Aborted);
+    let doc = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/lease/doc"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(doc.fields.get("v"), Some(&i(1)));
+    handle.abort();
+}
+
+/// A transaction whose held-back commit was abandoned by its client keeps its locks, and its
+/// waiting mark makes every later transactional commit into those locks the deadlock victim.
+/// The lock lease ends that: after it, the next such commit rolls the holder back and goes
+/// through, even though the victim itself could not wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_abandoned_waiting_holder_does_not_abort_other_transactions_forever() {
+    let (mut client, handle) = start_with_contention_wait_and_lease(
+        std::time::Duration::ZERO,
+        std::time::Duration::from_millis(300),
+    )
+    .await;
+    let begin = |client: &mut FirestoreClient<tonic::transport::Channel>| {
+        let mut client = client.clone();
+        async move {
+            client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: DB.to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction
+        }
+    };
+    let read = |client: &mut FirestoreClient<tonic::transport::Channel>, txn: Vec<u8>| {
+        let mut client = client.clone();
+        async move {
+            let _ = client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/abandoned/doc"),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(txn),
+                    ),
+                    ..Default::default()
+                })
+                .await;
+        }
+    };
+    // The abandoned holder: it read the document and its commit was held back by another
+    // reader's lock; the client never returns.
+    let holder = begin(&mut client).await;
+    let other = begin(&mut client).await;
+    read(&mut client, holder.clone()).await;
+    read(&mut client, other.clone()).await;
+    let held = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("abandoned/doc", &[("v", i(1))])],
+            transaction: holder,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(held.code(), tonic::Code::Aborted);
+    client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction: other,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // Fresh transactions that read the document and commit are victims until the lease ends.
+    let started = std::time::Instant::now();
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let txn = begin(&mut client).await;
+        read(&mut client, txn.clone()).await;
+        let outcome = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("abandoned/doc", &[("v", i(2))])],
+                transaction: txn,
+                ..Default::default()
+            })
+            .await;
+        match outcome {
+            Ok(_) => break,
+            Err(status) if status.code() == tonic::Code::Aborted && attempts < 100 => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(status) => panic!("unexpected refusal: {status}"),
+        }
+    }
+    assert!(
+        attempts >= 2,
+        "the first attempts were the deadlock victims"
+    );
+    assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    handle.abort();
+}
+
+/// The lease is enforced on every write path, not only Commit: a single-document update
+/// against an abandoned holder goes through once the lease has run out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_document_update_also_expires_the_lock_lease() {
+    let (mut client, handle) = start_with_contention_wait_and_lease(
+        std::time::Duration::ZERO,
+        std::time::Duration::from_millis(300),
+    )
+    .await;
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let _ = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/updates/doc"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                txn,
+            )),
+            ..Default::default()
+        })
+        .await;
+    let started = std::time::Instant::now();
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let outcome = client
+            .update_document(pb::UpdateDocumentRequest {
+                document: Some(pb::Document {
+                    name: format!("{DOCS}/updates/doc"),
+                    fields: HashMap::from([("v".to_owned(), i(1))]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await;
+        match outcome {
+            Ok(_) => break,
+            Err(status) if status.code() == tonic::Code::Aborted && attempts < 100 => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(status) => panic!("unexpected refusal: {status}"),
+        }
+    }
+    assert!(attempts >= 2);
+    assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    handle.abort();
+}
+
+/// A holder that keeps driving its transaction is not idle: the lease does not roll it back
+/// while it reads, and starts counting once it stops.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_busy_holder_keeps_its_locks_past_the_lease() {
+    let (mut client, handle) = start_with_contention_wait_and_lease(
+        std::time::Duration::ZERO,
+        std::time::Duration::from_millis(300),
+    )
+    .await;
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let read = |client: &mut FirestoreClient<tonic::transport::Channel>, txn: Vec<u8>| {
+        let mut client = client.clone();
+        async move {
+            let _ = client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/busy/doc"),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(txn),
+                    ),
+                    ..Default::default()
+                })
+                .await;
+        }
+    };
+    read(&mut client, txn.clone()).await;
+    let write = pb::CommitRequest {
+        database: DB.to_owned(),
+        writes: vec![update_write("busy/doc", &[("v", i(1))])],
+        ..Default::default()
+    };
+    // For twice the lease the holder reads every 50 ms; every write attempt is refused.
+    let busy_until = std::time::Instant::now() + std::time::Duration::from_millis(700);
+    while std::time::Instant::now() < busy_until {
+        read(&mut client, txn.clone()).await;
+        let refused = client.commit(write.clone()).await.unwrap_err();
+        assert_eq!(
+            refused.code(),
+            tonic::Code::Aborted,
+            "a busy holder keeps its locks"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    // Idle now: the lease runs out and the writer gets through.
+    let idle_since = std::time::Instant::now();
+    loop {
+        match client.commit(write.clone()).await {
+            Ok(_) => break,
+            Err(status) if status.code() == tonic::Code::Aborted => {
+                assert!(idle_since.elapsed() < std::time::Duration::from_secs(10));
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(status) => panic!("unexpected refusal: {status}"),
+        }
+    }
+    // The lease clock started at the last refused attempt, up to one busy-loop pause before
+    // `idle_since`.
+    assert!(idle_since.elapsed() >= std::time::Duration::from_millis(200));
+    handle.abort();
+}
+
+/// A transaction token is authenticated: a token with an adjacent id, or one with its
+/// authenticator changed, names no transaction, so a client cannot roll back or commit a
+/// transaction it was never handed.
+#[tokio::test]
+async fn a_transaction_token_cannot_be_forged_from_a_neighbouring_id() {
+    let (mut client, _clock, handle) = start().await;
+    let mine = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let other = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    assert_ne!(mine, other);
+    // The id sits in the leading bytes; the neighbouring id is what the other client holds.
+    let mut forged = mine.clone();
+    let handle_len = forged.len() - 16;
+    forged[handle_len - 1] = forged[handle_len - 1].wrapping_add(1);
+    let refused = client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction: forged,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+    let mut tampered = mine.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+    let refused = client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction: tampered,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+    // Both genuine tokens still work.
+    for txn in [mine, other] {
+        client
+            .rollback(pb::RollbackRequest {
+                database: DB.to_owned(),
+                transaction: txn,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    handle.abort();
+}
+
+/// A contended commit that waits past the bound is refused with production's wording.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_contended_commit_is_refused_after_the_wait_bound() {
+    let (mut client, handle) =
+        start_with_contention_wait(std::time::Duration::from_millis(100)).await;
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let _ = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/wait/held"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                txn,
+            )),
+            ..Default::default()
+        })
+        .await;
+    let started = std::time::Instant::now();
+    let refused = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("wait/held", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(started.elapsed() >= std::time::Duration::from_millis(100));
+    assert_eq!(refused.code(), tonic::Code::Aborted);
+    assert_eq!(
+        refused.message(),
+        "Too much contention on these documents. Please try again."
+    );
+    handle.abort();
+}
+
 async fn start() -> (
     FirestoreClient<tonic::transport::Channel>,
     Arc<Mutex<VirtualClock>>,
     tokio::task::JoinHandle<()>,
 ) {
     start_with_write_time(false).await
+}
+
+#[tokio::test]
+async fn event_admission_refusal_prevents_firestore_publication() {
+    let (mut client, _clock, backend, server) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    backend.set_atomic_change_sink(Arc::new(RejectEveryCommit));
+    let name = format!("{DOCS}/admission/refused");
+    let error = client
+        .create_document(pb::CreateDocumentRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "admission".to_owned(),
+            document_id: "refused".to_owned(),
+            document: Some(pb::Document {
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+    let missing = client
+        .get_document(pb::GetDocumentRequest {
+            name,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code(), tonic::Code::NotFound);
+
+    let generated_error = client
+        .create_document(pb::CreateDocumentRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "generated".to_owned(),
+            document_id: String::new(),
+            document: Some(pb::Document::default()),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(generated_error.code(), tonic::Code::ResourceExhausted);
+
+    backend.set_atomic_change_sink(Arc::new(AcceptEveryCommit));
+    let accepted = client
+        .create_document(pb::CreateDocumentRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "generated".to_owned(),
+            document_id: String::new(),
+            document: Some(pb::Document::default()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let reference = LocalBackend::new(
+        Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Conservative,
+            },
+            indexes: IndexSet::default(),
+        },
+        Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ))),
+        7,
+    );
+    let (_, expected_write) = reference
+        .plan_create(&pb::CreateDocumentRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "generated".to_owned(),
+            document_id: String::new(),
+            document: Some(pb::Document::default()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        accepted.name,
+        format!("{DOCS}/{}", expected_write.op.path().relative())
+    );
+    server.abort();
+    let _ = server.await;
 }
 
 #[test]
@@ -384,8 +1290,11 @@ async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
         .iter()
         .all(|document| document.fields.is_empty()));
 
-    let err = client
-        .run_query(pb::RunQueryRequest {
+    // An empty collection id without `allDescendants` is the same scan of everything under
+    // the parent: production and the official emulator both serve it.
+    let everything = collect_docs(
+        &mut client,
+        pb::RunQueryRequest {
             parent: DOCS.to_owned(),
             query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
                 pb::StructuredQuery {
@@ -397,10 +1306,10 @@ async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
                 },
             )),
             ..Default::default()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        },
+    )
+    .await;
+    assert_eq!(everything.len(), 4, "{everything:?}");
     handle.abort();
 }
 
@@ -719,7 +1628,8 @@ async fn create_update_with_mask_transforms_and_preconditions() {
 }
 
 #[tokio::test]
-async fn a_concurrent_write_aborts_the_stale_transaction_and_batch_get_reports_missing() {
+#[allow(clippy::too_many_lines)]
+async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() {
     let (mut client, _clock, handle) = start().await;
     client
         .commit(pb::CommitRequest {
@@ -760,15 +1670,46 @@ async fn a_concurrent_write_aborts_the_stale_transaction_and_batch_get_reports_m
         }
     }
     assert_eq!((found, missing), (1, 1));
-    client
+    // Production (PESSIMISTIC): the read locked both paths, so the out-of-band write is refused
+    // with production's wording (the test backend waits zero seconds for a release).
+    let contended = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("acct/a", &[("balance", i(90))])],
             ..Default::default()
         })
         .await
+        .unwrap_err();
+    assert_eq!(contended.code(), tonic::Code::Aborted);
+    assert_eq!(
+        contended.message(),
+        "Too much contention on these documents. Please try again."
+    );
+    // A second transaction reading the same document shares the lock; the first to commit
+    // is aborted for its client to retry.
+    let other = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/acct/a"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                other.clone(),
+            )),
+            ..Default::default()
+        })
+        .await
         .unwrap();
-    let conflict = client
+    // The first committer is held back (this backend waits zero seconds, so the answer is the
+    // contention refusal) and stays active; the other transaction then runs into a waiting
+    // holder and is the deadlock victim, aborted for its client to retry.
+    let held = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("acct/a", &[("balance", i(80))])],
@@ -777,7 +1718,36 @@ async fn a_concurrent_write_aborts_the_stale_transaction_and_batch_get_reports_m
         })
         .await
         .unwrap_err();
-    assert_eq!(conflict.code(), tonic::Code::Aborted);
+    assert_eq!(held.code(), tonic::Code::Aborted);
+    let victim = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("acct/a", &[("balance", i(70))])],
+            transaction: other.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(victim.code(), tonic::Code::Aborted);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("acct/a", &[("balance", i(80))])],
+            transaction: txn.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // Released: the out-of-band write goes through now.
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("acct/a", &[("balance", i(90))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let txn = other;
     let retry = || pb::BeginTransactionRequest {
         database: DB.to_owned(),
         options: Some(pb::TransactionOptions {
@@ -824,9 +1794,15 @@ async fn a_concurrent_write_aborts_the_stale_transaction_and_batch_get_reports_m
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
     const CLIENTS: usize = 20;
-    let (mut client, _, handle) = start().await;
+    // Every round commits the held-back transaction and aborts the others as deadlock
+    // victims, so a client may lose many rounds in a row before its turn.
+    const ATTEMPTS: usize = CLIENTS * 4;
+    // A held-back commit waits for the holders to finish, as the daemon does; the deadlock
+    // rule aborts the others, so every round makes progress.
+    let (mut client, handle) = start_with_contention_wait(std::time::Duration::from_secs(30)).await;
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -842,7 +1818,7 @@ async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
             let first_reads = first_reads.clone();
             tokio::spawn(async move {
                 let mut retry_transaction = Vec::new();
-                for attempt in 0..CLIENTS {
+                for attempt in 0..ATTEMPTS {
                     let transaction = client
                         .begin_transaction(pb::BeginTransactionRequest {
                             database: DB.to_owned(),
@@ -903,7 +1879,7 @@ async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
                         Err(status) => panic!("unexpected transaction failure: {status}"),
                     }
                 }
-                panic!("transaction did not make progress after {CLIENTS} attempts");
+                panic!("transaction did not make progress after {ATTEMPTS} attempts");
             })
         })
         .collect();
@@ -937,6 +1913,7 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
             writes: vec![
                 update_write("n/1", &[("v", i(1))]),
                 update_write("n/2", &[("v", i(2))]),
+                update_write("n/3", &[("other", i(3))]),
                 pb::Write {
                     operation: Some(pb::write::Operation::Update(pb::Document {
                         name: "bad name".to_owned(),
@@ -952,7 +1929,8 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
         .into_inner();
     assert_eq!(resp.status[0].code, 0);
     assert_eq!(resp.status[1].code, 0);
-    assert_eq!(resp.status[2].code, i32::from(tonic::Code::InvalidArgument));
+    assert_eq!(resp.status[2].code, 0);
+    assert_eq!(resp.status[3].code, i32::from(tonic::Code::InvalidArgument));
 
     let agg = pb::RunAggregationQueryRequest {
         parent: DOCS.to_owned(),
@@ -1045,6 +2023,25 @@ fn agg_count(collection: &str, alias: &str) -> pb::StructuredAggregationQuery {
             ),
         }],
     }
+}
+
+fn agg_count_and_sum(collection: &str, field: &str) -> pb::StructuredAggregationQuery {
+    let mut query = agg_count(collection, "count");
+    query
+        .aggregations
+        .push(pb::structured_aggregation_query::Aggregation {
+            alias: "sum".to_owned(),
+            operator: Some(
+                pb::structured_aggregation_query::aggregation::Operator::Sum(
+                    pb::structured_aggregation_query::aggregation::Sum {
+                        field: Some(sq::FieldReference {
+                            field_path: field.to_owned(),
+                        }),
+                    },
+                ),
+            ),
+        });
+    query
 }
 
 #[tokio::test]
@@ -1185,6 +2182,7 @@ async fn malformed_wire_shapes_are_rejected_before_any_mutation() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     let (mut client, _clock, handle) = start().await;
     client
@@ -1219,14 +2217,17 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     assert!(second.transaction.is_empty());
     assert!(stream.next().await.is_none());
 
-    client
+    // The queried range is locked: a phantom row cannot be written out of band while the
+    // transaction is active (production blocks the writer and aborts it).
+    let phantom = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("snap/2", &[("v", i(2))])],
             ..Default::default()
         })
         .await
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(phantom.code(), tonic::Code::Aborted);
     let mut stream = client
         .run_aggregation_query(pb::RunAggregationQueryRequest {
             parent: DOCS.to_owned(),
@@ -1245,7 +2246,7 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
         .into_inner();
     let result = stream.next().await.unwrap().unwrap().result.unwrap();
     assert_eq!(result.aggregate_fields.get("n"), Some(&i(1)));
-    let conflict = client
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("snap/3", &[("v", i(3))])],
@@ -1253,15 +2254,23 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(conflict.code(), tonic::Code::Aborted);
+        .unwrap();
     assert!(client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/snap/3"),
             ..Default::default()
         })
         .await
-        .is_err());
+        .is_ok());
+    // Released: the phantom row can be written now.
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("snap/2", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
 
     // An empty BatchGet with new_transaction still returns the token.
     let mut stream = client
@@ -1281,6 +2290,166 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     let only = stream.next().await.unwrap().unwrap();
     assert!(!only.transaction.is_empty());
     assert!(only.result.is_none());
+    handle.abort();
+}
+
+#[tokio::test]
+async fn run_query_streams_bounded_batches_and_releases_its_snapshot_pin() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| update_write(&format!("paged/{index:03}"), &[("v", i(index))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let responses = client
+        .run_query(query("paged", None))
+        .await
+        .unwrap()
+        .into_inner()
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(
+        responses
+            .iter()
+            .filter(|response| response
+                .as_ref()
+                .is_ok_and(|response| response.document.is_some()))
+            .count(),
+        65
+    );
+    let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+    assert_eq!(
+        backend.read_unadmitted(&parent, |state| state
+            .transaction_bookkeeping_stats()
+            .active),
+        Some(0)
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn dropping_a_slow_query_stream_releases_the_internal_snapshot_pin() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| update_write(&format!("cancel/{index:03}"), &[("v", i(index))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut stream = client
+        .run_query(query("cancel", None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stream.next().await.unwrap().unwrap().document.is_some());
+    drop(stream);
+
+    let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+    for _ in 0..100 {
+        if backend.read_unadmitted(&parent, |state| {
+            state.transaction_bookkeeping_stats().active
+        }) == Some(0)
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        backend.read_unadmitted(&parent, |state| state
+            .transaction_bookkeeping_stats()
+            .active),
+        Some(0)
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn aggregation_transaction_locks_the_aggregated_range() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("aggregation-conflict/present", &[("v", i(1))]),
+                update_write("aggregation-conflict/missing", &[("other", i(2))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut stream = client
+        .run_aggregation_query(pb::RunAggregationQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    agg_count_and_sum("aggregation-conflict", "v"),
+                ),
+            ),
+            consistency_selector: Some(
+                pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                    pb::TransactionOptions {
+                        mode: Some(pb::transaction_options::Mode::ReadWrite(
+                            pb::transaction_options::ReadWrite::default(),
+                        )),
+                    },
+                ),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let response = stream.next().await.unwrap().unwrap();
+    let result = response.result.unwrap();
+    assert_eq!(result.aggregate_fields.get("count"), Some(&i(1)));
+    assert_eq!(result.aggregate_fields.get("sum"), Some(&i(1)));
+    assert!(!response.transaction.is_empty());
+    assert!(stream.next().await.is_none());
+
+    // Giving the missing field a value would change the aggregate, and the range is locked
+    // while the transaction is active: the out-of-band write is refused, the transaction
+    // commits into the range.
+    let refused = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("aggregation-conflict/missing", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::Aborted);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("aggregation-conflict/inside", &[("v", i(3))])],
+            transaction: response.transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("aggregation-conflict/missing", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
     handle.abort();
 }
 
@@ -1679,6 +2848,13 @@ async fn verify_writes_check_preconditions_without_changing_anything() {
 #[tokio::test]
 async fn read_time_selectors_serve_historical_snapshots() {
     let (mut client, clock, handle) = start().await;
+    // The database exists for a second before the document does, so a read_time just before
+    // the first write is a read of an existing database in which the document is missing.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(1))
+        .unwrap();
     let t0 = clock.lock().unwrap().now();
     client
         .commit(pb::CommitRequest {
@@ -1879,13 +3055,15 @@ async fn clock_maintenance_compacts_an_idle_database_without_another_commit() {
 async fn wall_clock_restores_keep_the_time_window_without_the_pinned_clock_cap() {
     let (mut client, _clock, backend, handle) =
         start_with_backend_and_policy(true, IndexValidationPolicy::Conservative).await;
-    backend.restore_databases(std::collections::BTreeMap::from([(
-        (
-            "demo-app".to_owned(),
-            fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
-        ),
-        fireemu_core_firestore::store::FirestoreState::new(),
-    )]));
+    backend
+        .restore_databases(std::collections::BTreeMap::from([(
+            (
+                "demo-app".to_owned(),
+                fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
+            ),
+            fireemu_core_firestore::store::FirestoreState::new(),
+        )]))
+        .unwrap();
     for value in 0..=fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH {
         client
             .commit(pb::CommitRequest {
@@ -1946,15 +3124,18 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
         .unwrap()
         .into_inner();
     assert_eq!(listed.documents.len(), 1);
-    client
+    // The listed range is locked like a queried one: a new row cannot be written out of band
+    // while the transaction is active, and the transaction commits into the range.
+    let refused = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("scan/b", &[("v", i(2))])],
             ..Default::default()
         })
         .await
-        .unwrap();
-    let conflict = client
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::Aborted);
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("scan/a", &[("v", i(3))])],
@@ -1962,8 +3143,7 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(conflict.code(), tonic::Code::Aborted);
+        .unwrap();
     let current = client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/scan/a"),
@@ -1972,7 +3152,7 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(current.fields.get("v"), Some(&i(1)));
+    assert_eq!(current.fields.get("v"), Some(&i(3)));
     handle.abort();
 }
 
@@ -2030,7 +3210,7 @@ async fn read_time_selectors_are_validated_and_read_only_transactions_can_start_
                 seconds: first.seconds - 7200,
                 nanos: 0,
             },
-            "older than the retention window",
+            "before the database was created",
         ),
         (
             prost_types::Timestamp {
@@ -2041,14 +3221,9 @@ async fn read_time_selectors_are_validated_and_read_only_transactions_can_start_
         ),
     ] {
         let err = client.get_document(get_at(ts)).await.unwrap_err();
-        // A read_time below the retained history is FAILED_PRECONDITION (the backend's and
-        // the official emulator's code for "too old"); a malformed one is INVALID_ARGUMENT.
-        let expected = if what == "older than the retention window" {
-            tonic::Code::FailedPrecondition
-        } else {
-            tonic::Code::InvalidArgument
-        };
-        assert_eq!(err.code(), expected, "{what}");
+        // A read_time before the database existed is INVALID_ARGUMENT like a malformed one
+        // (production: "cannot be before database creation time").
+        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{what}");
     }
     // An empty transaction token is not "no transaction".
     let err = client
@@ -2110,6 +3285,16 @@ async fn read_time_selectors_are_validated_and_read_only_transactions_can_start_
     ));
     let docs = collect_docs(&mut client, q).await;
     assert_eq!(docs[0].fields.get("v"), Some(&i(1)));
+    // Inside the database's life but older than the retention window is FAILED_PRECONDITION
+    // with production's wording.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(7200))
+        .unwrap();
+    let too_old = client.get_document(get_at(first)).await.unwrap_err();
+    assert_eq!(too_old.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(too_old.message(), "The requested 'read_time' is too old.");
     handle.abort();
 }
 
@@ -2196,7 +3381,7 @@ async fn database_snapshots_restore_documents_and_start_a_new_epoch() {
     backend.commit(&write("snap/a", 2)).unwrap();
     backend.commit(&write("snap/b", 1)).unwrap();
     let epoch = backend.epoch();
-    backend.restore_databases(taken);
+    backend.restore_databases(taken).unwrap();
     assert_eq!(backend.epoch(), epoch + 1, "a restore is a new epoch");
     let get = |name: &str| pb::GetDocumentRequest {
         name: format!("projects/demo-app/databases/(default)/documents/{name}"),
@@ -2608,7 +3793,9 @@ async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
     assert_eq!(snapshot.databases.len(), 1);
     assert!(snapshot.ids.is_none());
     backend.reset_scope(&Scope::Project("demo-b".to_owned()));
-    backend.restore_scope(&Scope::Project("demo-b".to_owned()), &snapshot);
+    backend
+        .restore_scope(&Scope::Project("demo-b".to_owned()), &snapshot)
+        .unwrap();
     assert_eq!(count("demo-b"), 4);
     assert!(backend
         .snapshot_scope(&Scope::AllExcept(std::collections::BTreeSet::new()))
@@ -2958,7 +4145,9 @@ fn a_reset_or_restore_detaches_retained_database_handles() {
         .commit_with(&lock_test_commit("demo-detach", "items/b"), &allow_all)
         .unwrap();
     let snapshot = backend.snapshot_scope(&Scope::Project("demo-detach".to_owned()));
-    backend.restore_scope(&Scope::Project("demo-detach".to_owned()), &snapshot);
+    backend
+        .restore_scope(&Scope::Project("demo-detach".to_owned()), &snapshot)
+        .unwrap();
     assert!(fresh.is_detached());
     assert_eq!(
         fresh.with(|_| Ok(())).unwrap_err().code(),
@@ -3045,7 +4234,7 @@ fn capture_and_restore_stay_atomic_under_the_barrier() {
     let snapshot = backend.snapshot_scope(&everything);
     assert_eq!(snapshot.databases.len(), 2);
     backend.reset();
-    backend.restore_scope(&everything, &snapshot);
+    backend.restore_scope(&everything, &snapshot).unwrap();
     drop(exclusive);
 
     assert_eq!(finished.recv_timeout(PATIENCE), Ok(true));
@@ -3054,4 +4243,175 @@ fn capture_and_restore_stay_atomic_under_the_barrier() {
     // rather than on a half-restored state.
     assert_eq!(lock_test_version(&backend, "demo-s1"), Some(2));
     assert_eq!(lock_test_version(&backend, "demo-s2"), Some(1));
+}
+
+#[test]
+fn resources_report_the_session_charge_active_transactions_and_refusals() {
+    use fireemu_core_session::tenancy::Scope;
+    use fireemu_core_types::resources::RootBudget;
+
+    let backend = history_budget_backend(2, 10);
+    backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "a", 1),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "b", 1),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap();
+    // The third version exceeds the session's two-version budget: refused and counted.
+    let refused = backend
+        .commit_with(
+            &history_budget_update("demo-a", "(default)", "c", 1),
+            &fireemu_adapter_grpc::rules::allow_all,
+        )
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::ResourceExhausted);
+    let _transaction = backend
+        .begin_transaction(&pb::BeginTransactionRequest {
+            database: "projects/demo-a/databases/(default)".to_owned(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let default = backend
+        .resources(
+            &Scope::AllExcept(std::collections::BTreeSet::new()),
+            RootBudget::DEFAULT,
+        )
+        .unwrap();
+    assert_eq!(default.service, "firestore");
+    let gauge = |report: &fireemu_core_types::resources::ServiceResources, id: &str| {
+        report
+            .gauges
+            .iter()
+            .find(|g| g.id == id)
+            .unwrap_or_else(|| panic!("{id} in {:?}", report.gauges))
+            .clone()
+    };
+    assert_eq!(gauge(&default, "history.session_versions").current, 2);
+    assert_eq!(gauge(&default, "history.session_versions").limit, Some(2));
+    assert!(gauge(&default, "history.session_versions").saturated());
+    assert_eq!(gauge(&default, "history.global_versions").current, 2);
+    assert_eq!(gauge(&default, "history.global_versions").limit, Some(10));
+    assert_eq!(gauge(&default, "transactions.active").current, 1);
+    assert!(gauge(&default, "history.live_document_bytes").current > 0);
+    assert!(
+        default
+            .refusals
+            .iter()
+            .any(|r| r.reason == "history.session_versions" && r.count == 1),
+        "{:?}",
+        default.refusals
+    );
+    let database = default
+        .roots
+        .roots
+        .iter()
+        .find(|r| r.kind == "database")
+        .unwrap();
+    assert_eq!(database.id, "demo-a/(default)");
+    assert_eq!(database.count, 2);
+    assert!(!database.outstanding);
+    let transactions = default
+        .roots
+        .roots
+        .iter()
+        .find(|r| r.kind == "transactions")
+        .unwrap();
+    assert_eq!(transactions.id, "demo-a/(default)");
+    assert_eq!(transactions.count, 1);
+    assert!(transactions.outstanding);
+    assert_eq!(
+        default.roots.roots[0].kind, "transactions",
+        "outstanding roots come first"
+    );
+
+    // A project session sees its own databases and never the backend-wide totals.
+    let project = backend
+        .resources(&Scope::Project("demo-a".to_owned()), RootBudget::DEFAULT)
+        .unwrap();
+    assert!(project
+        .gauges
+        .iter()
+        .all(|g| !g.id.starts_with("history.global_")));
+    assert!(project
+        .roots
+        .roots
+        .iter()
+        .any(|r| r.id == "demo-a/(default)"));
+    let other = backend
+        .resources(&Scope::Project("demo-z".to_owned()), RootBudget::DEFAULT)
+        .unwrap();
+    assert_eq!(other.roots.total, 0);
+    assert_eq!(gauge(&other, "transactions.active").current, 0);
+}
+
+#[test]
+fn resources_report_history_the_next_compaction_would_reclaim() {
+    use fireemu_core_session::tenancy::Scope;
+    use fireemu_core_types::resources::RootBudget;
+
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let backend = LocalBackend::new(gateway, Arc::clone(&clock), 7);
+    let scope = Scope::AllExcept(std::collections::BTreeSet::new());
+    let reclaimable = |backend: &LocalBackend| {
+        backend
+            .resources(&scope, RootBudget::DEFAULT)
+            .unwrap()
+            .gauges
+            .into_iter()
+            .find(|g| g.id == "history.reclaimable_bytes")
+            .expect("reclaimable gauge")
+    };
+    for value in 1..=3 {
+        backend
+            .commit_with(
+                &history_budget_update("demo-a", "(default)", "a", value),
+                &fireemu_adapter_grpc::rules::allow_all,
+            )
+            .unwrap();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+    }
+    // Every version is still inside the read-time retention window: nothing to reclaim.
+    let fresh = reclaimable(&backend);
+    assert_eq!(fresh.current, 0, "{fresh:?}");
+    assert_eq!(fresh.reclaimable, 0);
+
+    // Past the window, the two superseded versions are what a compaction would release.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(3_601))
+        .unwrap();
+    let aged = reclaimable(&backend);
+    assert!(aged.current > 0, "{aged:?}");
+    assert_eq!(aged.reclaimable, aged.current);
+    let retained = backend
+        .resources(&scope, RootBudget::DEFAULT)
+        .unwrap()
+        .gauges
+        .into_iter()
+        .find(|g| g.id == "history.session_versions")
+        .unwrap();
+    assert_eq!(retained.current, 3);
 }

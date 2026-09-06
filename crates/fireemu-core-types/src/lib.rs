@@ -7,10 +7,12 @@
 //! - no wall-clock, thread-local RNG or environment access;
 //! - errors are typed enums, never panics on input.
 
+pub mod admission;
 pub mod codec;
 pub mod determinism;
 pub mod edition;
 pub mod hash;
 pub mod ids;
 pub mod json;
+pub mod resources;
 pub mod time;

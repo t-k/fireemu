@@ -175,6 +175,45 @@ pub enum BlockingAuthEvent {
     BeforeSignIn,
 }
 
+/// Raw identity-provider credential fields requested by one Blocking Auth target.
+///
+/// The suite-level Auth setting is a separate upper guard. These target flags only narrow that
+/// opt-in and default to denying every raw token.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct BlockingAuthTokenPolicy {
+    /// Forward the caller-supplied OAuth access token.
+    pub access_token: bool,
+    /// Forward the caller-supplied identity-provider ID token.
+    pub id_token: bool,
+    /// Forward the caller-supplied OAuth refresh token.
+    pub refresh_token: bool,
+}
+
+impl BlockingAuthTokenPolicy {
+    /// Policy used by legacy in-process hooks that explicitly opt in to raw forwarding.
+    pub const ALL: Self = Self {
+        access_token: true,
+        id_token: true,
+        refresh_token: true,
+    };
+
+    /// Whether this target requests at least one raw credential field.
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.access_token || self.id_token || self.refresh_token
+    }
+
+    /// Union used while retaining input for multiple hooks that may run later.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            access_token: self.access_token || other.access_token,
+            id_token: self.id_token || other.id_token,
+            refresh_token: self.refresh_token || other.refresh_token,
+        }
+    }
+}
+
 impl BlockingAuthEvent {
     /// Short event spelling used by firebase-functions.
     #[must_use]
@@ -452,6 +491,8 @@ pub enum Trigger {
     BlockingAuth {
         /// Before-create or before-sign-in.
         event: BlockingAuthEvent,
+        /// Per-target raw credential forwarding policy discovered from the Functions SDK.
+        token_policy: BlockingAuthTokenPolicy,
     },
     /// Cloud Storage object change.
     Storage {

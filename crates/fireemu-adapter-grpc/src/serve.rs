@@ -174,12 +174,45 @@ async fn rest_call(
         app_check,
         body,
     };
-    let response = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state.handle(&request)
-    })
-    .await
-    .map_err(|error| std::io::Error::other(format!("Firestore REST task failed: {error}")))?;
+    // A write refused for lock contention does not wait on the blocking-pool thread (that
+    // would hold one of the few slots for the whole wait); the slot is released, this task
+    // waits for a transaction to finish, then runs the request again.
+    let request = Arc::new(request);
+    let deadline = std::time::Instant::now() + state.local.contention_wait();
+    let mut permit = permit;
+    let response = loop {
+        let attempt_permit = permit;
+        let seen = state.local.release_count();
+        let (attempt_state, attempt_request) = (Arc::clone(&state), Arc::clone(&request));
+        let (response, contended) = tokio::task::spawn_blocking(move || {
+            let _permit = attempt_permit;
+            crate::local::LocalBackend::without_waiting(|| attempt_state.handle(&attempt_request))
+        })
+        .await
+        .map_err(|error| std::io::Error::other(format!("Firestore REST task failed: {error}")))?;
+        if !contended || std::time::Instant::now() >= deadline {
+            break response;
+        }
+        state.local.await_any_release(seen, deadline).await;
+        // Re-admitted for the retry; an exhausted pool answers the retry as it answers a new
+        // request.
+        match try_admit_rest_work(rest_work_limiter()) {
+            Some(admitted) => permit = admitted,
+            None => {
+                return Ok(json_response(
+                    &RestResponse {
+                        status: 503,
+                        body: fireemu_adapter_support::api_error::google_rpc(
+                            503,
+                            "too many concurrent Firestore REST requests",
+                            "RESOURCE_EXHAUSTED",
+                        ),
+                    },
+                    origin.as_deref(),
+                ));
+            }
+        }
+    };
     if crate::rest::drops_connection(&response) {
         // A `dropConnection` fault: the connection closes without a response.
         return Err(dropped());

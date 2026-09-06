@@ -7,11 +7,111 @@
   },
   "project": "demo-pubsub-probe",
   "summary": {
-    "parity": 22,
-    "documented-divergence": 1,
+    "parity": 28,
+    "documented-divergence": 3,
     "debt": 0
   },
   "programs": [
+    {
+      "id": "rest-resource-wire",
+      "area": "rest",
+      "faults": [],
+      "steps": [
+        {
+          "id": "topicPut",
+          "status": "parity",
+          "value": {
+            "status": 200,
+            "name": "rest-wire",
+            "label": "rest"
+          }
+        },
+        {
+          "id": "topicPost",
+          "status": "parity",
+          "value": {
+            "rejected": true
+          }
+        },
+        {
+          "id": "subscriptionPut",
+          "status": "parity",
+          "value": {
+            "status": 200,
+            "ackDeadlineSeconds": 20,
+            "filter": "attributes.kind = \"kept\"",
+            "deadLetterAttempts": 5,
+            "minimumBackoff": "1.500s"
+          }
+        },
+        {
+          "id": "subscriptionPatch",
+          "status": "parity",
+          "value": {
+            "status": 200,
+            "ackDeadlineSeconds": 30,
+            "filter": "attributes.kind = \"kept\""
+          }
+        },
+        {
+          "id": "snapshotPut",
+          "status": "documented-divergence",
+          "oracle": {
+            "status": 200,
+            "name": "rest-wire"
+          },
+          "fireemu": {
+            "status": 200,
+            "name": "rest-wire",
+            "label": "rest"
+          },
+          "documents": "vendored google/pubsub/v1/pubsub.proto Snapshot.labels; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The production Snapshot resource includes the labels supplied to CreateSnapshot in its response. fireemu preserves and returns those labels; the pinned official emulator accepts the labels but omits them from the response."
+        },
+        {
+          "id": "snapshotPost",
+          "status": "parity",
+          "value": {
+            "rejected": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "snapshot-future-retention",
+      "area": "snapshots",
+      "faults": [],
+      "steps": [
+        {
+          "id": "created",
+          "status": "parity",
+          "value": {
+            "publishStatus": 200,
+            "snapshotStatus": 200,
+            "futureStatus": 200
+          }
+        },
+        {
+          "id": "restored",
+          "status": "documented-divergence",
+          "oracle": {
+            "seekStatus": 200,
+            "pullStatus": 200,
+            "messages": []
+          },
+          "fireemu": {
+            "seekStatus": 200,
+            "pullStatus": 200,
+            "messages": [
+              "future",
+              "initial"
+            ]
+          },
+          "documents": "Google Cloud Pub/Sub replay overview, 'Replay and purge messages with seek'; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "Production retains both the source subscription's unacknowledged messages at snapshot creation and every later message published to the topic, and permits applying that snapshot to a newly created subscription on the topic. fireemu restores both messages. The pinned official emulator accepts the same create, publish, delete, create, seek, and pull sequence but returns no messages."
+        }
+      ]
+    },
     {
       "id": "topics-lifecycle",
       "area": "topics",

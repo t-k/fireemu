@@ -12,6 +12,7 @@ description = "private Quint model checking and Quint Connect conformance author
 anyhow = "1.0"
 fireemu-core-auth = { path = "../../crates/fireemu-core-auth" }
 fireemu-adapter-functions = { path = "../../crates/fireemu-adapter-functions" }
+fireemu-adapter-grpc = { path = "../../crates/fireemu-adapter-grpc" }
 fireemu-core-events = { path = "../../crates/fireemu-core-events" }
 fireemu-core-export = { path = "../../crates/fireemu-core-export" }
 fireemu-export-publication = { path = "../../crates/fireemu-export-publication" }
@@ -20,12 +21,15 @@ fireemu-core-rules = { path = "../../crates/fireemu-core-rules" }
 fireemu-core-session = { path = "../../crates/fireemu-core-session" }
 fireemu-core-storage = { path = "../../crates/fireemu-core-storage" }
 fireemu-core-types = { path = "../../crates/fireemu-core-types" }
+fireemu-proto-firestore = { path = "../../crates/fireemu-proto-firestore" }
 quint-connect = "=0.1.2"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 rustix = { version = "1", features = ["fs", "process"] }
 tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "process", "time"] }
+tonic = "0.13"
 
 [lints]
 workspace = true

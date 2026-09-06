@@ -1975,10 +1975,9 @@ pub async fn start(
         }
     };
     tokio::spawn(runtime.clone().dispatch_loop());
-    // Commits reach the runtime inside the database critical section: in order, never
-    // dropped, and enqueued before the write returns to its caller.
-    let sink_runtime = runtime.clone();
-    backend.set_change_sink(Arc::new(move |event| sink_runtime.on_commit(event)));
+    // Commits reserve their complete Functions fan-out before the database publishes and
+    // activate that already-built batch before releasing the database critical section.
+    backend.set_atomic_change_sink(Arc::new(FunctionsChangeSink(runtime.clone())));
     start_reload_supervisors(
         &runtime,
         cfg,
@@ -1987,6 +1986,56 @@ pub async fn start(
         callable_trusted_protocol,
     );
     Ok(runtime)
+}
+
+struct FunctionsChangeSink(Arc<FunctionsRuntime>);
+
+struct FunctionsCommitPublication(
+    Option<fireemu_adapter_functions::runtime::EventBatchReservation>,
+);
+
+impl fireemu_adapter_grpc::local::CommitPublication for FunctionsCommitPublication {
+    fn publish(mut self: Box<Self>) {
+        if let Some(reservation) = self.0.take() {
+            reservation.publish();
+        }
+    }
+}
+
+impl fireemu_adapter_grpc::local::AtomicChangeSink for FunctionsChangeSink {
+    fn reserve(
+        &self,
+        event: &fireemu_adapter_grpc::local::CommitEvent,
+    ) -> Result<
+        Box<dyn fireemu_adapter_grpc::local::CommitPublication>,
+        fireemu_core_types::admission::EventAdmissionError,
+    > {
+        self.0
+            .reserve_commit_events(event)
+            .map(|reservation| {
+                Box::new(FunctionsCommitPublication(Some(reservation)))
+                    as Box<dyn fireemu_adapter_grpc::local::CommitPublication>
+            })
+            .map_err(functions_event_admission_error)
+    }
+}
+
+fn functions_event_admission_error(
+    error: fireemu_adapter_functions::runtime::SourceEventAdmissionError,
+) -> fireemu_core_types::admission::EventAdmissionError {
+    use fireemu_adapter_functions::runtime::SourceEventAdmissionError;
+    use fireemu_core_types::admission::EventAdmissionError;
+    match error {
+        SourceEventAdmissionError::Capacity => {
+            EventAdmissionError::Capacity("Functions logical event capacity is exhausted".into())
+        }
+        SourceEventAdmissionError::Unavailable => EventAdmissionError::Unavailable(
+            "Functions logical event admission is unavailable".into(),
+        ),
+        SourceEventAdmissionError::InvalidEvent => EventAdmissionError::InvalidEvent(
+            "Functions trigger produced an invalid logical event".into(),
+        ),
+    }
 }
 
 fn validate_functions_codebase_budget(codebases: &[FunctionsCodebase]) -> Result<(), String> {
@@ -2267,10 +2316,14 @@ fn check_manifest_agrees_on_blocking_auth(
             .functions
             .iter()
             .filter_map(|function| match function.trigger {
-                Trigger::BlockingAuth { event } => Some((
+                Trigger::BlockingAuth {
+                    event,
+                    token_policy,
+                } => Some((
                     function.name.clone(),
                     function.region.clone(),
                     event.as_str(),
+                    token_policy,
                 )),
                 _ => None,
             })
@@ -2283,20 +2336,28 @@ fn check_manifest_agrees_on_blocking_auth(
             .find(|index| configured.get(*index) != discovered.get(*index))
             .unwrap_or(0);
         return Err(match (discovered.get(mismatch), configured.get(mismatch)) {
-            (Some((name, region, event)), None) => format!(
+            (Some((name, region, event, _)), None) => format!(
                 "the configured functions manifest omits discovered Blocking Auth hook {name:?} \
                  in {region} for {event} at position {mismatch}; blocking policy cannot be \
                  bypassed by a custom manifest"
             ),
-            (None, Some((name, region, event))) => format!(
+            (None, Some((name, region, event, _))) => format!(
                 "the configured functions manifest invents Blocking Auth hook {name:?} in \
                  {region} for {event} at position {mismatch}; it must match codebase discovery"
             ),
             (Some(discovered), Some(configured)) => format!(
                 "the configured functions manifest changes Blocking Auth hook order or identity \
                  at position {mismatch}: codebase discovery has {:?} in {} for {}, configured \
-                 manifest has {:?} in {} for {}; blocking policy selection must match exactly",
-                discovered.0, discovered.1, discovered.2, configured.0, configured.1, configured.2,
+                manifest has {:?} in {} for {} with token policy {:?}; configured manifest has \
+                token policy {:?}; blocking policy selection must match exactly",
+                discovered.0,
+                discovered.1,
+                discovered.2,
+                configured.0,
+                configured.1,
+                configured.2,
+                discovered.3,
+                configured.3,
             ),
             (None, None) => unreachable!("different contracts have a mismatching position"),
         });
@@ -2492,10 +2553,38 @@ fn check_callable_app_check(
 pub fn storage_sink(
     runtime: &Arc<FunctionsRuntime>,
     tenancy: &fireemu_core_session::tenancy::SharedTenancy,
-) -> Arc<dyn Fn(&fireemu_core_storage::store::StorageEvent) + Send + Sync> {
-    let runtime = runtime.clone();
-    let tenancy = tenancy.clone();
-    Arc::new(move |event| {
+) -> fireemu_adapter_http::storage::StorageEventSink {
+    Arc::new(FunctionsStorageSink {
+        runtime: runtime.clone(),
+        tenancy: tenancy.clone(),
+    })
+}
+
+struct FunctionsStorageSink {
+    runtime: Arc<FunctionsRuntime>,
+    tenancy: fireemu_core_session::tenancy::SharedTenancy,
+}
+
+struct FunctionsStoragePublication(
+    Option<fireemu_adapter_functions::runtime::EventBatchReservation>,
+);
+
+impl fireemu_adapter_http::storage::StorageEventPublication for FunctionsStoragePublication {
+    fn publish(mut self: Box<Self>) {
+        if let Some(reservation) = self.0.take() {
+            reservation.publish();
+        }
+    }
+}
+
+impl fireemu_adapter_http::storage::AtomicStorageEventSink for FunctionsStorageSink {
+    fn reserve(
+        &self,
+        event: &fireemu_core_storage::store::StorageEvent,
+    ) -> Result<
+        Box<dyn fireemu_adapter_http::storage::StorageEventPublication>,
+        fireemu_core_types::admission::EventAdmissionError,
+    > {
         use fireemu_core_storage::store::StorageEvent;
         let bucket = match event {
             StorageEvent::Finalized(m)
@@ -2504,13 +2593,27 @@ pub fn storage_sink(
         };
         // The runtime belongs to the default session: other sessions' buckets do not
         // trigger its functions.
-        let owned = tenancy
+        let owned = self
+            .tenancy
             .read()
-            .is_ok_and(|t| t.project_of_bucket(bucket) == runtime.project());
-        if owned {
-            runtime.on_storage_event(event);
-        }
-    })
+            .map_err(|_| {
+                fireemu_core_types::admission::EventAdmissionError::Unavailable(
+                    "Storage tenancy is unavailable during event admission".to_owned(),
+                )
+            })?
+            .project_of_bucket(bucket)
+            == self.runtime.project();
+        let reservation = if owned {
+            Some(
+                self.runtime
+                    .reserve_storage_event(event)
+                    .map_err(functions_event_admission_error)?,
+            )
+        } else {
+            None
+        };
+        Ok(Box::new(FunctionsStoragePublication(reservation)))
+    }
 }
 
 /// The Auth user event observer for `runtime` (called after each Auth request).
@@ -2525,6 +2628,7 @@ pub fn auth_sink(
 pub struct BlockingAuthBridge {
     runtime: Arc<FunctionsRuntime>,
     deadline: Duration,
+    forward_inbound_credentials: bool,
 }
 
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
@@ -2573,6 +2677,25 @@ fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
     )
 }
 
+fn narrow_blocking_auth_credentials(
+    context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+) -> fireemu_adapter_http::identity_toolkit::AuthBlockingContext {
+    let mut narrowed = context.clone();
+    if let Some(credential) = &mut narrowed.credential {
+        if !policy.access_token {
+            credential.access_token = None;
+        }
+        if !policy.id_token {
+            credential.id_token = None;
+        }
+        if !policy.refresh_token {
+            credential.refresh_token = None;
+        }
+    }
+    narrowed
+}
+
 fn blocking_auth_context_json(
     project: &str,
     tenant: Option<&str>,
@@ -2611,6 +2734,15 @@ fn blocking_auth_context_json(
         });
         if let Some(claims) = &credential.claims {
             value["claims"] = claims.clone();
+        }
+        if let Some(access_token) = &credential.access_token {
+            value["accessToken"] = serde_json::Value::String(access_token.clone());
+        }
+        if let Some(id_token) = &credential.id_token {
+            value["idToken"] = serde_json::Value::String(id_token.clone());
+        }
+        if let Some(refresh_token) = &credential.refresh_token {
+            value["refreshToken"] = serde_json::Value::String(refresh_token.clone());
         }
         context["credential"] = value;
     }
@@ -2730,12 +2862,33 @@ impl BlockingAuthBridge {
         Self {
             runtime,
             deadline: BLOCKING_AUTH_DEADLINE,
+            forward_inbound_credentials: false,
+        }
+    }
+
+    /// Builds a bridge with the explicit raw credential forwarding policy.
+    #[must_use]
+    pub fn new_with_forward_inbound_credentials(
+        runtime: Arc<FunctionsRuntime>,
+        forward_inbound_credentials: bool,
+    ) -> Self {
+        if !forward_inbound_credentials {
+            return Self::new(runtime);
+        }
+        Self {
+            runtime,
+            deadline: BLOCKING_AUTH_DEADLINE,
+            forward_inbound_credentials,
         }
     }
 
     #[cfg(test)]
     fn with_deadline(runtime: Arc<FunctionsRuntime>, deadline: Duration) -> Self {
-        Self { runtime, deadline }
+        Self {
+            runtime,
+            deadline,
+            forward_inbound_credentials: false,
+        }
     }
 
     fn invoke_for_namespace(
@@ -2774,12 +2927,13 @@ impl BlockingAuthBridge {
         let Some((target, _admission)) = admitted else {
             return Ok(None);
         };
+        let context = narrow_blocking_auth_credentials(context, target.token_policy);
         let user_json = blocking_auth_user_json(user, tenant);
         let event_context = blocking_auth_context_json(
             project,
             tenant,
             event,
-            context,
+            &context,
             &format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
             &fireemu_core_types::time::LogicalInstant::to_rfc3339(self.runtime.now())
                 .unwrap_or_default(),
@@ -2846,6 +3000,21 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
 
     fn handles(&self, event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
         self.runtime.handles_blocking_auth(event)
+    }
+
+    fn forward_inbound_credentials(&self) -> bool {
+        self.forward_inbound_credentials
+    }
+
+    fn inbound_credential_policy(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        if self.forward_inbound_credentials {
+            self.runtime.blocking_auth_token_policy(event)
+        } else {
+            fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default()
+        }
     }
 
     fn invoke(
@@ -2951,6 +3120,9 @@ impl PubSubBridge {
 
 impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
     fn deliver(&self, topic: &str, messages: &[fireemu_adapter_pubsub::BridgeMessage]) {
+        let Some(topic) = owned_pubsub_topic(self.0.project(), topic) else {
+            return;
+        };
         // The runtime consumes the same `{data: <base64>, attributes, orderingKey}` message
         // shape the control publish route produces (`pubsub_event` reads `data` verbatim as the
         // CloudEvent body).
@@ -2968,8 +3140,13 @@ impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
                 value
             })
             .collect();
-        let _ = self.0.publish(topic, &values);
+        let _ = self.0.publish(topic.topic(), &values);
     }
+}
+
+fn owned_pubsub_topic(project: &str, resource: &str) -> Option<fireemu_core_pubsub::TopicName> {
+    let topic = fireemu_core_pubsub::TopicName::parse(resource).ok()?;
+    (topic.project() == project).then_some(topic)
 }
 
 /// Standard base64 with padding (the encoding the `PubSub` `CloudEvent` `data` field carries).
@@ -3012,14 +3189,14 @@ mod tests {
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
         functions_source_stamp, functions_source_stamp_with_file_version, hash_source_file,
-        hash_source_stamp_entry, node_engine_matches, package_node_engine, parse_node_version,
-        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
-        source_scan_pacing_delay, stream_source_chunks, update_watch_hash,
-        validate_functions_codebase_budget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
-        FunctionsSourceScanBudget, FunctionsSourceStamp, NodeInstallation, BLOCKING_AUTH_DEADLINE,
-        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
-        MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
-        SOURCE_IO_BUFFER_BYTES,
+        hash_source_stamp_entry, node_engine_matches, owned_pubsub_topic, package_node_engine,
+        parse_node_version, provision_function_pubsub_resources, select_node_installation,
+        snapshot_functions_source, source_scan_pacing_delay, stream_source_chunks,
+        update_watch_hash, validate_functions_codebase_budget, FunctionsSourceEntryBudget,
+        FunctionsSourceFileVersion, FunctionsSourceScanBudget, FunctionsSourceStamp,
+        NodeInstallation, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
+        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
@@ -3236,6 +3413,9 @@ mod tests {
                 claims: Some(claims.clone()),
                 provider_id: "oidc.corp".to_owned(),
                 sign_in_method: "oidc.corp".to_owned(),
+                access_token: None,
+                id_token: None,
+                refresh_token: None,
             }),
             additional_user_info: Some(AuthBlockingAdditionalUserInfo {
                 provider_id: "oidc.corp".to_owned(),
@@ -3280,6 +3460,36 @@ mod tests {
         assert!(value["credential"].get("idToken").is_none());
         assert!(value["credential"].get("accessToken").is_none());
 
+        let raw_request = AuthBlockingContext {
+            credential: Some(AuthBlockingCredential {
+                claims: None,
+                provider_id: "oidc.corp".to_owned(),
+                sign_in_method: "oidc.corp".to_owned(),
+                access_token: Some("access-sentinel".to_owned()),
+                id_token: Some("id-sentinel".to_owned()),
+                refresh_token: Some("refresh-sentinel".to_owned()),
+            }),
+            ..request.clone()
+        };
+        let raw_value = super::blocking_auth_context_json(
+            "demo-app",
+            Some("customer"),
+            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+            &raw_request,
+            "event-raw",
+            "2026-08-29T12:01:00Z",
+        );
+        assert_eq!(
+            raw_value["credential"],
+            json!({
+                "providerId": "oidc.corp",
+                "signInMethod": "oidc.corp",
+                "accessToken": "access-sentinel",
+                "idToken": "id-sentinel",
+                "refreshToken": "refresh-sentinel"
+            })
+        );
+
         let before_create = super::blocking_auth_context_json(
             "demo-app",
             None,
@@ -3292,6 +3502,39 @@ mod tests {
             before_create["eventType"],
             "providers/cloud.auth/eventTypes/user.beforeCreate"
         );
+    }
+
+    #[test]
+    fn blocking_auth_context_is_narrowed_to_the_admitted_targets_token_policy() {
+        use fireemu_adapter_http::identity_toolkit::{AuthBlockingContext, AuthBlockingCredential};
+        use fireemu_core_functions::manifest::BlockingAuthTokenPolicy;
+
+        let context = AuthBlockingContext {
+            credential: Some(AuthBlockingCredential {
+                claims: Some(json!({"sub": "provider-user"})),
+                provider_id: "oidc.corp".to_owned(),
+                sign_in_method: "oidc.corp".to_owned(),
+                access_token: Some("access-sentinel".to_owned()),
+                id_token: Some("id-sentinel".to_owned()),
+                refresh_token: Some("refresh-sentinel".to_owned()),
+            }),
+            ..AuthBlockingContext::default()
+        };
+        for bits in 0_u8..8 {
+            let narrowed = super::narrow_blocking_auth_credentials(
+                &context,
+                BlockingAuthTokenPolicy {
+                    access_token: bits & 1 != 0,
+                    id_token: bits & 2 != 0,
+                    refresh_token: bits & 4 != 0,
+                },
+            );
+            let credential = narrowed.credential.unwrap();
+            assert_eq!(credential.access_token.is_some(), bits & 1 != 0);
+            assert_eq!(credential.id_token.is_some(), bits & 2 != 0);
+            assert_eq!(credential.refresh_token.is_some(), bits & 4 != 0);
+            assert_eq!(credential.claims, Some(json!({"sub": "provider-user"})));
+        }
     }
 
     #[test]
@@ -4086,6 +4329,17 @@ mod tests {
     }
 
     #[test]
+    fn pubsub_bridge_accepts_only_the_runtime_projects_full_topic_resource() {
+        assert_eq!(
+            owned_pubsub_topic("demo-app", "projects/demo-app/topics/jobs")
+                .map(|topic| topic.to_full()),
+            Some("projects/demo-app/topics/jobs".to_owned())
+        );
+        assert!(owned_pubsub_topic("demo-app", "projects/other-project/topics/jobs").is_none());
+        assert!(owned_pubsub_topic("demo-app", "jobs").is_none());
+    }
+
+    #[test]
     fn provisioning_function_pubsub_resources_is_idempotent_and_checks_existing_links() {
         let manifest = parse_manifest(&json!({"functions": [
             {"name": "worker", "trigger": {"type": "pubsub", "topic": "shared-jobs"}}
@@ -4372,6 +4626,29 @@ mod tests {
             .expect_err("custom manifest ordering must not select a different first hook");
         assert!(error.contains("firstCreateGuard"), "{error}");
         assert!(error.contains("secondCreateGuard"), "{error}");
+    }
+
+    #[test]
+    fn a_configured_manifest_cannot_widen_or_narrow_discovered_token_policy() {
+        let manifest = |access_token: bool| {
+            parse_manifest(&json!({"functions": [{
+                "name": "guardSignIn",
+                "trigger": {
+                    "type": "blockingAuth",
+                    "eventType": "beforeSignIn",
+                    "accessToken": access_token
+                }
+            }]}))
+            .unwrap()
+        };
+        for (configured, discovered, direction) in [
+            (manifest(true), manifest(false), "widen"),
+            (manifest(false), manifest(true), "narrow"),
+        ] {
+            let error = super::check_manifest_agrees_on_blocking_auth(&configured, &discovered)
+                .unwrap_err();
+            assert!(error.contains("token policy"), "{direction}: {error}");
+        }
     }
 
     /// A manifest whose only ignored export is an unrecognised shape starts, with a line

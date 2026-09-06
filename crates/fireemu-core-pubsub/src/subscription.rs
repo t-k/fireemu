@@ -26,6 +26,10 @@ pub const MAX_ACK_DEADLINE_SECONDS: u32 = 600;
 pub const MIN_DEAD_LETTER_ATTEMPTS: u32 = 5;
 /// Inclusive maximum `max_delivery_attempts` for a dead-letter policy.
 pub const MAX_DEAD_LETTER_ATTEMPTS: u32 = 100;
+/// Default retry minimum backoff when a policy omits the field.
+pub const DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS: i64 = 10;
+/// Default and maximum retry maximum backoff.
+pub const MAX_RETRY_BACKOFF_SECONDS: i64 = 600;
 /// Upper bound on the number of retained entries a single subscription keeps in memory.
 pub const MAX_RETAINED_PER_SUB: usize = 100_000;
 /// Upper bound on message bytes retained by one subscription.
@@ -98,9 +102,14 @@ impl SubscriptionConfig {
             }
         }
         if let Some(rp) = &self.retry_policy {
-            if rp.minimum_backoff.as_nanos() < 0 || rp.maximum_backoff.as_nanos() < 0 {
+            let maximum = LogicalDuration::from_seconds(MAX_RETRY_BACKOFF_SECONDS);
+            if rp.minimum_backoff.as_nanos() < 0
+                || rp.maximum_backoff.as_nanos() < 0
+                || rp.minimum_backoff > maximum
+                || rp.maximum_backoff > maximum
+            {
                 return Err(PubSubError::invalid_argument(
-                    "retry policy backoff must not be negative",
+                    "retry policy backoff must be between 0 and 600 seconds",
                 ));
             }
             if rp.minimum_backoff > rp.maximum_backoff {
@@ -210,6 +219,12 @@ impl SubscriptionState {
         self.config.push_config = push;
     }
 
+    /// Permanently detaches this subscription from a deleted topic incarnation.
+    pub fn mark_topic_deleted(&mut self) {
+        self.config.topic = TopicName::parse(crate::name::DELETED_TOPIC)
+            .expect("the deleted-topic sentinel is always valid");
+    }
+
     fn message_bytes(stored: &StoredMessage) -> usize {
         stored
             .message
@@ -255,6 +270,62 @@ impl SubscriptionState {
         }
     }
 
+    fn reclaim_acked_entries(&mut self) {
+        self.entries.retain(|entry| entry.state != Delivery::Acked);
+        self.rebuild_indexes();
+    }
+
+    /// Checks whether a whole publish batch can be appended without partial mutation.
+    pub fn ensure_enqueue_capacity<'a>(
+        &self,
+        mut messages: impl Iterator<Item = &'a StoredMessage>,
+    ) -> Result<()> {
+        let (additional_count, additional_bytes) =
+            messages.try_fold((0_usize, 0_usize), |(count, bytes), message| {
+                Ok::<_, PubSubError>((
+                    count.checked_add(1).ok_or_else(|| {
+                        PubSubError::resource_exhausted("subscription entry count overflow")
+                    })?,
+                    bytes
+                        .checked_add(Self::message_bytes(message))
+                        .ok_or_else(|| {
+                            PubSubError::resource_exhausted("subscription byte count overflow")
+                        })?,
+                ))
+            })?;
+        let fits = |count: usize, bytes: usize| {
+            count
+                .checked_add(additional_count)
+                .is_some_and(|total| total <= MAX_RETAINED_PER_SUB)
+                && bytes
+                    .checked_add(additional_bytes)
+                    .is_some_and(|total| total <= MAX_RETAINED_BYTES_PER_SUB)
+        };
+        if fits(self.entries.len(), self.retained_bytes) {
+            return Ok(());
+        }
+        let (acked_count, acked_bytes) = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == Delivery::Acked)
+            .fold((0_usize, 0_usize), |(count, bytes), entry| {
+                (
+                    count.saturating_add(1),
+                    bytes.saturating_add(Self::message_bytes(&entry.stored)),
+                )
+            });
+        if fits(
+            self.entries.len().saturating_sub(acked_count),
+            self.retained_bytes.saturating_sub(acked_bytes),
+        ) {
+            return Ok(());
+        }
+        Err(PubSubError::resource_exhausted(format!(
+            "subscription {} cannot retain the complete publish batch",
+            self.config.name.to_full()
+        )))
+    }
+
     /// Appends a message that already passed the subscription filter. Returns
     /// `RESOURCE_EXHAUSTED` when the retention bound is reached and no acked entry can be
     /// reclaimed.
@@ -265,18 +336,27 @@ impl SubscriptionState {
     ) -> Result<()> {
         let stored = stored.into();
         let message_bytes = Self::message_bytes(&stored);
-        if self.entries.len() >= MAX_RETAINED_PER_SUB {
+        let exceeds_entry_limit = self.entries.len() >= MAX_RETAINED_PER_SUB;
+        let exceeds_byte_limit = self
+            .retained_bytes
+            .checked_add(message_bytes)
+            .is_none_or(|total| total > MAX_RETAINED_BYTES_PER_SUB);
+        if (exceeds_entry_limit || exceeds_byte_limit)
+            && self
+                .entries
+                .iter()
+                .any(|entry| entry.state == Delivery::Acked)
+        {
             // Reclaim the oldest acked entries first; a backlog of live messages cannot be
             // dropped, so a subscription that is never drained is bounded and refuses further
             // publishes rather than growing without limit.
-            self.entries.retain(|e| e.state != Delivery::Acked);
-            self.rebuild_indexes();
-            if self.entries.len() >= MAX_RETAINED_PER_SUB {
-                return Err(PubSubError::resource_exhausted(format!(
-                    "subscription {} retains the maximum of {MAX_RETAINED_PER_SUB} messages",
-                    self.config.name.to_full()
-                )));
-            }
+            self.reclaim_acked_entries();
+        }
+        if self.entries.len() >= MAX_RETAINED_PER_SUB {
+            return Err(PubSubError::resource_exhausted(format!(
+                "subscription {} retains the maximum of {MAX_RETAINED_PER_SUB} messages",
+                self.config.name.to_full()
+            )));
         }
         if self
             .retained_bytes
@@ -464,6 +544,163 @@ impl SubscriptionState {
         self.rebuild_indexes();
         Ok(())
     }
+
+    /// Retained payload accounting for the resource diagnostics: `(unacknowledged messages,
+    /// their payload bytes, acknowledged-but-retained payload bytes)`. Acknowledged entries
+    /// stay retained only while a snapshot or the retention window still needs them, so their
+    /// bytes are what a reclaim could release.
+    #[must_use]
+    pub fn retention_accounting(&self) -> (usize, u64, u64) {
+        let mut unacked = 0usize;
+        let mut unacked_bytes = 0u64;
+        let mut acked_bytes = 0u64;
+        for entry in &self.entries {
+            let bytes = u64::try_from(entry.stored.message.data.len()).unwrap_or(u64::MAX);
+            if entry.state == Delivery::Acked {
+                acked_bytes = acked_bytes.saturating_add(bytes);
+            } else {
+                unacked += 1;
+                unacked_bytes = unacked_bytes.saturating_add(bytes);
+            }
+        }
+        (unacked, unacked_bytes, acked_bytes)
+    }
+
+    /// Returns the stable message IDs that were not acknowledged at the current point in time.
+    #[must_use]
+    pub fn unacknowledged_message_ids(&self) -> BTreeSet<String> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.state != Delivery::Acked)
+            .map(|entry| entry.stored.message_id.clone())
+            .collect()
+    }
+
+    /// Returns the stable message IDs retained by this subscription at the snapshot boundary.
+    #[must_use]
+    pub fn retained_message_ids(&self) -> BTreeSet<String> {
+        self.entries
+            .iter()
+            .map(|entry| entry.stored.message_id.clone())
+            .collect()
+    }
+
+    /// Returns the shared message records retained at the snapshot boundary, in subscription
+    /// order. The returned arcs let snapshots keep the payload alive without copying it.
+    #[must_use]
+    pub fn retained_messages(&self) -> Vec<Arc<StoredMessage>> {
+        self.entries
+            .iter()
+            .map(|entry| Arc::clone(&entry.stored))
+            .collect()
+    }
+
+    /// Oldest publish time among entries that were not acknowledged at the snapshot boundary.
+    #[must_use]
+    pub fn oldest_unacknowledged_publish_time(&self) -> Option<LogicalInstant> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.state != Delivery::Acked)
+            .map(|entry| entry.stored.publish_time)
+            .min()
+    }
+
+    /// Restores the acknowledgement state captured by a snapshot. Messages that were in the
+    /// source backlog remain available, and messages published after the snapshot was created
+    /// are also available. Older messages that were acknowledged at snapshot creation stay
+    /// acknowledged.
+    pub fn seek_to_snapshot(
+        &mut self,
+        captured_messages: &[Arc<StoredMessage>],
+        retained_message_ids: &BTreeSet<String>,
+        unacknowledged_message_ids: &BTreeSet<String>,
+        created_at: LogicalInstant,
+        now: LogicalInstant,
+    ) -> Result<()> {
+        let existing_ids = self
+            .entries
+            .iter()
+            .map(|entry| entry.stored.message_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let missing_messages = captured_messages
+            .iter()
+            .filter(|message| {
+                retained_message_ids.contains(&message.message_id)
+                    && !existing_ids.contains(message.message_id.as_str())
+                    && self.admits(&message.message.attributes)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let acked_count = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == Delivery::Acked)
+            .count();
+        let acked_bytes = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == Delivery::Acked)
+            .map(|entry| Self::message_bytes(&entry.stored))
+            .sum::<usize>();
+        let missing_bytes = missing_messages
+            .iter()
+            .map(|message| Self::message_bytes(message))
+            .sum::<usize>();
+        let entries_without_acked = self.entries.len().saturating_sub(acked_count);
+        let bytes_without_acked = self.retained_bytes.saturating_sub(acked_bytes);
+        let entries_after = self.entries.len().saturating_add(missing_messages.len());
+        let bytes_after = self.retained_bytes.saturating_add(missing_bytes);
+        let can_reclaim_acked =
+            entries_after > MAX_RETAINED_PER_SUB || bytes_after > MAX_RETAINED_BYTES_PER_SUB;
+        if can_reclaim_acked {
+            if entries_without_acked.saturating_add(missing_messages.len()) > MAX_RETAINED_PER_SUB
+                || bytes_without_acked.saturating_add(missing_bytes) > MAX_RETAINED_BYTES_PER_SUB
+            {
+                return Err(PubSubError::resource_exhausted(format!(
+                    "subscription {} cannot restore the snapshot within its retention bounds",
+                    self.config.name.to_full()
+                )));
+            }
+            self.entries.retain(|entry| entry.state != Delivery::Acked);
+            self.rebuild_indexes();
+        } else if entries_after > MAX_RETAINED_PER_SUB || bytes_after > MAX_RETAINED_BYTES_PER_SUB {
+            return Err(PubSubError::resource_exhausted(format!(
+                "subscription {} cannot restore the snapshot within its retention bounds",
+                self.config.name.to_full()
+            )));
+        }
+
+        let insertion_index = self
+            .entries
+            .iter()
+            .position(|entry| {
+                !retained_message_ids.contains(&entry.stored.message_id)
+                    && entry.stored.publish_time >= created_at
+            })
+            .unwrap_or(self.entries.len());
+        self.entries.splice(
+            insertion_index..insertion_index,
+            missing_messages.into_iter().map(|stored| Entry {
+                stored,
+                state: Delivery::Available { available_at: now },
+                delivery_attempt: 0,
+            }),
+        );
+        for entry in &mut self.entries {
+            if unacknowledged_message_ids.contains(&entry.stored.message_id)
+                || (!retained_message_ids.contains(&entry.stored.message_id)
+                    && entry.stored.publish_time >= created_at)
+            {
+                entry.state = Delivery::Available { available_at: now };
+                entry.delivery_attempt = 0;
+            } else {
+                entry.state = Delivery::Acked;
+            }
+        }
+        self.rebuild_indexes();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -571,6 +808,21 @@ mod tests {
     }
 
     #[test]
+    fn batch_admission_rejects_before_reclaim_or_enqueue_mutation() {
+        let mut subscription = SubscriptionState::new(cfg());
+        subscription.retained_bytes = MAX_RETAINED_BYTES_PER_SUB - 1;
+        let incoming = [stored("1", b"a", 100), stored("2", b"b", 100)];
+
+        let error = subscription
+            .ensure_enqueue_capacity(incoming.iter())
+            .unwrap_err();
+
+        assert_eq!(error.code(), crate::error::Code::ResourceExhausted);
+        assert!(subscription.entries.is_empty());
+        assert_eq!(subscription.retained_bytes, MAX_RETAINED_BYTES_PER_SUB - 1);
+    }
+
+    #[test]
     fn entry_cap_reclaims_acked_tombstones_before_refusing_a_publish() {
         let mut s = SubscriptionState::new(cfg());
         let shared = Arc::new(stored("old", b"a", 100));
@@ -587,6 +839,25 @@ mod tests {
         s.enqueue(stored("new", b"b", 100), now).unwrap();
         assert_eq!(s.entries.len(), 1);
         assert_eq!(s.entries[0].stored.message_id, "new");
+    }
+
+    #[test]
+    fn byte_pressure_reclaims_acked_tombstones_before_refusing_a_publish() {
+        let mut s = SubscriptionState::new(cfg());
+        s.entries.push(Entry {
+            stored: Arc::new(stored("acked", b"a", 100)),
+            state: Delivery::Acked,
+            delivery_attempt: 1,
+        });
+        s.rebuild_indexes();
+        s.retained_bytes = MAX_RETAINED_BYTES_PER_SUB;
+
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("new", b"b", 100), now).unwrap();
+
+        assert_eq!(s.entries.len(), 1);
+        assert_eq!(s.entries[0].stored.message_id, "new");
+        assert_eq!(s.retained_bytes, 1);
     }
 
     #[test]

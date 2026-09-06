@@ -153,8 +153,10 @@ pub struct AccountsFile {
 pub struct AuthConfig {
     /// `signIn.allowDuplicateEmails`.
     pub allow_duplicate_emails: bool,
-    /// `emailPrivacyConfig.enableImprovedEmailPrivacy`.
-    pub enable_improved_email_privacy: bool,
+    /// `emailPrivacyConfig.enableImprovedEmailPrivacy`; `None` when the artifact does not
+    /// declare it, so an import keeps the running configuration instead of switching the
+    /// protection off.
+    pub enable_improved_email_privacy: Option<bool>,
 }
 
 impl AuthConfig {
@@ -173,8 +175,7 @@ impl AuthConfig {
             enable_improved_email_privacy: value
                 .get("emailPrivacyConfig")
                 .and_then(|s| s.get("enableImprovedEmailPrivacy"))
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(false),
+                .and_then(JsonValue::as_bool),
         })
     }
 
@@ -188,12 +189,13 @@ impl AuthConfig {
             Json::Bool(self.allow_duplicate_emails),
         );
         doc.insert("signIn", sign_in);
-        let mut privacy = Json::object();
-        privacy.insert(
-            "enableImprovedEmailPrivacy",
-            Json::Bool(self.enable_improved_email_privacy),
-        );
-        doc.insert("emailPrivacyConfig", privacy);
+        // An undeclared setting stays undeclared: writing `false` would switch the protection
+        // off on the next import.
+        if let Some(enabled) = self.enable_improved_email_privacy {
+            let mut privacy = Json::object();
+            privacy.insert("enableImprovedEmailPrivacy", Json::Bool(enabled));
+            doc.insert("emailPrivacyConfig", privacy);
+        }
         doc.to_pretty()
     }
 }
@@ -679,18 +681,34 @@ mod tests {
     fn the_recorded_official_config_parses_and_round_trips() {
         let text = r#"{"signIn":{"allowDuplicateEmails":false},"emailPrivacyConfig":{"enableImprovedEmailPrivacy":false}}"#;
         let config = AuthConfig::parse(text).expect("the config parses");
-        assert_eq!(config, AuthConfig::default());
+        assert_eq!(
+            config,
+            AuthConfig {
+                allow_duplicate_emails: false,
+                enable_improved_email_privacy: Some(false),
+            }
+        );
         assert_eq!(
             AuthConfig::parse(&config.to_json()).expect("it parses"),
             config
         );
         let enabled = AuthConfig {
             allow_duplicate_emails: true,
-            enable_improved_email_privacy: true,
+            enable_improved_email_privacy: Some(true),
         };
         assert_eq!(
             AuthConfig::parse(&enabled.to_json()).expect("it parses"),
             enabled
+        );
+        // An undeclared privacy setting survives a round trip undeclared.
+        let undeclared = AuthConfig {
+            allow_duplicate_emails: false,
+            enable_improved_email_privacy: None,
+        };
+        assert!(!undeclared.to_json().contains("emailPrivacyConfig"));
+        assert_eq!(
+            AuthConfig::parse(&undeclared.to_json()).expect("it parses"),
+            undeclared
         );
     }
 

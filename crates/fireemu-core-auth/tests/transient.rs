@@ -4,7 +4,9 @@
 //! effect, and pending sign-ins resolve through a direct ownership lookup
 //! (`AUTH-TRANSIENT-01` .. `-05`). Refresh tokens are not part of it (`AUTH-TRANSIENT-06`).
 
-use fireemu_core_auth::mfa::{MfaError, TotpPolicy, MAX_PENDING_PER_USER};
+use fireemu_core_auth::mfa::{
+    MfaError, PendingSignInContext, PendingSignInCredentials, TotpPolicy, MAX_PENDING_PER_USER,
+};
 use fireemu_core_auth::store::{
     AuthError, AuthSnapshot, AuthStore, NewUser, OobRequestType, VerificationPurpose,
     MAX_OUTSTANDING_CODES, OOB_CODE_TTL_SECONDS, PENDING_SIGN_IN_TTL_SECONDS, SMS_CODE_TTL_SECONDS,
@@ -194,7 +196,24 @@ fn pending_enrollments_and_sign_ins_expire_and_the_per_user_budget_refuses() {
     let code = totp_at(&secret, &s.policy().params(), after(1000));
     s.finalize_totp_enrollment(&uid, &material.session_id, code, after(1000))
         .unwrap();
-    let pending = s.start_mfa_sign_in(&uid, after(1000)).unwrap();
+    let raw_credentials = PendingSignInCredentials::new(
+        Some("expiring-access-sentinel".to_owned()),
+        Some("expiring-id-sentinel".to_owned()),
+        Some("expiring-refresh-sentinel".to_owned()),
+    );
+    let pending = s
+        .start_mfa_sign_in_with_context(
+            &uid,
+            after(1000),
+            PendingSignInContext::new_with_credentials(
+                Some("oidc.corp".to_owned()),
+                false,
+                None,
+                Some(raw_credentials),
+            ),
+        )
+        .unwrap();
+    let retained_with_raw = s.retained_user_bytes();
     assert_eq!(s.pending_sign_in_user(&pending), Some(uid.clone()));
     assert_eq!(s.pending_sign_in_count(), 1);
     assert_eq!(s.pending_mfa_user_count(), 1);
@@ -208,6 +227,7 @@ fn pending_enrollments_and_sign_ins_expire_and_the_per_user_budget_refuses() {
     assert_eq!(s.pending_sign_in_user(&pending), None);
     assert_eq!(s.pending_sign_in_count(), 0);
     assert_eq!(s.pending_mfa_user_count(), 0);
+    assert!(s.retained_user_bytes() < retained_with_raw);
     let late = after(1000 + PENDING_SIGN_IN_TTL_SECONDS + 1);
     assert_eq!(
         s.finalize_mfa_sign_in(
@@ -273,6 +293,69 @@ fn a_snapshot_keeps_the_lifecycle_and_refresh_tokens_are_never_swept() {
     // Years later the refresh token still redeems (`AUTH-TRANSIENT-06`).
     restored.sweep_transient_credentials(after(10 * 365 * 24 * 3600));
     assert_eq!(restored.redeem_refresh_token(&refresh), Ok(uid));
+}
+
+#[test]
+fn a_default_snapshot_never_restores_pending_raw_credentials() {
+    let mut live = store();
+    let uid = live
+        .create_user(NewUser::email("snapshot-raw@example.com"), t0())
+        .unwrap();
+    let enrollment = live.start_totp_enrollment(&uid, t0()).unwrap();
+    let secret = enrollment.secret_for_test().to_vec();
+    let code = totp_at(&secret, &live.policy().params(), t0());
+    live.finalize_totp_enrollment(&uid, &enrollment.session_id, code, t0())
+        .unwrap();
+    let pending = live
+        .start_mfa_sign_in_with_context(
+            &uid,
+            after(1),
+            PendingSignInContext::new_with_credentials(
+                Some("oidc.example".to_owned()),
+                false,
+                None,
+                Some(PendingSignInCredentials::new(
+                    Some("snapshot-access-sentinel".to_owned()),
+                    Some("snapshot-id-sentinel".to_owned()),
+                    Some("snapshot-refresh-sentinel".to_owned()),
+                )),
+            ),
+        )
+        .unwrap();
+
+    let snapshot = AuthSnapshot::capture(&live);
+    assert!(
+        snapshot.retained_bytes() < live.retained_user_bytes(),
+        "a default snapshot must release raw credential bytes"
+    );
+    assert_eq!(snapshot.users_shared_with(&live), 0);
+    let snapshot_debug = format!("{snapshot:?}");
+    assert!(!snapshot_debug.contains("snapshot-access-sentinel"));
+    assert!(!snapshot_debug.contains("snapshot-id-sentinel"));
+    assert!(!snapshot_debug.contains("snapshot-refresh-sentinel"));
+    let mut restored = live.clone();
+    snapshot.restore_into(&mut restored);
+
+    let context = restored
+        .pending_sign_in_context(&pending)
+        .expect("pending sign-in survives as non-secret provenance");
+    assert_eq!(context.sign_in_provider(), Some("oidc.example"));
+    assert_eq!(context.inbound_credentials(), None);
+    let debug = format!("{restored:?}");
+    assert!(!debug.contains("snapshot-access-sentinel"));
+    assert!(!debug.contains("snapshot-id-sentinel"));
+    assert!(!debug.contains("snapshot-refresh-sentinel"));
+
+    let mut cross_namespace =
+        AuthStore::new("other-project", SplitMix64::new(5), TotpPolicy::default());
+    snapshot.restore_into(&mut cross_namespace);
+    assert_eq!(
+        cross_namespace
+            .pending_sign_in_context(&pending)
+            .expect("cross-namespace restore keeps non-secret provenance")
+            .inbound_credentials(),
+        None
+    );
 }
 
 #[test]

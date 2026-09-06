@@ -1,0 +1,259 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "firebaseTools": "15.28.2"
+  },
+  "programs": [
+    {
+      "id": "password/sign-up-and-sign-in",
+      "area": "password",
+      "steps": {
+        "sign-up": {
+          "oracle": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "idToken": "<idToken>",
+              "refreshToken": "<refreshToken>"
+            }
+          }
+        },
+        "duplicate-email": {
+          "oracle": {
+            "status": 400,
+            "code": "EMAIL_EXISTS",
+            "message": "EMAIL_EXISTS"
+          }
+        },
+        "sign-in": {
+          "oracle": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "registered": true,
+              "localId": "<localId>",
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "idToken": "<idToken>",
+              "refreshToken": "<refreshToken>"
+            }
+          }
+        },
+        "wrong-password": {
+          "oracle": {
+            "status": 400,
+            "code": "INVALID_PASSWORD",
+            "message": "INVALID_PASSWORD"
+          }
+        },
+        "unknown-email": {
+          "oracle": {
+            "status": 400,
+            "code": "EMAIL_NOT_FOUND",
+            "message": "EMAIL_NOT_FOUND"
+          }
+        },
+        "lookup": {
+          "oracle": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "users": [
+                {
+                  "localId": "<localId>",
+                  "emailVerified": false,
+                  "email": "fireemu-auth-probe-<run>-primary@example.com",
+                  "salt": "fakeSaltOp4uvdDnYtabIJl825Pw",
+                  "passwordHash": "fakeHash:salt=fakeSaltOp4uvdDnYtabIJl825Pw:password=password123",
+                  "passwordUpdatedAt": "<passwordUpdatedAt>",
+                  "validSince": "<validSince>",
+                  "providerUserInfo": [
+                    {
+                      "providerId": "password",
+                      "email": "fireemu-auth-probe-<run>-primary@example.com",
+                      "federatedId": "fireemu-auth-probe-<run>-primary@example.com",
+                      "rawId": "fireemu-auth-probe-<run>-primary@example.com"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "update-display-name": {
+          "oracle": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "emailVerified": false,
+              "providerUserInfo": [
+                {
+                  "providerId": "password",
+                  "email": "fireemu-auth-probe-<run>-primary@example.com",
+                  "federatedId": "fireemu-auth-probe-<run>-primary@example.com",
+                  "rawId": "fireemu-auth-probe-<run>-primary@example.com",
+                  "displayName": "Probe User"
+                }
+              ],
+              "email": "fireemu-auth-probe-<run>-primary@example.com",
+              "displayName": "Probe User",
+              "passwordHash": "fakeHash:salt=fakeSaltOp4uvdDnYtabIJl825Pw:password=password123"
+            }
+          }
+        },
+        "delete": {
+          "oracle": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>"
+            }
+          }
+        },
+        "sign-in-after-delete": {
+          "oracle": {
+            "status": 400,
+            "code": "EMAIL_NOT_FOUND",
+            "message": "EMAIL_NOT_FOUND"
+          }
+        }
+      }
+    },
+    {
+      "id": "password/validation",
+      "area": "password",
+      "steps": {
+        "invalid-email": {
+          "oracle": {
+            "status": 400,
+            "code": "INVALID_EMAIL",
+            "message": "INVALID_EMAIL"
+          }
+        },
+        "weak-password": {
+          "oracle": {
+            "status": 400,
+            "code": "WEAK_PASSWORD",
+            "message": "WEAK_PASSWORD : Password should be at least 6 characters"
+          }
+        },
+        "missing-password": {
+          "oracle": {
+            "status": 400,
+            "code": "MISSING_PASSWORD",
+            "message": "MISSING_PASSWORD"
+          }
+        },
+        "missing-email": {
+          "oracle": {
+            "status": 400,
+            "code": "MISSING_EMAIL",
+            "message": "MISSING_EMAIL"
+          }
+        }
+      }
+    },
+    {
+      "id": "anonymous/lifecycle",
+      "area": "anonymous",
+      "steps": {
+        "anonymous-sign-up": {
+          "oracle": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "localId": "<localId>",
+              "idToken": "<idToken>",
+              "refreshToken": "<refreshToken>"
+            }
+          }
+        },
+        "lookup-anonymous": {
+          "oracle": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>",
+              "users": [
+                {
+                  "localId": "<localId>"
+                }
+              ]
+            }
+          }
+        },
+        "delete-anonymous": {
+          "oracle": {
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "kind": "<kind>"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "tokens/errors",
+      "area": "tokens",
+      "steps": {
+        "lookup-with-garbage-token": {
+          "oracle": {
+            "status": 400,
+            "code": "INVALID_ID_TOKEN",
+            "message": "INVALID_ID_TOKEN"
+          }
+        },
+        "custom-token-garbage": {
+          "oracle": {
+            "status": 400,
+            "code": "INVALID_CUSTOM_TOKEN",
+            "message": "INVALID_CUSTOM_TOKEN : Invalid assertion format"
+          }
+        },
+        "reset-password-bad-code": {
+          "oracle": {
+            "status": 400,
+            "code": "INVALID_OOB_CODE",
+            "message": "INVALID_OOB_CODE"
+          }
+        },
+        "update-with-bad-oob-code": {
+          "oracle": {
+            "status": 400,
+            "code": "INVALID_OOB_CODE",
+            "message": "INVALID_OOB_CODE"
+          }
+        },
+        "unknown-method": {
+          "oracle": {
+            "status": 404,
+            "code": "Not",
+            "message": "Not Found"
+          }
+        },
+        "password-reset-for-unknown-email": {
+          "oracle": {
+            "status": 400,
+            "code": "EMAIL_NOT_FOUND",
+            "message": "EMAIL_NOT_FOUND"
+          }
+        },
+        "mfa-enrollment-start-without-token": {
+          "oracle": {
+            "status": 400,
+            "code": "MISSING_ID_TOKEN",
+            "message": "MISSING_ID_TOKEN"
+          }
+        }
+      }
+    }
+  ]
+}

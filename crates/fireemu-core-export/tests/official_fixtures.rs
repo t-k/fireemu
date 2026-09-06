@@ -119,7 +119,13 @@ fn the_recorded_multi_product_export_is_read_section_by_section() {
 
     let config = AuthConfig::parse(&read_text(&format!("{dir}/auth_export/config.json")))
         .expect("the config parses");
-    assert_eq!(config, AuthConfig::default());
+    assert_eq!(
+        config,
+        AuthConfig {
+            allow_duplicate_emails: false,
+            enable_improved_email_privacy: Some(false),
+        }
+    );
 
     let buckets = BucketsFile::parse(&read_text(&format!("{dir}/storage_export/buckets.json")))
         .expect("the bucket list parses");

@@ -45,6 +45,7 @@ mod functions;
 mod hub;
 mod import_export;
 mod init;
+mod resources;
 mod session_rsa_cache;
 mod sessions;
 mod snapshots;
@@ -266,7 +267,22 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail(&e),
         },
-        Some("doctor") => doctor::run(),
+        Some("doctor") => match args.get(1).map(String::as_str) {
+            None => doctor::run(),
+            Some("--connect") => match args.get(2) {
+                Some(url) if args.len() == 3 => doctor::run_connect(url),
+                _ => fail(&CliError {
+                    code: 2,
+                    message: "usage: fireemu doctor [--connect http://127.0.0.1:<control port>]"
+                        .to_owned(),
+                }),
+            },
+            Some(_) => fail(&CliError {
+                code: 2,
+                message: "usage: fireemu doctor [--connect http://127.0.0.1:<control port>]"
+                    .to_owned(),
+            }),
+        },
         // The manifest describes the behaviour of one profile, so the command takes the same
         // options the daemon does and reports the profile they resolve to.
         Some("capabilities") => match parse_options(&args[1..], OptionContext::Start) {
@@ -2175,6 +2191,7 @@ fn control_state(
     tenancy: fireemu_core_session::tenancy::SharedTenancy,
     app_check: Option<fireemu_core_app_check::AppCheckGate>,
     pubsub: &Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
+    pubsub_handle: &fireemu_adapter_pubsub::PubSubHandle,
     pubsub_resources: &[functions::FunctionPubSubResource],
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
@@ -2210,16 +2227,27 @@ fn control_state(
         let runtime = runtime.clone();
         reset_hooks.push(Arc::new(move || runtime.reset()) as Arc<dyn Fn() + Send + Sync>);
     }
-    let pubsub = pubsub.clone();
+    let pubsub_for_reset = pubsub.clone();
     let pubsub_resources = pubsub_resources.to_vec();
     let pubsub_project = cfg.auth_project.clone();
     reset_hooks.push(Arc::new(move || {
-        if let Ok(mut state) = pubsub.lock() {
+        if let Ok(mut state) = pubsub_for_reset.lock() {
             state.clear_project(&pubsub_project);
             functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)
                 .expect("validated Functions Pub/Sub resources reprovision after reset");
         }
     }));
+    // Resource diagnostics, one hook per service (spec 15); collected one after another.
+    let mut resource_hooks: Vec<Arc<dyn fireemu_adapter_http::control::ResourceHook>> = vec![
+        Arc::new(resources::Firestore(backend.clone())),
+        Arc::new(resources::Storage(storage.clone())),
+        Arc::new(resources::Auth(registry.clone())),
+        Arc::new(resources::PubSub(pubsub.clone())),
+        Arc::new(resources::Process),
+    ];
+    if let Some(runtime) = functions {
+        resource_hooks.push(Arc::new(resources::Functions(runtime.clone())));
+    }
     fireemu_adapter_http::control::ControlState {
         clock: clock.clone(),
         require_demo_prefix: cfg.require_demo_prefix,
@@ -2241,12 +2269,15 @@ fn control_state(
             "default".to_owned(),
             cfg.auth_project.clone(),
         )])),
+        resource_hooks,
         project_hooks: Some(Arc::new(sessions::Projects {
             backend: backend.clone(),
             storage: storage.clone(),
             registry: registry.clone(),
             seed: cfg.seed,
             app_check: app_check.clone(),
+            pubsub: pubsub.clone(),
+            pubsub_handle: pubsub_handle.clone(),
         })),
         functions: functions.map(|r| {
             Arc::new(functions::Hook(r.clone()))

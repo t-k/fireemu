@@ -171,7 +171,7 @@
       "GET /v1/projects and /v1/recaptchaParams (the fixed documents the official emulator serves)",
       "securetoken token (JSON and form)",
       "Admin: projects/{p}/accounts create/lookup/update/delete/batchGet/batchCreate/batchDelete/query/sendOobCode and projects/{p}:createSessionCookie; mfaInfo / mfa.enrollments (phone), linkProviderUserInfo / deleteProvider",
-      "Emulator routes: /emulator/v1/projects/{p}/oobCodes, verificationCodes, accounts (DELETE), config (GET and PATCH: signIn.allowDuplicateEmails is recorded for export, emailPrivacyConfig.enableImprovedEmailPrivacy changes what signInWithPassword, sendOobCode PASSWORD_RESET and createAuthUri reveal)"
+      "Emulator routes: /emulator/v1/projects/{p}/oobCodes, verificationCodes, accounts (DELETE), config (GET and PATCH: signIn.allowDuplicateEmails changes password-account uniqueness and lookup/sign-in selection, emailPrivacyConfig.enableImprovedEmailPrivacy changes what signInWithPassword, sendOobCode PASSWORD_RESET and createAuthUri reveal)"
     ],
     "notes": [
       "nothing is mailed or texted: codes are read from the emulator routes and are deterministic from the session seed",
@@ -303,12 +303,14 @@
       "Firestore *.withAuthContext variants: authtype / authid of the committing principal (app_user, service_account, unauthenticated, system)",
       "Storage object finalized / deleted / metadataUpdated triggers (v2 and v1)",
       "Pub/Sub topic triggers (v2 onMessagePublished, v1 topic().onPublish) fed by POST /v1/sessions/{s}/pubsub/topics/{t}:publish or /v1/projects/{p}/topics/{t}:publish",
+      "the Pub/Sub wire bridge preserves the canonical source topic resource and invokes a topic trigger only when that topic belongs to the Functions runtime project; a same-named topic in another project cannot cross the session boundary",
       "Auth user created / deleted events to v1 auth.user() handlers",
       "Identity Platform Blocking Functions: v2 beforeUserCreated / beforeUserSignedIn and v1 auth.user().beforeCreate / beforeSignIn run synchronously before an Auth commit in the Functions runtime's project; tenant stores forward tenantId and a tenant resource, other registered projects are isolated, rejection rolls the Auth operation back, and displayName, photoUrl, disabled, emailVerified, customClaims and before-sign-in sessionClaims are applied before tokens are issued",
       "Eventarc custom events (onCustomEventPublished) fed by POST /projects/{p}/locations/{l}/channels/{c}:publishEvents on the dedicated Eventarc port, which CLOUD_EVENTARC_EMULATOR_HOST names, so firebase-admin getEventarc().channel().publish() reaches them unconfigured; the proto CloudEvent is converted the way cloudEventFromProtoToJson converts it and eventFilters are matched as matchesAll matches them",
       "Firebase alerts (the whole onAlertPublished family) fed by POST /google/publishEvents, which is the only door the official emulator has for them too: an alert trigger is an Eventarc trigger on the sentinel google channel, and the CloudEvent is forwarded verbatim",
       "the Eventarc listener maintains the live Functions trigger table through POST /emulator/v1/projects/{project}/triggers/{trigger}, its exact removal counterpart and GET /google/getTriggers; duplicate definitions remain visible and dispatch independently, removal stops delivery immediately, ${PROJECT_ID} is substituted, and count and retained-byte admission are atomic and bounded",
       "Cloud Tasks queue functions (onTaskDispatched) enqueued with the Admin SDK's getFunctions().taskQueue(name).enqueue(payload) against CLOUD_TASKS_EMULATOR_HOST, which names the dedicated Tasks port; the queue is the function, its defaultUri is that function's own URL, and a dispatch carries the official X-CloudTasks-* header set, starts from the official empty token bucket, enforces maxConcurrentDispatches and production's maxDispatchesPerSecond contract across initial and retry attempts, and retries on the official backoff",
+      "GET /queueStats on the Tasks listener reports the pinned queue statistics shape (pending count, five-minute added/failed rates, completed-last-minute count, running slots and configured limits), uses each event's exact timestamp with the upstream strict-greater-than window boundary, and does not mutate dispatch or rate-refill state",
       "retries with virtual-time backoff, dead letters, await-idle",
       "bounded diagnostic retention: the 1000 most recent invocation records, 500 dead letters and 1000 terminal event records are kept (older ones are dropped) while the succeeded / deadLettered / overlapRejected counters stay cumulative; every retained record carries a monotonic sequence inside a generation the reset bumps, and the UI log stream consumes cursor deltas and resyncs when its cursor is expired or from an older generation"
     ],
@@ -334,23 +336,24 @@
     "precision": "boundary-conformance",
     "implemented": [
       "the google.pubsub.v1 Publisher and Subscriber services over gRPC on the loopback port PUBSUB_EMULATOR_HOST names (default 8085): CreateTopic / GetTopic / ListTopics / ListTopicSubscriptions / DeleteTopic, CreateSubscription / GetSubscription / UpdateSubscription / ListSubscriptions / DeleteSubscription, Publish, Pull, StreamingPull, Acknowledge, ModifyAckDeadline and Seek (to a timestamp)",
+      "REST/JSON on the same port for the implemented topic, subscription, snapshot, publish, pull, acknowledge, modify-ack-deadline and seek operations; resource creation follows the annotated PUT routes, subscription FieldMask updates validate every selected value before one atomic broker update, and supported retry, dead-letter, filter and ordering fields round-trip between REST and gRPC",
       "topic and subscription state: publish fans a message out to every subscription whose filter admits it; a subscription reports _deleted-topic_ once its topic is deleted",
       "delivery semantics: ack ids and message ids assigned deterministically under the daemon seed, ack deadlines and redelivery of unacked messages on the virtual clock, nack (ModifyAckDeadline 0) for immediate redelivery, ordering keys that hold a key's later messages until the earlier one is acked, subscription filters over attributes (equality, inequality, existence, hasPrefix, NOT/AND/OR), dead-letter forwarding after maxDeliveryAttempts, and seek-to-timestamp replay",
+      "Pub/Sub-native subscription snapshots: CreateSnapshot / GetSnapshot / ListSnapshots / ListTopicSnapshots / UpdateSnapshot / DeleteSnapshot and seek-to-snapshot retain the source subscription's unacknowledged backlog plus every later topic publication; the lifetime is seven days minus the age of the oldest unacknowledged source message, and creation is refused below one remaining hour",
+      "loopback HTTP push delivery for configured subscriptions: the Pub/Sub JSON push envelope is sent sequentially by bounded workers, a 2xx response acknowledges the message, and finite failures nack the message for pull-compatible redelivery",
       "input hardening: resource names validated against the documented Pub/Sub rules (3..=255, leading letter, the [A-Za-z0-9._~%+-] alphabet, no goog prefix), message size and attribute count bounds, and NUL rejection in attribute keys/values and ordering keys; topics, subscriptions and retained messages are bounded so a client cannot exhaust memory",
       "a message published through the wire protocol also reaches subscribed Cloud Functions (onMessagePublished v2, topic().onPublish v1) through the existing FunctionsRuntime delivery path, so EVTINFRA-02 flows through real topic state without regressing the control publish route"
     ],
     "unimplemented": [
-      "snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / DeleteSnapshot) and seek-to-snapshot: reported UNIMPLEMENTED",
-      "push delivery to an endpoint: a push config is accepted and returned but delivery uses pull and streaming pull",
       "UpdateTopic: reported UNIMPLEMENTED, as the official emulator does not support it either",
-      "REST/JSON transcoding on the port: the surface is gRPC-only, which is what the @google-cloud/pubsub and firebase-admin clients speak",
+      "REST UpdateTopic and UpdateSnapshot, and subscription updates outside ackDeadlineSeconds and pushConfig",
       "schemas (Avro or protobuf) and BigQuery / Cloud Storage subscription delivery"
     ],
     "notes": [
-      "conformance: the pubsub-probe records 22 parity steps and 1 documented divergence against the official pubsub-emulator 0.8.35 (conformance/pubsub-matrix.json, conformance/PUBSUB-MATRIX.md, conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
-      "the one documented divergence is a superset: fireemu retains acknowledged messages for seek even when retainAckedMessages is false, so a seek never returns fewer messages than the official emulator (conformance divergences.json pubsub-probe/seek-to-time#replayed)",
+      "conformance: the pubsub-probe records 28 parity steps and 3 documented divergences against the official pubsub-emulator 0.8.35 (conformance/pubsub-matrix.json, conformance/PUBSUB-MATRIX.md, conformance/README.md); agreement with the official Local Emulator Suite and production-authoritative divergences are classified separately",
+      "the documented divergences follow the production contract where the fixed official emulator differs: fireemu retains acknowledged messages for seek even when retainAckedMessages is false, CreateSnapshot returns supplied labels, and a snapshot retains publications made after it was created for replay into a new subscription on the same topic (conformance divergences.json)",
       "ack deadlines and redelivery run on the virtual clock, so a test advances time with the control clock rather than sleeping, and await-idle stays deterministic",
-      "the Pub/Sub broker state lives for the daemon's lifetime and is not yet wiped by a session reset or captured by a snapshot"
+      "session reset and deletion release the owned project's topics, subscriptions and Pub/Sub-native snapshots; fireemu control snapshots do not capture Pub/Sub broker state, while Pub/Sub-native snapshots remain scoped to broker subscription acknowledgement state"
     ]
   },
   "FN-HTTP-1": {
@@ -497,7 +500,7 @@
     "notes": [
       "ExecutePipeline is not served by this entry: FS-PIPE-RPC-1 owns it and decodes, identifies and validates a pipeline, then answers a well-formed one with UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY rather than executing it",
       "history retention: a version is kept while any retention root can still reach it, namely the one-hour read_time window (READ_TIME_RETENTION_SECONDS), the read version of every transaction that is still inside its budget, and the newest version or tombstone of every path; everything older is compacted away at the end of the commit that makes it unreachable, and a read_time below the retained history is FAILED_PRECONDITION instead of an answer from another version. Named snapshots are independent copies: restoring one reproduces exactly what it captured, whatever the live database compacted since.",
-      "conformance: the Firestore semantics matrix also gates preconditions, update masks, field transforms, batched writes and the transaction lifecycle; conformance/src/firestore-probe/divergences.mjs pins every deliberate difference, including the optimistic transaction model (fireemu aborts the reading transaction at commit where the official emulator locks and refuses the out-of-band writer)"
+      "conformance: the Firestore semantics matrix also gates preconditions, update masks, field transforms, batched writes and the transaction lifecycle; conformance/divergences.json pins every deliberate difference from the official emulator, each with the production observation (conformance/firestore-production-matrix.json) that justifies following production instead: no `done` marker and a leading readTime/skippedResults element over REST, production's validation codes, and the redacted marker fields production serves"
     ],
     "status": "implemented"
   },
@@ -519,8 +522,8 @@
   },
   "FS-TXN-1": {
     "notes": [
-      "optimistic MVCC keeps transactions serializable: document read sets and executed query result sets are re-validated at commit, and a stale transaction is refused with retryable ABORTED without publishing its staged writes",
-      "the official Local Emulator Suite instead locks documents read by a transaction and collection ranges scanned by its queries, then refuses a conflicting out-of-band writer with ABORTED 'Transaction lock timeout.'; the five affected transaction-concurrency rows are a documented emulator divergence, and no production behavior is inferred from either local model",
+      "pessimistic locking, as production runs it (concurrencyMode PESSIMISTIC): every document a read-write transaction read and every range it queried or listed is locked until the transaction finishes; a commit outside the transaction that touches a locked document waits for the release (15 s in the daemon) and is then refused with ABORTED 'Too much contention on these documents. Please try again.' in production's words, and the transaction's own commit succeeds",
+      "two transactions that both read a document and both commit into it are the deadlock production resolves by aborting one side: the first committer is aborted with the same retryable ABORTED for its client to retry, the second commits; the official Local Emulator Suite locks the same way and refuses the out-of-band writer with ABORTED 'Transaction lock timeout.', so the transaction-concurrency rows of the semantics matrix are parity on status and code (conformance/firestore-production-matrix.json, transactions/lifecycle, recorded against production 2026-09-05)",
       "conformance: firestore/transaction-read-set-abort (conformance/README.md)"
     ],
     "precision": "boundary-conformance",

@@ -6,6 +6,7 @@
 // the fixture still describes it.
 
 import { err, ok } from "neverthrow";
+import { isValidatedDivergenceMap } from "./divergence-authority.mjs";
 
 import { STATUS } from "./config.mjs";
 
@@ -66,7 +67,9 @@ export function classifyScenario({ scenarioId, oracleScenario, testdScenario, an
       continue;
     }
 
-    const annotation = annotations[`${scenarioId}#${id}`];
+    const annotation = isValidatedDivergenceMap(annotations)
+      ? annotations[`${scenarioId}#${id}`]
+      : undefined;
     if (annotation) {
       steps.push({
         id,

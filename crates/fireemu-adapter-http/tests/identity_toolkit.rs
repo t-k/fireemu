@@ -2750,3 +2750,110 @@ fn refreshed_tokens_keep_the_custom_token_provider_and_claims() {
     );
     assert!(looked["users"][0]["lastLoginAt"].is_string() || body["localId"] == uid);
 }
+
+/// Account records and sign-in bodies follow production's field omissions and additions
+/// (conformance/auth-production-matrix.json): a fresh anonymous record is `localId` and its
+/// timestamps alone, a password record carries the redacted hash, its update time and
+/// `validSince`, and a password sign-in always carries `displayName`.
+#[test]
+fn account_records_follow_production_field_omissions() {
+    let s = state();
+    let (status, anonymous) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{anonymous}");
+    let (status, looked) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": anonymous["idToken"]}),
+    );
+    assert_eq!(status, 200, "{looked}");
+    let record = looked["users"][0].as_object().unwrap();
+    let mut keys: Vec<&str> = record.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["createdAt", "lastLoginAt", "localId"], "{looked}");
+
+    let (status, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "record@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_up}");
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "record@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    assert_eq!(signed_in["displayName"], "", "{signed_in}");
+    assert_eq!(signed_in["registered"], true);
+
+    let (_, looked) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed_in["idToken"]}),
+    );
+    let record = &looked["users"][0];
+    assert_eq!(record["passwordHash"], "UkVEQUNURUQ=", "{looked}");
+    assert!(record["passwordUpdatedAt"].is_u64(), "{looked}");
+    assert!(record["validSince"].is_string(), "{looked}");
+    assert_eq!(record["emailVerified"], false);
+    assert!(record.get("disabled").is_none(), "{looked}");
+    assert!(record.get("mfaInfo").is_none(), "{looked}");
+    assert_eq!(record["providerUserInfo"][0]["providerId"], "password");
+
+    let (status, updated) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": signed_in["idToken"], "displayName": "Probe User", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["passwordHash"], "UkVEQUNURUQ=", "{updated}");
+    assert_eq!(updated["displayName"], "Probe User");
+    let (_, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "record@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(signed_in["displayName"], "Probe User", "{signed_in}");
+
+    // A disabled account says so; a fresh one did not.
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": record["localId"], "disableUser": true}),
+    );
+    assert_eq!(status, 200);
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [record["localId"]]}),
+    );
+    assert_eq!(looked["users"][0]["disabled"], true, "{looked}");
+}
+
+/// The v2 MFA enrollment routes answer a missing `idToken` with `INVALID_ID_TOKEN`, as
+/// production does; the v1 routes keep `MISSING_ID_TOKEN`.
+#[test]
+fn mfa_enrollment_without_an_id_token_is_an_invalid_token() {
+    let s = state_with_totp_extension();
+    for route in ["mfaEnrollment:start", "mfaEnrollment:finalize"] {
+        let (status, body) = post(
+            &s,
+            &format!("{V2}/accounts/{route}"),
+            &json!({"totpEnrollmentInfo": {}}),
+        );
+        assert_eq!(status, 400, "{route}: {body}");
+        assert_eq!(
+            body["error"]["message"], "INVALID_ID_TOKEN",
+            "{route}: {body}"
+        );
+    }
+    let (status, body) = post(&s, &format!("{V1}/accounts:lookup"), &json!({}));
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "MISSING_ID_TOKEN", "{body}");
+}

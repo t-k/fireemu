@@ -8,12 +8,14 @@
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
-    "lint": "oxlint src e2e",
+    "lint": "oxlint src e2e scripts",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/*.test.mjs",
     "test:watch": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "size": "node scripts/size-report.mjs",
+    "size:test": "node --test scripts/*.test.mjs"
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",

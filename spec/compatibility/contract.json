@@ -134,7 +134,7 @@
     "upgradePolicy": "Bumping the pin in conformance/package.json and re-recording turns every newly detected difference into a debt row in conformance/DEBT.md, because a row can only become a documented divergence once a human writes it into conformance/divergences.json. Any surface the new baseline adds is absent from this contract, so compat-check fails until it is enumerated with a scope; until then the claim sentence names the old version and is therefore false, which is the intended fail-closed behaviour."
   },
   "claim": {
-    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub and Cloud Tasks remain open gaps.",
+    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.",
     "documents": [
       "README.md"
     ],
@@ -208,25 +208,178 @@
           "key": "firestore.indexValidationPolicy",
           "profileValue": "emulator",
           "emulatorValue": "emulator",
+          "authorityRefs": [
+            "firestore/missing-composite-index#admin-two-equality-filters",
+            "firestore/missing-composite-index#admin-equality-plus-inequality",
+            "firestore/missing-composite-index#client-two-equality-filters",
+            "firestore/lite-rest-transport#query-needing-a-composite-index",
+            "firestore/rest-error-shapes#runQuery-needing-a-composite-index"
+          ],
           "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs and reports each assumption as FS_EMULATOR_INDEX_ASSUMED. The firebase value reproduces the Firebase backend instead, which refuses the same query; a run whose oracle is production rather than the emulator sets it explicitly. Both values are official behaviour of a different oracle; conservative is neither and belongs to the strict profile."
         },
         {
           "key": "rules.idTokenVerification",
           "profileValue": "unsigned mock tokens are admitted, with the audience still bound to the routed Firestore resource project or Storage bucket project and a signed token still verified",
           "emulatorValue": "no verification at all: the token is decoded and request.auth is built from whatever it carries",
+          "authority": {
+            "kind": "intentional-local-policy",
+            "sourceUrls": [
+              "https://firebase.google.com/docs/rules/rules-and-auth",
+              "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+            ],
+            "checkedOn": "2026-09-05",
+            "officialBaseline": {
+              "package": "firebase-tools",
+              "version": "15.28.2"
+            },
+            "approvalRecord": "README.md#security-rules"
+          },
           "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The firebase profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two checks the official emulators skip: the audience must name the routed Firestore resource project or Storage bucket project, so a token cannot cross a session or project boundary, and a signed token must still verify, so a forged RS256 token never becomes an identity. An unregistered Firestore project owned by the default session is a valid routed namespace and is not replaced by the configured Auth project for this comparison. Both checks are refusals of requests the official emulator admits, which is why they are recorded here rather than left implicit."
         },
         {
           "key": "auth.transientCredentialLifecycle",
           "profileValue": "email action codes expire after 3600 s and phone verification codes after 600 s of virtual time, pending second-factor sign-ins after 3600 s, a TOTP enrollment session answers SESSION_EXPIRED for one further session lifetime and is then reaped, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; expired entries are swept before every request and never observable",
           "emulatorValue": "no expiry and no budget: every code stays until it is consumed and the pending credential is a stateless base64 document (firebase-tools/lib/emulator/auth/state.js createOob, createVerificationCode; operations.js mfaPending)",
+          "authority": {
+            "kind": "intentional-local-policy",
+            "sourceUrls": [
+              "https://cloud.google.com/identity-platform/docs/multi-factor-authentication",
+              "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+            ],
+            "checkedOn": "2026-09-05",
+            "officialBaseline": {
+              "package": "firebase-tools",
+              "version": "15.28.2"
+            },
+            "approvalRecord": "README.md#authentication"
+          },
           "note": "Read from the pinned source rather than measured with a clock: the official emulator has no virtual clock to advance past a lifetime. fireemu bounds the retained state so abandoned flows cannot grow a session without limit (INV-AUTH-004); every in-window credential keeps its one-time consumption semantics, and refresh tokens are not part of the policy. Documented in README.md, \"Authentication\"."
         },
         {
           "key": "firestore.semantics",
-          "profileValue": "the 324-row Firestore semantics matrix (conformance/firestore-matrix.json), with 20 rows pinned to fireemu's own answer in conformance/src/firestore-probe/divergences.mjs",
+          "profileValue": "the 324-row Firestore semantics matrix (conformance/firestore-matrix.json), with 118 rows pinned to fireemu's own answer and authority in conformance/divergences.json",
           "emulatorValue": "the same rows as the official emulator records them",
-          "note": "Measured against the pinned suite over the REST surface both emulators serve (last recorded 2026-08-31). The 20 pinned rows fall into five families: (1) the transaction model -- fireemu is optimistic (the reading transaction is ABORTED at commit and the out-of-band write succeeds) where the official emulator is pessimistic, locks the read set and refuses the out-of-band writer with ABORTED 'Transaction lock timeout.'; (2) official REST-adapter defects fireemu does not reproduce -- a bytes-typed query parameter (?transaction=) hangs the connection without a response, ?readTime= misparses, a malformed page token and a fileless :securityRules body answer HTTP 500; (3) official leniencies fireemu refuses -- a query without a collection selector, a write addressed to another database than the route, an uppercase database id; (4) an official aggregation defect -- a count beside a sum or avg over a field some documents lack counts only the documents that hold it; (5) capabilities fireemu serves that the official emulator refuses -- orderBy(__name__, desc) and PartitionQuery. Everything else in the matrix is parity, gated on status, canonical code and normalized body."
+          "authorityRefs": [
+            "values/type-order#ascending",
+            "values/type-order#descending",
+            "values/type-order#ascending-name-only",
+            "values/type-order#descending-name-only",
+            "values/type-order#no-order-is-name-order",
+            "values/type-order#select-name-only",
+            "values/numeric-ties#ascending",
+            "values/numeric-ties#equal-int-matches-double",
+            "values/numeric-ties#equal-double-matches-int",
+            "values/numeric-ties#zero-equals-negative-zero",
+            "values/numeric-ties#nan-equals-nothing",
+            "values/numeric-ties#is-nan",
+            "values/numeric-ties#is-not-nan",
+            "values/numeric-ties#greater-than-negative-infinity",
+            "values/numeric-ties#less-than-nan",
+            "values/numeric-ties#not-equal-one",
+            "queries/filters#equal-string",
+            "queries/filters#equal-null",
+            "queries/filters#is-null",
+            "queries/filters#is-not-null",
+            "queries/filters#not-equal-excludes-null-and-missing",
+            "queries/filters#not-equal-null",
+            "queries/filters#range-is-type-restricted",
+            "queries/filters#range-on-string",
+            "queries/filters#array-contains",
+            "queries/filters#array-contains-null",
+            "queries/filters#array-contains-nan",
+            "queries/filters#array-contains-array",
+            "queries/filters#array-contains-any",
+            "queries/filters#in",
+            "queries/filters#in-with-double-for-int",
+            "queries/filters#not-in",
+            "queries/filters#not-in-with-null-candidate",
+            "queries/filters#equal-on-array-value",
+            "queries/filters#equal-on-map-value",
+            "queries/filters#nested-field-path",
+            "queries/filters#nested-field-path-on-map",
+            "queries/filters#or-filter",
+            "queries/filters#and-of-or",
+            "queries/filters#two-equalities",
+            "queries/filters#two-inequalities-on-different-fields",
+            "queries/filters#inequality-and-order-on-another-field",
+            "queries/filters#inequality-then-order-on-it-explicitly-second",
+            "queries/filters#order-by-missing-field-excludes",
+            "queries/filters#order-by-two-fields",
+            "queries/cursors#start-at-inclusive",
+            "queries/cursors#start-after",
+            "queries/cursors#end-before",
+            "queries/cursors#end-at-inclusive",
+            "queries/cursors#start-at-with-name-tiebreak",
+            "queries/cursors#start-at-prefix-of-order",
+            "queries/cursors#descending-start-after",
+            "queries/cursors#cursor-of-another-type",
+            "queries/cursors#cursor-on-name-only",
+            "queries/cursors#offset-and-limit",
+            "queries/cursors#offset-past-the-end",
+            "queries/cursors#limit-zero",
+            "queries/cursors#limit-to-last-shape",
+            "queries/cursors#start-at-with-empty-values",
+            "queries/collection-group#all-descendants",
+            "queries/collection-group#all-descendants-by-field",
+            "queries/collection-group#all-descendants-under-a-parent",
+            "queries/collection-group#subcollection-query",
+            "queries/collection-group#group-start-at-a-full-reference",
+            "queries/collection-group#group-with-name-range",
+            "queries/collection-group#name-equality",
+            "queries/collection-group#name-in",
+            "queries/collection-group#missing-collection",
+            "queries/collection-group#partition-query",
+            "queries/aggregations#count-all",
+            "queries/aggregations#count-up-to",
+            "queries/aggregations#count-with-filter",
+            "queries/aggregations#count-with-limit",
+            "queries/aggregations#count-with-offset",
+            "queries/aggregations#count-empty",
+            "queries/aggregations#sum-integers",
+            "queries/aggregations#sum-mixed-numbers",
+            "queries/aggregations#sum-doubles-only",
+            "queries/aggregations#sum-empty",
+            "queries/aggregations#sum-missing-field",
+            "queries/aggregations#sum-overflow-saturates-or-promotes",
+            "queries/aggregations#avg-integers",
+            "queries/aggregations#avg-with-nan",
+            "queries/aggregations#avg-empty",
+            "queries/aggregations#several-aggregations",
+            "queries/aggregations#count-collection-group",
+            "queries/aggregations#count-with-cursor",
+            "queries/aggregations#count-beside-a-sum-over-a-missing-field",
+            "queries/aggregations#count-beside-an-avg-over-a-missing-field",
+            "queries/projection-and-listing#select-fields",
+            "queries/projection-and-listing#select-missing-field",
+            "queries/projection-and-listing#select-with-empty-list",
+            "queries/projection-and-listing#list-documents-next-page",
+            "queries/projection-and-listing#list-collection-ids-paged",
+            "queries/projection-and-listing#batch-get-mixed",
+            "transactions/lifecycle#get-with-transaction-query-parameter",
+            "transactions/lifecycle#query-in-transaction",
+            "transactions/lifecycle#read-only-commit-without-writes",
+            "transactions/lifecycle#run-query-with-new-transaction",
+            "transactions/lifecycle#begin-with-read-time-in-the-past",
+            "errors/rest-shapes#run-query-without-from",
+            "errors/rest-shapes#in-with-thirty-values",
+            "errors/rest-shapes#array-contains-with-array-operand-and-any",
+            "errors/rest-shapes#two-array-contains",
+            "errors/rest-shapes#empty-composite",
+            "errors/rest-shapes#order-by-without-direction",
+            "errors/rest-shapes#from-with-empty-collection-id",
+            "errors/rest-shapes#read-time-in-the-distant-past",
+            "errors/rest-shapes#write-to-another-database",
+            "errors/rest-shapes#five-hundred-and-one-transforms",
+            "errors/rest-shapes#list-with-bad-page-token",
+            "emulator/routes#put-rules-without-files",
+            "emulator/routes#write-to-a-named-database",
+            "reads/read-time#read-at-the-first-update-time",
+            "reads/read-time#read-at-the-second-update-time",
+            "reads/read-time#query-at-the-first-update-time",
+            "reads/read-time#list-at-the-first-update-time",
+            "reads/read-time#count-at-the-first-update-time"
+          ],
+          "note": "Measured against the pinned suite over the REST surface both emulators serve (authority checked 2026-09-06). The pinned divergence rows fall into five families, each backed by a production observation in conformance/firestore-production-matrix.json where production could serve the row: (1) production's REST wire shape -- no `done` marker on the last runQuery or runAggregationQuery element, a leading readTime/skippedResults element for an offset, no nextPageToken on a page that holds the last results, batchGet answered found-first in name order -- where the official emulator differs; (2) production's validation codes -- a second array-contains filter, a read_time before database creation, committing a read-only transaction and more than 500 field transforms on one document are INVALID_ARGUMENT -- where the official emulator answers FAILED_PRECONDITION or accepts; (3) official REST-adapter defects fireemu does not reproduce -- a bytes-typed query parameter (?transaction=) hangs the connection without a response, ?readTime= misparses (a read at the latest commit time included), a malformed page token and a fileless :securityRules body answer HTTP 500; (4) an official leniency fireemu refuses -- a write addressed to another database than the route; (5) capabilities fireemu serves that the official emulator refuses -- orderBy(__name__, desc) and PartitionQuery. Transactions lock what they read on both emulators and in production, so the transaction-concurrency rows are parity. Everything else in the matrix is parity, gated on status, canonical code and normalized body."
         }
       ]
     },
@@ -369,7 +522,7 @@
       "claims": [
         {
           "id": "FS-CLAIM-RPC",
-          "statement": "The Firestore v1 gRPC service serves documents, atomic commits, serializable transactions, queries, aggregations and the Write and Listen streams against local state, with the same status codes and error shapes as the pinned official emulator except for the documented transaction concurrency rows: fireemu uses optimistic commit validation where the official Local Emulator Suite locks the read set. A committed server timestamp is immediately available to a transaction query, including a combined equality and timestamp-range filter with limit(1). Removing and replacing a listener target never delivers the removed target's changes, replacing a WebChannel backchannel cancels the superseded response before it can deliver queued arrays, and a long-poll response remains attached until its HTTP body reaches EOF or is dropped.",
+          "statement": "The Firestore v1 gRPC service serves documents, atomic commits, serializable transactions, queries, aggregations and the Write and Listen streams against local state, with the same status codes and error shapes as the pinned official emulator except for the rows pinned in conformance/divergences.json, where fireemu follows a recorded production observation instead; transactions lock what they read, as production and the official Local Emulator Suite both do. A committed server timestamp is immediately available to a transaction query, including a combined equality and timestamp-range filter with limit(1). Removing and replacing a listener target never delivers the removed target's changes, replacing a WebChannel backchannel cancels the superseded response before it can deliver queued arrays, and a long-poll response remains attached until its HTTP body reaches EOF or is dropped.",
           "capabilities": [
             {
               "id": "FS-RPC-1",
@@ -805,8 +958,8 @@
       ],
       "notes": [],
       "gaps": [
-        "multi-tenancy (tenant-scoped projects and the tenant admin forms); the official emulator has no Game Center sign-in route and Firebase Auth has no passkey provider, so neither is a gap. SAML / OIDC sign-in (accounts:signInWithIdp) and the identity-provider widget pages (/emulator/auth/handler and /emulator/auth/iframe) are served; the official emulator stores no SAML / OIDC provider configuration, so there is none to round-trip.",
-        "signIn.allowDuplicateEmails is recorded and exported but does not yet admit duplicate accounts"
+        "raw inbound OAuth credentials reach beforeCreate and beforeSignIn handlers only when auth.forwardInboundCredentials is enabled (default off) and only the token kinds the function's options request; the default emulator accepts the provider assertion and exposes its normalized claims, and the raw material is never retained in snapshots or exports. The per-token-kind matrix against real Node SDK handlers and the production expectation are still open in the Authentication parent issue",
+        "Android, Apple and Unity SDK matrices are outside the current Node/Web/REST/gRPC compatibility scope"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
@@ -1182,7 +1335,7 @@
         },
         {
           "id": "FN-CLAIM-EVENTS",
-          "statement": "Firestore document, Storage object, Pub/Sub topic, Auth user, Eventarc custom and Firebase alert events are delivered to v1 and v2 handlers as JSON CloudEvents, and Cloud Tasks queue functions are enqueued through bounded per-queue FIFOs and dispatched under their declared rate and concurrency limits, all with retries, dead letters and bounded diagnostic retention.",
+          "statement": "Firestore document, Storage object, Pub/Sub topic, Auth user, Eventarc custom and Firebase alert events are delivered to v1 and v2 handlers as JSON CloudEvents, and Cloud Tasks queue functions are enqueued through bounded per-queue FIFOs and dispatched under their declared rate and concurrency limits, all with retries, dead letters and bounded diagnostic retention. Queue statistics retain exact per-event timestamps and exclude a sample at the exact five-minute or one-minute boundary, matching the pinned emulator's strict greater-than comparison.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -1194,7 +1347,8 @@
             "integration": [
               "crates/fireemu-adapter-functions/tests/runtime.rs",
               "crates/fireemu-core-events/tests/state_machine.rs",
-              "crates/fireemu-core-events/tests/outbox.rs"
+              "crates/fireemu-core-events/tests/outbox.rs",
+              "crates/fireemu-adapter-functions/src/task_scheduler.rs"
             ],
             "conformance": []
           },
@@ -1573,21 +1727,53 @@
       "officialTraits": [
         "downloadable"
       ],
-      "state": "gap",
-      "decision": "Active supported surface with an open gap: fireemu serves its own Emulator UI, but no capability manifest entry claims parity with the official UI's workflows and none is recorded in the conformance corpus.",
+      "state": "claimed",
+      "decision": "Active supported surface with a scoped workflow claim. The fireemu UI covers the supported Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts journeys; the official UI v1.15.0 Logs browser boundary is separately verified against the Hub and the same Logging WebSocket. Android, Apple and Unity matrices and optional accessibility/visual snapshots remain outside this claim.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite"
       ],
       "issues": [
         "docs.local/issues/open/match-emulator-suite-ui-workflows.md"
       ],
-      "notes": [],
+      "notes": [
+        "the fireemu UI is an independent Solid application, so workflow parity is measured by reachable state and operation results rather than pixel identity",
+        "the official UI is a downloadable artifact (ui.main 1.15.0); its Logs page is verified through the Hub and fireemu's Logging WebSocket, while fireemu's own UI uses its bounded SSE log view"
+      ],
       "gaps": [
-        "the official UI's Firestore, Auth, Storage, Functions and Extensions workflows are not compared against any oracle",
-        "the official UI is a downloadable artifact (ui.main 1.15.0); fireemu embeds its own Solid application instead"
+        "Android, Apple and Unity SDK/browser matrices",
+        "optional accessibility and visual-snapshot coverage",
+        "Realtime Database and Extensions remain deferred or not planned product surfaces"
       ],
       "prohibitedClaimTerms": [],
-      "claims": []
+      "claims": [
+        {
+          "id": "UI-CLAIM-WORKFLOWS",
+          "statement": "The fireemu UI supports the scoped active-product workflows for Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts, labels deferred and not-planned products, and exposes the same Hub-discovered Logging endpoint used by the official UI Logs browser journey.",
+          "capabilities": [],
+          "evidence": {
+            "integration": [
+              "ui/e2e/overview.spec.ts",
+              "ui/e2e/rules.spec.ts",
+              "ui/e2e/alerts.spec.ts",
+              "ui/e2e/official-logging.spec.ts",
+              "crates/fireemu-adapter-ui/tests/ui.rs",
+              "ui/e2e/security.spec.ts"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official UI is a downloadable browser artifact and its visual layout is not a stable API contract"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "the fireemu UI exposes deterministic runtime controls and a bounded SSE log view in addition to the scoped product workflows",
+              "precision": "explicit-extension"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "cli",
@@ -1881,7 +2067,7 @@
         "supportedByFunctions"
       ],
       "state": "claimed",
-      "decision": "Active supported surface. The google.pubsub.v1 wire emulator is served over gRPC on port 8085; parity is claimed for the documented subset the official Pub/Sub emulator implements.",
+      "decision": "Active supported surface. The google.pubsub.v1 wire emulator is served over gRPC and REST/JSON on port 8085; parity is claimed for the documented subset the official Pub/Sub emulator implements.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite",
         "https://cloud.google.com/pubsub/docs/emulator",
@@ -1891,14 +2077,17 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [
-        "not yet implemented and reported UNIMPLEMENTED: snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / DeleteSnapshot and seek-to-snapshot), push delivery to an endpoint (pull and streaming pull are the delivery paths), UpdateTopic, and REST/JSON transcoding on the port (the surface is gRPC-only, which is what the @google-cloud/pubsub and firebase-admin clients speak through PUBSUB_EMULATOR_HOST)"
+        "Pub/Sub snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / ListTopicSnapshots / UpdateSnapshot / DeleteSnapshot and seek-to-snapshot) retain the source backlog and subsequent topic publications for replay into another same-topic subscription; lifetime is seven days minus the oldest unacknowledged message age and creation is refused below one remaining hour",
+        "push delivery is implemented for loopback HTTP endpoints with bounded workers, acknowledgement on 2xx, finite retry and nack on failure; remote, HTTPS and redirect endpoints are refused as a local safety boundary",
+        "REST/JSON transcoding on the Pub/Sub port implements the documented topic, subscription, snapshot, publish, pull, acknowledge, modify-ack-deadline and seek subset over the same broker state as gRPC; unsupported fields and update-mask paths are diagnosed explicitly",
+        "Avro/protobuf schema management and BigQuery / Cloud Storage subscription delivery remain outside the active implementation; the official emulator's documented unsupported delivery limitations are preserved"
       ],
       "gaps": [],
       "prohibitedClaimTerms": [],
       "claims": [
         {
           "id": "PUBSUB-CLAIM-WIRE",
-          "statement": "The google.pubsub.v1 wire emulator on port 8085 is served over gRPC: a real @google-cloud/pubsub or firebase-admin client creates, gets, lists and deletes topics and subscriptions, publishes, pulls (unary and streaming), acknowledges, extends and nacks ack deadlines, and seeks to a timestamp, with ordering keys, subscription filters and dead-letter forwarding; and a message published through the client protocol reaches subscribed onMessagePublished (v2) and topic().onPublish (v1) Cloud Functions.",
+          "statement": "The google.pubsub.v1 wire emulator on port 8085 is served over gRPC and its documented REST/JSON subset: a real @google-cloud/pubsub or firebase-admin client creates, gets, lists and deletes topics and subscriptions, publishes, pulls (unary and streaming), acknowledges, extends and nacks ack deadlines, and seeks to a timestamp, with ordering keys, subscription filters and dead-letter forwarding; REST uses the annotated PUT resource routes and atomic FieldMask subscription updates; and a message published through the client protocol reaches subscribed onMessagePublished (v2) and topic().onPublish (v1) Cloud Functions only when the canonical source topic belongs to the Functions runtime project.",
           "capabilities": [
             {
               "id": "PUBSUB-WIRE-1",
@@ -1909,13 +2098,20 @@
             "tests": [
               "publish_pull_ack_round_trip",
               "redelivery_after_ack_deadline_on_virtual_clock",
-              "streaming_pull_delivers_and_acks"
+              "streaming_pull_delivers_and_acks",
+              "rest_put_routes_preserve_every_supported_subscription_field",
+              "rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields",
+              "snapshot_lifecycle_replays_backlog_and_post_creation_messages",
+              "functions_bridge_receives_the_full_source_topic_resource"
             ],
             "integration": [
               "crates/fireemu-adapter-pubsub/tests/grpc.rs",
+              "crates/fireemu/src/functions.rs",
               "conformance/pubsub-matrix.json"
             ],
-            "conformance": []
+            "conformance": [
+              "pubsub/snapshot-lifetime-production"
+            ]
           },
           "officialLimitations": [
             "the official Pub/Sub emulator supports no IAM operations",
@@ -2035,9 +2231,7 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [],
-      "gaps": [
-        "the emulator-internal queueStats diagnostic route"
-      ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
       "claims": [
         {

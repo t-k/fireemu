@@ -1232,7 +1232,8 @@ async fn project_restore_replays_a_same_version_document_with_new_fields() {
             .borrow()
             .as_ref()
             .unwrap()
-            .restore_scope(&Scope::Project("demo-app".to_owned()), &snapshot);
+            .restore_scope(&Scope::Project("demo-app".to_owned()), &snapshot)
+            .unwrap();
     });
 
     let mut trace = Vec::new();

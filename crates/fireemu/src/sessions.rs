@@ -31,6 +31,10 @@ pub struct Projects {
     /// project replaces its session epoch, so every token issued before the transition fails
     /// with `WrongEpoch` at its next verification (`AC-LIFE-001`, specification section 14).
     pub app_check: Option<fireemu_core_app_check::AppCheckGate>,
+    /// Pub/Sub state whose deadline and snapshot retention follow the shared virtual clock.
+    pub pubsub: Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
+    /// Push dispatcher sharing `pubsub`; reset invalidates work before clearing broker state.
+    pub pubsub_handle: fireemu_adapter_pubsub::PubSubHandle,
 }
 
 /// The App Check epochs a transition will install, drawn before anything is destroyed.
@@ -83,6 +87,12 @@ impl Projects {
                 "the object store is poisoned",
             ));
         }
+        if self.pubsub.lock().is_err() {
+            return Err(TransitionFailure::new(
+                "pubsub",
+                "the Pub/Sub state is poisoned",
+            ));
+        }
         let auth = match scope {
             Scope::Project(p) => self.registry.store_for(p),
             Scope::AllExcept(_) => Some(self.registry.default_store()),
@@ -103,14 +113,11 @@ impl ProjectHooks for Projects {
             seed = (seed ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
         }
         let mut store = AuthStore::new(project, SplitMix64::new(seed), TotpPolicy::default());
-        if let Some(signer) = self
-            .registry
-            .default_store()
-            .lock()
-            .ok()
-            .and_then(|s| s.signer_arc())
-        {
-            store.set_signer(signer);
+        if let Ok(default) = self.registry.default_store().lock() {
+            store.set_config(default.config());
+            if let Some(signer) = default.signer_arc() {
+                store.set_signer(signer);
+            }
         }
         // A statically registered project may be reused by a new session; it starts with a
         // fresh epoch, so a token of the previous session never authorizes this one. The
@@ -131,6 +138,9 @@ impl ProjectHooks for Projects {
         // instead of a wiped session that still admits its old App Check tokens.
         let epochs = draw_app_check_epochs(self.app_check.as_ref(), |p| scope.owns_project(p))
             .map_err(|e| TransitionFailure::new("app check", e))?;
+        self.pubsub_handle
+            .invalidate_push_workers_where(|project| scope.owns_project(project))
+            .map_err(|e| TransitionFailure::new("pubsub push dispatcher", e))?;
         // Apply: Firestore first (it publishes the new epoch for the default scope), then
         // the stores the probe above proved writable.
         self.backend.reset_scope(scope);
@@ -151,6 +161,10 @@ impl ProjectHooks for Projects {
         if matches!(scope, Scope::AllExcept(_)) {
             self.registry.clear_routed();
         }
+        self.pubsub
+            .lock()
+            .map_err(|_| TransitionFailure::new("pubsub", "the Pub/Sub state is poisoned"))?
+            .clear_projects_where(|project| scope.owns_project(project));
         install_app_check_epochs(self.app_check.as_ref(), |p| scope.owns_project(p), &epochs);
         Ok(())
     }
@@ -169,6 +183,9 @@ impl ProjectHooks for Projects {
 
     fn clock_advanced(&self, now: fireemu_core_types::time::LogicalInstant) {
         self.backend.compact_all(now);
+        if let Ok(mut pubsub) = self.pubsub.lock() {
+            pubsub.expire_all(now);
+        }
     }
 }
 
@@ -180,7 +197,7 @@ pub(crate) mod tests {
 
     use super::{ProjectHooks, Projects, Scope};
 
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::{Arc, Mutex, RwLock};
 
     use fireemu_adapter_grpc::gateway::Gateway;
@@ -193,12 +210,16 @@ pub(crate) mod tests {
     use fireemu_core_app_check::registry::{AppCheckRegistry, AppRegistration, ProjectEpoch};
     use fireemu_core_app_check::verify::BaselineMode;
     use fireemu_core_auth::mfa::TotpPolicy;
-    use fireemu_core_auth::store::{AuthRegistry, AuthStore, RoutedStoreInstall};
+    use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser, RoutedStoreInstall};
     use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_pubsub::state::SNAPSHOT_TTL_SECONDS;
+    use fireemu_core_pubsub::{
+        Filter, PubsubMessage, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
+    };
     use fireemu_core_session::clock::VirtualClock;
     use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
     use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
-    use fireemu_core_types::time::LogicalInstant;
+    use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
     pub(crate) const APP_ID: &str = "1:1234567890:web:local-test-app";
     /// A second registered project, for the routes that create and delete one (the default
@@ -274,6 +295,9 @@ pub(crate) mod tests {
             SplitMix64::new(3),
             TotpPolicy::default(),
         )));
+        let pubsub = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(7)));
+        let pubsub_handle =
+            fireemu_adapter_pubsub::PubSubHandle::new(pubsub.clone(), clock.clone(), None);
         Projects {
             backend: Arc::new(LocalBackend::new(gateway, clock.clone(), 7)),
             storage: Arc::new(fireemu_adapter_http::storage::StorageState {
@@ -295,6 +319,8 @@ pub(crate) mod tests {
             registry: Arc::new(AuthRegistry::new("demo-app", auth_store)),
             seed: 1,
             app_check: Some(gate.clone()),
+            pubsub,
+            pubsub_handle,
         }
     }
 
@@ -308,6 +334,133 @@ pub(crate) mod tests {
 
     fn token(gate: &AppCheckGate) -> String {
         token_for(gate, "demo-app", APP_ID)
+    }
+
+    fn populate_pubsub(projects: &Projects, project: &str) -> (TopicName, String) {
+        let topic = TopicName::new(project, "events").unwrap();
+        let subscription = SubscriptionName::new(project, "events-sub").unwrap();
+        let snapshot = format!("projects/{project}/snapshots/retained");
+        let mut pubsub = projects.pubsub.lock().unwrap();
+        pubsub.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+        pubsub
+            .create_subscription(SubscriptionConfig {
+                name: subscription.clone(),
+                topic: topic.clone(),
+                ack_deadline_seconds: 10,
+                enable_message_ordering: false,
+                filter: Filter::always(),
+                dead_letter_policy: None,
+                retry_policy: None,
+                push_config: PushConfig::default(),
+            })
+            .unwrap();
+        pubsub
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: b"retained".to_vec(),
+                    ..PubsubMessage::default()
+                }],
+                AT,
+            )
+            .unwrap();
+        pubsub
+            .create_snapshot(&snapshot, &subscription, BTreeMap::new(), AT)
+            .unwrap();
+        drop(pubsub);
+        (topic, snapshot)
+    }
+
+    #[test]
+    fn project_reset_and_delete_release_only_their_pubsub_retention_roots() {
+        let gate = gate();
+        let projects = projects(&gate);
+        let (default_topic, default_snapshot) = populate_pubsub(&projects, "demo-app");
+        let (second_topic, second_snapshot) = populate_pubsub(&projects, SECOND_PROJECT);
+
+        fireemu_adapter_http::control::ProjectHooks::reset_scope(
+            &projects,
+            &Scope::Project(SECOND_PROJECT.to_owned()),
+        )
+        .unwrap();
+        {
+            let mut pubsub = projects.pubsub.lock().unwrap();
+            assert!(pubsub.topic_exists(&default_topic));
+            assert!(pubsub.get_snapshot(&default_snapshot, AT).is_ok());
+            assert!(!pubsub.topic_exists(&second_topic));
+            assert!(pubsub.get_snapshot(&second_snapshot, AT).is_err());
+        }
+
+        let (second_topic, second_snapshot) = populate_pubsub(&projects, SECOND_PROJECT);
+        fireemu_adapter_http::control::ProjectHooks::reset_scope(
+            &projects,
+            &Scope::AllExcept(BTreeSet::from([SECOND_PROJECT.to_owned()])),
+        )
+        .unwrap();
+        {
+            let mut pubsub = projects.pubsub.lock().unwrap();
+            assert!(!pubsub.topic_exists(&default_topic));
+            assert!(pubsub.get_snapshot(&default_snapshot, AT).is_err());
+            assert!(pubsub.topic_exists(&second_topic));
+            assert!(pubsub.get_snapshot(&second_snapshot, AT).is_ok());
+        }
+
+        fireemu_adapter_http::control::ProjectHooks::remove(&projects, SECOND_PROJECT).unwrap();
+        let mut pubsub = projects.pubsub.lock().unwrap();
+        assert!(!pubsub.topic_exists(&second_topic));
+        assert!(pubsub.get_snapshot(&second_snapshot, AT).is_err());
+    }
+
+    #[test]
+    fn a_poisoned_pubsub_lock_refuses_reset_before_other_stores_change() {
+        let gate = gate();
+        let projects = projects(&gate);
+        projects
+            .registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .create_user_with_id(NewUser::anonymous(), Some("sentinel"), AT)
+            .unwrap();
+        let pubsub = projects.pubsub.clone();
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = pubsub.lock().unwrap();
+            panic!("poison the Pub/Sub fixture lock");
+        });
+
+        assert!(fireemu_adapter_http::control::ProjectHooks::reset_scope(
+            &projects,
+            &Scope::AllExcept(BTreeSet::new()),
+        )
+        .is_err());
+        assert_eq!(
+            projects
+                .registry
+                .default_store()
+                .lock()
+                .unwrap()
+                .user_count(),
+            1
+        );
+    }
+
+    #[test]
+    fn advancing_the_shared_clock_reclaims_expired_pubsub_snapshots() {
+        let gate = gate();
+        let projects = projects(&gate);
+        let (_, snapshot) = populate_pubsub(&projects, "demo-app");
+        let expires_at = AT
+            .checked_add(LogicalDuration::from_seconds(SNAPSHOT_TTL_SECONDS))
+            .unwrap();
+
+        fireemu_adapter_http::control::ProjectHooks::clock_advanced(&projects, expires_at);
+
+        assert!(projects
+            .pubsub
+            .lock()
+            .unwrap()
+            .get_snapshot(&snapshot, expires_at)
+            .is_err());
     }
 
     pub(crate) fn admits_for(gate: &AppCheckGate, project: &str, token: &str) -> bool {

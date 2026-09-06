@@ -8,7 +8,7 @@
 // Recording is the only step that needs Java, a downloaded Firestore emulator jar and several
 // minutes. `pnpm run check` replays fireemu alone against what this wrote.
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CONFORMANCE_DIR, RUNS_DIR, STATUS } from "./config.mjs";
@@ -18,10 +18,9 @@ import { readAllFixtures, summarize, writeFixture } from "./fixtures.mjs";
 import { collectProvenance, renderOracleDoc } from "./provenance.mjs";
 import { configFor, runOfficial, runTestd } from "./sides.mjs";
 import { renderDebtDoc } from "./debt.mjs";
+import { readValidatedDivergenceRegister } from "./divergence-authority.mjs";
 
-const annotations = JSON.parse(
-  await readFile(join(CONFORMANCE_DIR, "divergences.json"), "utf8"),
-).divergences;
+const annotations = readValidatedDivergenceRegister().divergences;
 
 const only = process.argv.slice(2).find((a) => !a.startsWith("-")) ?? null;
 

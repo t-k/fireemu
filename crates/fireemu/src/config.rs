@@ -145,6 +145,15 @@ pub struct RuntimeConfig {
     /// fireemu-only TOTP policy. Absence preserves the official Auth emulator's rejection
     /// of TOTP enrollment; declaring `auth.totp` explicitly enables the extension.
     pub auth_totp: Option<TotpPolicy>,
+    /// Whether the Functions blocking Auth bridge may receive raw inbound `IdP` credentials.
+    /// This is disabled by default because those values are sensitive and are not needed by
+    /// ordinary blocking handlers.
+    pub auth_forward_inbound_credentials: bool,
+    /// `auth.improvedEmailPrivacy`: production's email enumeration protection, on by default
+    /// for every new Firebase project. Sign-in with a wrong password or an unknown address
+    /// answers `INVALID_LOGIN_CREDENTIALS`, and a password reset for an unknown address is
+    /// acknowledged. `false` restores the official Auth emulator's revealing answers.
+    pub auth_improved_email_privacy: bool,
     /// Path of `firestore.indexes.json`, if configured.
     pub index_file: Option<String>,
     /// Path of `firestore.text-indexes.json`, if configured.
@@ -396,6 +405,8 @@ impl Default for RuntimeConfig {
             seed: 42,
             auth_project: "demo-app".to_owned(),
             auth_totp: None,
+            auth_forward_inbound_credentials: false,
+            auth_improved_email_privacy: true,
             index_file: None,
             text_index_file: None,
             rules_file: None,
@@ -445,12 +456,14 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-const AUTH_KEYS: [&str; 5] = [
+const AUTH_KEYS: [&str; 7] = [
     "enabled",
     "projectIssuer",
     "idTokenSigning",
     "totp",
     "secretMaterialization",
+    "forwardInboundCredentials",
+    "improvedEmailPrivacy",
 ];
 
 /// Configuration errors.
@@ -1982,6 +1995,16 @@ impl RuntimeConfig {
                 }
                 cfg.id_token_signing = m;
             }
+            if let Some(forward) = auth.get("forwardInboundCredentials") {
+                cfg.auth_forward_inbound_credentials = forward.as_bool().ok_or_else(|| {
+                    ConfigError("auth.forwardInboundCredentials must be a boolean".to_owned())
+                })?;
+            }
+            if let Some(privacy) = auth.get("improvedEmailPrivacy") {
+                cfg.auth_improved_email_privacy = privacy.as_bool().ok_or_else(|| {
+                    ConfigError("auth.improvedEmailPrivacy must be a boolean".to_owned())
+                })?;
+            }
             if let Some(totp) = auth.get("totp") {
                 const TOTP_KEYS: [&str; 4] = [
                     "periodSeconds",
@@ -3130,6 +3153,33 @@ mod tests {
             Err(ConfigError("auth must be an object".to_owned()))
         );
         assert!(parse(&json!({"idTokenSigning": "hs256"})).is_err());
+    }
+
+    #[test]
+    fn raw_auth_credentials_require_an_explicit_forwarding_flag() {
+        assert!(!parse(&json!({})).unwrap().auth_forward_inbound_credentials);
+        assert!(
+            parse(&json!({"forwardInboundCredentials": true}))
+                .unwrap()
+                .auth_forward_inbound_credentials
+        );
+        assert!(parse(&json!({"forwardInboundCredentials": "yes"})).is_err());
+    }
+
+    #[test]
+    fn email_enumeration_protection_follows_production_unless_switched_off() {
+        assert!(parse(&json!({})).unwrap().auth_improved_email_privacy);
+        assert!(
+            !parse(&json!({"improvedEmailPrivacy": false}))
+                .unwrap()
+                .auth_improved_email_privacy
+        );
+        assert_eq!(
+            parse(&json!({"improvedEmailPrivacy": "off"})),
+            Err(ConfigError(
+                "auth.improvedEmailPrivacy must be a boolean".to_owned()
+            ))
+        );
     }
 
     #[test]

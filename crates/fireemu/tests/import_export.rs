@@ -595,6 +595,40 @@ fn a_missing_optional_auth_config_still_imports_accounts() {
     assert!(log.contains("auth: 5 account(s)"), "{log}");
 }
 
+/// An artifact that does not declare `enableImprovedEmailPrivacy` leaves the running setting
+/// (production's default, on) in place; one that declares it off switches it off.
+#[test]
+fn an_import_keeps_email_enumeration_protection_unless_the_artifact_declares_it() {
+    let probe = r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key" -H 'Content-Type: application/json' -d '{"email":"nobody@example.com","password":"hunter22","returnSecureToken":true}'"#;
+    for (declared, expected) in [
+        (None, "INVALID_LOGIN_CREDENTIALS"),
+        (Some(false), "EMAIL_NOT_FOUND"),
+        (Some(true), "INVALID_LOGIN_CREDENTIALS"),
+    ] {
+        let dir = scratch(&format!("auth-config-{declared:?}"));
+        let export = copy_fixture("official-multiproduct", &dir);
+        let config = match declared {
+            None => r#"{"signIn":{"allowDuplicateEmails":false}}"#.to_owned(),
+            Some(value) => format!(
+                r#"{{"signIn":{{"allowDuplicateEmails":false}},"emailPrivacyConfig":{{"enableImprovedEmailPrivacy":{value}}}}}"#
+            ),
+        };
+        std::fs::write(export.join("auth_export/config.json"), config).unwrap();
+        let output = exec()
+            .args(["--only", "auth", "--import"])
+            .arg(&export)
+            .args(["--", "sh", "-c", probe])
+            .output()
+            .unwrap();
+        let log = text(&output);
+        assert!(output.status.success(), "{declared:?}: {log}");
+        assert!(
+            log.contains(expected),
+            "{declared:?}: expected {expected} in {log}"
+        );
+    }
+}
+
 #[test]
 fn a_storage_blob_that_does_not_match_its_metadata_refuses_the_whole_import() {
     let dir = scratch("corrupt-storage");

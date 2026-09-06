@@ -40,12 +40,45 @@ export const listDocuments = (
 export const getDocument = (root: string, path: string): ResultAsync<FsDocument, ApiError> =>
   request<FsDocument>("GET", url(root, path));
 
-/** Replaces the whole document (creates it when missing). */
+/** Replaces the whole document (creates it when missing). The editor intentionally uses `updateDocument`. */
 export const setDocument = (
   root: string,
   path: string,
   fields: Record<string, FsValue>,
 ): ResultAsync<FsDocument, ApiError> => request<FsDocument>("PATCH", url(root, path), { fields });
+
+/** Quotes one literal Firestore field name for use in a field mask. */
+export const quoteFieldPath = (name: string): string =>
+  /^[_A-Za-z][_A-Za-z0-9]*$/.test(name)
+    ? name
+    : `\`${name.replaceAll("\\", "\\\\").replaceAll("`", "\\`")}\``;
+
+export const buildUpdateDocumentRequest = (
+  root: string,
+  path: string,
+  fields: Record<string, FsValue>,
+  fieldPaths: string[],
+  updateTime: string,
+): { path: string; body: { fields: Record<string, FsValue> } } => {
+  const params = new URLSearchParams();
+  for (const fieldPath of fieldPaths) {
+    params.append("updateMask.fieldPaths", quoteFieldPath(fieldPath));
+  }
+  params.set("currentDocument.updateTime", updateTime);
+  return { path: `${url(root, path)}?${params.toString()}`, body: { fields } };
+};
+
+/** Applies only changed fields when the document still has the captured update time. */
+export const updateDocument = (
+  root: string,
+  path: string,
+  fields: Record<string, FsValue>,
+  fieldPaths: string[],
+  updateTime: string,
+): ResultAsync<FsDocument, ApiError> => {
+  const update = buildUpdateDocumentRequest(root, path, fields, fieldPaths, updateTime);
+  return request<FsDocument>("PATCH", update.path, update.body);
+};
 
 /** Creates a document in `collection` (`documentId` empty: a generated ID). */
 export const createDocument = (

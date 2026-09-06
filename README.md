@@ -136,7 +136,7 @@ The following is a product-level summary, not a claim that every API and edge ca
 | Cloud Pub/Sub | The documented gRPC subset used by the supported Functions flows |
 | Emulator logging | The EmulatorLog WebSocket with bounded local history and per-function Node log attribution |
 | Firebase App Check | A fireemu-specific local implementation; this is not an official Emulator Suite parity claim |
-| Emulator UI | A fireemu UI for supported data and controls; official UI workflow parity is not claimed |
+| Emulator UI | A fireemu UI for supported data and controls, with scoped workflow and official Logs interoperability evidence |
 
 Run `fireemu capabilities` or inspect the [Capability Manifest](crates/fireemu/src/capabilities.json) before depending on a specific API. Each capability records whether it is implemented, partial, validation-only, or unsupported.
 
@@ -153,13 +153,13 @@ These are the gaps currently known and documented by the project, not an exhaust
 
 ## Gap from the official Firebase Emulator Suite
 
-fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub and Cloud Tasks remain open gaps.
+fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
 
 In practical terms:
 
 - the `firebase` profile targets the behavior of the pinned Firebase Emulator Suite release, while `strict` deliberately adds refusals and validation;
-- fireemu serves its own UI, but does not claim workflow parity with the official Emulator Suite UI;
-- Eventarc publication and trigger-management workflows are supported through the Functions runtime; local Eventarc safety limits and reload semantics are recorded in the compatibility contract, while Cloud Tasks queue inspection remains an open gap;
+- fireemu serves its own UI with the supported Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts workflows. The official UI Logs browser boundary is also tested; Android, Apple and Unity SDK matrices plus optional accessibility and visual snapshots remain outside the current scope;
+- Eventarc publication and trigger-management workflows, Cloud Tasks queue inspection, Pub/Sub snapshots, and loopback push delivery are supported through the Functions and Pub/Sub runtimes. Local safety limits and reload semantics are recorded in the compatibility contract;
 - Realtime Database, Firebase Hosting, App Hosting, and Data Connect are deferred and not served;
 - Firebase Extensions is not planned.
 

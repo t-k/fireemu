@@ -9,18 +9,21 @@ publish.workspace = true
 description = "gRPC surface for the Cloud Pub/Sub emulator (google.pubsub.v1 Publisher/Subscriber) over the core state machine"
 
 [dependencies]
+axum = "0.8"
+base64 = "0.22"
 fireemu-core-types = { path = "../fireemu-core-types" }
 fireemu-core-session = { path = "../fireemu-core-session" }
 fireemu-core-pubsub = { path = "../fireemu-core-pubsub" }
 fireemu-proto-pubsub = { path = "../fireemu-proto-pubsub" }
 prost = "0.13"
 prost-types = "0.13"
+serde_json.workspace = true
 tonic = { version = "0.13", features = ["transport", "codegen", "prost"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time", "io-util"] }
 
 [lints]
 workspace = true

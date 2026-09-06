@@ -31,6 +31,11 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
+        // Vite's build manifest (`dist/.vite/`) describes the bundle for the size report; it
+        // is not part of the app and must not be served.
+        if entry.file_name() == ".vite" {
+            continue;
+        }
         let target = to.join(entry.file_name());
         if entry.file_type()?.is_dir() {
             copy_dir(&entry.path(), &target)?;

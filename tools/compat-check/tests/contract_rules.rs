@@ -1,4 +1,4 @@
-//! Table-driven fixtures for the compatibility gate (CC-01..CC-09).
+//! Table-driven fixtures for the compatibility gate (CC-01..CC-10).
 //!
 //! Each case builds a throw-away repository root that passes every rule, mutates exactly one
 //! thing, runs the checker over it and asserts on the reported problems. The last test runs the
@@ -43,6 +43,12 @@ impl Fixture {
             &json!({"dependencies": {"firebase-tools": "15.28.2"}}).to_string(),
         );
         fixture.write_config_schema(&json!(["firebase"]));
+        fixture.write_divergences(&json!({
+            "schemaVersion": 2,
+            "divergences": {},
+            "firestoreMatrixDivergences": {},
+            "rulesMatrixDivergences": {},
+        }));
         fixture.write(
             "README.md",
             &format!("# fixture\n\nSome prose.\n\n{CLAIM}\n\nRealtime Database is deferred.\n"),
@@ -95,6 +101,10 @@ impl Fixture {
 
     fn write_contract(&self, contract: &Value) {
         self.write("spec/compatibility/contract.json", &contract.to_string());
+    }
+
+    fn write_divergences(&self, divergences: &Value) {
+        self.write("conformance/divergences.json", &divergences.to_string());
     }
 }
 
@@ -211,6 +221,30 @@ fn set(value: &mut Value, path: &str, new: Value) {
                 .insert(last.to_owned(), new);
         }
     }
+}
+
+/// A complete, otherwise valid register for `firestore/a-scenario#read` whose authority
+/// names `fixture`.
+fn forged_register(fixture: &str) -> Value {
+    json!({
+        "schemaVersion": 2,
+        "divergences": {
+            "firestore/a-scenario#read": {
+                "documents": "README.md",
+                "reason": "forged on purpose",
+                "authority": {
+                    "kind": "production-spec",
+                    "sourceUrls": ["https://firebase.google.com/docs/firestore"],
+                    "checkedOn": "2026-09-05",
+                    "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                    "fixture": fixture,
+                    "approvalRecord": "README.md"
+                }
+            }
+        },
+        "firestoreMatrixDivergences": {},
+        "rulesMatrixDivergences": {},
+    })
 }
 
 struct Case {
@@ -634,9 +668,9 @@ fn cases() -> Vec<Case> {
                 "CC-09: claim FS-CLAIM-RPC: excluded step read of firestore/a-scenario is parity, not debt; the exclusion is stale",
             ),
         },
-        // CC-09: a documented divergence is evidence: it is gated against the recorded value.
+        // CC-10: a documented divergence without structured authority is not justified.
         Case {
-            name: "documented-divergence-is-evidence",
+            name: "documented-divergence-without-authority-is-refused",
             mutate: |_, _, fixture| {
                 fixture.write_fixture(
                     "firestore/a-scenario",
@@ -649,7 +683,373 @@ fn cases() -> Vec<Case> {
                     }]),
                 );
             },
+            expect: Some("CC-10: firestore/a-scenario#read has no authority entry"),
+        },
+        // CC-10: a justified divergence remains evidence when its authority is complete.
+        Case {
+            name: "documented-divergence-with-authority-is-evidence",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{
+                        "id": "read",
+                        "status": "documented-divergence",
+                        "documents": "README.md",
+                        "oracle": {"status": 200},
+                        "testd": {"status": 404},
+                    }]),
+                );
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "documents": "README.md",
+                            "reason": "the local policy is intentionally stricter",
+                            "authority": {
+                                "kind": "intentional-local-policy",
+                                "sourceUrls": ["https://firebase.google.com/docs/emulator-suite"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/a-scenario.json#read",
+                                "approvalRecord": "README.md#policy"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
+                }));
+            },
             expect: None,
+        },
+        Case {
+            name: "unverified-authority-cannot-justify-a-documented-divergence",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{"id": "read", "status": "documented-divergence"}]),
+                );
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "documents": "README.md",
+                            "reason": "not yet verified",
+                            "authority": {
+                                "kind": "unverified",
+                                "sourceUrls": ["https://firebase.google.com/docs/emulator-suite"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/a-scenario.json#read",
+                                "issue": "docs.local/issues/open/verify.md",
+                                "approvalRecord": "README.md#policy"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
+                }));
+            },
+            expect: Some("CC-10: firestore/a-scenario#read is unverified and cannot justify a documented divergence"),
+        },
+        Case {
+            name: "authority-source-must-be-https",
+            mutate: |_, _, fixture| {
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "authority": {
+                                "kind": "production-spec",
+                                "sourceUrls": ["http://example.test/spec"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/a-scenario.json#read",
+                                "decidedBy": "fireemu maintainers"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
+                }));
+            },
+            expect: Some("authority sourceUrls must contain only non-empty HTTPS URLs"),
+        },
+        Case {
+            name: "authority-must-name-an-existing-divergence-row",
+            mutate: |_, _, fixture| {
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "authority": {
+                                "kind": "production-spec",
+                                "sourceUrls": ["https://firebase.google.com/docs/firestore"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/missing.json#read",
+                                "decidedBy": "fireemu maintainers"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
+                }));
+            },
+            expect: Some("does not name an existing documented-divergence row"),
+        },
+        Case {
+            name: "matrix-row-cannot-outlive-its-authority",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/pubsub-matrix.json",
+                    &json!({
+                        "programs": [{
+                            "id": "delivery",
+                            "steps": [{"id": "push", "status": "documented-divergence"}]
+                        }]
+                    })
+                    .to_string(),
+                );
+            },
+            expect: Some(
+                "CC-10: conformance/pubsub-matrix.json row pubsub-probe/delivery#push has no authority entry",
+            ),
+        },
+        // CC-10: the Rules program recording has no register section, so a divergence written
+        // into it is a promotion nothing authorized.
+        Case {
+            name: "rules-program-recording-cannot-pin-an-unauthorized-divergence",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/rules-programs.json",
+                    &json!({
+                        "version": 1,
+                        "programs": [{
+                            "id": "budget-get-10",
+                            "area": "budget",
+                            "oracle": {"steps": {"read": {"status": 404}}},
+                            "divergence": {"fireemu": {"steps": {"read": {"status": 200}}}}
+                        }]
+                    })
+                    .to_string(),
+                );
+            },
+            expect: Some(
+                "CC-10: conformance/rules-programs.json row budget-get-10 records a divergence, but Rules programs have no authority section in conformance/divergences.json",
+            ),
+        },
+        // CC-10: an authority fixture must be a repository-relative conformance file; a
+        // hand-written file elsewhere in the repository, outside it, reached by traversal or
+        // through a symbolic link is not evidence.
+        Case {
+            name: "authority-fixture-outside-conformance-is-refused",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "docs/forged/evil.json",
+                    &json!({"id": "firestore/a-scenario", "steps": [{"id": "read", "status": "documented-divergence"}]}).to_string(),
+                );
+                fixture.write_divergences(&forged_register("docs/forged/evil.json#read"));
+            },
+            expect: Some("CC-10: firestore/a-scenario#read authority fixture must be a repository-relative conformance file"),
+        },
+        Case {
+            name: "authority-fixture-absolute-path-is-refused",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "docs/forged/evil.json",
+                    &json!({"id": "firestore/a-scenario", "steps": [{"id": "read", "status": "documented-divergence"}]}).to_string(),
+                );
+                let absolute = fixture.root.join("docs/forged/evil.json");
+                fixture.write_divergences(&forged_register(&format!("{}#read", absolute.display())));
+            },
+            expect: Some("authority fixture must be a repository-relative conformance file"),
+        },
+        Case {
+            name: "authority-fixture-traversal-is-refused",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "docs/forged/evil.json",
+                    &json!({"id": "firestore/a-scenario", "steps": [{"id": "read", "status": "documented-divergence"}]}).to_string(),
+                );
+                fixture.write_divergences(&forged_register("conformance/../docs/forged/evil.json#read"));
+            },
+            expect: Some("authority fixture must be a repository-relative conformance file"),
+        },
+        Case {
+            name: "authority-fixture-backslash-is-refused",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{"id": "read", "status": "documented-divergence"}]),
+                );
+                fixture.write_divergences(&forged_register("conformance\\fixtures\\firestore\\a-scenario.json#read"));
+            },
+            expect: Some("authority fixture must be a repository-relative conformance file"),
+        },
+        #[cfg(unix)]
+        Case {
+            name: "authority-fixture-symlink-out-of-the-repository-is-refused",
+            mutate: |_, _, fixture| {
+                let outside = fixture.root.parent().unwrap().join(format!(
+                    "compat-outside-{}.json",
+                    fixture.root.file_name().unwrap().to_string_lossy()
+                ));
+                fs::write(
+                    &outside,
+                    json!({"id": "firestore/a-scenario", "steps": [{"id": "read", "status": "documented-divergence"}]}).to_string(),
+                )
+                .unwrap();
+                let link = fixture.root.join("conformance/fixtures/firestore/linked.json");
+                fs::create_dir_all(link.parent().unwrap()).unwrap();
+                std::os::unix::fs::symlink(&outside, &link).unwrap();
+                fixture.write_divergences(&forged_register("conformance/fixtures/firestore/linked.json#read"));
+            },
+            expect: Some("authority fixture must stay inside the repository"),
+        },
+        // CC-10: an object-shaped matrix row without a `divergence` is a parity row; binding an
+        // authority to it would promote an agreeing row to a divergence with a forged answer.
+        Case {
+            name: "authority-cannot-bind-a-matrix-row-whose-mark-pins-another-answer",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/firestore-matrix.json",
+                    &json!({"programs": [{"id": "values/type-order", "steps": {"ascending": {"oracle": {"status": 200}, "divergence": {"fireemu": {"status": 500}}}}}]}).to_string(),
+                );
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {},
+                    "firestoreMatrixDivergences": {
+                        "values/type-order#ascending": {
+                            "fireemu": {"status": 409},
+                            "reason": "the register drifted from the recording",
+                            "authority": {
+                                "kind": "production-spec",
+                                "sourceUrls": ["https://firebase.google.com/docs/firestore"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/firestore-matrix.json#values/type-order#ascending",
+                                "approvalRecord": "README.md"
+                            }
+                        }
+                    },
+                    "rulesMatrixDivergences": {},
+                }));
+            },
+            expect: Some("does not name an existing documented-divergence row"),
+        },
+        Case {
+            name: "authority-cannot-bind-a-parity-matrix-row",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/firestore-matrix.json",
+                    &json!({"programs": [{"id": "values/type-order", "steps": {"ascending": {"status": 200}}}]}).to_string(),
+                );
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {},
+                    "firestoreMatrixDivergences": {
+                        "values/type-order#ascending": {
+                            "fireemu": "forged-answer",
+                            "reason": "promoting a parity row that the recording never marked divergent",
+                            "authority": {
+                                "kind": "production-spec",
+                                "sourceUrls": ["https://firebase.google.com/docs/firestore"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/firestore-matrix.json#values/type-order#ascending",
+                                "approvalRecord": "README.md"
+                            }
+                        }
+                    },
+                    "rulesMatrixDivergences": {},
+                }));
+            },
+            expect: Some("does not name an existing documented-divergence row"),
+        },
+        // CC-10: a source URL with a control character, or a non-string list element, is not a
+        // valid HTTPS URL list.
+        Case {
+            name: "authority-source-url-control-character-is-refused",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{"id": "read", "status": "documented-divergence"}]),
+                );
+                let mut register = forged_register("conformance/fixtures/firestore/a-scenario.json#read");
+                register["divergences"]["firestore/a-scenario#read"]["authority"]["sourceUrls"] =
+                    json!(["https://example.test/a\u{0}b"]);
+                fixture.write_divergences(&register);
+            },
+            expect: Some("authority sourceUrls must contain only non-empty HTTPS URLs"),
+        },
+        Case {
+            name: "authority-source-url-non-string-element-is-refused",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{"id": "read", "status": "documented-divergence"}]),
+                );
+                let mut register = forged_register("conformance/fixtures/firestore/a-scenario.json#read");
+                register["divergences"]["firestore/a-scenario#read"]["authority"]["sourceUrls"] =
+                    json!(["https://example.test/x", 5]);
+                fixture.write_divergences(&register);
+            },
+            expect: Some("authority sourceUrls must contain only non-empty HTTPS URLs"),
+        },
+        Case {
+            name: "authority-fixture-extension-is-case-sensitive-like-the-node-gate",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/fixtures/firestore/COPY.JSON",
+                    &json!({"id": "firestore/a-scenario", "steps": [{"id": "read", "status": "documented-divergence"}]}).to_string(),
+                );
+                fixture.write_divergences(&forged_register("conformance/fixtures/firestore/COPY.JSON#read"));
+            },
+            expect: Some("authority fixture must be a repository-relative conformance file"),
+        },
+        Case {
+            name: "authority-fixture-must-match-its-register-key",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/other-scenario",
+                    &json!([{"id": "read", "status": "documented-divergence"}]),
+                );
+                fixture.write_divergences(&json!({
+                    "schemaVersion": 2,
+                    "divergences": {
+                        "firestore/a-scenario#read": {
+                            "documents": "README.md",
+                            "reason": "misbound on purpose",
+                            "authority": {
+                                "kind": "production-spec",
+                                "sourceUrls": ["https://firebase.google.com/docs/firestore"],
+                                "checkedOn": "2026-09-05",
+                                "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+                                "fixture": "conformance/fixtures/firestore/other-scenario.json#read",
+                                "approvalRecord": "README.md"
+                            }
+                        }
+                    },
+                    "firestoreMatrixDivergences": {},
+                    "rulesMatrixDivergences": {},
+                }));
+            },
+            expect: Some("authority fixture points to different row firestore/other-scenario#read"),
+        },
+        Case {
+            name: "contract-divergence-needs-structured-authority",
+            mutate: |contract, _, _| {
+                contract
+                    .pointer_mut("/profiles/firebase")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(
+                        "officialEmulatorDivergences".to_owned(),
+                        json!([{"key": "free.text", "note": "not enough"}]),
+                    );
+            },
+            expect: Some("CC-10: free.text has no authority object"),
         },
         // CC-09: a row no local oracle can answer (production-only) is not emulator evidence,
         // so a fixture made only of such rows proves nothing.

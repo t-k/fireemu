@@ -175,6 +175,139 @@ fn generations_metagenerations_and_preconditions() {
 }
 
 #[test]
+fn event_admission_refusal_keeps_storage_mutations_private() {
+    let b = bucket();
+    let source = name("source");
+    let destination = name("destination");
+    let mut store = StorageState::new(17);
+    let source_meta = store
+        .put(
+            &b,
+            &source,
+            b"source bytes".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(0),
+        )
+        .unwrap();
+    let _ = store.drain_events();
+
+    let refused = |_: &StorageEvent| {
+        Err::<(), _>(StorageError::EventAdmission(
+            fireemu_core_types::admission::EventAdmissionError::Capacity("outbox full".to_owned()),
+        ))
+    };
+    assert_eq!(
+        store.put_with_admission(
+            &b,
+            &destination,
+            b"new bytes".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(1),
+            refused,
+        ),
+        Err(StorageError::EventAdmission(
+            fireemu_core_types::admission::EventAdmissionError::Capacity("outbox full".to_owned(),),
+        ))
+    );
+    assert!(store.get(&b, &destination).is_none());
+    assert!(store.drain_events().is_empty());
+
+    let patch = MetadataPatch {
+        content_type: Some(Some("text/plain".to_owned())),
+        ..MetadataPatch::default()
+    };
+    assert!(matches!(
+        store.update_metadata_with_admission(
+            &b,
+            &source,
+            &patch,
+            Precondition::default(),
+            t(2),
+            refused,
+        ),
+        Err(StorageError::EventAdmission(_))
+    ));
+    assert_eq!(store.get(&b, &source), Some(&source_meta));
+
+    assert!(matches!(
+        store.add_download_token_with_admission(&b, &source, t(3), refused),
+        Err(StorageError::EventAdmission(_))
+    ));
+    assert_eq!(store.get(&b, &source), Some(&source_meta));
+
+    assert!(matches!(
+        store.copy_with_admission(
+            (&b, &source),
+            (&b, &destination),
+            None,
+            Precondition::default(),
+            t(4),
+            refused,
+        ),
+        Err(StorageError::EventAdmission(_))
+    ));
+    assert!(store.get(&b, &destination).is_none());
+
+    assert!(matches!(
+        store.delete_with_admission(&b, &source, Precondition::default(), refused),
+        Err(StorageError::EventAdmission(_))
+    ));
+    assert_eq!(store.get(&b, &source), Some(&source_meta));
+    assert_eq!(store.bytes(&source_meta), b"source bytes");
+    assert!(store.drain_events().is_empty());
+
+    let accepted = store
+        .put(
+            &b,
+            &destination,
+            b"accepted".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(5),
+        )
+        .unwrap();
+    assert_eq!(accepted.generation, source_meta.generation + 1);
+}
+
+#[test]
+fn refused_download_token_admission_does_not_advance_the_seeded_rng() {
+    let b = bucket();
+    let n = name("token");
+    let mut refused_store = StorageState::new(91);
+    let mut control = StorageState::new(91);
+    for store in [&mut refused_store, &mut control] {
+        store
+            .put(
+                &b,
+                &n,
+                Vec::new(),
+                NewMetadata::default(),
+                Precondition::default(),
+                t(0),
+            )
+            .unwrap();
+        let _ = store.drain_events();
+    }
+
+    assert!(matches!(
+        refused_store.add_download_token_with_admission(&b, &n, t(1), |_| {
+            Err::<(), _>(StorageError::EventAdmission(
+                fireemu_core_types::admission::EventAdmissionError::Capacity(
+                    "outbox full".to_owned(),
+                ),
+            ))
+        }),
+        Err(StorageError::EventAdmission(_))
+    ));
+    let actual = refused_store.add_download_token(&b, &n, t(2)).unwrap();
+    let expected = control.add_download_token(&b, &n, t(2)).unwrap();
+    assert_eq!(actual.download_tokens, expected.download_tokens);
+    assert_eq!(actual.metageneration, expected.metageneration);
+}
+
+#[test]
 fn listing_uses_the_namespace_with_prefix_and_delimiter() {
     let mut s = StorageState::new(2);
     let b = bucket();
@@ -452,6 +585,42 @@ fn upload_sessions_keep_the_committed_object_and_enforce_the_declared_total() {
     let (received, status) = s.upload_status(&id, t(3)).unwrap();
     assert_eq!(received, 3);
     assert_eq!(status, Some(committed));
+}
+
+#[test]
+fn resumable_event_admission_refusal_keeps_bytes_and_session_retryable() {
+    let mut store = StorageState::new(23);
+    let b = bucket();
+    let n = name("resumable-refusal");
+    let id = store
+        .begin_upload(
+            &b,
+            &n,
+            NewMetadata::default(),
+            Precondition::default(),
+            Some(3),
+            t(0),
+        )
+        .unwrap();
+    store.append_upload(&id, 0, b"abc", t(1)).unwrap();
+
+    assert!(matches!(
+        store.finalize_upload_with_admission(&id, t(2), |_| {
+            Err::<(), _>(StorageError::EventAdmission(
+                fireemu_core_types::admission::EventAdmissionError::Capacity(
+                    "outbox full".to_owned(),
+                ),
+            ))
+        }),
+        Err(StorageError::EventAdmission(_))
+    ));
+    assert!(store.get(&b, &n).is_none());
+    assert_eq!(store.pending_upload(&id, t(2)).unwrap().bytes, b"abc");
+    assert!(store.drain_events().is_empty());
+
+    let committed = store.finalize_upload(&id, t(3)).unwrap();
+    assert_eq!(committed.generation, 1);
+    assert_eq!(store.bytes(&committed), b"abc");
 }
 
 #[test]

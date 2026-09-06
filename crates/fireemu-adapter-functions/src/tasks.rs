@@ -81,6 +81,8 @@ pub struct EnqueueRefusal {
 /// The route a functions-port path names, if it is one of the Cloud Tasks routes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
+    /// `GET /queueStats`: statistics for all registered queues.
+    QueueStats,
     /// `POST /projects/{p}/locations/{l}/queues/{q}`: create or update a queue.
     CreateQueue {
         /// Project.
@@ -112,9 +114,12 @@ pub enum Route {
     },
 }
 
-/// Classifies a path against the three Cloud Tasks routes.
+/// Classifies a path against the Cloud Tasks routes.
 #[must_use]
 pub fn route(path: &str) -> Option<Route> {
+    if path.trim_end_matches('/') == "/queueStats" {
+        return Some(Route::QueueStats);
+    }
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     let (project, location, queue) = match parts.as_slice() {
         ["projects", p, "locations", l, "queues", q, ..]
@@ -343,7 +348,9 @@ mod tests {
     }
 
     #[test]
-    fn the_three_routes_are_told_apart_and_a_function_url_is_not_one() {
+    fn task_routes_are_told_apart_and_a_function_url_is_not_one() {
+        assert_eq!(route("/queueStats"), Some(Route::QueueStats));
+        assert_eq!(route("/queueStats/"), Some(Route::QueueStats));
         assert_eq!(
             route("/projects/demo/locations/us-central1/queues/onJob"),
             Some(Route::CreateQueue {

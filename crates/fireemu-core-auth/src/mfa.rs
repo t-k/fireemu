@@ -180,12 +180,83 @@ impl fmt::Debug for PendingSignIn {
     }
 }
 
+/// Raw identity-provider credentials retained only when a blocking Auth bridge explicitly opts
+/// into forwarding them after the first factor has created an MFA pending credential.
+#[derive(Clone, Default, PartialEq, Eq)]
+#[allow(clippy::struct_field_names)] // the three names mirror the OAuth credential fields
+pub struct PendingSignInCredentials {
+    access_token: Option<String>,
+    id_token: Option<String>,
+    refresh_token: Option<String>,
+}
+
+impl PendingSignInCredentials {
+    /// Creates the raw credential set without synthesizing values for omitted fields.
+    #[must_use]
+    pub fn new(
+        access_token: Option<String>,
+        id_token: Option<String>,
+        refresh_token: Option<String>,
+    ) -> Self {
+        Self {
+            access_token,
+            id_token,
+            refresh_token,
+        }
+    }
+
+    /// OAuth access token supplied by the identity provider, if any.
+    #[must_use]
+    pub fn access_token(&self) -> Option<&str> {
+        self.access_token.as_deref()
+    }
+
+    /// Identity-provider ID token supplied by the caller, if any.
+    #[must_use]
+    pub fn id_token(&self) -> Option<&str> {
+        self.id_token.as_deref()
+    }
+
+    /// OAuth refresh token supplied by the caller, if any.
+    #[must_use]
+    pub fn refresh_token(&self) -> Option<&str> {
+        self.refresh_token.as_deref()
+    }
+
+    pub(crate) fn retained_heap_bytes(&self) -> u64 {
+        self.access_token
+            .as_ref()
+            .into_iter()
+            .chain(self.id_token.as_ref())
+            .chain(self.refresh_token.as_ref())
+            .map(|token| token.len() as u64)
+            .fold(0, u64::saturating_add)
+    }
+}
+
+impl fmt::Debug for PendingSignInCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PendingSignInCredentials")
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[redacted]"),
+            )
+            .field("id_token", &self.id_token.as_ref().map(|_| "[redacted]"))
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
+}
+
 /// First-factor provenance retained by an opaque MFA pending credential.
 #[derive(Clone, Default, PartialEq)]
 pub struct PendingSignInContext {
     sign_in_provider: Option<String>,
     is_new_user: bool,
     sign_in_attributes: Option<Arc<ClaimValue>>,
+    inbound_credentials: Option<Arc<PendingSignInCredentials>>,
 }
 
 impl PendingSignInContext {
@@ -196,10 +267,22 @@ impl PendingSignInContext {
         is_new_user: bool,
         sign_in_attributes: Option<ClaimValue>,
     ) -> Self {
+        Self::new_with_credentials(sign_in_provider, is_new_user, sign_in_attributes, None)
+    }
+
+    /// Creates first-factor provenance and optionally retains caller-supplied raw credentials.
+    #[must_use]
+    pub fn new_with_credentials(
+        sign_in_provider: Option<String>,
+        is_new_user: bool,
+        sign_in_attributes: Option<ClaimValue>,
+        inbound_credentials: Option<PendingSignInCredentials>,
+    ) -> Self {
         Self {
             sign_in_provider,
             is_new_user,
             sign_in_attributes: sign_in_attributes.map(Arc::new),
+            inbound_credentials: inbound_credentials.map(Arc::new),
         }
     }
 
@@ -221,6 +304,12 @@ impl PendingSignInContext {
         self.sign_in_attributes.as_deref()
     }
 
+    /// Raw identity-provider credentials retained for an opted-in blocking Auth bridge.
+    #[must_use]
+    pub fn inbound_credentials(&self) -> Option<&PendingSignInCredentials> {
+        self.inbound_credentials.as_deref()
+    }
+
     pub(crate) fn retained_heap_bytes(&self) -> u64 {
         let mut total = self
             .sign_in_provider
@@ -230,6 +319,9 @@ impl PendingSignInContext {
             let mut encoded = String::new();
             attributes.write_canonical_json(&mut encoded);
             total = total.saturating_add(encoded.len() as u64);
+        }
+        if let Some(credentials) = &self.inbound_credentials {
+            total = total.saturating_add(credentials.retained_heap_bytes());
         }
         total
     }
@@ -243,6 +335,10 @@ impl fmt::Debug for PendingSignInContext {
             .field(
                 "sign_in_attributes",
                 &self.sign_in_attributes.as_ref().map(|_| "[redacted]"),
+            )
+            .field(
+                "inbound_credentials",
+                &self.inbound_credentials.as_ref().map(|_| "[redacted]"),
             )
             .finish()
     }
@@ -602,6 +698,32 @@ impl MfaState {
     #[must_use]
     pub fn holds_no_totp_secret(&self) -> bool {
         self.totp.iter().all(|f| f.secret.is_detached()) && self.pending_enrollments.is_empty()
+    }
+
+    /// Whether no pending sign-in retains raw identity-provider credentials.
+    #[must_use]
+    pub(crate) fn holds_no_inbound_credentials(&self) -> bool {
+        self.pending_sign_ins
+            .values()
+            .all(|pending| pending.context.inbound_credentials.is_none())
+    }
+
+    /// Drops raw identity-provider credentials from pending sign-ins while retaining their
+    /// non-secret first-factor provenance.
+    pub(crate) fn detach_inbound_credentials(&mut self) {
+        for pending in self.pending_sign_ins.values_mut() {
+            pending.context.inbound_credentials = None;
+        }
+    }
+
+    /// Drops raw credentials retained by one pending sign-in without consuming its non-secret
+    /// provenance or the pending credential itself.
+    pub fn clear_pending_sign_in_credentials(&mut self, id: &str) -> bool {
+        let Some(pending) = self.pending_sign_ins.get_mut(id) else {
+            return false;
+        };
+        pending.context.inbound_credentials = None;
+        true
     }
 
     /// Rebinds every detached TOTP factor to the secret `live` holds for the same enrollment

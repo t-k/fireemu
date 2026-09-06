@@ -13,7 +13,23 @@ const candidates = [
   resolve(repo, "target/debug/fireemu"),
 ].filter((p): p is string => Boolean(p));
 
-export const PORTS = { firestore: 18080, http: 19099, storage: 19199, functions: 15001, ui: 14000 };
+const port = (name: string, fallback: number): number => {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error(`${name} must be a TCP port`);
+  }
+  return parsed;
+};
+
+export const PORTS = {
+  firestore: port("FIREEMU_E2E_FIRESTORE_PORT", 18080),
+  http: port("FIREEMU_E2E_HTTP_PORT", 19099),
+  storage: port("FIREEMU_E2E_STORAGE_PORT", 19199),
+  functions: port("FIREEMU_E2E_FUNCTIONS_PORT", 15001),
+  ui: port("FIREEMU_E2E_UI_PORT", 14000),
+};
 export const STATE_FILE = resolve(here, "../test-results/daemon.json");
 
 const waitFor = async (url: string, attempts: number): Promise<void> => {

@@ -5,10 +5,11 @@ use std::collections::BTreeMap;
 
 use fireemu_core_pubsub::subscription::{
     DeadLetterPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
+    DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS, MIN_DEAD_LETTER_ATTEMPTS,
 };
 use fireemu_core_pubsub::{
-    Code, Filter, PubSubError, PubsubMessage, ReceivedMessage, StoredMessage, SubscriptionConfig,
-    SubscriptionName, TopicName,
+    Code, Filter, PubSubError, PubsubMessage, ReceivedMessage, Snapshot, StoredMessage,
+    SubscriptionConfig, SubscriptionName, TopicName,
 };
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
@@ -85,8 +86,17 @@ pub fn received_to_proto(r: &ReceivedMessage) -> pb::ReceivedMessage {
     }
 }
 
-fn duration_from_proto(d: &prost_types::Duration) -> LogicalDuration {
-    LogicalDuration::from_nanos(i128::from(d.seconds) * NANOS_PER_SEC + i128::from(d.nanos))
+fn retry_duration_from_proto(
+    duration: &prost_types::Duration,
+) -> Result<LogicalDuration, PubSubError> {
+    if duration.seconds < 0 || !(0..1_000_000_000).contains(&duration.nanos) {
+        return Err(PubSubError::invalid_argument(
+            "retry policy duration must use non-negative canonical seconds and nanos",
+        ));
+    }
+    Ok(LogicalDuration::from_nanos(
+        i128::from(duration.seconds) * NANOS_PER_SEC + i128::from(duration.nanos),
+    ))
 }
 
 fn duration_to_proto(d: LogicalDuration) -> prost_types::Duration {
@@ -111,29 +121,45 @@ pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionCon
     let dead_letter_policy = match &sub.dead_letter_policy {
         Some(dl) if !dl.dead_letter_topic.is_empty() => Some(DeadLetterPolicy {
             dead_letter_topic: TopicName::parse(&dl.dead_letter_topic)?,
-            max_delivery_attempts: u32::try_from(dl.max_delivery_attempts).map_err(|_| {
-                PubSubError::invalid_argument("maxDeliveryAttempts must be positive")
-            })?,
+            max_delivery_attempts: if dl.max_delivery_attempts == 0 {
+                MIN_DEAD_LETTER_ATTEMPTS
+            } else {
+                u32::try_from(dl.max_delivery_attempts).map_err(|_| {
+                    PubSubError::invalid_argument("maxDeliveryAttempts must be positive")
+                })?
+            },
         }),
         _ => None,
     };
-    let retry_policy = sub.retry_policy.as_ref().map(|rp| RetryPolicy {
-        minimum_backoff: rp
-            .minimum_backoff
-            .as_ref()
-            .map_or(LogicalDuration::ZERO, duration_from_proto),
-        maximum_backoff: rp
-            .maximum_backoff
-            .as_ref()
-            .map_or(LogicalDuration::ZERO, duration_from_proto),
-    });
-    let push_config = PushConfig {
-        push_endpoint: sub
-            .push_config
-            .as_ref()
-            .map(|p| p.push_endpoint.clone())
-            .unwrap_or_default(),
-    };
+    let retry_policy = sub
+        .retry_policy
+        .as_ref()
+        .map(|rp| {
+            Ok::<_, PubSubError>(RetryPolicy {
+                minimum_backoff: rp
+                    .minimum_backoff
+                    .as_ref()
+                    .map(retry_duration_from_proto)
+                    .transpose()?
+                    .unwrap_or_else(|| {
+                        LogicalDuration::from_seconds(DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS)
+                    }),
+                maximum_backoff: rp
+                    .maximum_backoff
+                    .as_ref()
+                    .map(retry_duration_from_proto)
+                    .transpose()?
+                    .unwrap_or_else(|| LogicalDuration::from_seconds(MAX_RETRY_BACKOFF_SECONDS)),
+            })
+        })
+        .transpose()?;
+    let push_endpoint = sub
+        .push_config
+        .as_ref()
+        .map(|p| p.push_endpoint.clone())
+        .unwrap_or_default();
+    crate::push::validate_endpoint(&push_endpoint).map_err(PubSubError::invalid_argument)?;
+    let push_config = PushConfig { push_endpoint };
     Ok(SubscriptionConfig {
         name,
         topic,
@@ -158,7 +184,7 @@ pub fn subscription_to_proto(
         topic: reported_topic.to_owned(),
         ack_deadline_seconds: i32::try_from(config.ack_deadline_seconds).unwrap_or(10),
         enable_message_ordering: config.enable_message_ordering,
-        filter: String::new(),
+        filter: config.filter.as_str().to_owned(),
         dead_letter_policy: config
             .dead_letter_policy
             .as_ref()
@@ -189,5 +215,20 @@ pub fn topic_to_proto(name: &TopicName, labels: &BTreeMap<String, String>) -> pb
         name: name.to_full(),
         labels: labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         ..pb::Topic::default()
+    }
+}
+
+/// Renders a core snapshot resource as the Pub/Sub wire representation.
+#[must_use]
+pub fn snapshot_to_proto(snapshot: &Snapshot) -> pb::Snapshot {
+    pb::Snapshot {
+        name: snapshot.name.clone(),
+        topic: snapshot.topic.to_full(),
+        expire_time: Some(to_timestamp(snapshot.expire_at)),
+        labels: snapshot
+            .labels
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
     }
 }

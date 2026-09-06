@@ -20,6 +20,7 @@ ui/dist/
 ui/node_modules/
 ui/test-results/
 ui/playwright-report/
+ui/.runs/
 .claude/worktrees/
 # npm distribution build outputs (npm/scripts/pack-local.mjs, .github/workflows/release.yml)
 npm/dist/

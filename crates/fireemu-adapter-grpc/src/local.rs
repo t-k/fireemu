@@ -23,13 +23,17 @@ use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
-    Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreState,
-    ListedDocument, Precondition, QueryStats, TransactionId, Write, WriteOp,
+    Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreError,
+    FirestoreState, HistoryCapacityError, HistoryProjection, HistoryUsage, ListedDocument,
+    Precondition, QueryStats, TransactionId, Write, WriteOp,
 };
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{Clock, DeterministicRng, SplitMix64};
 use fireemu_core_types::ids::{CollectionId, DatabaseId, DocumentId};
+use fireemu_core_types::resources::{
+    Gauge, Refusal, RetentionRoot, RootBudget, ServiceResources, Unit,
+};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
@@ -54,6 +58,12 @@ pub const READ_TIME_RETENTION_SECONDS: i64 = 3600;
 #[derive(Debug, Default)]
 struct DatabaseEntry {
     cell: RwLock<DatabaseCell>,
+    /// Wakes writers refused for lock contention when a transaction finishes.
+    releases: TransactionReleases,
+    /// When each transaction first blocked a writer (wall clock). A transaction that keeps
+    /// writers blocked for the lock lease is rolled back the way production expires an idle
+    /// transaction, so a virtual clock that does not move cannot hold a lock forever.
+    blocking_since: Mutex<BTreeMap<TransactionId, (std::time::Instant, u64)>>,
 }
 
 impl DatabaseEntry {
@@ -64,6 +74,51 @@ impl DatabaseEntry {
                 detached: false,
                 state,
             }),
+            releases: TransactionReleases::default(),
+            blocking_since: Mutex::new(BTreeMap::new()),
+        }
+    }
+}
+
+/// The last observed value of the store's transaction release counter, with a condition a
+/// contended writer can sleep on until a transaction finishes and its locks are gone.
+#[derive(Debug, Default)]
+struct TransactionReleases {
+    seen: Mutex<u64>,
+    changed: std::sync::Condvar,
+}
+
+impl TransactionReleases {
+    fn publish(&self, releases: u64) {
+        if let Ok(mut seen) = self.seen.lock() {
+            if *seen != releases {
+                *seen = releases;
+                self.changed.notify_all();
+            }
+        }
+    }
+
+    fn current(&self) -> u64 {
+        self.seen.lock().map_or(0, |seen| *seen)
+    }
+
+    /// Blocks until the counter moves past `seen` or `deadline` passes; `true` when it moved.
+    fn wait_past(&self, seen: u64, deadline: std::time::Instant) -> bool {
+        let Ok(mut current) = self.seen.lock() else {
+            return false;
+        };
+        loop {
+            if *current != seen {
+                return true;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            match self.changed.wait_timeout(current, deadline - now) {
+                Ok((guard, _)) => current = guard,
+                Err(_) => return false,
+            }
         }
     }
 }
@@ -107,7 +162,21 @@ impl DatabaseHandle {
         if cell.detached {
             return Err(detached());
         }
-        f(&mut cell.state)
+        let outcome = f(&mut cell.state);
+        // Published under the database lock, so a waiter that read the marker before this
+        // operation cannot miss the release it caused.
+        self.0.releases.publish(cell.state.transaction_releases());
+        outcome
+    }
+
+    /// The transaction release marker a contended writer records before trying again.
+    fn release_marker(&self) -> u64 {
+        self.0.releases.current()
+    }
+
+    /// Blocks until a transaction finishes after `marker` was read, or until `deadline`.
+    fn wait_for_release(&self, marker: u64, deadline: std::time::Instant) -> bool {
+        self.0.releases.wait_past(marker, deadline)
     }
 
     /// Reads under this database's own lock; `None` once detached or poisoned.
@@ -137,6 +206,7 @@ impl DatabaseHandle {
     fn detach(&self) {
         if let Ok(mut cell) = self.0.cell.write() {
             cell.detached = true;
+            cell.state = FirestoreState::new();
         }
     }
 }
@@ -147,12 +217,26 @@ pub struct LocalBackend {
     /// Reloadable index catalog used for every new query plan.
     indexes: RwLock<BTreeMap<(Option<String>, String), fireemu_core_firestore::index::IndexSet>>,
     clock: Arc<Mutex<VirtualClock>>,
+    /// When this backend's databases came into being: a `read_time` before it is refused as
+    /// production refuses one before the database's creation time.
+    created_at: fireemu_core_types::time::LogicalInstant,
+    /// How long a commit outside a transaction waits for the locks an active read-write
+    /// transaction holds on what it read before it is refused with `ABORTED` (production:
+    /// "Too much contention on these documents"). Zero refuses at once.
+    contention_wait: std::time::Duration,
+    /// How long (wall clock) a transaction may keep writers blocked before it is rolled back
+    /// the way production expires an idle transaction (see [`DEFAULT_LOCK_LEASE`]).
+    lock_lease: std::time::Duration,
     /// Unpinned compatibility runs sample wall time for each Firestore write while every
     /// other product and explicitly pinned run continues to use the virtual clock.
     wall_clock_write_time: bool,
     /// Capacity retention root for databases created by this backend. Pinned-clock runs use
     /// the bounded default; wall-clock parity runs rely on the one-hour time root alone.
     history_version_limit: usize,
+    /// Aggregate retained-history admission shared by every database.
+    history_budget: Arc<Mutex<HistoryBudgetLedger>>,
+    /// Resolves registered projects to their session budget owner.
+    tenancy: Mutex<Option<fireemu_core_session::tenancy::SharedTenancy>>,
     /// The database catalog. Locked only to locate, create or retire an entry: an
     /// operation clones the entry's handle and releases this lock before it runs.
     databases: Mutex<BTreeMap<(String, String), Arc<DatabaseEntry>>>,
@@ -165,6 +249,16 @@ pub struct LocalBackend {
     /// bound to it, so a project reset invalidates that project's tokens only).
     generations: Mutex<BTreeMap<(String, String), u64>>,
     ids: Mutex<SplitMix64>,
+    /// Draws the starting transaction id of each database; separate from `ids` so that the
+    /// generated document ids stay what they were for a given seed.
+    transaction_ids: Mutex<SplitMix64>,
+    /// Keys the authenticator appended to every transaction token, so a client cannot name a
+    /// transaction it was never handed (production tokens are opaque).
+    token_key: [u8; 32],
+    /// How many transactions have finished across every database, and the signal a REST
+    /// writer refused for lock contention waits on without holding a blocking-pool slot.
+    release_count: std::sync::atomic::AtomicU64,
+    release_notify: tokio::sync::Notify,
     commits: tokio::sync::broadcast::Sender<CommitNotification>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
     epoch: std::sync::atomic::AtomicU64,
@@ -175,10 +269,341 @@ pub struct LocalBackend {
     /// before the commit's response is returned (event triggers): nothing is lost or
     /// reordered, and `await-idle` sees the event as soon as the write returns.
     change_sink: Mutex<Option<ChangeSink>>,
+    change_admission: Mutex<Option<Arc<dyn AtomicChangeSink>>>,
 }
 
-/// Synchronous observer of commits (see [`LocalBackend::set_change_sink`]).
+/// Aggregate logical MVCC limits. Per-session limits combine every project/database owned by
+/// one session; global limits combine the complete backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryBudgetLimits {
+    /// Logical bytes owned by one session.
+    pub session_bytes: u64,
+    /// Versions owned by one session.
+    pub session_versions: u64,
+    /// Logical bytes owned by the backend.
+    pub global_bytes: u64,
+    /// Versions owned by the backend.
+    pub global_versions: u64,
+}
+
+impl Default for HistoryBudgetLimits {
+    fn default() -> Self {
+        Self {
+            session_bytes: 1 << 30,
+            session_versions: 1_000_000,
+            global_bytes: 4 << 30,
+            global_versions: 4_000_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum HistoryBudgetOwner {
+    Default,
+    Project(String),
+}
+
+#[derive(Debug, Clone)]
+struct HistoryCharge {
+    owner: HistoryBudgetOwner,
+    usage: HistoryUsage,
+}
+
+#[derive(Debug)]
+struct PendingHistoryCharge {
+    key: (String, String),
+    charge: HistoryCharge,
+}
+
+#[derive(Debug)]
+struct HistoryBudgetLedger {
+    limits: HistoryBudgetLimits,
+    committed: BTreeMap<(String, String), HistoryCharge>,
+    pending: BTreeMap<u64, PendingHistoryCharge>,
+    pending_by_key: BTreeMap<(String, String), u64>,
+    charged_global: HistoryUsage,
+    charged_by_owner: BTreeMap<HistoryBudgetOwner, HistoryUsage>,
+    accounting_steps: u64,
+    next_reservation: u64,
+    /// Refused reservations by the limit that refused them, for the resource report.
+    refusals: BTreeMap<&'static str, u64>,
+}
+
+impl HistoryBudgetLedger {
+    fn new(limits: HistoryBudgetLimits) -> Self {
+        Self {
+            limits,
+            committed: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            pending_by_key: BTreeMap::new(),
+            charged_global: HistoryUsage::default(),
+            charged_by_owner: BTreeMap::new(),
+            accounting_steps: 0,
+            next_reservation: 0,
+            refusals: BTreeMap::new(),
+        }
+    }
+
+    fn note_refusal(&mut self, error: &FirestoreError) {
+        let dimension = match error {
+            FirestoreError::HistoryCapacity(capacity) => capacity.dimension,
+            _ => "other",
+        };
+        *self.refusals.entry(dimension).or_default() += 1;
+    }
+
+    fn adjust_totals(&mut self, old: Option<&HistoryCharge>, new: Option<&HistoryCharge>) {
+        if let Some(old) = old {
+            self.accounting_steps = self.accounting_steps.saturating_add(1);
+            self.charged_global = subtract_aggregate_usage(self.charged_global, old.usage);
+            let remove_owner = {
+                let total = self.charged_by_owner.entry(old.owner.clone()).or_default();
+                *total = subtract_aggregate_usage(*total, old.usage);
+                total.versions == 0 && total.total_bytes == 0
+            };
+            if remove_owner {
+                self.charged_by_owner.remove(&old.owner);
+            }
+        }
+        if let Some(new) = new {
+            self.accounting_steps = self.accounting_steps.saturating_add(1);
+            self.charged_global = add_aggregate_usage(self.charged_global, new.usage);
+            let owner = self.charged_by_owner.entry(new.owner.clone()).or_default();
+            *owner = add_aggregate_usage(*owner, new.usage);
+        }
+    }
+
+    fn reserve(
+        &mut self,
+        key: (String, String),
+        owner: HistoryBudgetOwner,
+        mut usage: HistoryUsage,
+    ) -> Result<u64, FirestoreError> {
+        // A speculative reduction is not capacity another database may consume. It becomes
+        // visible only when this reservation commits; cancellation must leave the old charge.
+        if self.pending_by_key.contains_key(&key) {
+            let error = FirestoreError::HistoryCapacity(HistoryCapacityError {
+                dimension: "database reservation",
+                current: 1,
+                maximum: 0,
+            });
+            self.note_refusal(&error);
+            return Err(error);
+        }
+        let previous = self.committed.get(&key).cloned();
+        if let Some(committed) = &previous {
+            usage.total_bytes = usage.total_bytes.max(committed.usage.total_bytes);
+            usage.versions = usage.versions.max(committed.usage.versions);
+        }
+        let charge = HistoryCharge { owner, usage };
+        let candidate_global = add_aggregate_usage(
+            previous.as_ref().map_or(self.charged_global, |old| {
+                subtract_aggregate_usage(self.charged_global, old.usage)
+            }),
+            charge.usage,
+        );
+        if let Err(error) = self.validate_global(candidate_global) {
+            self.note_refusal(&error);
+            return Err(error);
+        }
+        let current_owner_total = self
+            .charged_by_owner
+            .get(&charge.owner)
+            .copied()
+            .unwrap_or_default();
+        let without_previous = previous.as_ref().map_or(current_owner_total, |old| {
+            if old.owner == charge.owner {
+                subtract_aggregate_usage(current_owner_total, old.usage)
+            } else {
+                current_owner_total
+            }
+        });
+        if let Err(error) = self.validate_owner(add_aggregate_usage(without_previous, charge.usage))
+        {
+            self.note_refusal(&error);
+            return Err(error);
+        }
+        let id = self.next_reservation;
+        self.next_reservation = self.next_reservation.wrapping_add(1);
+        self.adjust_totals(previous.as_ref(), Some(&charge));
+        self.pending.insert(
+            id,
+            PendingHistoryCharge {
+                key: key.clone(),
+                charge,
+            },
+        );
+        self.pending_by_key.insert(key, id);
+        Ok(id)
+    }
+
+    fn validate_global(&self, global: HistoryUsage) -> Result<(), FirestoreError> {
+        check_aggregate_history_limit(
+            "global versions",
+            global.versions,
+            self.limits.global_versions,
+        )?;
+        check_aggregate_history_limit(
+            "global bytes",
+            global.total_bytes,
+            self.limits.global_bytes,
+        )?;
+        Ok(())
+    }
+
+    fn validate_owner(&self, session: HistoryUsage) -> Result<(), FirestoreError> {
+        check_aggregate_history_limit(
+            "session versions",
+            session.versions,
+            self.limits.session_versions,
+        )?;
+        check_aggregate_history_limit(
+            "session bytes",
+            session.total_bytes,
+            self.limits.session_bytes,
+        )
+    }
+
+    fn validate_replacement(
+        &self,
+        removed: impl Iterator<Item = HistoryCharge>,
+        added: impl Iterator<Item = HistoryCharge>,
+    ) -> Result<(), FirestoreError> {
+        let mut global = self.charged_global;
+        let mut owners = self.charged_by_owner.clone();
+        for charge in removed {
+            global = subtract_aggregate_usage(global, charge.usage);
+            let total = owners.entry(charge.owner).or_default();
+            *total = subtract_aggregate_usage(*total, charge.usage);
+        }
+        for charge in added {
+            global = add_aggregate_usage(global, charge.usage);
+            let total = owners.entry(charge.owner).or_default();
+            *total = add_aggregate_usage(*total, charge.usage);
+        }
+        self.validate_global(global)?;
+        for usage in owners.into_values() {
+            self.validate_owner(usage)?;
+        }
+        Ok(())
+    }
+
+    fn remove_committed(&mut self, key: &(String, String)) {
+        if let Some(charge) = self.committed.remove(key) {
+            self.adjust_totals(Some(&charge), None);
+        }
+    }
+
+    fn replace_committed(&mut self, key: (String, String), charge: &HistoryCharge) {
+        let old = self.committed.insert(key, charge.clone());
+        self.adjust_totals(old.as_ref(), Some(charge));
+    }
+}
+
+fn add_aggregate_usage(mut total: HistoryUsage, usage: HistoryUsage) -> HistoryUsage {
+    total.total_bytes = total.total_bytes.saturating_add(usage.total_bytes);
+    total.versions = total.versions.saturating_add(usage.versions);
+    total
+}
+
+fn subtract_aggregate_usage(mut total: HistoryUsage, usage: HistoryUsage) -> HistoryUsage {
+    total.total_bytes = total.total_bytes.saturating_sub(usage.total_bytes);
+    total.versions = total.versions.saturating_sub(usage.versions);
+    total
+}
+
+fn check_aggregate_history_limit(
+    dimension: &'static str,
+    current: u64,
+    maximum: u64,
+) -> Result<(), FirestoreError> {
+    if current > maximum {
+        Err(FirestoreError::HistoryCapacity(HistoryCapacityError {
+            dimension,
+            current,
+            maximum,
+        }))
+    } else {
+        Ok(())
+    }
+}
+
+struct HistoryReservation {
+    ledger: Arc<Mutex<HistoryBudgetLedger>>,
+    id: u64,
+    committed: bool,
+}
+
+impl HistoryReservation {
+    fn commit(mut self, actual: HistoryUsage) {
+        let mut ledger = self
+            .ledger
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(mut pending) = ledger.pending.remove(&self.id) {
+            ledger.pending_by_key.remove(&pending.key);
+            let reserved = pending.charge.clone();
+            pending.charge.usage = actual;
+            ledger.adjust_totals(Some(&reserved), Some(&pending.charge));
+            ledger.committed.insert(pending.key, pending.charge);
+        }
+        self.committed = true;
+    }
+}
+
+impl Drop for HistoryReservation {
+    fn drop(&mut self) {
+        if !self.committed {
+            let mut ledger = self
+                .ledger
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(pending) = ledger.pending.remove(&self.id) {
+                ledger.pending_by_key.remove(&pending.key);
+                let committed = ledger.committed.get(&pending.key).cloned();
+                ledger.adjust_totals(Some(&pending.charge), committed.as_ref());
+            }
+        }
+    }
+}
+
+/// Synchronous observer of committed changes (see [`LocalBackend::set_change_sink`]).
 pub type ChangeSink = Arc<dyn Fn(&CommitEvent) + Send + Sync>;
+
+/// A complete logical-event reservation for one Firestore commit.
+pub trait CommitPublication: Send {
+    /// Publishes the already admitted event batch after the source state is visible.
+    fn publish(self: Box<Self>);
+}
+
+/// Reserves every logical event a prospective Firestore commit requires.
+pub trait AtomicChangeSink: Send + Sync {
+    /// Returns a complete reservation or refuses before the source state changes.
+    fn reserve(
+        &self,
+        event: &CommitEvent,
+    ) -> Result<Box<dyn CommitPublication>, fireemu_core_types::admission::EventAdmissionError>;
+}
+
+struct NoopCommitPublication;
+
+impl CommitPublication for NoopCommitPublication {
+    fn publish(self: Box<Self>) {}
+}
+
+/// The lock contention wait the daemon runs with. Production makes a colliding writer wait
+/// for the transaction's locks and refuses it with `ABORTED` after a bound of its own
+/// (measured under a minute in conformance/firestore-production-matrix.json,
+/// transactions/lifecycle#out-of-band-write); the official emulator answers "Transaction lock
+/// timeout." on the same shape. fireemu waits this long.
+pub const DEFAULT_CONTENTION_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// How long (wall clock) a transaction may keep other writers blocked on its locks before it
+/// is rolled back: production expires a transaction idle for 60 seconds, which is what
+/// releases a lock a client stopped driving. The lease is wall time even under a pinned
+/// virtual clock, so a client awaiting a write that its own transaction blocks (a pattern
+/// the SDKs' commit retries turn into a long wait in production too) eventually proceeds.
+pub const DEFAULT_LOCK_LEASE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Commit notifications retained for slow Listen and UI subscribers. Lag is recoverable by
 /// reading one current database snapshot, so a small ring bounds retained path metadata.
@@ -333,6 +758,14 @@ thread_local! {
     /// staged by a guard whose commit then failed is never attributed to a later commit.
     static PENDING_ACTOR: std::cell::RefCell<Option<Actor>> =
         const { std::cell::RefCell::new(None) };
+}
+
+thread_local! {
+    /// Set while a REST request runs on a blocking-pool thread: a write refused for lock
+    /// contention is not waited on there (that would hold the pool slot), it is reported
+    /// through this slot and the connection task waits without the slot instead.
+    static NO_WAIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static CONTENDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Clears the operation-local actor slot on entry and on the way out.
@@ -565,23 +998,68 @@ impl LocalBackend {
             (None, DatabaseId::DEFAULT.to_owned()),
             gateway.indexes.clone(),
         )]));
+        let created_at = clock
+            .lock()
+            .map(|clock| clock.now())
+            .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH);
         Self {
+            created_at,
+            contention_wait: std::time::Duration::ZERO,
+            lock_lease: DEFAULT_LOCK_LEASE,
             gateway,
             indexes,
             clock,
             wall_clock_write_time: false,
             history_version_limit:
                 fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
+            history_budget: Arc::new(Mutex::new(HistoryBudgetLedger::new(
+                HistoryBudgetLimits::default(),
+            ))),
+            tenancy: Mutex::new(None),
             databases: Mutex::new(BTreeMap::new()),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
+            transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
+            token_key: {
+                let mut key_source = SplitMix64::new(seed ^ 0x544f_4b45_4e4b_4559);
+                let mut key = [0_u8; 32];
+                for chunk in key.chunks_mut(8) {
+                    chunk.copy_from_slice(&key_source.next_u64().to_be_bytes());
+                }
+                key
+            },
+            release_count: std::sync::atomic::AtomicU64::new(0),
+            release_notify: tokio::sync::Notify::new(),
             commits: tokio::sync::broadcast::channel(COMMIT_NOTIFICATION_CAPACITY).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
             change_sink: Mutex::new(None),
+            change_admission: Mutex::new(None),
             barrier: Arc::new(AdmissionBarrier::new()),
         }
+    }
+
+    /// How long a commit outside a transaction waits for the locks an active read-write
+    /// transaction holds before it is refused (see [`DEFAULT_CONTENTION_WAIT`]). The
+    /// constructor's default is zero: the refusal is immediate and deterministic.
+    #[must_use]
+    pub const fn with_contention_wait(mut self, wait: std::time::Duration) -> Self {
+        self.contention_wait = wait;
+        self
+    }
+
+    /// The configured lock contention wait.
+    #[must_use]
+    pub const fn contention_wait(&self) -> std::time::Duration {
+        self.contention_wait
+    }
+
+    /// How long a transaction may keep writers blocked before it is rolled back.
+    #[must_use]
+    pub const fn with_lock_lease(mut self, lease: std::time::Duration) -> Self {
+        self.lock_lease = lease;
+        self
     }
 
     /// Uses host wall time for Firestore commit timestamps. This is selected only when the
@@ -604,6 +1082,75 @@ impl LocalBackend {
         self
     }
 
+    /// Overrides aggregate history limits for deterministic tests and embedders.
+    #[must_use]
+    pub fn with_history_budget_limits(mut self, limits: HistoryBudgetLimits) -> Self {
+        self.history_budget = Arc::new(Mutex::new(HistoryBudgetLedger::new(limits)));
+        self
+    }
+
+    /// Shares the session ownership registry used by control-plane registration.
+    pub fn set_tenancy(&self, tenancy: fireemu_core_session::tenancy::SharedTenancy) {
+        *self
+            .tenancy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tenancy);
+    }
+
+    fn history_owner(&self, project: &str) -> HistoryBudgetOwner {
+        let tenancy = self
+            .tenancy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        tenancy.map_or(HistoryBudgetOwner::Default, |tenancy| {
+            let tenancy = tenancy
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if tenancy.is_registered(project) {
+                HistoryBudgetOwner::Project(project.to_owned())
+            } else {
+                HistoryBudgetOwner::Default
+            }
+        })
+    }
+
+    fn reserve_history(
+        &self,
+        parent: &Parent,
+        projection: HistoryProjection,
+    ) -> Result<HistoryReservation, FirestoreError> {
+        let owner = self.history_owner(parent.project.as_str());
+        let mut ceiling = projection.after;
+        ceiling.total_bytes = ceiling.total_bytes.max(projection.before.total_bytes);
+        ceiling.versions = ceiling.versions.max(projection.before.versions);
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let id = ledger.reserve(database_key(parent), owner, ceiling)?;
+        drop(ledger);
+        Ok(HistoryReservation {
+            ledger: self.history_budget.clone(),
+            id,
+            committed: false,
+        })
+    }
+
+    fn reconcile_history(&self, parent: &Parent, usage: HistoryUsage) {
+        let key = database_key(parent);
+        let owner = self.history_owner(parent.project.as_str());
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if usage.versions == 0 && usage.total_bytes == 0 {
+            ledger.remove_committed(&key);
+        } else {
+            ledger.replace_committed(key, &HistoryCharge { owner, usage });
+        }
+    }
+
     /// The session's admission barrier (share it with every other mutable surface).
     #[must_use]
     pub fn barrier(&self) -> Arc<AdmissionBarrier> {
@@ -616,6 +1163,13 @@ impl LocalBackend {
     /// its own queue.
     pub fn set_change_sink(&self, sink: ChangeSink) {
         if let Ok(mut slot) = self.change_sink.lock() {
+            *slot = Some(sink);
+        }
+    }
+
+    /// Installs the source-publication admission boundary used by a Functions runtime.
+    pub fn set_atomic_change_sink(&self, sink: Arc<dyn AtomicChangeSink>) {
+        if let Ok(mut slot) = self.change_admission.lock() {
             *slot = Some(sink);
         }
     }
@@ -686,13 +1240,21 @@ impl LocalBackend {
             }
             Err(_) => Vec::new(),
         };
-        removed
+        let keys: Vec<(String, String)> = removed
             .into_iter()
             .map(|(key, handle)| {
                 handle.detach();
                 key
             })
-            .collect()
+            .collect();
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for key in &keys {
+            ledger.remove_committed(key);
+        }
+        keys
     }
 
     fn announce_wipe(&self, databases: Vec<(String, String)>) {
@@ -740,12 +1302,197 @@ impl LocalBackend {
     pub fn compact_all(&self, now: fireemu_core_types::time::LogicalInstant) {
         let scope =
             fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
-        for (_, handle) in self.handles_of(&scope) {
-            let _ = handle.with(|state| {
+        for (key, handle) in self.handles_of(&scope) {
+            let usage = handle.with(|state| {
                 state.compact(now);
-                Ok(())
+                Ok(state.history_usage())
             });
+            if let Ok(usage) = usage {
+                let mut ledger = self
+                    .history_budget
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(mut charge) = ledger.committed.get(&key).cloned() {
+                    charge.usage = usage;
+                    ledger.replace_committed(key, &charge);
+                }
+            }
         }
+    }
+
+    /// One session's Firestore retention report for the resource diagnostics: the session's
+    /// logical history charge against its limits (the backend-wide charge for the default
+    /// session only, so a session never reads another session's byte or version totals), the
+    /// ledger's refusal counts by limit (backend-wide counts by category, carrying no
+    /// identifier), and one root per database plus one per database with active transactions.
+    /// Each database is read under its own lock, one after another; the report never holds
+    /// two databases' locks or the catalog lock while reading a database.
+    ///
+    /// # Errors
+    ///
+    /// A database whose lock is poisoned or that was detached while the report was collected
+    /// is an error, never a silently missing root: its transactions would otherwise vanish
+    /// from a report that claims to be complete.
+    pub fn resources(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        budget: RootBudget,
+    ) -> Result<ServiceResources, String> {
+        let owner = match scope {
+            fireemu_core_session::tenancy::Scope::Project(project) => {
+                HistoryBudgetOwner::Project(project.clone())
+            }
+            fireemu_core_session::tenancy::Scope::AllExcept(_) => HistoryBudgetOwner::Default,
+        };
+        let (mut gauges, refusals) = self.history_budget_gauges(&owner, scope.is_default())?;
+        let (database_gauges, roots, unreadable) = self.database_roots(scope);
+        if unreadable > 0 {
+            return Err(format!(
+                "{unreadable} database(s) could not be read (poisoned or detached during the report)"
+            ));
+        }
+        gauges.extend(database_gauges);
+        Ok(ServiceResources {
+            service: "firestore".to_owned(),
+            gauges,
+            refusals,
+            roots: budget.bound(roots),
+        })
+    }
+
+    /// The ledger's view: the owner's charge against the session limits, the backend-wide
+    /// charge against the global limits for the default session only, and the refusals by
+    /// limit.
+    fn history_budget_gauges(
+        &self,
+        owner: &HistoryBudgetOwner,
+        report_global: bool,
+    ) -> Result<(Vec<Gauge>, Vec<Refusal>), String> {
+        // A poisoned ledger is a half-applied update, not a value to report as complete.
+        let ledger = self
+            .history_budget
+            .lock()
+            .map_err(|_| "the history budget ledger is poisoned".to_owned())?;
+        let session = ledger
+            .charged_by_owner
+            .get(owner)
+            .copied()
+            .unwrap_or_default();
+        let limits = ledger.limits;
+        let mut gauges = vec![
+            Gauge::logical(
+                "history.session_bytes",
+                Unit::Bytes,
+                session.total_bytes,
+                Some(limits.session_bytes),
+            ),
+            Gauge::logical(
+                "history.session_versions",
+                Unit::Count,
+                session.versions,
+                Some(limits.session_versions),
+            ),
+        ];
+        if report_global {
+            gauges.push(Gauge::logical(
+                "history.global_bytes",
+                Unit::Bytes,
+                ledger.charged_global.total_bytes,
+                Some(limits.global_bytes),
+            ));
+            gauges.push(Gauge::logical(
+                "history.global_versions",
+                Unit::Count,
+                ledger.charged_global.versions,
+                Some(limits.global_versions),
+            ));
+        }
+        let refusals = ledger
+            .refusals
+            .iter()
+            .map(|(reason, count)| Refusal {
+                reason: format!("history.{}", reason.replace(' ', "_")),
+                count: *count,
+            })
+            .collect();
+        Ok((gauges, refusals))
+    }
+
+    /// One root per database the scope owns (its retained versions and bytes) and one per
+    /// database with active transactions, each read under that database's own lock.
+    fn database_roots(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+    ) -> (Vec<Gauge>, Vec<RetentionRoot>, usize) {
+        let mut roots = Vec::new();
+        let mut live_bytes = 0u64;
+        let mut historical_bytes = 0u64;
+        let mut transactions = 0u64;
+        let mut unreadable = 0usize;
+        let mut reclaimable_bytes = 0u64;
+        let now = self.now();
+        for ((project, database), handle) in self.handles_of(scope) {
+            let Ok((usage, stats, reclaimable)) = handle.with(|state| {
+                Ok((
+                    state.history_usage(),
+                    state.transaction_bookkeeping_stats(),
+                    state.reclaimable_history_usage(now),
+                ))
+            }) else {
+                unreadable += 1;
+                continue;
+            };
+            reclaimable_bytes = reclaimable_bytes.saturating_add(reclaimable.total_bytes);
+            live_bytes = live_bytes.saturating_add(usage.live_document_bytes);
+            historical_bytes = historical_bytes.saturating_add(usage.historical_document_bytes);
+            let active = u64::try_from(stats.active).unwrap_or(u64::MAX);
+            transactions = transactions.saturating_add(active);
+            let id = format!("{project}/{database}");
+            roots.push(RetentionRoot {
+                kind: "database".to_owned(),
+                id: id.clone(),
+                count: usage.versions,
+                bytes: usage.total_bytes,
+                outstanding: false,
+            });
+            if active > 0 {
+                roots.push(RetentionRoot {
+                    kind: "transactions".to_owned(),
+                    id,
+                    count: active,
+                    bytes: stats.conflict_ledger_bytes,
+                    outstanding: true,
+                });
+            }
+        }
+        let gauges = vec![
+            Gauge::logical("history.live_document_bytes", Unit::Bytes, live_bytes, None),
+            Gauge::logical(
+                "history.historical_document_bytes",
+                Unit::Bytes,
+                historical_bytes,
+                None,
+            ),
+            Gauge::logical("transactions.active", Unit::Count, transactions, None),
+            // What the next compaction would release from these databases' retained history.
+            Gauge::logical(
+                "history.reclaimable_bytes",
+                Unit::Bytes,
+                reclaimable_bytes,
+                None,
+            )
+            .with_reclaimable(reclaimable_bytes),
+        ];
+        (gauges, roots, unreadable)
+    }
+
+    /// Aggregate logical Firestore history retained by the backend.
+    #[must_use]
+    pub fn history_usage(&self) -> HistoryUsage {
+        self.history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .charged_global
     }
 
     /// Copies the databases `scope` owns, each under its own lock.
@@ -787,14 +1534,17 @@ impl LocalBackend {
 
     /// Replaces every database with `databases` (the default session's restore): a new
     /// epoch, and the streams opened before it end like on a reset.
-    pub fn restore_databases(&self, databases: BTreeMap<(String, String), FirestoreState>) {
+    pub fn restore_databases(
+        &self,
+        databases: BTreeMap<(String, String), FirestoreState>,
+    ) -> Result<(), Status> {
         self.restore_scope(
             &fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new()),
             &FirestoreSnapshot {
                 databases,
                 ids: None,
             },
-        );
+        )
     }
 
     /// Replaces the databases `scope` owns with the snapshot's (the others stay). The
@@ -804,7 +1554,40 @@ impl LocalBackend {
         &self,
         scope: &fireemu_core_session::tenancy::Scope,
         snapshot: &FirestoreSnapshot,
-    ) {
+    ) -> Result<(), Status> {
+        let restored_charges: BTreeMap<(String, String), HistoryCharge> = snapshot
+            .databases
+            .iter()
+            .filter(|(key, _)| scope.owns_project(&key.0))
+            .map(|(key, state)| {
+                (
+                    key.clone(),
+                    HistoryCharge {
+                        owner: self.history_owner(&key.0),
+                        usage: state.history_usage(),
+                    },
+                )
+            })
+            .collect();
+        {
+            let ledger = self
+                .history_budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !ledger.pending.is_empty() {
+                return Err(Status::unavailable(
+                    "Firestore history reservations are still in flight",
+                ));
+            }
+            let removed = ledger
+                .committed
+                .iter()
+                .filter(|((project, _), _)| scope.owns_project(project))
+                .map(|(_, charge)| charge.clone());
+            ledger
+                .validate_replacement(removed, restored_charges.values().cloned())
+                .map_err(|error| status_from_error(&error))?;
+        }
         if scope.is_default() {
             self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -832,8 +1615,25 @@ impl LocalBackend {
                 *rng = ids.clone();
             }
         }
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let removed_keys: Vec<_> = ledger
+            .committed
+            .keys()
+            .filter(|(project, _)| scope.owns_project(project))
+            .cloned()
+            .collect();
+        for key in removed_keys {
+            ledger.remove_committed(&key);
+        }
+        for (key, charge) in restored_charges {
+            ledger.replace_committed(key, &charge);
+        }
         self.bump_generations(&touched);
         self.announce_wipe(touched);
+        Ok(())
     }
 
     /// Drops every database (session reset). Listen streams observe the wipe as deletes.
@@ -944,20 +1744,53 @@ impl LocalBackend {
         });
     }
 
-    fn publish(&self, parent: &Parent, result: &CommitResult) {
-        let actor = PENDING_ACTOR
-            .with(|slot| slot.try_borrow_mut().ok().and_then(|mut s| s.take()))
-            .unwrap_or_else(Actor::system);
-        let event = CommitEvent {
-            actor,
-            project: parent.project.as_str().to_owned(),
-            database: parent.database.as_str().to_owned(),
-            version: result.version.value(),
-            commit_time: Some(result.commit_time),
-            changes: result.changes.clone(),
-        };
+    fn take_commit_actor() -> Actor {
+        PENDING_ACTOR
+            .with(|slot| slot.try_borrow_mut().ok().and_then(|mut slot| slot.take()))
+            .unwrap_or_else(Actor::system)
+    }
+
+    fn commit_with_events(
+        &self,
+        parent: &Parent,
+        db: &mut FirestoreState,
+        writes: &[Write],
+        transaction: Option<&TransactionId>,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<CommitResult, Status> {
+        let actor = Self::take_commit_actor();
+        let sink = self
+            .change_admission
+            .lock()
+            .map_err(|_| Status::unavailable("Functions event admission is unavailable"))?
+            .clone();
+        let (result, (event, publication, history)) = db
+            .commit_with_history_admission(writes, transaction, now, |result, projection| {
+                let history = self.reserve_history(parent, projection)?;
+                let event = CommitEvent {
+                    actor,
+                    project: parent.project.as_str().to_owned(),
+                    database: parent.database.as_str().to_owned(),
+                    version: result.version.value(),
+                    commit_time: Some(result.commit_time),
+                    changes: result.changes.clone(),
+                };
+                let publication = sink.as_ref().map_or_else(
+                    || Ok(Box::new(NoopCommitPublication) as Box<dyn CommitPublication>),
+                    |sink| sink.reserve(&event).map_err(FirestoreError::EventAdmission),
+                )?;
+                Ok((event, publication, history))
+            })
+            .map_err(|error| status_from_error(&error))?;
+        history.commit(db.history_usage());
+        publication.publish();
+        self.publish_committed(&event, &result);
+        Ok(result)
+    }
+
+    fn publish_committed(&self, event: &CommitEvent, result: &CommitResult) {
         if let Some(sink) = self.change_sink.lock().ok().and_then(|s| s.clone()) {
-            sink(&event);
+            sink(event);
         }
         let changes = result
             .changes
@@ -972,8 +1805,8 @@ impl LocalBackend {
             })
             .collect::<Arc<[_]>>();
         let _ = self.commits.send(CommitNotification {
-            project: event.project,
-            database: event.database,
+            project: event.project.clone(),
+            database: event.database.clone(),
             version: event.version,
             reset: false,
             changes,
@@ -987,17 +1820,16 @@ impl LocalBackend {
         writes: &[Write],
         guard: WriteGuard<'_>,
     ) -> Result<crate::streams::WireCommit, Status> {
-        self.fault(parent.project.as_str(), "firestore.commit")?;
-        let now = self.write_time();
-        let result = self.with_db(parent, |db| {
-            guard(db, writes, now)?;
-            let result = db
-                .commit(writes, None, now)
-                .map_err(|error| status_from_error(&error))?;
-            self.publish(parent, &result);
-            Ok(result)
-        })?;
-        Ok(crate::streams::WireCommit::from_result(&result))
+        self.retry_on_contention(parent, None, writes, || {
+            self.fault(parent.project.as_str(), "firestore.commit")?;
+            let now = self.write_time();
+            let result = self.with_db(parent, |db| {
+                guard(db, writes, now)?;
+                let result = self.commit_with_events(parent, db, writes, None, now)?;
+                Ok(result)
+            })?;
+            Ok(crate::streams::WireCommit::from_result(&result))
+        })
     }
 
     /// Current version and read time of a database (Listen boundaries, resume tokens).
@@ -1325,9 +2157,17 @@ impl LocalBackend {
         Ok(DatabaseHandle(
             dbs.entry(database_key(parent))
                 .or_insert_with(|| {
+                    // Transaction ids start at a seeded offset: a token names one transaction
+                    // and cannot be guessed from how many the database has begun.
+                    let offset = self
+                        .transaction_ids
+                        .lock()
+                        .map(|mut ids| ids.next_u64() >> 2)
+                        .unwrap_or(0);
                     Arc::new(DatabaseEntry::restored(
                         FirestoreState::with_limit_scope(scope)
-                            .with_retained_version_limit(self.history_version_limit),
+                            .with_retained_version_limit(self.history_version_limit)
+                            .with_transaction_id_offset(offset),
                     ))
                 })
                 .clone(),
@@ -1348,7 +2188,21 @@ impl LocalBackend {
         // Attribution is confined to this operation: whatever a previous one left on this
         // thread is dropped here, and whatever this one stages is dropped on the way out.
         let _actor = ActorScope::enter();
-        handle.with(f)
+        let releases_before = handle.release_marker();
+        let outcome = handle.with(|state| {
+            let outcome = f(state);
+            // Core operations may legally release an expired retention root even when the
+            // requested operation returns an error. Reconcile before releasing this database
+            // lock so a later same-database commit cannot be overwritten by stale accounting.
+            self.reconcile_history(parent, state.history_usage());
+            outcome
+        });
+        if handle.release_marker() != releases_before {
+            self.release_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.release_notify.notify_waiters();
+        }
+        outcome
     }
 
     fn read_db<T>(
@@ -1362,32 +2216,60 @@ impl LocalBackend {
     }
 
     fn auto_id(&self) -> String {
-        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         let mut rng = match self.ids.lock() {
             Ok(r) => r,
             Err(p) => p.into_inner(),
         };
-        (0..20)
-            .map(|_| {
-                let index = usize::try_from(rng.next_below(ALPHABET.len() as u64)).unwrap_or(0);
-                ALPHABET[index] as char
-            })
-            .collect()
+        auto_id_from(&mut rng)
     }
 
     /// Wire token for a transaction: the handle plus a tag binding it to its database, so a
     /// token issued by one database is rejected by another.
-    fn token(parent: &Parent, id: &TransactionId) -> Vec<u8> {
+    fn token(&self, parent: &Parent, id: &TransactionId) -> Vec<u8> {
         let mut bytes = encode_transaction(id);
         bytes.extend_from_slice(&database_tag(parent).to_be_bytes());
+        let mac = self.token_mac(&bytes);
+        bytes.extend_from_slice(&mac);
         bytes
     }
 
-    fn txn(parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
+    /// The authenticator of a token's handle and database tag: the first 8 bytes of
+    /// SHA-256 over the backend's token key and those bytes.
+    fn token_mac(&self, handle_and_tag: &[u8]) -> [u8; 8] {
+        let mut digest = fireemu_core_types::hash::Sha256::new();
+        digest.update(&self.token_key);
+        digest.update(handle_and_tag);
+        let full = digest.finalize();
+        let mut mac = [0_u8; 8];
+        mac.copy_from_slice(&full[..8]);
+        mac
+    }
+
+    /// The transaction a wire token names, if any (public form of the token check).
+    pub fn txn_of(&self, parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
+        self.txn(parent, bytes)
+    }
+
+    fn txn(&self, parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
         if bytes.is_empty() {
             return Ok(None);
         }
-        let (handle, tag) = bytes.split_at(bytes.len().saturating_sub(8));
+        // [handle][database tag: 8][authenticator: 8]; a token this backend did not issue,
+        // for this database, is invalid whatever else it decodes to.
+        let (authenticated, mac) = bytes.split_at(bytes.len().saturating_sub(8));
+        let expected = self.token_mac(authenticated);
+        let authentic = mac.len() == 8
+            && mac
+                .iter()
+                .zip(expected.iter())
+                .fold(0_u8, |difference, (left, right)| {
+                    difference | (left ^ right)
+                })
+                == 0;
+        if !authentic {
+            return Err(Status::invalid_argument("Invalid transaction."));
+        }
+        let (handle, tag) = authenticated.split_at(authenticated.len().saturating_sub(8));
         let tag: Option<[u8; 8]> = tag.try_into().ok();
         if tag.map(u64::from_be_bytes) != Some(database_tag(parent)) {
             return Err(Status::invalid_argument(
@@ -1397,8 +2279,9 @@ impl LocalBackend {
         decode_transaction(handle).map(Some).map_err(status)
     }
 
-    fn required_txn(parent: &Parent, bytes: &[u8]) -> Result<TransactionId, Status> {
-        Self::txn(parent, bytes)?.ok_or_else(|| Status::invalid_argument("missing transaction"))
+    fn required_txn(&self, parent: &Parent, bytes: &[u8]) -> Result<TransactionId, Status> {
+        self.txn(parent, bytes)?
+            .ok_or_else(|| Status::invalid_argument("missing transaction"))
     }
 
     /// Rejects document names outside the request's database.
@@ -1423,9 +2306,25 @@ impl LocalBackend {
     /// Validates a `read_time` selector: a well-formed, microsecond-precision timestamp that
     /// is not in the future and lies within the retention window
     /// ([`READ_TIME_RETENTION_SECONDS`]).
+    /// The latest instant a `read_time` may name for `parent`'s database: the clock, or the
+    /// last commit time when commits were aligned past a clock that did not move (a read at
+    /// the commit time a commit just reported is valid in production).
+    fn read_time_horizon(
+        &self,
+        parent: &Parent,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> fireemu_core_types::time::LogicalInstant {
+        self.database_handle(parent)
+            .ok()
+            .and_then(|handle| handle.read(|db| db.read_time(now)))
+            .unwrap_or(now)
+    }
+
     fn read_time_selector(
+        &self,
         ts: &prost_types::Timestamp,
         now: fireemu_core_types::time::LogicalInstant,
+        horizon: fireemu_core_types::time::LogicalInstant,
     ) -> Result<fireemu_core_types::time::LogicalInstant, Status> {
         if !(0..1_000_000_000).contains(&ts.nanos) {
             return Err(Status::invalid_argument("read_time: nanos out of range"));
@@ -1436,17 +2335,24 @@ impl LocalBackend {
             ));
         }
         let at = crate::encode::decode_instant(ts);
-        if at.as_nanos() > now.as_nanos() {
+        if at.as_nanos() > horizon.max(now).as_nanos() {
             return Err(Status::invalid_argument(
                 "read_time must not be in the future",
             ));
         }
+        // Production answers a read_time before the database existed with INVALID_ARGUMENT and
+        // one inside the database's life but outside the retention window with
+        // FAILED_PRECONDITION, in these words (conformance/firestore-production-matrix.json).
+        if at < self.created_at {
+            return Err(Status::invalid_argument(
+                "The requested 'read_time' cannot be before database creation time.",
+            ));
+        }
         let oldest = now.as_nanos() - i128::from(READ_TIME_RETENTION_SECONDS) * 1_000_000_000;
         if at.as_nanos() < oldest {
-            // FAILED_PRECONDITION, as the backend and the official emulator answer it.
-            return Err(Status::failed_precondition(format!(
-                "The requested 'read_time' is too old (it must be within the past {READ_TIME_RETENTION_SECONDS} seconds)."
-            )));
+            return Err(Status::failed_precondition(
+                "The requested 'read_time' is too old.",
+            ));
         }
         Ok(at)
     }
@@ -1466,6 +2372,7 @@ impl LocalBackend {
     /// read-write mode is given (Firestore's default for `new_transaction`), at the
     /// `read_time` snapshot when one is requested.
     fn new_transaction(
+        &self,
         parent: &Parent,
         db: &mut FirestoreState,
         opts: &pb::TransactionOptions,
@@ -1476,13 +2383,13 @@ impl LocalBackend {
                 if read_write.retry_transaction.is_empty() {
                     db.begin_transaction(false, now)
                 } else {
-                    let previous = Self::required_txn(parent, &read_write.retry_transaction)?;
+                    let previous = self.required_txn(parent, &read_write.retry_transaction)?;
                     db.retry_transaction(&previous, now)
                 }
             }
             Some(pb::transaction_options::Mode::ReadOnly(ro)) => match &ro.consistency_selector {
                 Some(pb::transaction_options::read_only::ConsistencySelector::ReadTime(ts)) => {
-                    let at = Self::read_time_selector(ts, now)?;
+                    let at = self.read_time_selector(ts, now, db.read_time(now))?;
                     db.begin_transaction_at(at, now)
                 }
                 None => db.begin_transaction(true, now),
@@ -1493,6 +2400,7 @@ impl LocalBackend {
     }
 
     fn select_snapshot(
+        &self,
         parent: &Parent,
         db: &mut FirestoreState,
         selector: SnapshotSelector<'_>,
@@ -1500,7 +2408,7 @@ impl LocalBackend {
     ) -> Result<SelectedSnapshot, Status> {
         match selector {
             SnapshotSelector::Transaction(bytes) => {
-                let transaction = Self::required_txn(parent, bytes)?;
+                let transaction = self.required_txn(parent, bytes)?;
                 db.touch_transaction(&transaction, now)
                     .map_err(|error| status_from_error(&error))?;
                 Ok(SelectedSnapshot {
@@ -1510,8 +2418,8 @@ impl LocalBackend {
                 })
             }
             SnapshotSelector::NewTransaction(options) => {
-                let transaction = Self::new_transaction(parent, db, options, now)?;
-                let report = Self::token(parent, &transaction);
+                let transaction = self.new_transaction(parent, db, options, now)?;
+                let report = self.token(parent, &transaction);
                 Ok(SelectedSnapshot {
                     transaction: Some(transaction),
                     report,
@@ -1563,7 +2471,7 @@ impl LocalBackend {
             }),
             SnapshotSelector::Transaction(_) | SnapshotSelector::NewTransaction(_) => {
                 self.with_db(parent, |db| {
-                    let selected = Self::select_snapshot(parent, db, selector, now)?;
+                    let selected = self.select_snapshot(parent, db, selector, now)?;
                     let mut access = SnapshotAccess {
                         state: SnapshotState::Exclusive(db),
                         selected,
@@ -1595,11 +2503,12 @@ impl LocalBackend {
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::get_document_request::ConsistencySelector::Transaction(t)) => {
-                (Some(Self::required_txn(&parent, t)?), None)
+                (Some(self.required_txn(&parent, t)?), None)
             }
-            Some(pb::get_document_request::ConsistencySelector::ReadTime(ts)) => {
-                (None, Some(Self::read_time_selector(ts, now)?))
-            }
+            Some(pb::get_document_request::ConsistencySelector::ReadTime(ts)) => (
+                None,
+                Some(self.read_time_selector(ts, now, self.read_time_horizon(&parent, now))?),
+            ),
             None => (None, None),
         };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
@@ -1683,7 +2592,11 @@ impl LocalBackend {
                 SnapshotSelector::NewTransaction(options)
             }
             Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(Self::read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(self.read_time_selector(
+                    ts,
+                    now,
+                    self.read_time_horizon(&parent, now),
+                )?)
             }
             None => SnapshotSelector::Latest,
         };
@@ -1704,7 +2617,9 @@ impl LocalBackend {
                 .collect();
             guard(access.db(), version, ReadCheck::Documents(&reads))?;
             access.record_document_reads(&reads)?;
-            let items = req
+            // Production answers the found documents in name order and the missing names
+            // after them, whatever order the request listed them in.
+            let mut items: Vec<BatchGetItem> = req
                 .documents
                 .iter()
                 .zip(reads)
@@ -1713,6 +2628,10 @@ impl LocalBackend {
                     None => BatchGetItem::Missing(name.clone()),
                 })
                 .collect();
+            items.sort_by_cached_key(|item| match item {
+                BatchGetItem::Found(d) => (0u8, d.path.resource_name()),
+                BatchGetItem::Missing(name) => (1u8, name.clone()),
+            });
             Ok(BatchGetOutcome {
                 items,
                 transaction: access.report().to_vec(),
@@ -1784,8 +2703,7 @@ impl LocalBackend {
 
     /// `CreateDocument`.
     pub fn create_document(&self, req: &pb::CreateDocumentRequest) -> Result<pb::Document, Status> {
-        let (parent, write) = self.plan_create(req)?;
-        self.execute_planned(&parent, &write, req.mask.as_ref())
+        self.create_document_with(req, &allow_all)
     }
 
     /// Executes a single planned write and returns the resulting document.
@@ -1807,23 +2725,144 @@ impl LocalBackend {
         mask: Option<&pb::DocumentMask>,
         guard: WriteGuard<'_>,
     ) -> Result<pb::Document, Status> {
+        self.retry_on_contention(parent, None, std::slice::from_ref(write), || {
+            self.execute_planned_once(parent, write, mask, guard)
+        })
+    }
+
+    /// One attempt at a planned write: no waiting for lock contention.
+    pub fn execute_planned_once(
+        &self,
+        parent: &Parent,
+        write: &Write,
+        mask: Option<&pb::DocumentMask>,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::Document, Status> {
         self.fault(parent.project.as_str(), "firestore.commit")?;
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
         let now = self.write_time();
         let doc = self.with_db(parent, |db| {
             guard(db, std::slice::from_ref(write), now)?;
-            let result = db
-                .commit(std::slice::from_ref(write), None, now)
-                .map_err(|error| status_from_error(&error))?;
+            self.commit_with_events(parent, db, std::slice::from_ref(write), None, now)?;
             let doc = db
                 .get(&path)
                 .map(|document| encode_masked(document, mask.as_deref()))
                 .ok_or_else(|| Status::internal("document vanished after commit"))?;
-            self.publish(parent, &result);
             Ok(doc)
         })?;
         Ok(doc)
+    }
+
+    /// Plans, authorizes and publishes a create under one database critical section. An auto-ID
+    /// is serialized with the source commit and restored when any later gate refuses it.
+    pub fn create_document_with(
+        &self,
+        req: &pb::CreateDocumentRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::Document, Status> {
+        let (parent, lease) = Self::plan_create_lease(req)?;
+        self.retry_on_contention(&parent, None, std::slice::from_ref(&lease), || {
+            self.create_document_once(req, guard)
+        })
+    }
+
+    /// The database a create addresses and a stand-in write at the target collection (the
+    /// document id may not exist yet), which names the same locked ranges the real write
+    /// would, for lease bookkeeping.
+    pub fn plan_create_lease(req: &pb::CreateDocumentRequest) -> Result<(Parent, Write), Status> {
+        let parent = parse_parent(&req.parent).map_err(status)?;
+        let collection = CollectionId::try_new(req.collection_id.as_str())
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let document_id = if req.document_id.is_empty() {
+            "_"
+        } else {
+            req.document_id.as_str()
+        };
+        let relative = match &parent.document {
+            Some(path) => format!("{}/{}/{document_id}", path.relative(), collection.as_str()),
+            None => format!("{}/{document_id}", collection.as_str()),
+        };
+        let path = DocumentPath::parse(&parent.project, &parent.database, &relative)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        Ok((
+            parent,
+            Write {
+                op: WriteOp::Delete { path },
+                precondition: None,
+                transforms: Vec::new(),
+            },
+        ))
+    }
+
+    /// One attempt at a create: no waiting for lock contention.
+    pub fn create_document_once(
+        &self,
+        req: &pb::CreateDocumentRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::Document, Status> {
+        let parent = parse_parent(&req.parent).map_err(status)?;
+        let collection = CollectionId::try_new(req.collection_id.as_str())
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let fields = decode_fields(
+            &req.document
+                .as_ref()
+                .map(|document| document.fields.clone())
+                .unwrap_or_default(),
+        )
+        .map_err(status)?;
+        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
+        let now = self.write_time();
+        self.with_db(&parent, |db| {
+            let generated_id = req.document_id.is_empty();
+            let mut rng = generated_id.then(|| {
+                self.ids
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            });
+            let checkpoint = rng.as_deref().cloned();
+            let document_id = if generated_id {
+                auto_id_from(rng.as_deref_mut().expect("generated IDs hold the RNG lock"))
+            } else {
+                req.document_id.clone()
+            };
+            DocumentId::try_new(document_id.as_str())
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            let relative = match &parent.document {
+                Some(path) => format!(
+                    "{}/{}/{}",
+                    path.relative(),
+                    collection.as_str(),
+                    document_id
+                ),
+                None => format!("{}/{}", collection.as_str(), document_id),
+            };
+            let path = DocumentPath::parse(&parent.project, &parent.database, &relative)
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            let write = Write {
+                op: WriteOp::Set {
+                    path: path.clone(),
+                    fields: fields.clone(),
+                    update_mask: None,
+                },
+                precondition: Some(Precondition::Exists(false)),
+                transforms: Vec::new(),
+            };
+            let result = (|| {
+                guard(db, std::slice::from_ref(&write), now)?;
+                self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)?;
+                db.get(&path)
+                    .map(|document| encode_masked(document, mask.as_deref()))
+                    .ok_or_else(|| Status::internal("document vanished after commit"))
+            })();
+            if result.is_err() {
+                if let (Some(rng), Some(checkpoint)) = (rng.as_deref_mut(), checkpoint) {
+                    *rng = checkpoint;
+                }
+            }
+            result
+        })
     }
 
     /// Decodes an `UpdateDocument` request into its write.
@@ -1876,14 +2915,23 @@ impl LocalBackend {
         guard: WriteGuard<'_>,
     ) -> Result<(), Status> {
         let (parent, write) = Self::plan_delete(req)?;
+        self.retry_on_contention(&parent, None, std::slice::from_ref(&write), || {
+            self.delete_document_once(req, guard)
+        })
+    }
+
+    /// One attempt at a delete: no waiting for lock contention.
+    pub fn delete_document_once(
+        &self,
+        req: &pb::DeleteDocumentRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<(), Status> {
+        let (parent, write) = Self::plan_delete(req)?;
         self.fault(parent.project.as_str(), "firestore.commit")?;
         let now = self.write_time();
         self.with_db(&parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
-            let result = db
-                .commit(std::slice::from_ref(&write), None, now)
-                .map_err(|error| status_from_error(&error))?;
-            self.publish(&parent, &result);
+            self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)?;
             Ok(())
         })
     }
@@ -1929,7 +2977,7 @@ impl LocalBackend {
                         Some(
                             pb::transaction_options::read_only::ConsistencySelector::ReadTime(ts),
                         ) => {
-                            let at = Self::read_time_selector(ts, now)?;
+                            let at = self.read_time_selector(ts, now, db.read_time(now))?;
                             db.begin_transaction_at(at, now)
                         }
                         None => db.begin_transaction(true, now),
@@ -1938,13 +2986,13 @@ impl LocalBackend {
                 Some(pb::transaction_options::Mode::ReadWrite(read_write))
                     if !read_write.retry_transaction.is_empty() =>
                 {
-                    let previous = Self::required_txn(&parent, &read_write.retry_transaction)?;
+                    let previous = self.required_txn(&parent, &read_write.retry_transaction)?;
                     db.retry_transaction(&previous, now)
                 }
                 _ => db.begin_transaction(false, now),
             }
             .map_err(|e| status_from_error(&e))?;
-            Ok(Self::token(&parent, &id))
+            Ok(self.token(&parent, &id))
         })
     }
 
@@ -1953,33 +3001,253 @@ impl LocalBackend {
         self.commit_with(req, &allow_all)
     }
 
-    /// `Commit` with a write guard.
+    /// `Commit` with a write guard. A commit that collides with the locks of an active
+    /// read-write transaction waits for a release up to the configured contention wait
+    /// (blocking the calling thread; the REST surface runs on a blocking thread) and is then
+    /// refused the way production refuses it.
     pub fn commit_with(
         &self,
         req: &pb::CommitRequest,
         guard: WriteGuard<'_>,
     ) -> Result<pb::CommitResponse, Status> {
         let (parent, writes) = Self::plan_commit(req)?;
+        let own = self.txn(&parent, &req.transaction)?;
+        self.retry_on_contention(&parent, own.as_ref(), &writes, || {
+            self.commit_once(req, guard)
+        })
+    }
+
+    /// One attempt at `Commit`: no waiting for lock contention.
+    pub fn commit_once(
+        &self,
+        req: &pb::CommitRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::CommitResponse, Status> {
+        let (parent, writes) = Self::plan_commit(req)?;
         self.fault(parent.project.as_str(), "firestore.commit")?;
-        let txn = Self::txn(&parent, &req.transaction)?;
+        let txn = self.txn(&parent, &req.transaction)?;
         let now = self.write_time();
         let result = self.with_db(&parent, |db| {
             guard(db, &writes, now)?;
-            let result = db
-                .commit(&writes, txn.as_ref(), now)
-                .map_err(|error| status_from_error(&error))?;
-            self.publish(&parent, &result);
+            let result = self.commit_with_events(&parent, db, &writes, txn.as_ref(), now)?;
             Ok(result)
         })?;
         Ok(encode_commit(&result))
     }
 
+    /// Runs `attempt` until it is not refused for lock contention. A refusal runs the lease
+    /// bookkeeping (a holder that kept writers blocked while idle for the lock lease is rolled
+    /// back), then waits for a transaction of `parent`'s database to finish, up to the
+    /// contention wait, and tries again; past the deadline, or once the refused transaction
+    /// itself is gone (the deadlock victim), the refusal is returned. `lease_writes` names
+    /// the documents the attempt writes, for the bookkeeping.
+    pub fn retry_on_contention<T>(
+        &self,
+        parent: &Parent,
+        own: Option<&TransactionId>,
+        lease_writes: &[Write],
+        mut attempt: impl FnMut() -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        let deadline = std::time::Instant::now() + self.contention_wait;
+        loop {
+            let handle = self.database_handle(parent)?;
+            let marker = handle.release_marker();
+            match attempt() {
+                Err(status) if Self::is_contention(&status) => {
+                    let released = self.expire_lock_leases(&handle, lease_writes, own);
+                    if NO_WAIT.with(std::cell::Cell::get) {
+                        // A blocking-pool thread never waits here; the caller does.
+                        CONTENDED.with(|slot| slot.set(true));
+                        if released {
+                            continue;
+                        }
+                        return Err(status);
+                    }
+                    if !Self::should_wait_for_release(&handle, own, deadline) {
+                        return Err(status);
+                    }
+                    if !released {
+                        handle.wait_for_release(marker, deadline);
+                    }
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    /// Runs `f` with lock-contention waits disabled on this thread and reports whether a
+    /// write was refused for contention: for a blocking-pool thread that must not hold its
+    /// slot while waiting. The caller then waits with [`Self::await_any_release`] and repeats.
+    pub fn without_waiting<T>(f: impl FnOnce() -> T) -> (T, bool) {
+        let previous = NO_WAIT.with(|slot| slot.replace(true));
+        CONTENDED.with(|slot| slot.set(false));
+        let value = f();
+        let contended = CONTENDED.with(|slot| slot.replace(false));
+        NO_WAIT.with(|slot| slot.set(previous));
+        (value, contended)
+    }
+
+    /// How many transactions have finished across every database so far.
+    #[must_use]
+    pub fn release_count(&self) -> u64 {
+        self.release_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Waits, without blocking a thread, until a transaction of any database finishes after
+    /// `seen` was read or until `deadline`; `true` when one finished.
+    pub async fn await_any_release(&self, seen: u64, deadline: std::time::Instant) -> bool {
+        loop {
+            if self.release_count() != seen {
+                return true;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let notified = self.release_notify.notified();
+            if tokio::time::timeout(deadline - now, notified)
+                .await
+                .is_err()
+            {
+                return self.release_count() != seen;
+            }
+        }
+    }
+
+    /// [`Self::retry_on_contention`] for an async caller: the wait runs off the runtime.
+    pub async fn retry_on_contention_async<T>(
+        &self,
+        parent: &Parent,
+        own: Option<&TransactionId>,
+        lease_writes: &[Write],
+        mut attempt: impl FnMut() -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        let deadline = std::time::Instant::now() + self.contention_wait;
+        loop {
+            let handle = self.database_handle(parent)?;
+            let marker = handle.release_marker();
+            match attempt() {
+                Err(status) if Self::is_contention(&status) => {
+                    let released = self.expire_lock_leases(&handle, lease_writes, own);
+                    if !Self::should_wait_for_release(&handle, own, deadline) {
+                        return Err(status);
+                    }
+                    if !released {
+                        let waiter = handle.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            waiter.wait_for_release(marker, deadline)
+                        })
+                        .await;
+                    }
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    /// Whether a refused attempt should wait for a transaction to finish and try again:
+    /// before the deadline, and, for a transaction's own commit, only while that transaction
+    /// is still active (the store aborts the deadlock victim).
+    fn should_wait_for_release(
+        handle: &DatabaseHandle,
+        own: Option<&TransactionId>,
+        deadline: std::time::Instant,
+    ) -> bool {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        own.is_none_or(|txn| {
+            handle
+                .read(|db| db.transaction_is_active(txn))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Whether `status` is the lock contention refusal.
+    #[must_use]
+    pub fn is_contention(status: &Status) -> bool {
+        status.code() == tonic::Code::Aborted
+            && status.message() == fireemu_core_firestore::store::TOO_MUCH_CONTENTION
+    }
+
+    /// Lease bookkeeping for a refused attempt: notes when each holder of a colliding lock
+    /// first blocked a writer and how active it was then, and rolls back a holder that has
+    /// blocked writers for the lock lease without driving its transaction in the meantime
+    /// (production expires an idle transaction; a busy one keeps its locks). `true` when a
+    /// holder was rolled back, so the attempt is worth repeating at once.
+    pub fn expire_lock_leases(
+        &self,
+        handle: &DatabaseHandle,
+        lease_writes: &[Write],
+        own: Option<&TransactionId>,
+    ) -> bool {
+        let holders: Vec<(TransactionId, u64)> = handle
+            .read(|db| {
+                db.lock_holders(lease_writes, own)
+                    .into_iter()
+                    .filter_map(|id| db.transaction_activity(&id).map(|activity| (id, activity)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let now = std::time::Instant::now();
+        let expired: Vec<TransactionId> = {
+            let Ok(mut since) = handle.0.blocking_since.lock() else {
+                return false;
+            };
+            // Forget holders that finished; keep the clock of every still-active holder, so
+            // writers with different write sets do not reset each other's lease.
+            let stale: Vec<TransactionId> = since
+                .keys()
+                .filter(|id| {
+                    !handle
+                        .read(|db| db.transaction_is_active(id))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            for id in stale {
+                since.remove(&id);
+            }
+            holders
+                .iter()
+                .filter(|(id, activity)| {
+                    let entry = since.entry(id.clone()).or_insert((now, *activity));
+                    if entry.1 != *activity {
+                        // The holder drove its transaction since: not idle, the lease restarts.
+                        *entry = (now, *activity);
+                    }
+                    now.duration_since(entry.0) >= self.lock_lease
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        if expired.is_empty() {
+            return false;
+        }
+        let _ = handle.with(|db| {
+            for id in &expired {
+                let _ = db.rollback(id);
+            }
+            Ok(())
+        });
+        if let Ok(mut since) = handle.0.blocking_since.lock() {
+            for id in &expired {
+                since.remove(id);
+            }
+        }
+        true
+    }
+
     /// `Rollback`.
     pub fn rollback(&self, req: &pb::RollbackRequest) -> Result<(), Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
-        let txn = Self::required_txn(&parent, &req.transaction)?;
+        let txn = self.required_txn(&parent, &req.transaction)?;
+        let now = self.write_time();
         self.with_db(&parent, |db| {
-            db.rollback(&txn).map_err(|e| status_from_error(&e))
+            db.rollback(&txn).map_err(|e| status_from_error(&e))?;
+            db.compact(now);
+            self.reconcile_history(&parent, db.history_usage());
+            Ok(())
         })
     }
 
@@ -1987,6 +3255,18 @@ impl LocalBackend {
     pub fn run_query(
         &self,
         req: &pb::RunQueryRequest,
+        guard: ReadGuard<'_>,
+    ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
+        self.run_query_authorized_as(req, req, guard)
+    }
+
+    /// Executes a bounded page while authorizing the caller's original query shape.
+    /// Synthetic pagination limits and offsets are an adapter implementation detail and must
+    /// not change `request.query` as observed by Security Rules.
+    pub fn run_query_authorized_as(
+        &self,
+        req: &pb::RunQueryRequest,
+        authorization_req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
@@ -1997,6 +3277,23 @@ impl LocalBackend {
             ));
         };
         let accepted = self.accepted_query(&parent, sq)?;
+        let authorization_parent = parse_parent(&authorization_req.parent).map_err(status)?;
+        if authorization_parent.project != parent.project
+            || authorization_parent.database != parent.database
+            || authorization_parent.document != parent.document
+        {
+            return Err(Status::invalid_argument(
+                "RunQuery authorization parent does not match the execution page",
+            ));
+        }
+        let Some(pb::run_query_request::QueryType::StructuredQuery(authorization_query)) =
+            &authorization_req.query_type
+        else {
+            return Err(Status::invalid_argument(
+                "RunQuery requires a structured_query",
+            ));
+        };
+        let authorization = self.accepted_query(&authorization_parent, authorization_query)?;
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -2006,7 +3303,11 @@ impl LocalBackend {
                 SnapshotSelector::NewTransaction(options)
             }
             Some(pb::run_query_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(Self::read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(self.read_time_selector(
+                    ts,
+                    now,
+                    self.read_time_horizon(&parent, now),
+                )?)
             }
             None => SnapshotSelector::Latest,
         };
@@ -2017,8 +3318,8 @@ impl LocalBackend {
                 access.db(),
                 version,
                 ReadCheck::Query {
-                    parent: &parent,
-                    query: &accepted.query,
+                    parent: &authorization_parent,
+                    query: &authorization.query,
                 },
             )?;
             let (docs, stats) = access.run_query_with_stats(&accepted.query)?;
@@ -2028,7 +3329,7 @@ impl LocalBackend {
                 .unwrap_or(i32::MAX);
             Ok((
                 query_responses(&docs, read_time, access.report(), skipped),
-                accepted.warnings.clone(),
+                authorization.warnings.clone(),
             ))
         })
     }
@@ -2066,7 +3367,11 @@ impl LocalBackend {
                 options,
             )) => SnapshotSelector::NewTransaction(options),
             Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(Self::read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(self.read_time_selector(
+                    ts,
+                    now,
+                    self.read_time_horizon(&parent, now),
+                )?)
             }
             None => SnapshotSelector::Latest,
         };
@@ -2114,11 +3419,12 @@ impl LocalBackend {
         self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
-            Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => {
-                (None, Some(Self::read_time_selector(ts, now)?))
-            }
+            Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => (
+                None,
+                Some(self.read_time_selector(ts, now, self.read_time_horizon(&parent, now))?),
+            ),
             Some(pb::list_documents_request::ConsistencySelector::Transaction(t)) => {
-                (Some(Self::required_txn(&parent, t)?), None)
+                (Some(self.required_txn(&parent, t)?), None)
             }
             None => (None, None),
         };
@@ -2186,6 +3492,8 @@ impl LocalBackend {
         } else {
             DEFAULT_LIST_PAGE_SIZE
         };
+        // One document beyond the page decides whether a `nextPageToken` is issued.
+        let scan_size = page_size.saturating_add(1);
         let mut proof_query = accepted.query.clone();
         proof_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
         let bounded_name_page = txn.is_none() && !ordered;
@@ -2210,7 +3518,7 @@ impl LocalBackend {
                         &req.collection_id,
                         version,
                         after_path.as_ref(),
-                        page_size,
+                        scan_size,
                     )
                     .0
                     .into_iter()
@@ -2229,7 +3537,7 @@ impl LocalBackend {
                     .collect()
             } else if bounded_ordered_page {
                 let mut page_query = accepted.query.clone();
-                page_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
+                page_query.limit = Some(u32::try_from(scan_size).unwrap_or(u32::MAX));
                 let cursor = after_path
                     .as_ref()
                     .map(|path| {
@@ -2266,7 +3574,7 @@ impl LocalBackend {
                                     &req.collection_id,
                                     version,
                                     Some(after_path),
-                                    page_size,
+                                    scan_size,
                                 );
                             if cursor_is_missing {
                                 continued_missing_suffix = true;
@@ -2275,7 +3583,7 @@ impl LocalBackend {
                             }
                         }
                     }
-                    if !continued_missing_suffix && documents.len() < page_size {
+                    if !continued_missing_suffix && documents.len() < scan_size {
                         missing = access
                             .db()
                             .list_missing_parents_page_at(
@@ -2283,7 +3591,7 @@ impl LocalBackend {
                                 &req.collection_id,
                                 version,
                                 None,
-                                page_size - documents.len(),
+                                scan_size - documents.len(),
                             )
                             .1;
                     }
@@ -2305,7 +3613,7 @@ impl LocalBackend {
                         &req.collection_id,
                         version,
                         after_path.as_ref(),
-                        page_size,
+                        scan_size,
                     ),
                     (None, false) => access.db().list_documents_at(
                         parent.document.as_ref(),
@@ -2354,9 +3662,10 @@ impl LocalBackend {
                     }
                 }
             }
-            // A full page carries a token whether or not anything follows, as the backend
-            // and the official emulator issue it; the next page is then simply empty.
-            let full = documents.len() >= page_size;
+            // A token is issued only when a document follows the page: production answers
+            // the last page, full or not, without one (the official emulator issues a token
+            // for every full page and then an empty page).
+            let full = documents.len() > page_size;
             documents.truncate(page_size);
             let next_page_token = if full {
                 documents.last().map_or(String::new(), |d| {
@@ -2399,7 +3708,8 @@ impl LocalBackend {
             if let Some(after) = &after {
                 ids.retain(|id| id > after);
             }
-            let full = ids.len() >= page_size;
+            // As for documents: a token only when a collection id follows the page.
+            let full = ids.len() > page_size;
             ids.truncate(page_size);
             let next_page_token = if full {
                 ids.last().map_or(String::new(), |id| {
@@ -2459,15 +3769,13 @@ impl LocalBackend {
                 let now = self.write_time();
                 let outcome = decoded.and_then(|write| {
                     guard(db, std::slice::from_ref(&write), now)?;
-                    db.commit(std::slice::from_ref(&write), None, now)
-                        .map_err(|e| status_from_error(&e))
+                    self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)
                 });
                 match outcome {
                     Ok(result) => {
                         let encoded = encode_commit(&result);
                         // Every successful write is its own commit and is published as such,
                         // in write order, with its own commit time.
-                        self.publish(&parent, &result);
                         write_results
                             .push(encoded.write_results.into_iter().next().unwrap_or_default());
                         statuses.push(fireemu_proto_firestore::google::rpc::Status {
@@ -2490,6 +3798,25 @@ impl LocalBackend {
                 write_results,
                 status: statuses,
             })
+        })
+        .inspect(|response| {
+            // A batch is not atomic and does not wait, but a write refused for lock contention
+            // still counts towards the holder's lease.
+            let contended: Vec<Write> = response
+                .status
+                .iter()
+                .zip(req.writes.iter())
+                .filter(|(status, _)| {
+                    status.code == i32::from(tonic::Code::Aborted)
+                        && status.message == fireemu_core_firestore::store::TOO_MUCH_CONTENTION
+                })
+                .filter_map(|(_, write)| decode_write(write).ok())
+                .collect();
+            if !contended.is_empty() {
+                if let Ok(handle) = self.database_handle(&parent) {
+                    let _ = self.expire_lock_leases(&handle, &contended, None);
+                }
+            }
         })
     }
 }
@@ -2570,6 +3897,16 @@ fn database_key(parent: &Parent) -> (String, String) {
         parent.project.as_str().to_owned(),
         parent.database.as_str().to_owned(),
     )
+}
+
+fn auto_id_from(rng: &mut SplitMix64) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    (0..20)
+        .map(|_| {
+            let index = usize::try_from(rng.next_below(ALPHABET.len() as u64)).unwrap_or(0);
+            ALPHABET[index] as char
+        })
+        .collect()
 }
 
 fn database_tag(parent: &Parent) -> u64 {
@@ -2706,10 +4043,25 @@ fn query_responses(
             ..Default::default()
         });
     }
-    // Reported on the first result; an offset past the end reports nothing, as the
-    // official emulator answers it.
-    if let Some(first) = responses.first_mut().filter(|r| r.document.is_some()) {
-        first.skipped_results = skipped_results;
+    // Production reports an offset in a leading result-less response (`readTime` and
+    // `skippedResults`, no document) ahead of the documents; an offset past the end is that
+    // single response with every skipped document counted. The official emulator attaches
+    // the count to the first document instead and omits it past the end.
+    if skipped_results != 0 {
+        if responses.first().is_some_and(|r| r.document.is_none()) {
+            responses[0].skipped_results = skipped_results;
+        } else {
+            responses.insert(
+                0,
+                pb::RunQueryResponse {
+                    transaction: Vec::new(),
+                    document: None,
+                    read_time,
+                    skipped_results,
+                    ..Default::default()
+                },
+            );
+        }
     }
     if let Some(last) = responses.last_mut() {
         // The last response says so, so a client can tell the end of the results from a
@@ -2758,6 +4110,7 @@ mod lock_tests {
     use std::time::Duration;
 
     use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_session::tenancy::Tenancy;
     use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
     use fireemu_core_types::time::LogicalInstant;
 
@@ -2779,6 +4132,176 @@ mod lock_tests {
             ))),
             7,
         ))
+    }
+
+    fn history_usage(versions: u64) -> HistoryUsage {
+        HistoryUsage {
+            versions,
+            total_bytes: versions,
+            ..HistoryUsage::default()
+        }
+    }
+
+    #[test]
+    fn pending_reduction_does_not_release_committed_capacity() {
+        let limits = HistoryBudgetLimits {
+            session_bytes: u64::MAX,
+            session_versions: u64::MAX,
+            global_bytes: u64::MAX,
+            global_versions: 14,
+        };
+        let ledger = Arc::new(Mutex::new(HistoryBudgetLedger::new(limits)));
+        let first_key = ("first".to_owned(), "(default)".to_owned());
+        let reduction = {
+            let mut locked = ledger.lock().unwrap();
+            locked.replace_committed(
+                first_key.clone(),
+                &HistoryCharge {
+                    owner: HistoryBudgetOwner::Default,
+                    usage: history_usage(10),
+                },
+            );
+            let id = locked
+                .reserve(first_key, HistoryBudgetOwner::Default, history_usage(5))
+                .unwrap();
+            HistoryReservation {
+                ledger: Arc::clone(&ledger),
+                id,
+                committed: false,
+            }
+        };
+        let error = ledger
+            .lock()
+            .unwrap()
+            .reserve(
+                ("second".to_owned(), "(default)".to_owned()),
+                HistoryBudgetOwner::Default,
+                history_usage(5),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            FirestoreError::HistoryCapacity(HistoryCapacityError {
+                dimension: "global versions",
+                current: 15,
+                maximum: 14,
+            })
+        ));
+        drop(reduction);
+        let ledger = ledger.lock().unwrap();
+        assert!(ledger.pending.is_empty());
+        assert!(ledger.pending_by_key.is_empty());
+        assert_eq!(ledger.charged_global.versions, 10);
+        assert_eq!(
+            ledger.charged_by_owner[&HistoryBudgetOwner::Default].versions,
+            10
+        );
+        assert_eq!(
+            ledger.committed[&("first".to_owned(), "(default)".to_owned())]
+                .usage
+                .versions,
+            10
+        );
+    }
+
+    #[test]
+    fn one_reservation_has_constant_accounting_work_across_many_owners() {
+        let mut ledger = HistoryBudgetLedger::new(HistoryBudgetLimits {
+            session_bytes: u64::MAX,
+            session_versions: u64::MAX,
+            global_bytes: u64::MAX,
+            global_versions: u64::MAX,
+        });
+        for index in 0..8_192 {
+            ledger.replace_committed(
+                (format!("project-{index}"), "(default)".to_owned()),
+                &HistoryCharge {
+                    owner: HistoryBudgetOwner::Project(format!("project-{index}")),
+                    usage: history_usage(1),
+                },
+            );
+        }
+        let before = ledger.accounting_steps;
+
+        ledger
+            .reserve(
+                ("new-project".to_owned(), "(default)".to_owned()),
+                HistoryBudgetOwner::Project("new-project".to_owned()),
+                history_usage(1),
+            )
+            .unwrap();
+
+        assert_eq!(ledger.accounting_steps - before, 1);
+        assert_eq!(ledger.charged_global.versions, 8_193);
+    }
+
+    #[test]
+    fn poisoned_history_and_tenancy_locks_fail_closed_with_recovered_accounting() {
+        let backend = backend();
+        let tenancy = Arc::new(RwLock::new(Tenancy::new("primary-app")));
+        tenancy
+            .write()
+            .unwrap()
+            .register("demo-app", &[], &[])
+            .unwrap();
+        backend.set_tenancy(tenancy.clone());
+        let ledger = backend.history_budget.clone();
+
+        assert!(std::panic::catch_unwind(|| {
+            let _guard = ledger.lock().unwrap();
+            panic!("poison history ledger");
+        })
+        .is_err());
+        assert!(std::panic::catch_unwind(|| {
+            let _guard = tenancy.write().unwrap();
+            panic!("poison tenancy registry");
+        })
+        .is_err());
+
+        let parent = parse_parent("projects/demo-app/databases/(default)/documents").unwrap();
+        assert_eq!(
+            backend.history_owner("demo-app"),
+            HistoryBudgetOwner::Project("demo-app".to_owned())
+        );
+        let cancelled = backend
+            .reserve_history(
+                &parent,
+                HistoryProjection {
+                    before: HistoryUsage::default(),
+                    after: history_usage(1),
+                },
+            )
+            .unwrap();
+        drop(cancelled);
+        assert_eq!(backend.history_usage().versions, 0);
+
+        let request = pb::CommitRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: "projects/demo-app/databases/(default)/documents/items/one".to_owned(),
+                    fields: [(
+                        "v".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::IntegerValue(1)),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    ..pb::Document::default()
+                })),
+                ..pb::Write::default()
+            }],
+            ..pb::CommitRequest::default()
+        };
+        backend.commit(&request).unwrap();
+        let snapshot = backend.snapshot_databases();
+        assert_eq!(backend.history_usage().versions, 1);
+        backend.reset();
+        assert_eq!(backend.history_usage().versions, 0);
+        backend.restore_databases(snapshot).unwrap();
+        assert_eq!(backend.history_usage().versions, 1);
     }
 
     #[test]

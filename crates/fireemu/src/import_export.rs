@@ -156,8 +156,29 @@ type PreparedDatabases = BTreeMap<(String, String), Vec<ImportedDocument>>;
 #[derive(Debug, Default)]
 struct PreparedAuth {
     users: Vec<ImportedUser>,
+    /// `passwordUpdatedAt` per imported account (default store and tenants), restored after
+    /// the account is imported so a lookup answers what the artifact recorded.
+    password_updated_at: BTreeMap<String, LogicalInstant>,
     config: ProjectAuthConfig,
+    /// Whether the artifact declared `emailPrivacyConfig.enableImprovedEmailPrivacy`. When it
+    /// did not (the official emulator's export without the key, or no config.json at all),
+    /// the running store's setting is kept: an import must not switch the protection off.
+    email_privacy_declared: bool,
     tenants: BTreeMap<String, Vec<ImportedUser>>,
+}
+
+impl PreparedAuth {
+    /// The configuration to install over `current`.
+    fn config_over(&self, current: ProjectAuthConfig) -> ProjectAuthConfig {
+        ProjectAuthConfig {
+            enable_improved_email_privacy: if self.email_privacy_declared {
+                self.config.enable_improved_email_privacy
+            } else {
+                current.enable_improved_email_privacy
+            },
+            ..self.config
+        }
+    }
 }
 
 /// The objects with their bytes, and the buckets the Storage section listed.
@@ -349,7 +370,16 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
             })?;
             snapshot.databases.insert(key.clone(), state);
         }
-        endpoints.backend.restore_databases(snapshot.databases);
+        endpoints
+            .backend
+            .restore_databases(snapshot.databases)
+            .map_err(|error| {
+                ArtifactError::new(
+                    "firestore",
+                    PathBuf::from(FIRESTORE_PATH),
+                    error.to_string(),
+                )
+            })?;
     }
 
     if let Some(auth) = prepared.auth.take() {
@@ -380,7 +410,7 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
     Ok(())
 }
 
-fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
+fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
     let store = endpoints.auth.default_store();
     let mut store = store.lock().map_err(|_| {
         ArtifactError::new(
@@ -390,16 +420,21 @@ fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactE
         )
     })?;
     store.clear();
-    store.set_config(auth.config);
-    for user in auth.users {
+    let current = store.config();
+    store.set_config(auth.config_over(current));
+    let users = std::mem::take(&mut auth.users);
+    for user in users {
         let id = user.local_id.clone();
-        store.import_user(user).map_err(|e| {
+        let uid = store.import_user(user).map_err(|e| {
             ArtifactError::new(
                 "auth",
                 PathBuf::from(AUTH_PATH).join(ACCOUNTS_FILE),
                 format!("account {id}: {e}"),
             )
         })?;
+        if let Some(at) = auth.password_updated_at.get(&id) {
+            store.set_password_updated_at(&uid, *at);
+        }
     }
     // An import restores accounts that already existed; no Auth trigger fires for them.
     let _ = store.take_user_events();
@@ -408,7 +443,8 @@ fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactE
     for tenant in endpoints.auth.tenants(endpoints.project) {
         endpoints.auth.delete_tenant(endpoints.project, &tenant);
     }
-    for (tenant, users) in auth.tenants {
+    let tenants = std::mem::take(&mut auth.tenants);
+    for (tenant, users) in tenants {
         let tenant_store = endpoints
             .auth
             .ensure_tenant(endpoints.project, &tenant)
@@ -427,16 +463,20 @@ fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactE
             )
         })?;
         tenant_store.clear();
-        tenant_store.set_config(auth.config);
+        let current = tenant_store.config();
+        tenant_store.set_config(auth.config_over(current));
         for user in users {
             let id = user.local_id.clone();
-            tenant_store.import_user(user).map_err(|e| {
+            let uid = tenant_store.import_user(user).map_err(|e| {
                 ArtifactError::new(
                     "auth",
                     PathBuf::from(AUTH_PATH).join(format!("accounts-{tenant}.json")),
                     format!("account {id}: {e}"),
                 )
             })?;
+            if let Some(at) = auth.password_updated_at.get(&id) {
+                tenant_store.set_password_updated_at(&uid, *at);
+            }
         }
         let _ = tenant_store.take_user_events();
     }
@@ -851,6 +891,48 @@ fn read_auth_text(
     .map_err(|error| ArtifactError::new("auth", path, error))
 }
 
+/// The optional `config.json` of the Auth section: the project configuration and whether it
+/// declared the email privacy setting.
+fn read_auth_config(
+    dir: &Path,
+    section_dir: &Path,
+    remaining_bytes: &mut u64,
+) -> Result<(ProjectAuthConfig, bool), ArtifactError> {
+    let config_path = section_dir.join(CONFIG_FILE);
+    let (config, email_privacy_declared) = match std::fs::symlink_metadata(&config_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                return Err(ArtifactError::new(
+                    "auth",
+                    &config_path,
+                    "the optional config is not a regular no-symlink file",
+                ));
+            }
+            let text = read_auth_text(dir, &config_path, remaining_bytes)?;
+            let parsed = AuthConfig::parse(&text)
+                .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
+            (
+                ProjectAuthConfig {
+                    allow_duplicate_emails: parsed.allow_duplicate_emails,
+                    enable_improved_email_privacy: parsed
+                        .enable_improved_email_privacy
+                        .unwrap_or(false),
+                },
+                parsed.enable_improved_email_privacy.is_some(),
+            )
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (ProjectAuthConfig::default(), false),
+        Err(e) => {
+            return Err(ArtifactError::new(
+                "auth",
+                &config_path,
+                format!("cannot inspect the optional config: {e}"),
+            ))
+        }
+    };
+    Ok((config, email_privacy_declared))
+}
+
 fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, ArtifactError> {
     let section_dir = dir.join(&section.path);
     scan_import_tree(
@@ -863,35 +945,10 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
         Some(IMPORT_AUTH_FILE_BYTES_LIMIT),
     )?;
     let mut remaining_bytes = IMPORT_AUTH_TOTAL_BYTES_LIMIT;
-    let config_path = section_dir.join(CONFIG_FILE);
-    let config = match std::fs::symlink_metadata(&config_path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-                return Err(ArtifactError::new(
-                    "auth",
-                    &config_path,
-                    "the optional config is not a regular no-symlink file",
-                ));
-            }
-            let text = read_auth_text(dir, &config_path, &mut remaining_bytes)?;
-            let parsed = AuthConfig::parse(&text)
-                .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
-            ProjectAuthConfig {
-                allow_duplicate_emails: parsed.allow_duplicate_emails,
-                enable_improved_email_privacy: parsed.enable_improved_email_privacy,
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProjectAuthConfig::default(),
-        Err(e) => {
-            return Err(ArtifactError::new(
-                "auth",
-                &config_path,
-                format!("cannot inspect the optional config: {e}"),
-            ))
-        }
-    };
-
+    let (config, email_privacy_declared) =
+        read_auth_config(dir, &section_dir, &mut remaining_bytes)?;
     let mut tenants = BTreeMap::new();
+    let mut password_updated_at = BTreeMap::new();
     let entries = std::fs::read_dir(&section_dir)
         .map_err(|e| ArtifactError::new("auth", &section_dir, format!("cannot read it: {e}")))?;
     for entry in entries.flatten() {
@@ -928,6 +985,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
                     ));
                 }
                 users.push(imported_user(record, &entry.path())?);
+                note_password_updated_at(&mut password_updated_at, record);
             }
             tenants.insert(tenant.to_owned(), users);
         }
@@ -940,10 +998,13 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     let mut users = Vec::with_capacity(accounts.users.len());
     for record in &accounts.users {
         users.push(imported_user(record, &accounts_path)?);
+        note_password_updated_at(&mut password_updated_at, record);
     }
     Ok(PreparedAuth {
         users,
+        password_updated_at,
         config,
+        email_privacy_declared,
         tenants,
     })
 }
@@ -956,6 +1017,22 @@ fn millis_instant(text: Option<&str>) -> Option<LogicalInstant> {
 fn seconds_instant(text: Option<&str>) -> Option<LogicalInstant> {
     let seconds: i64 = text?.parse().ok()?;
     Some(LogicalInstant::from_unix_seconds(seconds))
+}
+
+/// Remembers the `passwordUpdatedAt` an account record carries (milliseconds), keyed by
+/// account id, for restoration after the account is imported.
+fn note_password_updated_at(into: &mut BTreeMap<String, LogicalInstant>, record: &UserRecord) {
+    if let Some(millis) = record.password_updated_at {
+        if millis.is_finite() && millis.fract() == 0.0 && millis.abs() < 9.007_199_254_740_992e15 {
+            // Guarded above: finite, whole and inside the exactly representable range.
+            #[allow(clippy::cast_possible_truncation)]
+            let millis = millis as i64;
+            into.insert(
+                record.local_id.clone(),
+                LogicalInstant::from_nanos(i128::from(millis) * 1_000_000),
+            );
+        }
+    }
 }
 
 fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, ArtifactError> {
@@ -1567,7 +1644,7 @@ fn export_auth(
     let config_path = section_dir.join(CONFIG_FILE);
     let document = AuthConfig {
         allow_duplicate_emails: config.allow_duplicate_emails,
-        enable_improved_email_privacy: config.enable_improved_email_privacy,
+        enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
     };
     write_private_file(&config_path, document.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
@@ -1701,7 +1778,10 @@ fn exported_account(
             disabled: user.disabled,
             password_hash,
             salt,
-            password_updated_at: None,
+            #[allow(clippy::cast_precision_loss)]
+            password_updated_at: store
+                .password_updated_at(&user.local_id)
+                .map(|t| (t.as_nanos() / 1_000_000) as f64),
             valid_since: Some((user.tokens_valid_after.as_nanos() / 1_000_000_000).to_string()),
             created_at: Some((user.created_at.as_nanos() / 1_000_000).to_string()),
             last_login_at: user

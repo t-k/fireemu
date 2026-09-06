@@ -21,6 +21,7 @@ import { join } from "node:path";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { deepEqual } from "../diff.mjs";
+import { readValidatedDivergenceRegister } from "../divergence-authority.mjs";
 
 const PROJECT = "demo-pubsub-probe";
 // The official side binds the port in pubsub-probe.firebase.json (32460).
@@ -172,8 +173,7 @@ async function probeFireemu(outPath) {
 }
 
 async function annotations() {
-  const parsed = JSON.parse(await readFile(join(CONFORMANCE_DIR, "divergences.json"), "utf8"));
-  return parsed.divergences;
+  return readValidatedDivergenceRegister().divergences;
 }
 
 function classify(oracle, fireemu, notes) {
@@ -301,6 +301,7 @@ async function record() {
 
 async function check() {
   const matrix = JSON.parse(await readFile(MATRIX_JSON, "utf8"));
+  const authorities = readValidatedDivergenceRegister().divergences;
   await mkdir(RUN_DIR, { recursive: true });
   const run = await probeFireemu(join(RUN_DIR, "check.json"));
   const failures = [];
@@ -325,6 +326,10 @@ async function check() {
           );
         }
       } else if (step.status === "documented-divergence") {
+        if (!authorities[`pubsub-probe/${program.id}#${step.id}`]) {
+          failures.push(`${program.id}#${step.id}: documented divergence has no authority`);
+          continue;
+        }
         gated += 1;
         if (!deepEqual(step.fireemu, value)) {
           failures.push(

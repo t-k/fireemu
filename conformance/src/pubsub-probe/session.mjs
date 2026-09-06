@@ -11,6 +11,25 @@ import { PROGRAMS } from "./programs.mjs";
 
 const project = process.env.PUBSUB_PROBE_PROJECT || "demo-pubsub-probe";
 const outPath = process.env.PUBSUB_PROBE_OUT;
+const emulatorHost = process.env.PUBSUB_EMULATOR_HOST;
+
+async function rest(method, path, body = {}) {
+  const response = await fetch(`http://${emulatorHost}${path}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  let responseBody = {};
+  if (text !== "") {
+    try {
+      responseBody = JSON.parse(text);
+    } catch {
+      responseBody = { raw: text };
+    }
+  }
+  return { status: response.status, body: responseBody };
+}
 
 /**
  * Collects up to `n` messages from a subscription within a bounded window, then either acks or
@@ -47,7 +66,7 @@ async function main() {
   for (const program of PROGRAMS) {
     // A fresh client per program keeps subscription streams from leaking across programs.
     const pubsub = new PubSub({ projectId: project });
-    const ctx = { pubsub, receive: receiveFactory() };
+    const ctx = { project, pubsub, receive: receiveFactory(), rest };
     try {
       const steps = await program.run(ctx);
       result.programs[program.id] = {

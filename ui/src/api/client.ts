@@ -12,7 +12,7 @@ export const settle = <T, E>(r: ResultAsync<T, E>): Promise<Result<T, E>> =>
   );
 
 /** An API failure: the HTTP status and the daemon's message. */
-export type ApiError = { status: number; message: string };
+export type ApiError = { status: number; code?: string; message: string };
 
 /** The message of a failed result (for banners), `null` otherwise. */
 export const errorOf = <T>(r: Result<T, ApiError> | undefined): string | null =>
@@ -46,6 +46,21 @@ const messageOf = (status: number, body: unknown): string => {
   return `HTTP ${status}`;
 };
 
+/** Preserves the optional Google RPC status used by callers for typed recovery. */
+export const parseApiError = (status: number, body: unknown): ApiError => {
+  let code: string | undefined;
+  if (body && typeof body === "object" && "error" in body) {
+    const error = (body as { error?: unknown }).error;
+    if (error && typeof error === "object" && "status" in error) {
+      const value = (error as { status?: unknown }).status;
+      if (typeof value === "string") code = value;
+    }
+  }
+  return code === undefined
+    ? { status, message: messageOf(status, body) }
+    : { status, code, message: messageOf(status, body) };
+};
+
 const parseBody = async (response: Response): Promise<unknown> => {
   const text = await response.text();
   if (!text) {
@@ -66,7 +81,7 @@ export const request = <T = Json>(
   method: string,
   path: string,
   body?: unknown,
-  init?: { headers?: Record<string, string>; raw?: BodyInit },
+  init?: { headers?: Record<string, string>; raw?: BodyInit; accept?: number[] },
 ): ResultAsync<T, ApiError> =>
   ResultAsync.fromPromise(
     (async (): Promise<Result<T, ApiError>> => {
@@ -82,8 +97,10 @@ export const request = <T = Json>(
         body: payload ?? null,
       });
       const parsed = await parseBody(response);
-      if (!response.ok) {
-        return err({ status: response.status, message: messageOf(response.status, parsed) });
+      // `accept` names non-2xx statuses whose body is an answer, not a failure (a 409 from
+      // a quiescence assertion carries the leaks).
+      if (!response.ok && !init?.accept?.includes(response.status)) {
+        return err(parseApiError(response.status, parsed));
       }
       return ok(parsed as T);
     })(),

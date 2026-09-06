@@ -2,9 +2,13 @@
 //! tokens and ranges, listing, metadata, rewrite and Storage Rules.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use fireemu_adapter_http::storage::{handle, StorageRequest, StorageRulesRegistry, StorageState};
+use fireemu_adapter_http::storage::{
+    handle, AtomicStorageEventSink, StorageEventPublication, StorageRequest, StorageRulesRegistry,
+    StorageState,
+};
 use fireemu_adapter_http::storage_server::{
     serve_storage_with_budget, BodyBudget, MAX_STORAGE_BODY_BYTES,
 };
@@ -14,6 +18,7 @@ use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::name::{BucketName, ObjectName};
+use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_storage::store::StorageState as ObjectStore;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -21,6 +26,18 @@ use serde_json::{json, Value};
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 const BUCKET: &str = "demo-app.appspot.com";
+
+struct RefusingStorageEvents;
+
+impl AtomicStorageEventSink for RefusingStorageEvents {
+    fn reserve(
+        &self,
+        _event: &StorageEvent,
+    ) -> Result<Box<dyn StorageEventPublication>, fireemu_core_types::admission::EventAdmissionError>
+    {
+        Err(fireemu_core_types::admission::EventAdmissionError::Capacity("outbox full".to_owned()))
+    }
+}
 
 fn state(rules: Option<&str>) -> StorageState {
     state_with(rules, TokenAcceptance::Verified)
@@ -323,6 +340,75 @@ fn firebase_protocol_upload_download_list_update_delete() {
     // The official Firebase dialect answers a missing object with a bare status text.
     assert_eq!(r.status, 404);
     assert_eq!(r.body.as_ref(), b"Not Found");
+}
+
+#[test]
+fn event_admission_refusal_returns_429_without_publishing_the_object() {
+    let mut s = state(None);
+    s.events = Some(Arc::new(RefusingStorageEvents));
+    let (content_type, body) = multipart(&json!({}), "text/plain", b"private");
+
+    let response = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=refused.txt&uploadType=multipart"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", &content_type),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
+            &body,
+        ),
+    );
+
+    assert_eq!(
+        response.status,
+        429,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    let object = ObjectName::try_new("refused.txt").unwrap();
+    let mut store = s.store.lock().unwrap();
+    assert!(store.get(&bucket, &object).is_none());
+    assert!(store.drain_events().is_empty());
+    drop(store);
+
+    s.events = None;
+    let accepted = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=accepted.txt&uploadType=multipart"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", &content_type),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
+            &body,
+        ),
+    );
+    assert_eq!(json_body(&accepted)["generation"], "1");
+    let control = state(None);
+    let expected = handle(
+        &control,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=accepted.txt&uploadType=multipart"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", &content_type),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
+            &body,
+        ),
+    );
+    assert_eq!(
+        json_body(&accepted)["downloadTokens"],
+        json_body(&expected)["downloadTokens"],
+        "a refused mutation must not consume token RNG state"
+    );
 }
 
 #[test]
@@ -1746,6 +1832,29 @@ impl fireemu_core_rules::eval::DocumentAccess for Flags {
     }
 }
 
+struct CountingFlags {
+    present: Vec<String>,
+    reads: Arc<AtomicUsize>,
+}
+
+impl fireemu_core_rules::eval::DocumentAccess for CountingFlags {
+    fn get(&self, segments: &[String]) -> Option<fireemu_core_rules::value::RulesValue> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        let path = segments.join("/");
+        self.present.contains(&path).then(|| {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert(
+                "data".to_owned(),
+                fireemu_core_rules::value::RulesValue::Map(std::collections::BTreeMap::from([(
+                    "open".to_owned(),
+                    fireemu_core_rules::value::RulesValue::Bool(true),
+                )])),
+            );
+            fireemu_core_rules::value::RulesValue::Map(m)
+        })
+    }
+}
+
 #[test]
 fn storage_rules_can_read_firestore_documents() {
     let rules = "rules_version = '2';
@@ -1780,6 +1889,98 @@ service firebase.storage {
         "databases/(default)/documents/flags/open".to_owned(),
     ])));
     assert_eq!(handle(&s, req("GET", &read, &[], b"")).status, 200);
+}
+
+#[test]
+fn storage_rules_cache_repeated_firestore_reads_and_bound_distinct_reads() {
+    let repeated_rules = "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o/gated/{file} {
+    allow read: if firestore.exists(/databases/(default)/documents/flags/open)
+                && firestore.exists(/databases/(default)/documents/flags/open);
+  }
+}";
+    let mut repeated = state(Some(repeated_rules));
+    let (content_type, body) = multipart(&json!({}), "text/plain", b"stable");
+    assert_eq!(
+        handle(
+            &repeated,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=gated/repeated.txt&uploadType=multipart"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", &content_type),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        )
+        .status,
+        200
+    );
+    let repeated_reads = Arc::new(AtomicUsize::new(0));
+    repeated.firestore = Some(Arc::new(CountingFlags {
+        present: vec!["databases/(default)/documents/flags/open".to_owned()],
+        reads: repeated_reads.clone(),
+    }));
+    let repeated_read = format!("/v0/b/{BUCKET}/o/gated%2Frepeated.txt?alt=media");
+    let response = handle(&repeated, req("GET", &repeated_read, &[], b""));
+    assert_eq!(
+        response.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    assert_eq!(repeated_reads.load(Ordering::SeqCst), 1);
+
+    let distinct_rules = "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o/gated/{file} {
+    allow read: if firestore.exists(/databases/(default)/documents/flags/a)
+                && firestore.exists(/databases/(default)/documents/flags/b)
+                && firestore.exists(/databases/(default)/documents/flags/c);
+  }
+}";
+    let mut distinct = state(Some(distinct_rules));
+    let (content_type, body) = multipart(&json!({}), "text/plain", b"stable");
+    assert_eq!(
+        handle(
+            &distinct,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=gated/distinct.txt&uploadType=multipart"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", &content_type),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        )
+        .status,
+        200
+    );
+    let distinct_reads = Arc::new(AtomicUsize::new(0));
+    distinct.firestore = Some(Arc::new(CountingFlags {
+        present: ["a", "b", "c"]
+            .into_iter()
+            .map(|name| format!("databases/(default)/documents/flags/{name}"))
+            .collect(),
+        reads: distinct_reads.clone(),
+    }));
+    let distinct_read = format!("/v0/b/{BUCKET}/o/gated%2Fdistinct.txt?alt=media");
+    let response = handle(&distinct, req("GET", &distinct_read, &[], b""));
+    assert_eq!(response.status, 403);
+    assert_eq!(distinct_reads.load(Ordering::SeqCst), 2);
+    let store = distinct.store.lock().unwrap();
+    let metadata = store
+        .get(
+            &BucketName::try_new(BUCKET).unwrap(),
+            &ObjectName::try_new("gated/distinct.txt").unwrap(),
+        )
+        .expect("denied read keeps the object");
+    assert_eq!(store.bytes(metadata), b"stable");
 }
 
 #[test]

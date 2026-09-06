@@ -309,6 +309,15 @@ function ignored(base, triggerType, scope, reason) {
   return { ...base, ignored: { triggerType, scope, reason } };
 }
 
+// A blocking trigger the runner does not serve: a product decision when the event belongs to
+// a deferred or not-planned product (Firebase AI Logic), otherwise the official emulator's
+// "not served" report for an identity event it has no hook for (email and SMS).
+function ignoredBlocking(base, eventType) {
+  const product = deferredProduct(eventType);
+  if (product) return ignored(base, product.triggerType, product.scope, product.reason);
+  return ignored(base, "blocking", "unsupported", `blocking identity event ${eventType} is not served`);
+}
+
 // Products the official emulator has a trigger service for and fireemu does not serve.
 // The event-type substring is matched the way `getServiceFromEventType` matches it.
 const DEFERRED_TRIGGER_PRODUCTS = [
@@ -324,6 +333,18 @@ const DEFERRED_TRIGGER_PRODUCTS = [
     triggerType: "remoteConfig",
     scope: "deferred",
     reason: "deferred: Remote Config has no emulator in the active supported surface",
+  },
+  {
+    match: (type) => type.includes("dataconnect"),
+    triggerType: "dataconnect",
+    scope: "deferred",
+    reason: "deferred: the Data Connect emulator is not in the active supported surface",
+  },
+  {
+    match: (type) => type.includes("ailogic"),
+    triggerType: "ai",
+    scope: "notPlanned",
+    reason: "not planned: Firebase AI Logic blocking triggers have no local emulator",
   },
   {
     match: (type) => type.includes("analytics"),
@@ -441,6 +462,16 @@ function callableAppCheck(instrumentation, fn) {
   };
 }
 
+function blockingAuthTrigger(eventType, options) {
+  return {
+    type: "blockingAuth",
+    eventType,
+    accessToken: options?.accessToken === true,
+    idToken: options?.idToken === true,
+    refreshToken: options?.refreshToken === true,
+  };
+}
+
 function describe(name, fn, instrumentation) {
   const callable = () => ({
     type: "http",
@@ -465,13 +496,12 @@ function describe(name, fn, instrumentation) {
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
       if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
-        return { ...base, trigger: { type: "blockingAuth", eventType } };
+        return {
+          ...base,
+          trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
+        };
       }
-      return ignored(
-        base,
-        "blocking",
-        "unsupported",
-        `blocking identity event ${eventType} is not served`,
+      return ignoredBlocking(base, eventType,
       );
     }
     const et = ep.eventTrigger || {};
@@ -509,13 +539,12 @@ function describe(name, fn, instrumentation) {
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
       if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
-        return { ...base, trigger: { type: "blockingAuth", eventType } };
+        return {
+          ...base,
+          trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
+        };
       }
-      return ignored(
-        base,
-        "blocking",
-        "unsupported",
-        `blocking identity event ${eventType} is not served`,
+      return ignoredBlocking(base, eventType,
       );
     }
     if (ep.eventTrigger) {
@@ -618,13 +647,12 @@ function describe(name, fn, instrumentation) {
     if (t.blockingTrigger) {
       const eventType = String(t.blockingTrigger.eventType || "");
       if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
-        return { ...base, trigger: { type: "blockingAuth", eventType } };
+        return {
+          ...base,
+          trigger: blockingAuthTrigger(eventType, t.blockingTrigger.options),
+        };
       }
-      return ignored(
-        base,
-        "blocking",
-        "unsupported",
-        `blocking identity event ${eventType} is not served`,
+      return ignoredBlocking(base, eventType,
       );
     }
     const et = t.eventTrigger;

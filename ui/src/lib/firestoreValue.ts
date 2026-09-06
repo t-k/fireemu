@@ -5,7 +5,7 @@ export type FsValue =
   | { nullValue: null }
   | { booleanValue: boolean }
   | { integerValue: string }
-  | { doubleValue: number }
+  | { doubleValue: number | "NaN" | "Infinity" | "-Infinity" }
   | { stringValue: string }
   | { timestampValue: string }
   | { geoPointValue: { latitude: number; longitude: number } }
@@ -47,8 +47,17 @@ export const FIELD_TYPES: FieldType[] = [
   "bytes",
 ];
 
-/** One editable field: a name, a type and the text the user types. */
-export type EditableField = { name: string; type: FieldType; text: string };
+export type NumberKind = "integer" | "double";
+
+/** One editable field, including the immutable wire value captured when editing began. */
+export type EditableField = {
+  name: string;
+  type: FieldType;
+  text: string;
+  original?: FsValue | undefined;
+  dirty?: boolean;
+  numberKind?: NumberKind | undefined;
+};
 
 /** The type of a REST value. */
 export const typeOf = (v: FsValue): FieldType => {
@@ -114,7 +123,14 @@ export const toText = (v: FsValue): string => {
 
 /** The editable fields of a document. */
 export const toEditable = (fields: Record<string, FsValue> | undefined): EditableField[] =>
-  Object.entries(fields ?? {}).map(([name, v]) => ({ name, type: typeOf(v), text: toText(v) }));
+  Object.entries(fields ?? {}).map(([name, v]) => ({
+    name,
+    type: typeOf(v),
+    text: toText(v),
+    original: v,
+    dirty: false,
+    numberKind: "integerValue" in v ? "integer" : "doubleValue" in v ? "double" : undefined,
+  }));
 
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
@@ -124,19 +140,57 @@ const isFsValue = (x: unknown): x is FsValue => {
   const keys = Object.keys(x);
   if (keys.length !== 1) return false;
   const key = keys[0] ?? "";
-  return [
-    "nullValue",
-    "booleanValue",
-    "integerValue",
-    "doubleValue",
-    "stringValue",
-    "timestampValue",
-    "geoPointValue",
-    "referenceValue",
-    "bytesValue",
-    "arrayValue",
-    "mapValue",
-  ].includes(key);
+  const value = x as Record<string, unknown>;
+  switch (key) {
+    case "nullValue":
+      return value[key] === null;
+    case "booleanValue":
+      return typeof value[key] === "boolean";
+    case "integerValue":
+      return typeof value[key] === "string" && /^[+-]?\d+$/.test(value[key]);
+    case "doubleValue":
+      return (
+        (typeof value[key] === "number" && Number.isFinite(value[key])) ||
+        value[key] === "NaN" ||
+        value[key] === "Infinity" ||
+        value[key] === "-Infinity"
+      );
+    case "stringValue":
+    case "timestampValue":
+    case "referenceValue":
+    case "bytesValue":
+      return typeof value[key] === "string";
+    case "geoPointValue": {
+      const point = value[key];
+      return (
+        !!point &&
+        typeof point === "object" &&
+        !Array.isArray(point) &&
+        typeof (point as Record<string, unknown>).latitude === "number" &&
+        typeof (point as Record<string, unknown>).longitude === "number"
+      );
+    }
+    case "arrayValue": {
+      const array = value[key];
+      if (!array || typeof array !== "object" || Array.isArray(array)) return false;
+      const values = (array as Record<string, unknown>).values;
+      return values === undefined || (Array.isArray(values) && values.every(isFsValue));
+    }
+    case "mapValue": {
+      const map = value[key];
+      if (!map || typeof map !== "object" || Array.isArray(map)) return false;
+      const fields = (map as Record<string, unknown>).fields;
+      return (
+        fields === undefined ||
+        (!!fields &&
+          typeof fields === "object" &&
+          !Array.isArray(fields) &&
+          Object.values(fields).every(isFsValue))
+      );
+    }
+    default:
+      return false;
+  }
 };
 
 /** The REST value a document path refers to (relative paths are resolved under `documentsRoot`). */
@@ -157,6 +211,7 @@ export const parseField = (
   type: FieldType,
   text: string,
   documentsRoot: string,
+  numberKind?: NumberKind,
 ): Result<FsValue, string> => {
   switch (type) {
     case "string":
@@ -171,7 +226,10 @@ export const parseField = (
     }
     case "number": {
       const v = text.trim();
-      if (/^[+-]?\d+$/.test(v)) {
+      if (numberKind === "double" && ["NaN", "Infinity", "-Infinity"].includes(v)) {
+        return ok({ doubleValue: v as "NaN" | "Infinity" | "-Infinity" });
+      }
+      if (numberKind !== "double" && /^[+-]?\d+$/.test(v)) {
         const n = BigInt(v);
         if (n > 9223372036854775807n || n < -9223372036854775808n) {
           return err("integer out of the 64-bit range");
@@ -179,7 +237,7 @@ export const parseField = (
         return ok({ integerValue: n.toString() });
       }
       const n = Number(v);
-      if (v === "" || Number.isNaN(n)) return err("integer or decimal");
+      if (v === "" || !Number.isFinite(n)) return err("integer or decimal");
       return ok({ doubleValue: n });
     }
     case "timestamp": {
@@ -248,21 +306,108 @@ export const parseFields = (
   fields: EditableField[],
   documentsRoot: string,
 ): Result<Record<string, FsValue>, { field: string; message: string }> => {
-  const out: Record<string, FsValue> = {};
+  const seen = new Set<string>();
+  const entries: [string, FsValue][] = [];
   for (const f of fields) {
     if (!validFieldName(f.name)) {
       return err({ field: f.name, message: "a field needs a name without control characters" });
     }
-    if (f.name in out) {
+    if (seen.has(f.name)) {
       return err({ field: f.name, message: "declared twice" });
     }
-    const value = parseField(f.type, f.text, documentsRoot);
+    seen.add(f.name);
+    if (f.original !== undefined && f.dirty !== true && typeOf(f.original) === f.type) {
+      entries.push([f.name, f.original]);
+      continue;
+    }
+    const value = parseField(f.type, f.text, documentsRoot, f.numberKind);
     if (value.isErr()) {
       return err({ field: f.name, message: value.error });
     }
-    out[f.name] = value.value;
+    entries.push([f.name, value.value]);
+  }
+  const out: Record<string, FsValue> = {};
+  for (const [name, value] of entries) {
+    Object.defineProperty(out, name, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return ok(out);
+};
+
+const sameWireValue = (left: unknown, right: unknown): boolean => {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => sameWireValue(value, right[index]))
+    );
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const keys = Object.keys(leftRecord);
+  return (
+    keys.length === Object.keys(rightRecord).length &&
+    keys.every(
+      (key) => Object.hasOwn(rightRecord, key) && sameWireValue(leftRecord[key], rightRecord[key]),
+    )
+  );
+};
+
+/** The top-level fields changed or deleted since editing began. */
+export const diffFields = (
+  original: Record<string, FsValue>,
+  next: Record<string, FsValue>,
+): { fields: Record<string, FsValue>; fieldPaths: string[] } => {
+  const fields: Record<string, FsValue> = {};
+  const fieldPaths: string[] = [];
+  for (const name of [...Object.keys(original), ...Object.keys(next)]) {
+    if (fieldPaths.includes(name)) continue;
+    const beforePresent = Object.hasOwn(original, name);
+    const afterPresent = Object.hasOwn(next, name);
+    const before = original[name];
+    const after = next[name];
+    if (beforePresent && afterPresent && sameWireValue(before, after)) continue;
+    if (!beforePresent && !afterPresent) continue;
+    fieldPaths.push(name);
+    if (afterPresent) {
+      Object.defineProperty(fields, name, {
+        value: after,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  return { fields, fieldPaths };
+};
+
+/** Reapplies a top-level field delta to a freshly loaded document. */
+export const applyFieldDiff = (
+  latest: Record<string, FsValue>,
+  changes: { fields: Record<string, FsValue>; fieldPaths: string[] },
+): Record<string, FsValue> => {
+  const entries = new Map(Object.entries(latest));
+  for (const name of changes.fieldPaths) {
+    if (Object.hasOwn(changes.fields, name)) entries.set(name, changes.fields[name]!);
+    else entries.delete(name);
+  }
+  const rebased: Record<string, FsValue> = {};
+  for (const [name, value] of entries) {
+    Object.defineProperty(rebased, name, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return rebased;
 };
 
 /** The default text for a type when the user switches to it. */

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use fireemu_core_functions::manifest::{
     FunctionManifest, TaskRateLimits, TaskRetryConfig, Trigger,
 };
+use serde_json::{json, Value};
 
 use crate::tasks::Task;
 
@@ -26,6 +27,9 @@ const MAX_COMPLETED_NAMES: usize = 65_536;
 /// Completed-name storage has a tighter subset ceiling because names outlive task bodies.
 const MAX_COMPLETED_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 const TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_STATISTICS_BUCKETS: usize = 512;
+const TASKS_ADDED_WINDOW: Duration = Duration::from_secs(5 * 60);
+const COMPLETED_TASKS_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdmissionError {
@@ -58,6 +62,70 @@ struct ActiveTask {
 }
 
 #[derive(Debug)]
+struct StatisticBucket {
+    recorded_at: Instant,
+    count: u64,
+}
+
+#[derive(Debug)]
+struct StatisticWindow {
+    window: Duration,
+    buckets: VecDeque<StatisticBucket>,
+}
+
+impl StatisticWindow {
+    fn new(window: Duration) -> Self {
+        Self {
+            window,
+            buckets: VecDeque::new(),
+        }
+    }
+
+    fn prune(&mut self, now: Instant) {
+        while self
+            .buckets
+            .front()
+            .is_some_and(|bucket| now.saturating_duration_since(bucket.recorded_at) >= self.window)
+        {
+            self.buckets.pop_front();
+        }
+    }
+
+    fn record(&mut self, now: Instant) {
+        self.prune(now);
+        if let Some(bucket) = self.buckets.back_mut() {
+            if bucket.recorded_at == now {
+                bucket.count = bucket.count.saturating_add(1);
+                return;
+            }
+        }
+        if self.buckets.len() == MAX_STATISTICS_BUCKETS {
+            self.buckets.pop_front();
+        }
+        self.buckets.push_back(StatisticBucket {
+            recorded_at: now,
+            count: 1,
+        });
+    }
+
+    fn count(&mut self, now: Instant) -> u64 {
+        self.prune(now);
+        self.buckets
+            .iter()
+            .fold(0, |total, bucket| total.saturating_add(bucket.count))
+    }
+
+    fn clear(&mut self) {
+        self.buckets = VecDeque::new();
+    }
+
+    #[cfg(test)]
+    fn retained_bytes(&self) -> usize {
+        self.buckets.capacity() * std::mem::size_of::<StatisticBucket>()
+    }
+}
+
+#[derive(Debug)]
 struct QueueState {
     limits: TaskRateLimits,
     pending: VecDeque<QueuedTask>,
@@ -65,6 +133,9 @@ struct QueueState {
     names: BTreeSet<Arc<str>>,
     tokens: f64,
     last_refill: Instant,
+    added_times: StatisticWindow,
+    completed_times: StatisticWindow,
+    failed_times: StatisticWindow,
 }
 
 impl QueueState {
@@ -76,6 +147,9 @@ impl QueueState {
             names: BTreeSet::new(),
             tokens: 0.0,
             last_refill: now,
+            added_times: StatisticWindow::new(TASKS_ADDED_WINDOW),
+            completed_times: StatisticWindow::new(COMPLETED_TASKS_WINDOW),
+            failed_times: StatisticWindow::new(TASKS_ADDED_WINDOW),
         }
     }
 
@@ -157,6 +231,17 @@ impl TaskScheduler {
         retry: TaskRetryConfig,
         retained_bytes: usize,
     ) -> Result<(), AdmissionError> {
+        self.enqueue_at(queue, task, retry, retained_bytes, Instant::now())
+    }
+
+    fn enqueue_at(
+        &mut self,
+        queue: &str,
+        task: Task,
+        retry: TaskRetryConfig,
+        retained_bytes: usize,
+        now: Instant,
+    ) -> Result<(), AdmissionError> {
         if self.closed {
             return Err(AdmissionError::Closed);
         }
@@ -190,6 +275,7 @@ impl TaskScheduler {
             retained_bytes,
             name,
         });
+        state.added_times.record(now);
         self.outstanding = next_outstanding;
         self.retained_bytes = next_bytes;
         Ok(())
@@ -264,7 +350,29 @@ impl TaskScheduler {
         (dispatches, next_wake)
     }
 
+    #[cfg(test)]
     pub(crate) fn finish(&mut self, queue: &str, id: u64, generation: u64) -> bool {
+        self.finish_with_outcome(queue, id, generation, false)
+    }
+
+    pub(crate) fn finish_with_outcome(
+        &mut self,
+        queue: &str,
+        id: u64,
+        generation: u64,
+        failed: bool,
+    ) -> bool {
+        self.finish_with_outcome_at(queue, id, generation, failed, Instant::now())
+    }
+
+    fn finish_with_outcome_at(
+        &mut self,
+        queue: &str,
+        id: u64,
+        generation: u64,
+        failed: bool,
+        now: Instant,
+    ) -> bool {
         if generation != self.generation {
             return false;
         }
@@ -274,6 +382,10 @@ impl TaskScheduler {
         let Some(active) = state.active.remove(&id) else {
             return false;
         };
+        state.completed_times.record(now);
+        if failed {
+            state.failed_times.record(now);
+        }
         self.outstanding = self.outstanding.saturating_sub(1);
         // The Task and its payload are gone, but the shared name stays in the duplicate index
         // until its completed-history entry expires. The enqueue charge includes that second
@@ -348,9 +460,58 @@ impl TaskScheduler {
         self.queues.values().map(|queue| queue.active.len()).sum()
     }
 
+    pub(crate) fn statistics(
+        &mut self,
+        project: &str,
+        region_for: impl Fn(&str) -> Option<String>,
+    ) -> Value {
+        self.statistics_at(project, region_for, Instant::now())
+    }
+
+    #[allow(clippy::cast_precision_loss)] // queueStats publishes the official floating-point rate shape
+    fn statistics_at(
+        &mut self,
+        project: &str,
+        region_for: impl Fn(&str) -> Option<String>,
+        now: Instant,
+    ) -> Value {
+        let mut statistics = serde_json::Map::new();
+        for (function, queue) in &mut self.queues {
+            let key = region_for(function).map_or_else(
+                || function.clone(),
+                |region| crate::tasks::queue_key(project, &region, function),
+            );
+            statistics.insert(
+                key,
+                json!({
+                    "numberOfTasks": queue.pending.len(),
+                    "tasksAdded": queue.added_times.count(now) as f64 / 5.0,
+                    "completedLastMin": queue.completed_times.count(now),
+                    "failedTasks": queue.failed_times.count(now) as f64 / 5.0,
+                    "runningTasks": queue.limits.max_concurrent_dispatches,
+                    "maxRate": queue.limits.max_dispatches_per_second,
+                    "maxConcurrent": queue.limits.max_concurrent_dispatches,
+                }),
+            );
+        }
+        Value::Object(statistics)
+    }
+
     #[cfg(test)]
     pub(crate) fn retained_bytes(&self) -> usize {
         self.retained_bytes
+    }
+
+    #[cfg(test)]
+    fn statistics_retained_bytes(&self) -> usize {
+        self.queues
+            .values()
+            .map(|queue| {
+                queue.added_times.retained_bytes()
+                    + queue.completed_times.retained_bytes()
+                    + queue.failed_times.retained_bytes()
+            })
+            .sum()
     }
 
     pub(crate) fn reset(&mut self, now: Instant) {
@@ -366,6 +527,9 @@ impl TaskScheduler {
             queue.names.clear();
             queue.tokens = 0.0;
             queue.last_refill = now;
+            queue.added_times.clear();
+            queue.completed_times.clear();
+            queue.failed_times.clear();
         }
     }
 
@@ -483,6 +647,287 @@ mod tests {
             10,
         );
         assert_eq!(second.len(), 1);
+    }
+
+    #[test]
+    fn queue_statistics_report_pending_work_and_rate_limits() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 3,
+                max_dispatches_per_second: 7.5,
+            }),
+            start,
+        );
+        scheduler
+            .enqueue("queue", task("a"), TaskRetryConfig::default(), 1)
+            .unwrap();
+        scheduler
+            .enqueue("queue", task("b"), TaskRetryConfig::default(), 1)
+            .unwrap();
+
+        let stats = scheduler.statistics("demo-app", |_| Some("us-central1".to_owned()));
+        assert_eq!(
+            stats["queue:demo-app-us-central1-queue"]["numberOfTasks"],
+            2
+        );
+        assert_eq!(stats["queue:demo-app-us-central1-queue"]["tasksAdded"], 0.4);
+        assert_eq!(
+            stats["queue:demo-app-us-central1-queue"]["completedLastMin"],
+            0
+        );
+        assert_eq!(
+            stats["queue:demo-app-us-central1-queue"]["failedTasks"],
+            0.0
+        );
+        assert_eq!(stats["queue:demo-app-us-central1-queue"]["runningTasks"], 3);
+        assert_eq!(stats["queue:demo-app-us-central1-queue"]["maxRate"], 7.5);
+        assert_eq!(
+            stats["queue:demo-app-us-central1-queue"]["maxConcurrent"],
+            3
+        );
+    }
+
+    #[test]
+    fn queue_statistics_history_is_bounded_when_queue_stats_is_never_read() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 4096,
+                max_dispatches_per_second: 4096.0,
+            }),
+            start,
+        );
+        for sequence in 0..2048 {
+            scheduler
+                .enqueue(
+                    "queue",
+                    task(&format!("history-{sequence}")),
+                    TaskRetryConfig::default(),
+                    1,
+                )
+                .unwrap();
+        }
+
+        let queue = scheduler.queues.get("queue").expect("queue exists");
+        assert!(
+            queue.added_times.buckets.len() <= 512,
+            "enqueue history grew to {} entries without a statistics read",
+            queue.added_times.buckets.len()
+        );
+
+        let (dispatches, _) = scheduler.dispatch_ready(
+            start + Duration::from_secs(1),
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            4096,
+        );
+        assert_eq!(dispatches.len(), 2048);
+        for (sequence, dispatch) in dispatches.iter().enumerate() {
+            assert!(scheduler.finish_with_outcome(
+                "queue",
+                dispatch.id,
+                dispatch.generation,
+                sequence % 2 == 0,
+            ));
+        }
+
+        let queue = scheduler.queues.get("queue").expect("queue exists");
+        assert!(
+            queue.completed_times.buckets.len() <= 512,
+            "completed history grew to {} entries without a statistics read",
+            queue.completed_times.buckets.len()
+        );
+        assert!(
+            queue.failed_times.buckets.len() <= 512,
+            "failed history grew to {} entries without a statistics read",
+            queue.failed_times.buckets.len()
+        );
+        assert!(scheduler.statistics_retained_bytes() <= 512 * 3 * 32);
+    }
+
+    #[test]
+    fn queue_statistics_prune_each_record_at_the_exact_window_boundary() {
+        let start = Instant::now();
+        let mut window = super::StatisticWindow::new(Duration::from_secs(60));
+        window.record(start);
+        window.record(start + Duration::from_millis(900));
+
+        assert_eq!(window.count(start + Duration::from_millis(60_500)), 1);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one scenario covers the exact and adjacent window boundaries
+    fn queue_statistics_preserves_same_timestamp_counts_and_window_boundaries() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 2,
+                max_dispatches_per_second: 4096.0,
+            }),
+            start,
+        );
+        scheduler
+            .enqueue_at(
+                "queue",
+                task("same-a"),
+                TaskRetryConfig::default(),
+                1,
+                start,
+            )
+            .unwrap();
+        scheduler
+            .enqueue_at(
+                "queue",
+                task("same-b"),
+                TaskRetryConfig::default(),
+                1,
+                start,
+            )
+            .unwrap();
+        scheduler
+            .enqueue_at(
+                "queue",
+                task("later"),
+                TaskRetryConfig::default(),
+                1,
+                start + Duration::from_secs(1),
+            )
+            .unwrap();
+        let (dispatches, _) = scheduler.dispatch_ready(
+            start + Duration::from_secs(1),
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            2,
+        );
+        assert_eq!(dispatches.len(), 2);
+        scheduler.finish_with_outcome_at(
+            "queue",
+            dispatches[0].id,
+            dispatches[0].generation,
+            false,
+            start + Duration::from_secs(60),
+        );
+        scheduler.finish_with_outcome_at(
+            "queue",
+            dispatches[1].id,
+            dispatches[1].generation,
+            true,
+            start + Duration::from_secs(60),
+        );
+
+        let completed_before_boundary = scheduler.statistics_at(
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            (start + Duration::from_secs(120))
+                .checked_sub(Duration::from_nanos(1))
+                .expect("the boundary is after the test start"),
+        );
+        assert_eq!(
+            completed_before_boundary["queue:demo-app-us-central1-queue"]["tasksAdded"],
+            0.6
+        );
+        assert_eq!(
+            completed_before_boundary["queue:demo-app-us-central1-queue"]["completedLastMin"],
+            2
+        );
+        assert_eq!(
+            completed_before_boundary["queue:demo-app-us-central1-queue"]["failedTasks"],
+            0.2
+        );
+
+        let completed_at_boundary = scheduler.statistics_at(
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            start + Duration::from_secs(120),
+        );
+        assert_eq!(
+            completed_at_boundary["queue:demo-app-us-central1-queue"]["completedLastMin"],
+            0
+        );
+
+        let before_added_boundary = scheduler.statistics_at(
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            (start + Duration::from_secs(5 * 60))
+                .checked_sub(Duration::from_nanos(1))
+                .expect("the boundary is after the test start"),
+        );
+        assert_eq!(
+            before_added_boundary["queue:demo-app-us-central1-queue"]["tasksAdded"],
+            0.6
+        );
+        assert_eq!(
+            before_added_boundary["queue:demo-app-us-central1-queue"]["completedLastMin"],
+            0
+        );
+
+        let at_added_boundary = scheduler.statistics_at(
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            start + Duration::from_secs(5 * 60),
+        );
+        assert_eq!(
+            at_added_boundary["queue:demo-app-us-central1-queue"]["tasksAdded"],
+            0.2
+        );
+
+        scheduler.reset(start + Duration::from_secs(6 * 60));
+        let after_reset = scheduler.statistics_at(
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            start + Duration::from_secs(6 * 60),
+        );
+        assert_eq!(
+            after_reset["queue:demo-app-us-central1-queue"]["tasksAdded"],
+            0.0
+        );
+        assert_eq!(scheduler.statistics_retained_bytes(), 0);
+    }
+
+    #[test]
+    fn reading_queue_statistics_does_not_change_dispatch_order_or_rate_refill() {
+        let start = Instant::now();
+        let limits = TaskRateLimits {
+            max_concurrent_dispatches: 1,
+            max_dispatches_per_second: 1.0,
+        };
+        let mut with_reads = TaskScheduler::from_manifest(&two_queue_manifest(limits), start);
+        let mut without_reads = TaskScheduler::from_manifest(&two_queue_manifest(limits), start);
+        for (queue, name) in [("a", "a1"), ("a", "a2"), ("b", "b1"), ("b", "b2")] {
+            with_reads
+                .enqueue_at(queue, task(name), TaskRetryConfig::default(), 1, start)
+                .unwrap();
+            without_reads
+                .enqueue_at(queue, task(name), TaskRetryConfig::default(), 1, start)
+                .unwrap();
+        }
+
+        let mut observed = Vec::new();
+        let mut expected = Vec::new();
+        for tick in 1..=4 {
+            let now = start + Duration::from_secs(tick);
+            let _ = with_reads.statistics_at("demo-app", |_| Some(DEFAULT_REGION.to_owned()), now);
+            if tick % 2 == 0 {
+                let _ =
+                    with_reads.statistics_at("demo-app", |_| Some(DEFAULT_REGION.to_owned()), now);
+            }
+            let (actual, _) =
+                with_reads.dispatch_ready(now, "demo-app", |_| Some(DEFAULT_REGION.to_owned()), 1);
+            let (baseline, _) = without_reads.dispatch_ready(
+                now,
+                "demo-app",
+                |_| Some(DEFAULT_REGION.to_owned()),
+                1,
+            );
+            if let (Some(actual), Some(baseline)) = (actual.first(), baseline.first()) {
+                observed.push((actual.queue.clone(), actual.task.name.clone()));
+                expected.push((baseline.queue.clone(), baseline.task.name.clone()));
+                assert!(with_reads.finish(&actual.queue, actual.id, actual.generation));
+                assert!(without_reads.finish(&baseline.queue, baseline.id, baseline.generation));
+            }
+        }
+        assert_eq!(observed, expected);
     }
 
     #[test]
@@ -671,6 +1116,32 @@ mod tests {
             1,
         );
         assert_eq!(ready.len(), 1);
+    }
+
+    #[test]
+    fn a_token_refill_is_applied_once_per_scheduler_tick() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 3,
+                max_dispatches_per_second: 1.0,
+            }),
+            start,
+        );
+        for name in ["first", "second", "third"] {
+            scheduler
+                .enqueue("queue", task(name), TaskRetryConfig::default(), 1)
+                .unwrap();
+        }
+
+        let (dispatches, _) = scheduler.dispatch_ready(
+            start + Duration::from_secs(1),
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            10,
+        );
+
+        assert_eq!(dispatches.len(), 1);
     }
 
     #[test]

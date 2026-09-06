@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# Local runtime-test gate.
+#
+# The automatic pull-request job only formats and compiles (`cargo check`); it runs no test.
+# This gate runs `cargo nextest` through the session wrapper and writes a small JSON report
+# that says what was actually executed: the commit, whether the tree was dirty, the nextest
+# profile, the arguments, and the counts of tests run, passed, failed and skipped. It fails
+# when nextest fails, when nextest is not installed, and when no test ran at all, so an
+# empty selection or a missing dependency is never mistaken for a pass.
+#
+#   scripts/local-regression-gate --session <name> --report <file.json> [--profile pr] -- <nextest run arguments>
+#
+# Example:
+#   scripts/local-regression-gate --session compat --report docs.local/gates/compat.json -- -p fireemu-core-firestore
+set -uo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/local-regression-gate --session <name> --report <file.json> [--profile <nextest profile>] -- <cargo nextest run arguments>
+EOF
+  exit 2
+}
+
+session=
+report=
+profile="pr"
+
+while (($#)); do
+  case "$1" in
+    --session)
+      (($# >= 2)) || usage
+      session=$2
+      shift 2
+      ;;
+    --report)
+      (($# >= 2)) || usage
+      report=$2
+      shift 2
+      ;;
+    --profile)
+      (($# >= 2)) || usage
+      profile=$2
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+[[ -n "$session" && -n "$report" ]] || usage
+[[ "$profile" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || {
+  printf 'local-regression-gate: invalid profile name: %s\n' "$profile" >&2
+  exit 2
+}
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+wrapper="$here/cargo-session"
+
+json_string() {
+  # Escapes one string for a JSON literal: backslash, double quote, and the control
+  # characters JSON forbids in raw form.
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '"%s"' "$value"
+}
+
+json_array() {
+  local first=true item
+  printf '['
+  for item in "$@"; do
+    $first || printf ','
+    first=false
+    json_string "$item"
+  done
+  printf ']'
+}
+
+commit=$(git rev-parse HEAD 2>/dev/null || printf 'unknown')
+if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then dirty=true; else dirty=false; fi
+started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+status=
+exit_status=0
+run=0
+passed=0
+failed=0
+skipped=0
+nextest_version=
+rustc_version=$(rustc --version 2>/dev/null || printf 'unknown')
+
+if ! nextest_version=$(cargo nextest --version 2>/dev/null | head -n 1) || [[ -z "$nextest_version" ]]; then
+  status=missing-dependency
+  exit_status=127
+  printf 'local-regression-gate: cargo-nextest is not installed; nothing was tested (install it with cargo install cargo-nextest --locked)\n' >&2
+else
+  log=$(mktemp "${TMPDIR:-/tmp}/local-regression-gate.XXXXXX")
+  trap 'rm -f -- "$log"' EXIT
+  "$wrapper" --session "$session" -- cargo nextest run --profile "$profile" "$@" 2>&1 | tee "$log"
+  exit_status=${PIPESTATUS[0]}
+  summary=$(grep -E '^[[:space:]]*Summary \[' "$log" | tail -n 1 || true)
+  if [[ -z "$summary" ]]; then
+    status=no-summary
+    printf 'local-regression-gate: nextest printed no summary line; the run is not evidence\n' >&2
+  else
+    # "Summary [   1.234s] 12 tests run: 11 passed (1 slow), 1 failed, 3 skipped"
+    run=$(sed -nE 's/.* ([0-9]+) tests? run: .*/\1/p' <<<"$summary")
+    passed=$(sed -nE 's/.* ([0-9]+) passed.*/\1/p' <<<"$summary")
+    failed=$(sed -nE 's/.*, ([0-9]+) failed.*/\1/p' <<<"$summary")
+    skipped=$(sed -nE 's/.*, ([0-9]+) skipped.*/\1/p' <<<"$summary")
+    run=${run:-0}
+    passed=${passed:-0}
+    failed=${failed:-0}
+    skipped=${skipped:-0}
+    if ((run == 0)); then
+      status=no-tests
+      printf 'local-regression-gate: no test ran; an empty selection is not a pass\n' >&2
+    elif ((exit_status != 0)) || ((failed > 0)); then
+      status=failed
+    else
+      status=passed
+    fi
+  fi
+  if ((run == 0)) && ((exit_status == 0)); then
+    exit_status=4
+  fi
+fi
+
+finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+mkdir -p -- "$(dirname -- "$report")"
+{
+  printf '{\n'
+  printf '  "schemaVersion": 1,\n'
+  printf '  "kind": "runtime-tests",\n'
+  printf '  "status": %s,\n' "$(json_string "$status")"
+  printf '  "commit": %s,\n' "$(json_string "$commit")"
+  printf '  "dirty": %s,\n' "$dirty"
+  printf '  "session": %s,\n' "$(json_string "$session")"
+  printf '  "profile": %s,\n' "$(json_string "$profile")"
+  printf '  "arguments": %s,\n' "$(json_array "$@")"
+  printf '  "nextest": %s,\n' "$(json_string "$nextest_version")"
+  printf '  "rustc": %s,\n' "$(json_string "$rustc_version")"
+  printf '  "counts": {"run": %d, "passed": %d, "failed": %d, "skipped": %d},\n' "$run" "$passed" "$failed" "$skipped"
+  printf '  "exitStatus": %d,\n' "$exit_status"
+  printf '  "startedAt": %s,\n' "$(json_string "$started")"
+  printf '  "finishedAt": %s\n' "$(json_string "$finished")"
+  printf '}\n'
+} >"$report"
+
+printf 'local-regression-gate: %s (%d run, %d passed, %d failed, %d skipped) at %s%s; report %s\n' \
+  "$status" "$run" "$passed" "$failed" "$skipped" "${commit:0:12}" "$([[ $dirty == true ]] && printf ' (dirty)')" "$report" >&2
+
+if [[ "$status" == passed ]]; then
+  exit 0
+fi
+if ((exit_status == 0)); then
+  exit_status=1
+fi
+exit "$exit_status"

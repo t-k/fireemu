@@ -314,8 +314,10 @@ fn aggregations_count_sum_avg() {
             None,
         )
         .unwrap();
-    assert_eq!(r[0], Value::Integer(5));
-    // Only numeric values participate: 1 + 3 + 2.5 = 6.5 over 3 numeric documents.
+    // The document missing `priority` is excluded from the common aggregation input, while
+    // the non-numeric value remains countable.
+    assert_eq!(r[0], Value::Integer(4));
+    // Only numeric values contribute: 1 + 3 + 2.5 = 6.5 over 3 numeric documents.
     assert_eq!(r[1], Value::Double(6.5));
     assert_eq!(r[2], Value::Double(6.5 / 3.0));
     let capped = s

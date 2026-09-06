@@ -1377,7 +1377,9 @@ mod refresh_tests {
         )));
         let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
         let scope = Scope::Project("demo-app".to_owned());
-        local.restore_scope(&scope, &restored_snapshot("before"));
+        local
+            .restore_scope(&scope, &restored_snapshot("before"))
+            .unwrap();
         let parent = database_parent("projects/demo-app/databases/(default)").unwrap();
         let generation = local.database_generation(&parent);
         let query = Query::new(fireemu_core_firestore::query::QueryScope::collection(
@@ -1466,7 +1468,8 @@ mod refresh_tests {
         fixture
             .context
             .local
-            .restore_scope(&fixture.scope, &restored_snapshot("after"));
+            .restore_scope(&fixture.scope, &restored_snapshot("after"))
+            .unwrap();
         let mut out = Vec::new();
 
         handle_listen_request(
@@ -1493,7 +1496,8 @@ mod refresh_tests {
         fixture
             .context
             .local
-            .restore_scope(&fixture.scope, &restored_snapshot("after-precheck"));
+            .restore_scope(&fixture.scope, &restored_snapshot("after-precheck"))
+            .unwrap();
         refresh_all(
             &fixture.context,
             fixture.parent.as_ref(),

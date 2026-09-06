@@ -25,6 +25,9 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
+use fireemu_core_types::resources::{
+    Gauge, Refusal, RetentionRoot, RootBudget, ServiceResources, Unit,
+};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 use tokio::sync::Notify;
@@ -55,6 +58,13 @@ pub const RETRY_BASE_BACKOFF_SECONDS: i64 = 10;
 pub const RETRY_MAX_BACKOFF_SECONDS: i64 = 600;
 /// Maximum non-terminal event records retained by one Functions runtime.
 pub const MAX_ACTIVE_EVENT_RECORDS: usize = 4096;
+/// Logical events whose causal phases the runtime keeps for `await-idle` diagnostics
+/// (spec 10.5). Older entries are evicted and counted; eviction is never a completion.
+pub const MAX_CAUSALITY_ENTRIES: usize = 512;
+/// Phase transitions kept per causal entry; further ones are counted as dropped.
+const MAX_CAUSALITY_PHASES: usize = 32;
+/// Causal entries one status projection lists, unfinished ones first.
+const MAX_CAUSALITY_PROJECTED: usize = 64;
 /// Maximum serialized payload and routing bytes retained by non-terminal event records.
 pub const MAX_ACTIVE_EVENT_BYTES: usize = 64 * 1024 * 1024;
 /// Eventarc's share, leaving capacity for Firestore, Storage, Auth, Pub/Sub and schedules.
@@ -126,6 +136,8 @@ pub struct BlockingAuthTarget {
     pub addr: String,
     /// Per-runner proxy secret.
     pub secret: String,
+    /// Raw credential fields requested by this exact admitted target generation.
+    pub token_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
     runner: Arc<Runner>,
     revision: u64,
     owner: usize,
@@ -331,6 +343,161 @@ impl RecordLog {
     }
 }
 
+/// One phase of a logical event's life, on the virtual clock.
+#[derive(Debug, Clone)]
+struct CausalPhase {
+    phase: &'static str,
+    attempt: u32,
+    at: LogicalInstant,
+}
+
+/// The bounded causal record of one logical event: what registered it (the source operation,
+/// never a payload), which function it targets, and the phases it went through. It is written
+/// after the event is registered atomically with its source (F1), so it never describes an
+/// event that admission refused.
+#[derive(Debug, Clone)]
+struct CausalEntry {
+    event_id: u128,
+    epoch: u64,
+    source: EventSource,
+    event_type: String,
+    function: String,
+    parent: Option<String>,
+    terminal: bool,
+    phases: Vec<CausalPhase>,
+    phases_dropped: u32,
+}
+
+/// The runtime's bounded causality window.
+#[derive(Debug)]
+struct CausalityLog {
+    entries: BTreeMap<u128, CausalEntry>,
+    order: std::collections::VecDeque<u128>,
+    retention: usize,
+    evicted: u64,
+    reset_gaps: u64,
+}
+
+impl CausalityLog {
+    fn new(retention: usize) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            order: std::collections::VecDeque::new(),
+            retention: retention.max(1),
+            evicted: 0,
+            reset_gaps: 0,
+        }
+    }
+
+    fn register(&mut self, mut entry: CausalEntry, at: LogicalInstant) {
+        entry.phases.push(CausalPhase {
+            phase: "registered",
+            attempt: 0,
+            at,
+        });
+        let id = entry.event_id;
+        if self.entries.insert(id, entry).is_none() {
+            self.order.push_back(id);
+        }
+        while self.order.len() > self.retention {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+                self.evicted = self.evicted.saturating_add(1);
+            }
+        }
+    }
+
+    fn transition(
+        &mut self,
+        id: u128,
+        phase: &'static str,
+        attempt: u32,
+        at: LogicalInstant,
+        terminal: bool,
+    ) {
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        if entry.phases.len() >= MAX_CAUSALITY_PHASES {
+            entry.phases_dropped = entry.phases_dropped.saturating_add(1);
+        } else {
+            entry.phases.push(CausalPhase { phase, attempt, at });
+        }
+        entry.terminal |= terminal;
+    }
+
+    /// A reset discards the old epoch's entries: nothing in them completed, they are a gap.
+    fn reset(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.reset_gaps = self.reset_gaps.saturating_add(1);
+    }
+
+    fn set_retention(&mut self, retention: usize) {
+        self.retention = retention.max(1);
+        while self.order.len() > self.retention {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+                self.evicted = self.evicted.saturating_add(1);
+            }
+        }
+    }
+
+    /// The projection `status()` publishes: unfinished entries first, at most
+    /// [`MAX_CAUSALITY_PROJECTED`], with the counters that say what the window does not show.
+    fn project(&self, epoch: u64) -> Value {
+        let mut listed: Vec<&CausalEntry> = self
+            .order
+            .iter()
+            .filter_map(|id| self.entries.get(id))
+            .filter(|entry| !entry.terminal)
+            .collect();
+        listed.extend(
+            self.order
+                .iter()
+                .filter_map(|id| self.entries.get(id))
+                .filter(|entry| entry.terminal),
+        );
+        let truncated = listed.len() > MAX_CAUSALITY_PROJECTED;
+        listed.truncate(MAX_CAUSALITY_PROJECTED);
+        json!({
+            "epoch": epoch,
+            "retained": self.entries.len(),
+            "retention": self.retention,
+            "evicted": self.evicted,
+            "resetGaps": self.reset_gaps,
+            "truncated": truncated,
+            "events": listed.iter().map(|entry| json!({
+                "eventId": entry.event_id.to_string(),
+                "epoch": entry.epoch,
+                "source": source_name(entry.source),
+                "eventType": entry.event_type,
+                "function": entry.function,
+                "parent": entry.parent,
+                "terminal": entry.terminal,
+                "phasesDropped": entry.phases_dropped,
+                "phases": entry.phases.iter().map(|phase| json!({
+                    "phase": phase.phase,
+                    "attempt": phase.attempt,
+                    "at": phase.at.to_rfc3339().ok(),
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
+fn source_name(source: EventSource) -> &'static str {
+    match source {
+        EventSource::Firestore => "firestore",
+        EventSource::Storage => "storage",
+        EventSource::Scheduler => "scheduler",
+        EventSource::Manual => "manual",
+        EventSource::PubSub => "pubsub",
+        EventSource::Auth => "auth",
+        EventSource::Eventarc => "eventarc",
+    }
+}
+
 struct Inner {
     /// Bounded per-function Cloud Tasks queues and conservative retained-data accounting.
     task_scheduler: crate::task_scheduler::TaskScheduler,
@@ -339,6 +506,8 @@ struct Inner {
     outbox: Outbox,
     payloads: BTreeMap<EventId, QueuedPayload>,
     active_event_bytes: usize,
+    reserved_event_records: usize,
+    reserved_event_bytes: usize,
     active_eventarc_records: usize,
     active_eventarc_bytes: usize,
     /// Invocations occupying a slot, keyed by invocation key (`<event>-<attempt>` or
@@ -366,16 +535,148 @@ struct Inner {
     catch_up_steps: u64,
     /// Schedule runs refused by the `reject` overlap policy.
     overlap_rejected: u64,
+    /// Source-event admissions refused since the last reset, by category.
+    admission_refusals: BTreeMap<&'static str, u64>,
     /// Events held back by a `delay` fault until the virtual clock reaches the instant,
     /// with the outcome the same rule set decided for them.
     delayed: BTreeMap<EventId, Held>,
+    /// Bounded causal phases of registered events (`await-idle` diagnostics).
+    causality: CausalityLog,
 }
 
 struct QueuedPayload {
     function: String,
-    payload: Value,
+    payload: Arc<Value>,
     retained_bytes: usize,
     source: EventSource,
+}
+
+struct PlannedDelivery {
+    event: LogicalEvent,
+    payload: QueuedPayload,
+    /// The source operation that produced the event (`firestore-commit:<db>@<version>`,
+    /// `storage-generation:<n>`), for the causality window. Never a payload.
+    parent: Option<String>,
+}
+
+struct DeliveryDraft {
+    function: String,
+    event_type: String,
+    subject: String,
+    time: LogicalInstant,
+    payload: Arc<Value>,
+    parent: Option<String>,
+}
+
+/// A complete, capacity-charged batch of source-trigger deliveries that remains invisible
+/// until its source mutation has been published.
+pub struct EventBatchReservation {
+    runtime: std::sync::Weak<FunctionsRuntime>,
+    epoch: Epoch,
+    deliveries: Option<Vec<PlannedDelivery>>,
+    retained_bytes: usize,
+}
+
+/// Exact logical-event ownership used by atomic source adapters and formal projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceEventAccounting {
+    /// Deliveries charged to source mutations that have not published or cancelled yet.
+    pub reserved_records: usize,
+    /// Published deliveries that still retain their payload in the runtime.
+    pub published_records: usize,
+    /// Session generation that owns both sets.
+    pub epoch: Epoch,
+}
+
+impl EventBatchReservation {
+    /// Publishes every reserved delivery without re-matching triggers, re-serializing payloads,
+    /// or performing another admission decision.
+    pub fn publish(mut self) {
+        let Some(deliveries) = self.deliveries.take() else {
+            return;
+        };
+        if deliveries.is_empty() {
+            return;
+        }
+        let Some(runtime) = self.runtime.upgrade() else {
+            return;
+        };
+        let mut inner = runtime
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.epoch != self.epoch {
+            return;
+        }
+        release_event_reservation(&mut inner, deliveries.len(), self.retained_bytes);
+        for delivery in deliveries {
+            let id = delivery.event.event_id;
+            inner.causality.register(
+                CausalEntry {
+                    event_id: id.value(),
+                    epoch: delivery.event.epoch.value(),
+                    source: delivery.event.source,
+                    event_type: delivery.event.event_type.as_str().to_owned(),
+                    function: delivery.payload.function.clone(),
+                    parent: delivery.parent,
+                    terminal: false,
+                    phases: Vec::new(),
+                    phases_dropped: 0,
+                },
+                delivery.event.logical_time,
+            );
+            inner
+                .outbox
+                .enqueue(delivery.event)
+                .unwrap_or_else(|_| unreachable!("a reserved event id is unique"));
+            inner.active_event_bytes = inner
+                .active_event_bytes
+                .saturating_add(delivery.payload.retained_bytes);
+            inner.payloads.insert(id, delivery.payload);
+        }
+        drop(inner);
+        runtime.idle.notify_waiters();
+        runtime.wake.notify_one();
+    }
+}
+
+impl Drop for EventBatchReservation {
+    fn drop(&mut self) {
+        let Some(deliveries) = self.deliveries.take() else {
+            return;
+        };
+        if deliveries.is_empty() {
+            return;
+        }
+        let Some(runtime) = self.runtime.upgrade() else {
+            return;
+        };
+        let mut inner = runtime
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.epoch == self.epoch {
+            release_event_reservation(&mut inner, deliveries.len(), self.retained_bytes);
+        }
+        drop(inner);
+        runtime.idle.notify_waiters();
+    }
+}
+
+fn release_event_reservation(inner: &mut Inner, records: usize, bytes: usize) {
+    inner.reserved_event_records = inner.reserved_event_records.saturating_sub(records);
+    inner.reserved_event_bytes = inner.reserved_event_bytes.saturating_sub(bytes);
+}
+
+/// Why a source mutation could not reserve all of its logical deliveries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceEventAdmissionError {
+    /// The complete fan-out would exceed the bounded logical outbox.
+    Capacity,
+    /// Runtime state is unavailable.
+    Unavailable,
+    /// A generated logical event was invalid.
+    InvalidEvent,
 }
 
 /// A bounded Eventarc publication refusal.
@@ -562,6 +863,10 @@ pub struct FunctionsRuntime {
     trigger_generation: std::sync::atomic::AtomicU64,
     /// Once set, no reload or respawn may install another child process.
     shutting_down: std::sync::atomic::AtomicBool,
+    /// Set only after every source mutation that reserved a logical event batch has either
+    /// published or cancelled it. The dispatcher remains alive during that handoff so a
+    /// successful source write can never publish into an already stopped runtime.
+    dispatch_stopping: std::sync::atomic::AtomicBool,
 }
 
 /// Generation-tagged cleanup for one active task dispatch. Dropping the future because of a
@@ -571,6 +876,7 @@ struct TaskCompletion {
     queue: String,
     id: u64,
     generation: u64,
+    failed: bool,
 }
 
 impl Drop for TaskCompletion {
@@ -579,9 +885,12 @@ impl Drop for TaskCompletion {
             return;
         };
         let finished = runtime.inner.lock().is_ok_and(|mut inner| {
-            inner
-                .task_scheduler
-                .finish(&self.queue, self.id, self.generation)
+            inner.task_scheduler.finish_with_outcome(
+                &self.queue,
+                self.id,
+                self.generation,
+                self.failed,
+            )
         });
         if finished {
             runtime.idle.notify_waiters();
@@ -591,6 +900,14 @@ impl Drop for TaskCompletion {
 }
 
 impl FunctionsRuntime {
+    fn empty_event_reservation(self: &Arc<Self>) -> EventBatchReservation {
+        EventBatchReservation {
+            runtime: Arc::downgrade(self),
+            epoch: Epoch::initial(),
+            deliveries: Some(Vec::new()),
+            retained_bytes: 0,
+        }
+    }
     /// Builds the runtime around a started runner; schedules start counting from the
     /// current virtual time.
     #[must_use]
@@ -728,6 +1045,8 @@ impl FunctionsRuntime {
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
                 active_event_bytes: 0,
+                reserved_event_records: 0,
+                reserved_event_bytes: 0,
                 active_eventarc_records: 0,
                 active_eventarc_bytes: 0,
                 running: BTreeMap::new(),
@@ -742,7 +1061,9 @@ impl FunctionsRuntime {
                 catch_up_pending: false,
                 catch_up_steps: 0,
                 overlap_rejected: 0,
+                admission_refusals: BTreeMap::new(),
                 delayed: BTreeMap::new(),
+                causality: CausalityLog::new(MAX_CAUSALITY_ENTRIES),
             }),
             task_attempts: Mutex::new(tokio::task::JoinSet::new()),
             wake: Notify::new(),
@@ -753,6 +1074,7 @@ impl FunctionsRuntime {
             background_triggers: std::sync::atomic::AtomicBool::new(true),
             trigger_generation: std::sync::atomic::AtomicU64::new(0),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
+            dispatch_stopping: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -816,10 +1138,25 @@ impl FunctionsRuntime {
             .collect()
     }
 
-    /// Shuts down every current codebase runner concurrently.
-    pub async fn shutdown(&self) {
+    /// Closes admission while allowing already reserved source mutations to finish publishing.
+    pub fn begin_shutdown(&self) {
+        // Reservation admission reads this flag while holding `inner`. Taking the same lock
+        // makes this method's return the linearization boundary: a reservation charged before
+        // it returns is owned and awaited; one attempting afterward observes the closed flag.
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.shutting_down
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(inner);
+        self.wake.notify_one();
+        self.idle.notify_waiters();
+    }
+
+    /// Shuts down every current codebase runner concurrently.
+    pub async fn shutdown(&self) {
+        self.begin_shutdown();
         let mut retired_attempts = {
             let mut attempts = self
                 .task_attempts
@@ -830,6 +1167,24 @@ impl FunctionsRuntime {
             }
             std::mem::take(&mut *attempts)
         };
+        loop {
+            let notified = self.idle.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self
+                .inner
+                .lock()
+                .map(|inner| inner.reserved_event_records == 0)
+                .unwrap_or(true)
+            {
+                break;
+            }
+            notified.await;
+        }
+        // Admission is closed and every source mutation has completed its publish/cancel
+        // handoff. Only now may the dispatch loop stop and the runners be terminated.
+        self.dispatch_stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         retired_attempts.shutdown().await;
         // There is exactly one dispatch loop. A stored permit also covers the narrow window
         // between its shutdown check and awaiting the notification.
@@ -1071,6 +1426,7 @@ impl FunctionsRuntime {
             return false;
         };
         if !Self::can_admit_events(inner, source, 1, retained_bytes) {
+            *inner.admission_refusals.entry("capacity").or_default() += 1;
             return false;
         }
         inner.next_event += 1;
@@ -1090,12 +1446,24 @@ impl FunctionsRuntime {
             correlation_id: CorrelationId::new(u128::from(inner.next_event)),
             payload: Vec::new(),
         };
+        let causal = CausalEntry {
+            event_id: id.value(),
+            epoch: inner.epoch.value(),
+            source,
+            event_type: event.event_type.as_str().to_owned(),
+            function: function.to_owned(),
+            parent: None,
+            terminal: false,
+            phases: Vec::new(),
+            phases_dropped: 0,
+        };
         if inner.outbox.enqueue(event).is_ok() {
+            inner.causality.register(causal, time);
             inner.payloads.insert(
                 id,
                 QueuedPayload {
                     function: function.to_owned(),
-                    payload: payload.clone(),
+                    payload: Arc::new(payload.clone()),
                     retained_bytes,
                     source,
                 },
@@ -1141,12 +1509,14 @@ impl FunctionsRuntime {
         let global = inner
             .payloads
             .len()
-            .checked_add(count)
-            .is_some_and(|count| count <= MAX_ACTIVE_EVENT_RECORDS)
+            .checked_add(inner.reserved_event_records)
+            .and_then(|used| used.checked_add(count))
+            .is_some_and(|used| used <= MAX_ACTIVE_EVENT_RECORDS)
             && inner
                 .active_event_bytes
-                .checked_add(bytes)
-                .is_some_and(|bytes| bytes <= MAX_ACTIVE_EVENT_BYTES);
+                .checked_add(inner.reserved_event_bytes)
+                .and_then(|used| used.checked_add(bytes))
+                .is_some_and(|used| used <= MAX_ACTIVE_EVENT_BYTES);
         let source = source != EventSource::Eventarc
             || (inner
                 .active_eventarc_records
@@ -1157,6 +1527,102 @@ impl FunctionsRuntime {
                     .checked_add(bytes)
                     .is_some_and(|bytes| bytes <= MAX_ACTIVE_EVENTARC_BYTES));
         global && source
+    }
+
+    fn reserve_drafts(
+        self: &Arc<Self>,
+        source: EventSource,
+        drafts: Vec<DeliveryDraft>,
+        inner: &mut Inner,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        // The outer source-specific check is a fast path. This check is linearized with the
+        // reservation counters so shutdown cannot close admission between that check and the
+        // capacity charge.
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(SourceEventAdmissionError::Unavailable);
+        }
+        let mut retained_bytes = 0usize;
+        for draft in &drafts {
+            EventType::try_new(&draft.event_type)
+                .map_err(|_| SourceEventAdmissionError::InvalidEvent)?;
+            let bytes = Self::retained_event_bytes(
+                &draft.function,
+                &draft.event_type,
+                &draft.subject,
+                &draft.payload,
+            )
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+            retained_bytes = retained_bytes
+                .checked_add(bytes)
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+        }
+        if !Self::can_admit_events(inner, source, drafts.len(), retained_bytes) {
+            return Err(SourceEventAdmissionError::Capacity);
+        }
+        let delivery_count =
+            u64::try_from(drafts.len()).map_err(|_| SourceEventAdmissionError::Capacity)?;
+        let final_event = inner
+            .next_event
+            .checked_add(delivery_count)
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+        let next_reserved_records = inner
+            .reserved_event_records
+            .checked_add(drafts.len())
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+        let next_reserved_bytes = inner
+            .reserved_event_bytes
+            .checked_add(retained_bytes)
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+
+        let epoch = inner.epoch;
+        let mut next_event = inner.next_event;
+        let mut deliveries = Vec::with_capacity(drafts.len());
+        for draft in drafts {
+            next_event = next_event
+                .checked_add(1)
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            let id = EventId::new(u128::from(next_event));
+            let event_type = EventType::try_new(&draft.event_type)
+                .map_err(|_| SourceEventAdmissionError::InvalidEvent)?;
+            let retained_bytes = Self::retained_event_bytes(
+                &draft.function,
+                &draft.event_type,
+                &draft.subject,
+                &draft.payload,
+            )
+            .ok_or(SourceEventAdmissionError::Capacity)?;
+            deliveries.push(PlannedDelivery {
+                event: LogicalEvent {
+                    event_id: id,
+                    session_id: self.config.session,
+                    epoch,
+                    source,
+                    event_type,
+                    subject: draft.subject,
+                    logical_time: draft.time,
+                    causation_id: None,
+                    correlation_id: CorrelationId::new(u128::from(next_event)),
+                    payload: Vec::new(),
+                },
+                payload: QueuedPayload {
+                    function: draft.function,
+                    payload: draft.payload,
+                    retained_bytes,
+                    source,
+                },
+                parent: draft.parent,
+            });
+        }
+        debug_assert_eq!(next_event, final_event);
+        inner.next_event = final_event;
+        inner.reserved_event_records = next_reserved_records;
+        inner.reserved_event_bytes = next_reserved_bytes;
+        Ok(EventBatchReservation {
+            runtime: Arc::downgrade(self),
+            epoch,
+            deliveries: Some(deliveries),
+            retained_bytes,
+        })
     }
 
     fn remove_payload(inner: &mut Inner, id: EventId) {
@@ -1173,21 +1639,53 @@ impl FunctionsRuntime {
         }
     }
 
-    /// Turns a Firestore commit into document events for every matching trigger.
-    pub fn on_commit(&self, commit: &CommitEvent) {
+    /// Reserves the complete Firestore trigger fan-out before the source commit is published.
+    pub fn reserve_commit_events(
+        self: &Arc<Self>,
+        commit: &CommitEvent,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        let reservation = self.reserve_commit_events_unmetered(commit);
+        if let Err(error) = &reservation {
+            self.note_admission_refusal(*error);
+        }
+        reservation
+    }
+
+    /// Counts a refused source-event admission for the resource report.
+    fn note_admission_refusal(&self, error: SourceEventAdmissionError) {
+        let category = match error {
+            SourceEventAdmissionError::Capacity => "capacity",
+            SourceEventAdmissionError::Unavailable => "unavailable",
+            SourceEventAdmissionError::InvalidEvent => "invalid_event",
+        };
+        if let Ok(mut inner) = self.inner.lock() {
+            *inner.admission_refusals.entry(category).or_default() += 1;
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn reserve_commit_events_unmetered(
+        self: &Arc<Self>,
+        commit: &CommitEvent,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        if commit.project != self.config.project {
+            return Ok(self.empty_event_reservation());
+        }
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(SourceEventAdmissionError::Unavailable);
+        }
         if !self.background_triggers_enabled() {
-            return; // dropped, never held for a later replay
+            return Ok(self.empty_event_reservation());
         }
         let Some(time) = commit.commit_time else {
-            return; // reset
+            return Ok(self.empty_event_reservation());
         };
-        if commit.project != self.config.project {
-            return;
-        }
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
-        let mut enqueued = false;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| SourceEventAdmissionError::Unavailable)?;
+        let mut drafts = Vec::new();
+        let mut draft_bytes = 0usize;
         for change in commit.changes.iter() {
             let Some(kind) = change_kind(change.before.as_deref(), change.after.as_deref()) else {
                 continue;
@@ -1219,7 +1717,12 @@ impl FunctionsRuntime {
                         ..
                     }
                 );
-                let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
+                let next = inner
+                    .next_event
+                    .checked_add(u64::try_from(drafts.len()).unwrap_or(u64::MAX))
+                    .and_then(|next| next.checked_add(1))
+                    .ok_or(SourceEventAdmissionError::Capacity)?;
+                let id = format!("{}-{next}", self.config.session.value());
                 let mut payload = firestore_event(
                     &id,
                     &commit.project,
@@ -1241,28 +1744,73 @@ impl FunctionsRuntime {
                     .and_then(Value::as_str)
                     .unwrap_or(reported.event_type())
                     .to_owned();
-                self.enqueue_delivery(
-                    &mut inner,
-                    EventSource::Firestore,
-                    &m.function.name,
-                    &event_type,
-                    &format!("documents/{relative}"),
-                    time,
-                    &payload,
-                );
-                enqueued = true;
+                let copies = self.delivery_copies(&m.function.name, &event_type);
+                let subject = format!("documents/{relative}");
+                let one_delivery =
+                    Self::retained_event_bytes(&m.function.name, &event_type, &subject, &payload)
+                        .ok_or(SourceEventAdmissionError::Capacity)?;
+                draft_bytes = draft_bytes
+                    .checked_add(
+                        one_delivery
+                            .checked_mul(copies)
+                            .ok_or(SourceEventAdmissionError::Capacity)?,
+                    )
+                    .ok_or(SourceEventAdmissionError::Capacity)?;
+                let draft_count = drafts
+                    .len()
+                    .checked_add(copies)
+                    .ok_or(SourceEventAdmissionError::Capacity)?;
+                if !Self::can_admit_events(&inner, EventSource::Firestore, draft_count, draft_bytes)
+                {
+                    return Err(SourceEventAdmissionError::Capacity);
+                }
+                let payload = Arc::new(payload);
+                for _ in 0..copies {
+                    drafts.push(DeliveryDraft {
+                        function: m.function.name.clone(),
+                        event_type: event_type.clone(),
+                        subject: subject.clone(),
+                        time,
+                        payload: Arc::clone(&payload),
+                        parent: Some(format!(
+                            "firestore-commit:{}@{}",
+                            commit.database, commit.version
+                        )),
+                    });
+                }
             }
         }
-        drop(inner);
-        if enqueued {
-            self.wake.notify_one();
+        self.reserve_drafts(EventSource::Firestore, drafts, &mut inner)
+    }
+
+    /// Turns a Firestore commit into document events for every matching trigger.
+    pub fn on_commit(self: &Arc<Self>, commit: &CommitEvent) {
+        if let Ok(reservation) = self.reserve_commit_events(commit) {
+            reservation.publish();
         }
     }
 
-    /// Turns a Storage object event into events for every matching trigger.
-    pub fn on_storage_event(&self, event: &StorageEvent) {
+    /// Reserves the complete Storage trigger fan-out before the object mutation is published.
+    pub fn reserve_storage_event(
+        self: &Arc<Self>,
+        event: &StorageEvent,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        let reservation = self.reserve_storage_event_unmetered(event);
+        if let Err(error) = &reservation {
+            self.note_admission_refusal(*error);
+        }
+        reservation
+    }
+
+    fn reserve_storage_event_unmetered(
+        self: &Arc<Self>,
+        event: &StorageEvent,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(SourceEventAdmissionError::Unavailable);
+        }
         if !self.background_triggers_enabled() {
-            return; // dropped, never held for a later replay
+            return Ok(self.empty_event_reservation());
         }
         let (kind, object) = match event {
             StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m),
@@ -1270,30 +1818,61 @@ impl FunctionsRuntime {
             StorageEvent::MetadataUpdated(m) => (ObjectEvent::MetadataUpdated, m),
         };
         let time = self.now();
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
-        let mut enqueued = false;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| SourceEventAdmissionError::Unavailable)?;
+        let mut drafts = Vec::new();
+        let mut draft_bytes = 0usize;
         for f in
             self.manifest
                 .storage_matches(object.bucket.as_str(), &self.config.default_bucket, kind)
         {
-            let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
+            let next = inner
+                .next_event
+                .checked_add(u64::try_from(drafts.len()).unwrap_or(u64::MAX))
+                .and_then(|next| next.checked_add(1))
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            let id = format!("{}-{next}", self.config.session.value());
             let payload = storage_event(&id, kind, object, time);
-            self.enqueue_delivery(
-                &mut inner,
-                EventSource::Storage,
-                &f.name,
-                kind.event_type(),
-                &format!("objects/{}", object.name.as_str()),
-                time,
-                &payload,
-            );
-            enqueued = true;
+            let event_type = kind.event_type().to_owned();
+            let subject = format!("objects/{}", object.name.as_str());
+            let copies = self.delivery_copies(&f.name, &event_type);
+            let one_delivery = Self::retained_event_bytes(&f.name, &event_type, &subject, &payload)
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            draft_bytes = draft_bytes
+                .checked_add(
+                    one_delivery
+                        .checked_mul(copies)
+                        .ok_or(SourceEventAdmissionError::Capacity)?,
+                )
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            let draft_count = drafts
+                .len()
+                .checked_add(copies)
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            if !Self::can_admit_events(&inner, EventSource::Storage, draft_count, draft_bytes) {
+                return Err(SourceEventAdmissionError::Capacity);
+            }
+            let payload = Arc::new(payload);
+            for _ in 0..copies {
+                drafts.push(DeliveryDraft {
+                    function: f.name.clone(),
+                    event_type: event_type.clone(),
+                    subject: subject.clone(),
+                    time,
+                    payload: Arc::clone(&payload),
+                    parent: Some(format!("storage-generation:{}", object.generation)),
+                });
+            }
         }
-        drop(inner);
-        if enqueued {
-            self.wake.notify_one();
+        self.reserve_drafts(EventSource::Storage, drafts, &mut inner)
+    }
+
+    /// Turns a Storage object event into events for every matching trigger.
+    pub fn on_storage_event(self: &Arc<Self>, event: &StorageEvent) {
+        if let Ok(reservation) = self.reserve_storage_event(event) {
+            reservation.publish();
         }
     }
 
@@ -1450,7 +2029,7 @@ impl FunctionsRuntime {
         self: &Arc<Self>,
         dispatch: &crate::task_scheduler::Dispatch,
         epoch: Epoch,
-    ) {
+    ) -> bool {
         let task = &dispatch.task;
         let mut started = None;
         let mut attempt = 1u32;
@@ -1460,7 +2039,7 @@ impl FunctionsRuntime {
         loop {
             // A reset supersedes every task accepted before it.
             if self.inner.lock().ok().map(|i| i.epoch) != Some(epoch) {
-                return;
+                return false;
             }
             if started.is_some_and(|first_delivery| {
                 task_retry_exhausted(first_delivery, dispatch.retry, attempt)
@@ -1470,7 +2049,7 @@ impl FunctionsRuntime {
                     task.name,
                     attempt - 1
                 );
-                return;
+                return true;
             }
             let Some(target) =
                 self.http_target(&dispatch.project, &dispatch.region, &dispatch.function)
@@ -1479,7 +2058,7 @@ impl FunctionsRuntime {
                     "[functions] task {:?}: {} is no longer served",
                     task.name, dispatch.function
                 );
-                return;
+                return true;
             };
             let headers = crate::tasks::dispatch_headers(
                 task,
@@ -1503,7 +2082,7 @@ impl FunctionsRuntime {
             )
             .await;
             let status = match outcome {
-                Ok(Ok(response)) if (200..300).contains(&response.status) => return,
+                Ok(Ok(response)) if (200..300).contains(&response.status) => return false,
                 Ok(Ok(response)) => Some(response.status),
                 Ok(Err(HttpInvokeError::Capacity { .. })) => {
                     // The task has not reached a runner. Local process contention is
@@ -1521,7 +2100,7 @@ impl FunctionsRuntime {
                         task_retry_deadline(first_delivery, dispatch.retry, attempt)
                     });
                     if !self.wait_for_task_token(dispatch, retry_deadline).await {
-                        return;
+                        return true;
                     }
                     continue;
                 }
@@ -1544,7 +2123,7 @@ impl FunctionsRuntime {
                     task.name,
                     attempt - 1
                 );
-                return;
+                return true;
             }
             tokio::time::sleep(Duration::from_millis(
                 dispatch.retry.backoff_millis(attempt),
@@ -1552,7 +2131,7 @@ impl FunctionsRuntime {
             .await;
             let retry_deadline = task_retry_deadline(first_delivery, dispatch.retry, attempt);
             if !self.wait_for_task_token(dispatch, retry_deadline).await {
-                return;
+                return true;
             }
         }
     }
@@ -1937,6 +2516,7 @@ impl FunctionsRuntime {
         }
         for id in inner.outbox.retries_due(now) {
             if inner.outbox.update(id, |r| r.retry_due(now)).is_ok() {
+                inner.causality.transition(id.value(), "due", 0, now, false);
                 enqueued = true;
             }
         }
@@ -2112,8 +2692,12 @@ impl FunctionsRuntime {
                     current.runner.kill_now();
                 }
                 inner.outbox.discard_stale(epoch);
+                inner.causality.reset();
+                inner.admission_refusals.clear();
                 inner.payloads.clear();
                 inner.active_event_bytes = 0;
+                inner.reserved_event_records = 0;
+                inner.reserved_event_bytes = 0;
                 inner.active_eventarc_records = 0;
                 inner.active_eventarc_bytes = 0;
                 inner.running.clear();
@@ -2315,6 +2899,16 @@ impl FunctionsRuntime {
             .unwrap_or(true)
     }
 
+    /// Returns the exact source-event ownership projection without payload contents.
+    #[must_use]
+    pub fn source_event_accounting(&self) -> Option<SourceEventAccounting> {
+        self.inner.lock().ok().map(|inner| SourceEventAccounting {
+            reserved_records: inner.reserved_event_records,
+            published_records: inner.payloads.len(),
+            epoch: inner.epoch,
+        })
+    }
+
     /// Whether every codebase's runner process is alive (a dead runner leaves that
     /// codebase's queued work pending).
     #[must_use]
@@ -2353,6 +2947,10 @@ impl FunctionsRuntime {
             "timeZoneDatabase": crate::zone::database_version(),
             "runnerAlive": self.runner_alive(),
             "epoch": inner.epoch.value(),
+            // Bounded causal phases of the registered events (spec 10.5 diagnostics): what
+            // an `await-idle` timeout is waiting for and where it came from. Eviction and
+            // resets are counted, never presented as completions.
+            "causality": inner.causality.project(inner.epoch.value()),
             "functions": self.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
             // One entry per loaded codebase, so a multi-codebase project can see which runner
             // is down and which functions went with it.
@@ -2373,6 +2971,148 @@ impl FunctionsRuntime {
                 "reason": f.reason,
             })).collect::<Vec<_>>(),
         })
+    }
+
+    /// The runtime's retention report for the resource diagnostics: outbox records and bytes,
+    /// Eventarc records and bytes, the retained history windows and running work, each against
+    /// its limit, with one outstanding root per queued event and running invocation. Payloads
+    /// are never included; an event root carries its identifier and retained byte count only.
+    ///
+    /// # Errors
+    ///
+    /// A poisoned runtime lock is an error, never an empty report: an empty report would read
+    /// as "quiescent" while work may still be outstanding.
+    pub fn resources(&self, budget: RootBudget) -> Result<ServiceResources, String> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| "the functions runtime state is poisoned".to_owned())?;
+        Ok(ServiceResources {
+            service: "functions".to_owned(),
+            gauges: self.resource_gauges(&inner),
+            refusals: std::iter::once(Refusal {
+                reason: "schedule.overlap".to_owned(),
+                count: inner.overlap_rejected,
+            })
+            .chain(
+                inner
+                    .admission_refusals
+                    .iter()
+                    .map(|(category, count)| Refusal {
+                        reason: format!("admission.{category}"),
+                        count: *count,
+                    }),
+            )
+            .collect(),
+            roots: budget.bound(Self::resource_roots(&inner)),
+        })
+    }
+
+    fn resource_roots(inner: &Inner) -> Vec<RetentionRoot> {
+        let mut roots = Vec::new();
+        for (id, payload) in &inner.payloads {
+            let Some(record) = inner.outbox.record(*id) else {
+                continue;
+            };
+            let phase = match record.state() {
+                EventState::Pending | EventState::Leased => "pending",
+                EventState::RetryWaiting { .. } => "retry",
+                _ => continue,
+            };
+            roots.push(RetentionRoot {
+                kind: format!("event.{phase}"),
+                id: format!("{id:?}"),
+                count: 1,
+                bytes: u64::try_from(payload.retained_bytes).unwrap_or(u64::MAX),
+                outstanding: true,
+            });
+        }
+        for key in inner.running.keys() {
+            roots.push(RetentionRoot {
+                kind: "invocation".to_owned(),
+                id: key.clone(),
+                count: 1,
+                bytes: 0,
+                outstanding: true,
+            });
+        }
+        roots
+    }
+
+    fn resource_gauges(&self, inner: &Inner) -> Vec<Gauge> {
+        let count = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
+        vec![
+            Gauge::logical(
+                "outbox.records",
+                Unit::Count,
+                count(
+                    inner
+                        .payloads
+                        .len()
+                        .saturating_add(inner.reserved_event_records),
+                ),
+                Some(count(MAX_ACTIVE_EVENT_RECORDS)),
+            ),
+            Gauge::logical(
+                "outbox.bytes",
+                Unit::Bytes,
+                count(
+                    inner
+                        .active_event_bytes
+                        .saturating_add(inner.reserved_event_bytes),
+                ),
+                Some(count(MAX_ACTIVE_EVENT_BYTES)),
+            ),
+            Gauge::logical(
+                "eventarc.records",
+                Unit::Count,
+                count(inner.active_eventarc_records),
+                Some(count(MAX_ACTIVE_EVENTARC_RECORDS)),
+            ),
+            Gauge::logical(
+                "eventarc.bytes",
+                Unit::Bytes,
+                count(inner.active_eventarc_bytes),
+                Some(count(MAX_ACTIVE_EVENTARC_BYTES)),
+            ),
+            Gauge::logical(
+                "history.records",
+                Unit::Count,
+                count(inner.history.records.len()),
+                Some(count(inner.history.retention)),
+            ),
+            Gauge::logical(
+                "dead_letters.records",
+                Unit::Count,
+                count(inner.dead_letters.records.len()),
+                Some(count(inner.dead_letters.retention)),
+            ),
+            Gauge::logical(
+                "invocations.running",
+                Unit::Count,
+                count(inner.running.len()),
+                Some(count(self.max_global_concurrency())),
+            ),
+            Gauge::logical(
+                "tasks.in_flight",
+                Unit::Count,
+                count(inner.task_scheduler.outstanding()),
+                None,
+            ),
+        ]
+    }
+
+    /// Returns the read-only Cloud Tasks `/queueStats` payload for all loaded task queues.
+    #[must_use]
+    pub fn task_queue_stats(&self) -> Value {
+        let Ok(mut inner) = self.inner.lock() else {
+            return json!({});
+        };
+        inner
+            .task_scheduler
+            .statistics(&self.config.project, |function| {
+                self.manifest.get(function).map(|spec| spec.region.clone())
+            })
     }
 
     /// Waits until the runtime is idle or `timeout` (real time) elapses.
@@ -2413,6 +3153,14 @@ impl FunctionsRuntime {
             .lock()
             .map(|i| i.history.window())
             .unwrap_or_default()
+    }
+
+    /// Bounds the causality window to `entries` events (tests and embedders; the default is
+    /// [`MAX_CAUSALITY_ENTRIES`]). Entries beyond the bound are evicted oldest first.
+    pub fn set_causality_retention(&self, entries: usize) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.causality.set_retention(entries);
+        }
     }
 
     /// The retained window of dead letters, oldest first ([`MAX_RETAINED_DEAD_LETTERS`]).
@@ -2558,8 +3306,27 @@ impl FunctionsRuntime {
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> bool {
         self.manifest.functions.iter().any(|function| {
-            matches!(function.trigger, Trigger::BlockingAuth { event: candidate } if candidate == event)
+            matches!(function.trigger, Trigger::BlockingAuth { event: candidate, .. } if candidate == event)
         })
+    }
+
+    /// Token policy of the first Blocking Auth target selected for `event`.
+    #[must_use]
+    pub fn blocking_auth_token_policy(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        self.manifest
+            .functions
+            .iter()
+            .find_map(|function| match function.trigger {
+                Trigger::BlockingAuth {
+                    event: candidate,
+                    token_policy,
+                } if candidate == event => Some(token_policy),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     /// Atomically selects a ready Blocking Auth runner generation and reserves one slot in the
@@ -2572,7 +3339,7 @@ impl FunctionsRuntime {
             return Err("the Functions runtime is shutting down".to_owned());
         }
         let Some(spec) = self.manifest.functions.iter().find(|function| {
-            matches!(function.trigger, Trigger::BlockingAuth { event: candidate } if candidate == event)
+            matches!(function.trigger, Trigger::BlockingAuth { event: candidate, .. } if candidate == event)
         }) else {
             return Ok(None);
         };
@@ -2620,6 +3387,10 @@ impl FunctionsRuntime {
             region: spec.region.clone(),
             addr: format!("127.0.0.1:{port}"),
             secret: self.config.runner_secret.clone(),
+            token_policy: match spec.trigger {
+                Trigger::BlockingAuth { token_policy, .. } => token_policy,
+                _ => unreachable!("the selected function is a Blocking Auth target"),
+            },
             runner: current.runner.clone(),
             revision: current.revision,
             owner,
@@ -3030,7 +3801,10 @@ impl FunctionsRuntime {
             let wake = self.wake.notified();
             tokio::pin!(wake);
             wake.as_mut().enable();
-            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            if self
+                .dispatch_stopping
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
                 break;
             }
             self.dispatch_ready();
@@ -3050,14 +3824,20 @@ impl FunctionsRuntime {
     /// Moves ready Cloud Tasks from their bounded FIFOs into active dispatch slots. Only an
     /// active slot owns a Tokio task; pending bodies remain plain queue entries.
     fn dispatch_tasks_ready(self: &Arc<Self>) -> Option<std::time::Instant> {
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .dispatch_stopping
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return None;
         }
         let mut attempts = self
             .task_attempts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .dispatch_stopping
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return None;
         }
         let (dispatches, next_wake, epoch) = {
@@ -3085,13 +3865,14 @@ impl FunctionsRuntime {
         for dispatch in dispatches {
             let runtime = self.clone();
             attempts.spawn(async move {
-                let _completion = TaskCompletion {
+                let mut completion = TaskCompletion {
                     runtime: Arc::downgrade(&runtime),
                     queue: dispatch.queue.clone(),
                     id: dispatch.id,
                     generation: dispatch.generation,
+                    failed: false,
                 };
-                runtime.dispatch_task(&dispatch, epoch).await;
+                completion.failed = runtime.dispatch_task(&dispatch, epoch).await;
             });
         }
         next_wake
@@ -3099,7 +3880,10 @@ impl FunctionsRuntime {
 
     #[allow(clippy::too_many_lines)]
     fn dispatch_ready(self: &Arc<Self>) {
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .dispatch_stopping
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return;
         }
         // The runners snapshotted here are the ones every invocation of this pass goes to: an
@@ -3180,6 +3964,9 @@ impl FunctionsRuntime {
             let Ok(Some((attempt, epoch))) = leased else {
                 continue;
             };
+            inner
+                .causality
+                .transition(id.value(), "running", attempt, now, false);
             let Some(queued) = inner.payloads.get(&id) else {
                 continue;
             };
@@ -3276,6 +4063,53 @@ impl FunctionsRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Applies the outbox's retirement decision to the causality window, the payload and the
+    /// dead-letter log.
+    #[allow(clippy::too_many_arguments)]
+    fn settle_record(
+        inner: &mut Inner,
+        id: EventId,
+        attempt: u32,
+        now: LogicalInstant,
+        outcome: &InvokeOutcome,
+        retirement: Result<Retirement, fireemu_core_events::outbox::OutboxError>,
+        function: &str,
+        text: String,
+    ) {
+        match retirement {
+            Ok(Retirement::Retired) => {
+                inner
+                    .causality
+                    .transition(id.value(), "completed", attempt, now, true);
+                Self::remove_payload(inner, id);
+            }
+            Ok(Retirement::StillActive) => {
+                let phase = if matches!(outcome, InvokeOutcome::RunnerGone(_)) {
+                    "interrupted"
+                } else {
+                    "retry"
+                };
+                inner
+                    .causality
+                    .transition(id.value(), phase, attempt, now, false);
+            }
+            Ok(Retirement::DeadLettered) => {
+                inner
+                    .causality
+                    .transition(id.value(), "failed", attempt, now, true);
+                Self::remove_payload(inner, id);
+                inner.record_dead_letter(InvocationRecord {
+                    event_id: id.value(),
+                    function: function.to_owned(),
+                    attempt,
+                    outcome: text,
+                });
+            }
+            Err(_) => {}
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn complete(
         &self,
         id: EventId,
@@ -3362,21 +4196,16 @@ impl FunctionsRuntime {
                     Retirement::DeadLettered
                 }
             });
-            match outcome_of_record {
-                Ok(Retirement::Retired) => {
-                    Self::remove_payload(&mut inner, id);
-                }
-                Ok(Retirement::DeadLettered) => {
-                    Self::remove_payload(&mut inner, id);
-                    inner.record_dead_letter(InvocationRecord {
-                        event_id: id.value(),
-                        function: function.to_owned(),
-                        attempt,
-                        outcome: text,
-                    });
-                }
-                Ok(Retirement::StillActive) | Err(_) => {}
-            }
+            Self::settle_record(
+                &mut inner,
+                id,
+                attempt,
+                now,
+                outcome,
+                outcome_of_record,
+                function,
+                text,
+            );
         }
         let more_due = self
             .inner
@@ -3490,12 +4319,19 @@ impl Drop for Admission {
 
 #[cfg(test)]
 mod task_completion_tests {
-    use super::{FunctionsConfig, FunctionsRuntime, TaskCompletion};
+    use super::{
+        FunctionsConfig, FunctionsRuntime, SourceEventAdmissionError, TaskCompletion,
+        MAX_ACTIVE_EVENT_BYTES,
+    };
     use crate::manifest_json::parse_manifest;
     use crate::runner::{Runner, SpawnSpec};
+    use fireemu_adapter_grpc::local::{Actor, CommitEvent};
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
     use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig, Trigger};
     use fireemu_core_session::clock::VirtualClock;
-    use fireemu_core_types::ids::SessionId;
+    use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    use fireemu_core_types::ids::{DatabaseId, ProjectId, SessionId};
     use fireemu_core_types::time::LogicalInstant;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
@@ -3566,6 +4402,173 @@ mod task_completion_tests {
         dispatches.remove(0)
     }
 
+    fn created_commit() -> CommitEvent {
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let path = DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::try_new("(default)").unwrap(),
+            "items/reserved",
+        )
+        .unwrap();
+        CommitEvent {
+            actor: Actor::system(),
+            project: "demo-app".to_owned(),
+            database: "(default)".to_owned(),
+            version: 1,
+            commit_time: Some(now),
+            changes: Arc::from([DocumentChange {
+                path: path.clone(),
+                before: None,
+                after: Some(Arc::new(Document {
+                    path,
+                    fields: std::collections::BTreeMap::default(),
+                    create_time: now,
+                    update_time: now,
+                    version: CommitVersion::from_value(1),
+                })),
+            }]),
+        }
+    }
+
+    #[tokio::test]
+    async fn source_event_reservation_is_all_or_none_and_drop_refunds_capacity() {
+        let runtime = runtime().await;
+        let commit = created_commit();
+        let reservation = runtime.reserve_commit_events(&commit).unwrap();
+        assert_eq!(reservation.deliveries.as_ref().unwrap().len(), 2);
+        let required_bytes = reservation.retained_bytes;
+        drop(reservation);
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.reserved_event_records, 0);
+            assert_eq!(inner.reserved_event_bytes, 0);
+            assert!(inner.payloads.is_empty());
+        }
+
+        let stale = runtime.reserve_commit_events(&commit).unwrap();
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            inner.epoch = inner.epoch.next().unwrap();
+            inner.reserved_event_records = 0;
+            inner.reserved_event_bytes = 0;
+        }
+        let current = runtime.reserve_commit_events(&commit).unwrap();
+        let current_records = current.deliveries.as_ref().unwrap().len();
+        let current_bytes = current.retained_bytes;
+        drop(stale);
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.reserved_event_records, current_records);
+            assert_eq!(inner.reserved_event_bytes, current_bytes);
+        }
+        drop(current);
+
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            inner.active_event_bytes = MAX_ACTIVE_EVENT_BYTES - required_bytes + 1;
+        }
+        let before_id = runtime.inner.lock().unwrap().next_event;
+        assert!(matches!(
+            runtime.reserve_commit_events(&commit),
+            Err(SourceEventAdmissionError::Capacity)
+        ));
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.next_event, before_id);
+            assert_eq!(inner.reserved_event_records, 0);
+            assert_eq!(inner.reserved_event_bytes, 0);
+            assert!(inner.payloads.is_empty());
+        }
+
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            inner.active_event_bytes = MAX_ACTIVE_EVENT_BYTES - required_bytes;
+        }
+        runtime.reserve_commit_events(&commit).unwrap().publish();
+        {
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.payloads.len(), 2);
+            assert_eq!(inner.reserved_event_records, 0);
+            assert_eq!(inner.reserved_event_bytes, 0);
+            assert_eq!(inner.active_event_bytes, MAX_ACTIVE_EVENT_BYTES);
+        }
+        runtime.shutdown().await;
+        assert!(matches!(
+            runtime.reserve_commit_events(&commit),
+            Err(SourceEventAdmissionError::Unavailable)
+        ));
+        let mut foreign_commit = commit.clone();
+        foreign_commit.project = "other-project".to_owned();
+        let foreign = runtime.reserve_commit_events(&foreign_commit).unwrap();
+        assert!(foreign.deliveries.as_ref().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_an_owned_source_reservation_to_publish_or_cancel() {
+        async fn assert_handoff(publish: bool) {
+            let runtime = runtime().await;
+            let reservation = runtime.reserve_commit_events(&created_commit()).unwrap();
+            runtime.begin_shutdown();
+            assert!(matches!(
+                runtime.reserve_commit_events(&created_commit()),
+                Err(SourceEventAdmissionError::Unavailable)
+            ));
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            let shutting_down = {
+                let runtime = runtime.clone();
+                tokio::spawn(async move {
+                    entered_tx.send(()).unwrap();
+                    runtime.shutdown().await;
+                })
+            };
+            entered_rx.await.unwrap();
+            tokio::task::yield_now().await;
+            assert!(!shutting_down.is_finished());
+
+            if publish {
+                reservation.publish();
+            } else {
+                drop(reservation);
+            }
+            tokio::time::timeout(Duration::from_secs(5), shutting_down)
+                .await
+                .expect("shutdown finishes after the source handoff")
+                .expect("shutdown task remains healthy");
+            let inner = runtime.inner.lock().unwrap();
+            assert_eq!(inner.reserved_event_records, 0);
+            assert_eq!(inner.payloads.len(), usize::from(publish) * 2);
+        }
+
+        assert_handoff(true).await;
+        assert_handoff(false).await;
+    }
+
+    #[tokio::test]
+    async fn source_event_reservation_charges_duplicate_fault_fanout() {
+        let runtime = runtime().await;
+        let faults = Arc::new(Mutex::new(FaultState::default()));
+        faults.lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "functions.deliver".to_owned(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::Duplicate { count: 1 },
+            }],
+        });
+        runtime.set_faults(faults);
+
+        let reservation = runtime.reserve_commit_events(&created_commit()).unwrap();
+        assert_eq!(reservation.deliveries.as_ref().unwrap().len(), 4);
+        assert_eq!(runtime.inner.lock().unwrap().reserved_event_records, 4);
+        drop(reservation);
+        assert_eq!(runtime.inner.lock().unwrap().reserved_event_records, 0);
+        runtime.shutdown().await;
+    }
+
     async fn assert_cleanup_after(
         runtime: &Arc<FunctionsRuntime>,
         dispatch: crate::task_scheduler::Dispatch,
@@ -3589,6 +4592,7 @@ mod task_completion_tests {
                 queue: dispatch.queue,
                 id: dispatch.id,
                 generation: dispatch.generation,
+                failed: false,
             };
             let _ = ready.send(());
             assert!(!panic, "exercise task-completion unwind cleanup");
@@ -3656,6 +4660,7 @@ mod task_completion_tests {
             queue: active.queue,
             id: active.id,
             generation: active.generation,
+            failed: false,
         });
         runtime
             .enqueue_task("demo-app", "us-central1", "taskB", &body("process-full"))

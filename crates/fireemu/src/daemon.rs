@@ -210,8 +210,12 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         barrier: Some(barrier.clone()),
         events: functions_runtime.as_ref().map(functions::auth_sink),
         blocking: functions_runtime.as_ref().map(|runtime| {
-            Arc::new(functions::BlockingAuthBridge::new(runtime.clone()))
-                as Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>
+            Arc::new(
+                functions::BlockingAuthBridge::new_with_forward_inbound_credentials(
+                    runtime.clone(),
+                    cfg.auth_forward_inbound_credentials,
+                ),
+            ) as Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>
         }),
         operation_gate: Arc::new(Mutex::new(())),
         control_token: Some(control_token.clone()),
@@ -313,6 +317,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         tenancy.clone(),
         app_check_gate.clone(),
         &pubsub_state,
+        &pubsub_handle,
         &pubsub_resources,
     ));
     Ok(ServiceAssembly {
@@ -661,7 +666,7 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
     if let Some(listener) = pubsub_listener {
         spawn_server!(
             "Pub/Sub",
-            fireemu_adapter_pubsub::serve_pubsub(listener, pubsub)
+            fireemu_adapter_pubsub::serve_pubsub(listener, pubsub.clone())
         );
     }
     let log_bus = fireemu_adapter_logging::LogBus::new();
@@ -836,11 +841,25 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         }
     }
     if let Some(runtime) = functions_runtime {
+        // Close Functions source admission only after every Firestore and Storage mutation
+        // already admitted through the shared session barrier has published its reservation.
+        // New source requests can enter after this short critical section, but their runtime
+        // reservation fails before the source state changes.
+        close_functions_source_admission(&backend.barrier(), || runtime.begin_shutdown());
         runtime.shutdown().await;
     }
+    pubsub.shutdown_push_dispatcher().await;
     servers.abort_all();
     while servers.join_next().await.is_some() {}
     outcome.map(|_| code)
+}
+
+fn close_functions_source_admission(
+    barrier: &fireemu_core_session::barrier::AdmissionBarrier,
+    close: impl FnOnce(),
+) {
+    let _exclusive = barrier.exclusive();
+    close();
 }
 
 fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
@@ -903,8 +922,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         };
         let backend = Arc::new(if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
+                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
         } else {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
+                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
                 .with_wall_clock_write_time()
         });
         for (database, files) in &cfg.firestore_databases {
@@ -924,11 +945,19 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let tenancy: fireemu_core_session::tenancy::SharedTenancy = Arc::new(RwLock::new(
             fireemu_core_session::tenancy::Tenancy::new(&cfg.auth_project),
         ));
+        backend.set_tenancy(tenancy.clone());
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,
             SplitMix64::new(cfg.seed ^ 0xA0),
             cfg.auth_totp.unwrap_or_default(),
         )));
+        if let Ok(mut store) = auth_store.lock() {
+            let config = fireemu_core_auth::store::ProjectAuthConfig {
+                enable_improved_email_privacy: cfg.auth_improved_email_privacy,
+                ..store.config()
+            };
+            store.set_config(config);
+        }
         // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
         // wanted they are generated concurrently on blocking tasks. They are always separate
         // keys: the Auth key is derived from the session seed, the App Check key is drawn from
@@ -1158,7 +1187,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::function_log_input;
+    use super::{close_functions_source_admission, function_log_input};
     use fireemu_adapter_logging::wire::build_bundle;
 
     #[test]
@@ -1189,5 +1218,24 @@ mod tests {
         assert_eq!(bundle["data"]["metadata"]["type"], "USER");
         assert_eq!(bundle["data"]["trace"], "projects/demo/traces/abc");
         assert_eq!(bundle["data"]["metadata"]["user"]["spoofed"], true);
+    }
+
+    #[test]
+    fn functions_shutdown_waits_for_admitted_source_publication() {
+        let barrier = std::sync::Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        let admitted = barrier.admit();
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        let closing_barrier = barrier.clone();
+        let closer = std::thread::spawn(move || {
+            close_functions_source_admission(&closing_barrier, || closed_tx.send(()).unwrap());
+        });
+
+        assert!(matches!(
+            closed_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        drop(admitted);
+        closed_rx.recv().unwrap();
+        closer.join().unwrap();
     }
 }

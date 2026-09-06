@@ -9,9 +9,9 @@ use fireemu_adapter_http::identity_toolkit::{
 };
 use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::AuthStore;
+use fireemu_core_auth::store::{AuthStore, PendingSignInId};
 use fireemu_core_auth::{base32, totp::totp_at};
-use fireemu_core_functions::manifest::BlockingAuthEvent;
+use fireemu_core_functions::manifest::{BlockingAuthEvent, BlockingAuthTokenPolicy};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -35,6 +35,12 @@ impl AuthBlockingHook for PassThroughBlockingHook {
 
 struct FilteringIdpBlockingHook {
     contexts: Arc<Mutex<Vec<(BlockingAuthEvent, AuthBlockingContext)>>>,
+}
+
+struct RawCredentialBlockingHook {
+    contexts: Arc<Mutex<Vec<(BlockingAuthEvent, AuthBlockingContext)>>>,
+    forward_inbound_credentials: bool,
+    token_policy: Option<BlockingAuthTokenPolicy>,
 }
 
 struct FixedBeforeSignInHook {
@@ -115,6 +121,39 @@ impl AuthBlockingHook for FilteringIdpBlockingHook {
             json!({})
         };
         Ok(Some(response))
+    }
+}
+
+impl AuthBlockingHook for RawCredentialBlockingHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(json!({}))
+    }
+
+    fn forward_inbound_credentials(&self) -> bool {
+        self.forward_inbound_credentials
+    }
+
+    fn inbound_credential_policy(&self, _event: BlockingAuthEvent) -> BlockingAuthTokenPolicy {
+        if !self.forward_inbound_credentials {
+            return BlockingAuthTokenPolicy::default();
+        }
+        self.token_policy.unwrap_or(BlockingAuthTokenPolicy::ALL)
+    }
+
+    fn invoke_for_with_context(
+        &self,
+        _project: &str,
+        _tenant: Option<&str>,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+        context: &AuthBlockingContext,
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
+        self.contexts.lock().unwrap().push((event, context.clone()));
+        Ok(Some(json!({})))
     }
 }
 
@@ -955,6 +994,66 @@ fn the_inspection_routes_are_project_scoped_and_can_wipe_accounts() {
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
         &json!({"email": "w@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400);
+}
+
+#[test]
+fn allow_duplicate_emails_applies_to_password_accounts_and_active_lookup() {
+    let s = state();
+    let config_path = format!("{EMU}/config");
+    let (status, enabled) = {
+        let response = handle_with(
+            &s,
+            "PATCH",
+            &config_path,
+            &owner(),
+            &json!({"signIn": {"allowDuplicateEmails": true}}),
+        );
+        (response.status, response.body)
+    };
+    assert_eq!(status, 200, "{enabled}");
+    assert_eq!(enabled["signIn"]["allowDuplicateEmails"], true);
+
+    let first = sign_up(&s, "duplicate@example.com");
+    let second = sign_up(&s, "duplicate@example.com");
+    assert_ne!(first["localId"], second["localId"]);
+
+    let (_, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"email": ["duplicate@example.com"]}),
+    );
+    assert_eq!(lookup["users"][0]["localId"], second["localId"]);
+
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    assert_eq!(
+        claims(signed_in["idToken"].as_str().unwrap())["sub"],
+        second["localId"]
+    );
+
+    let (status, updated) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"localId": first["localId"], "email": "duplicate@example.com"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": second["idToken"]}),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
     );
     assert_eq!(status, 400);
 }
@@ -2051,6 +2150,102 @@ fn blocking_auth_receives_idp_context_and_can_select_session_claims() {
 }
 
 #[test]
+fn blocking_auth_forwards_raw_idp_credentials_only_when_opted_in() {
+    let oidc = json!({
+        "sub": "oidc-raw-credentials",
+        "email": "raw-credentials@example.com",
+        "email_verified": true
+    });
+    let id_token = oidc.to_string();
+    let post_body = format!(
+        "providerId=oidc.corp&id_token={}&access_token=access-sentinel&refresh_token=refresh-sentinel",
+        percent(&id_token)
+    );
+
+    for forward_inbound_credentials in [false, true] {
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        let mut s = state();
+        s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+            contexts: Arc::clone(&contexts),
+            forward_inbound_credentials,
+            token_policy: None,
+        }));
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithIdp"),
+            &json!({"postBody": post_body, "requestUri": DUMMY_URI}),
+        );
+        assert_eq!(status, 200, "{response}");
+
+        let recorded = contexts.lock().unwrap();
+        assert_eq!(recorded.len(), 2);
+        for (_, context) in recorded.iter() {
+            let credential = context.credential.as_ref().unwrap();
+            assert_eq!(credential.provider_id, "oidc.corp");
+            assert_eq!(
+                credential.id_token.as_deref(),
+                forward_inbound_credentials.then_some(id_token.as_str())
+            );
+            assert_eq!(
+                credential.access_token.as_deref(),
+                forward_inbound_credentials.then_some("access-sentinel")
+            );
+            assert_eq!(
+                credential.refresh_token.as_deref(),
+                forward_inbound_credentials.then_some("refresh-sentinel")
+            );
+            let debug = format!("{context:?}");
+            assert!(!debug.contains("access-sentinel"));
+            assert!(!debug.contains("refresh-sentinel"));
+        }
+    }
+}
+
+#[test]
+fn blocking_auth_retains_and_forwards_only_each_targets_requested_tokens() {
+    let id_token = json!({
+        "sub": "oidc-token-policy",
+        "email": "token-policy@example.com",
+        "email_verified": true
+    })
+    .to_string();
+    for bits in 0_u8..8 {
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        let mut s = state();
+        s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+            contexts: Arc::clone(&contexts),
+            forward_inbound_credentials: true,
+            token_policy: Some(BlockingAuthTokenPolicy {
+                access_token: bits & 1 != 0,
+                id_token: bits & 2 != 0,
+                refresh_token: bits & 4 != 0,
+            }),
+        }));
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithIdp"),
+            &json!({
+                "postBody": format!(
+                    "providerId=oidc.corp&id_token={}&access_token=access-sentinel&refresh_token=refresh-sentinel",
+                    percent(&id_token)
+                ),
+                "requestUri": DUMMY_URI
+            }),
+        );
+        assert_eq!(status, 200, "policy {bits}: {response}");
+
+        let recorded = contexts.lock().unwrap();
+        assert_eq!(recorded.len(), 2);
+        for (_, context) in recorded.iter() {
+            let credential = context.credential.as_ref().unwrap();
+            assert_eq!(credential.access_token.is_some(), bits & 1 != 0);
+            assert_eq!(credential.id_token.is_some(), bits & 2 != 0);
+            assert_eq!(credential.refresh_token.is_some(), bits & 4 != 0);
+        }
+    }
+}
+
+#[test]
 fn blocking_auth_receives_every_non_idp_sign_in_method() {
     fn recorded_method(
         state: &mut AuthState,
@@ -2283,6 +2478,212 @@ fn federated_mfa_finalize_preserves_attributes_and_invokes_blocking_auth_once() 
             .and_then(|credential| credential.claims.as_ref()),
         Some(&oidc)
     );
+}
+
+#[test]
+fn blocking_auth_forwards_idp_credentials_only_after_mfa_continuation() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "raw-mfa@example.com",
+            "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15550008888"}]
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [created["localId"]]}),
+    );
+    let enrollment_id = lookup["users"][0]["mfaInfo"][0]["mfaEnrollmentId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+        contexts: Arc::clone(&contexts),
+        forward_inbound_credentials: true,
+        token_policy: None,
+    }));
+    let oidc = json!({
+        "sub": "oidc-raw-mfa",
+        "email": "raw-mfa@example.com",
+        "email_verified": true
+    });
+    let id_token = oidc.to_string();
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({
+            "postBody": format!(
+                "providerId=oidc.corp&id_token={}&access_token=access-mfa-sentinel&refresh_token=refresh-mfa-sentinel",
+                percent(&id_token)
+            ),
+            "requestUri": DUMMY_URI
+        }),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("idToken").is_none());
+    assert!(contexts.lock().unwrap().is_empty());
+
+    let credential = pending["mfaPendingCredential"].as_str().unwrap().to_owned();
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({
+            "mfaPendingCredential": credential,
+            "mfaEnrollmentId": enrollment_id,
+            "phoneSignInInfo": {"recaptchaToken": "x"}
+        }),
+    );
+    assert_eq!(status, 200, "{started}");
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["code"]
+        .as_str()
+        .unwrap();
+    s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+        contexts: Arc::clone(&contexts),
+        forward_inbound_credentials: false,
+        token_policy: Some(BlockingAuthTokenPolicy::ALL),
+    }));
+    let (status, signed) = finalize_mfa(
+        &s,
+        &json!({
+            "mfaPendingCredential": credential,
+            "phoneVerificationInfo": {
+                "sessionInfo": started["phoneResponseInfo"]["sessionInfo"],
+                "code": code
+            }
+        }),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    let context = &recorded[0].1;
+    let credential = context.credential.as_ref().unwrap();
+    assert_eq!(credential.id_token, None);
+    assert_eq!(credential.access_token, None);
+    assert_eq!(credential.refresh_token, None);
+    let debug = format!("{context:?}");
+    assert!(!debug.contains("access-mfa-sentinel"));
+    assert!(!debug.contains("refresh-mfa-sentinel"));
+}
+
+fn assert_rejected_mfa_hook_drops_raw_credentials(
+    hook: Arc<dyn AuthBlockingHook>,
+    expected_status: u16,
+) {
+    let mut s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "rejected-raw-mfa@example.com",
+            "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15550007777"}]
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [created["localId"]]}),
+    );
+    let enrollment_id = lookup["users"][0]["mfaInfo"][0]["mfaEnrollmentId"]
+        .as_str()
+        .unwrap();
+    s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+        contexts: Arc::new(Mutex::new(Vec::new())),
+        forward_inbound_credentials: true,
+        token_policy: None,
+    }));
+    let id_token = json!({
+        "sub": "oidc-rejected-raw-mfa",
+        "email": "rejected-raw-mfa@example.com",
+        "email_verified": true
+    })
+    .to_string();
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({
+            "postBody": format!(
+                "providerId=oidc.corp&id_token={}&access_token=reject-access-sentinel&refresh_token=reject-refresh-sentinel",
+                percent(&id_token)
+            ),
+            "requestUri": DUMMY_URI
+        }),
+    );
+    assert_eq!(status, 200, "{pending}");
+    let credential = pending["mfaPendingCredential"].as_str().unwrap();
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({
+            "mfaPendingCredential": credential,
+            "mfaEnrollmentId": enrollment_id,
+            "phoneSignInInfo": {"recaptchaToken": "x"}
+        }),
+    );
+    assert_eq!(status, 200, "{started}");
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["code"]
+        .as_str()
+        .unwrap();
+    s.blocking = Some(hook);
+    let (status, refused) = finalize_mfa(
+        &s,
+        &json!({
+            "mfaPendingCredential": credential,
+            "phoneVerificationInfo": {
+                "sessionInfo": started["phoneResponseInfo"]["sessionInfo"],
+                "code": code
+            }
+        }),
+    );
+    assert_eq!(status, expected_status, "{refused}");
+
+    let pending_id = PendingSignInId::parse(credential).unwrap();
+    let store = s.store.lock().unwrap();
+    let context = store.pending_sign_in_context(&pending_id).unwrap();
+    assert_eq!(context.inbound_credentials(), None);
+    assert_eq!(context.sign_in_provider(), Some("oidc.corp"));
+    assert_eq!(store.pending_sign_in_count(), 1);
+}
+
+#[test]
+fn rejected_mfa_hooks_drop_raw_credentials_but_keep_retry_provenance() {
+    for (hook, expected_status) in [
+        (
+            Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
+            503,
+        ),
+        (Arc::new(RejectBeforeSignInHook { timeout: true }), 503),
+        (
+            Arc::new(FixedBeforeSignInHook {
+                response: json!({
+                    "userRecord": {
+                        "updateMask": "sessionClaims",
+                        "sessionClaims": {"firebase": "reserved"}
+                    }
+                }),
+            }),
+            400,
+        ),
+    ] {
+        assert_rejected_mfa_hook_drops_raw_credentials(hook, expected_status);
+    }
 }
 
 #[test]

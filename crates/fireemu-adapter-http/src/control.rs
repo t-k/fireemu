@@ -24,6 +24,10 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_session::tenancy::Scope;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::edition::FirestoreEdition;
+use fireemu_core_types::resources::{
+    assert_quiescent, AllowedRoot, Gauge, Measure, RetentionRoot, RootBudget, ServiceResources,
+    Unit,
+};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
@@ -47,6 +51,24 @@ pub trait FunctionsHook: Send + Sync {
     fn publish(&self, topic: &str, messages: &[Value]) -> Result<Vec<String>, String>;
     /// The project the functions belong to (the Pub/Sub REST path must name it).
     fn project(&self) -> String;
+}
+
+/// One service's resource diagnostics for one session (`GET /v1/sessions/{s}/resources`).
+///
+/// A hook reports what `scope` retains in the shared schema of
+/// [`fireemu_core_types::resources`]: gauges against limits, refusal counts and bounded,
+/// opaque retention roots. It never mutates, never reports a payload or a credential, and
+/// locks only its own store: hooks are collected one after another, so no request ever holds
+/// two services' locks at once.
+pub trait ResourceHook: Send + Sync {
+    /// The service (`firestore`, `functions`, ...).
+    fn name(&self) -> &'static str;
+    /// Collects the report for `scope`, listing at most `budget.max_roots` roots.
+    fn collect(
+        &self,
+        scope: &Scope,
+        budget: RootBudget,
+    ) -> Result<ServiceResources, TransitionFailure>;
 }
 
 /// One adapter's failure during a session-state transition (a reset, a deletion, a
@@ -239,6 +261,8 @@ pub struct ControlState {
     pub project_hooks: Option<Arc<dyn ProjectHooks>>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<dyn FunctionsHook>>,
+    /// Resource diagnostics, one hook per service; the snapshot store reports itself.
+    pub resource_hooks: Vec<Arc<dyn ResourceHook>>,
     /// Session admission barrier: a reset holds it exclusively across every hook, so no
     /// request straddles a half-reset session; other control mutations are admitted.
     pub barrier: Option<Arc<fireemu_core_session::barrier::AdmissionBarrier>>,
@@ -259,11 +283,48 @@ pub struct ControlState {
 /// detailed failure reasons here are exactly what an unprivileged view must never see.
 pub const APP_CHECK_OBSERVATIONS_SUFFIX: &str = "/appCheck/observations";
 
+/// Where one session's resource diagnostics are served. Privileged for every method: the
+/// report names retention roots and refusal counts a page must not read without the token.
+pub const RESOURCES_SUFFIX: &str = "/resources";
+/// The quiescence assertion on the same report.
+pub const RESOURCES_ASSERT_SUFFIX: &str = "/resources:assertQuiescent";
+
 /// Whether a response to `path` must carry `Cache-Control: no-store`.
 #[must_use]
 pub fn is_no_store_path(path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
-    path.starts_with("/v1/sessions/") && path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX)
+    path.starts_with("/v1/sessions/")
+        && (path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX) || is_resources_path(path))
+}
+
+/// The resource report is privileged for pages on every method (see [`RESOURCES_SUFFIX`]);
+/// this check is repeated after the query string is stripped so it cannot depend on the
+/// browser guard's spelling alone.
+fn resources_guard(
+    state: &ControlState,
+    path: &str,
+    headers: &RequestHeaders,
+) -> Option<JsonResponse> {
+    if !is_resources_path(path) || headers.origin.is_none() {
+        return None;
+    }
+    let presented = headers
+        .authorization
+        .as_deref()
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .map(str::trim);
+    (!token_matches(presented, &state.control_token)).then(|| {
+        error(
+            403,
+            "CONTROL_TOKEN_REQUIRED : resource diagnostics need Authorization: Bearer <control token> on every method",
+        )
+    })
+}
+
+/// Whether a query-stripped path is one of the resource diagnostics routes.
+fn is_resources_path(path: &str) -> bool {
+    path.starts_with("/v1/sessions/")
+        && (path.ends_with(RESOURCES_SUFFIX) || path.ends_with(RESOURCES_ASSERT_SUFFIX))
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -384,6 +445,9 @@ pub fn handle_with(
         return refusal;
     }
     let path = path.split('?').next().unwrap_or(path);
+    if let Some(refusal) = resources_guard(state, path, headers) {
+        return refusal;
+    }
     match (method, path) {
         ("GET", "/health/live" | "/health/ready") => ok(json!({"status": "ok"})),
         ("GET", "/v1/capabilities") => ok(state.capabilities.value()),
@@ -891,6 +955,9 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         return response;
     }
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
+    if action == "resources" || action == "resources:assertQuiescent" {
+        return resources_route(state, session, &project, method, action, body);
+    }
     if !is_default && (action.starts_with("functions") || action.starts_with("pubsub/topics/")) {
         // The functions runtime (and its fault plan) belongs to the default session.
         return error(
@@ -1891,6 +1958,250 @@ fn restore_parts(
     Ok(())
 }
 
+/// The most allowances one quiescence assertion may carry, and the longest field.
+const MAX_ALLOWANCES: usize = 64;
+const MAX_ALLOWANCE_FIELD: usize = 256;
+
+/// One session's report, collected service by service.
+struct ResourceReport {
+    services: Vec<ServiceResources>,
+    errors: Vec<TransitionFailure>,
+}
+
+fn collect_resources(state: &ControlState, session: &str, scope: &Scope) -> ResourceReport {
+    let budget = RootBudget::DEFAULT;
+    let mut services = Vec::with_capacity(state.resource_hooks.len() + 1);
+    let mut errors = Vec::new();
+    match state.snapshots.lock() {
+        Ok(snapshots) => services.push(snapshot_resources(state, &snapshots, session, budget)),
+        Err(_) => errors.push(TransitionFailure::new(
+            "snapshots",
+            "the snapshot store is poisoned",
+        )),
+    }
+    for hook in &state.resource_hooks {
+        match hook.collect(scope, budget) {
+            Ok(report) => services.push(report),
+            Err(failure) => errors.push(failure),
+        }
+    }
+    ResourceReport { services, errors }
+}
+
+/// The snapshot store's own report: retained snapshots and their estimated bytes against the
+/// per-session budgets. Snapshot names are identifiers the caller chose, so they are the roots.
+fn snapshot_resources(
+    state: &ControlState,
+    snapshots: &SnapshotStore,
+    session: &str,
+    budget: RootBudget,
+) -> ServiceResources {
+    let retained = snapshots
+        .get(session)
+        .map_or(0, std::collections::BTreeMap::len);
+    let bytes = session_snapshot_bytes(&state.snapshot_hooks, snapshots, session);
+    let mut retained_bytes = Gauge::logical(
+        "snapshots.retained_bytes",
+        Unit::Bytes,
+        bytes,
+        Some(MAX_SNAPSHOT_BYTES_PER_SESSION),
+    );
+    retained_bytes.measure = Measure::Estimate;
+    let roots = snapshots
+        .get(session)
+        .into_iter()
+        .flatten()
+        .map(|(name, snapshot)| RetentionRoot {
+            kind: "snapshot".to_owned(),
+            id: name.clone(),
+            count: snapshot.parts.iter().flatten().count() as u64,
+            bytes: parts_bytes(&state.snapshot_hooks, &snapshot.parts),
+            outstanding: false,
+        })
+        .collect();
+    ServiceResources {
+        service: "snapshots".to_owned(),
+        gauges: vec![
+            Gauge::logical(
+                "snapshots.retained",
+                Unit::Count,
+                retained as u64,
+                Some(MAX_SNAPSHOTS_PER_SESSION as u64),
+            ),
+            retained_bytes,
+        ],
+        refusals: Vec::new(),
+        roots: budget.bound(roots),
+    }
+}
+
+fn gauge_json(gauge: &Gauge) -> Value {
+    json!({
+        "id": gauge.id,
+        "measure": gauge.measure.as_str(),
+        "unit": gauge.unit.as_str(),
+        "current": gauge.current,
+        "limit": gauge.limit,
+        "reclaimable": gauge.reclaimable,
+    })
+}
+
+fn root_json(root: &RetentionRoot) -> Value {
+    json!({
+        "kind": root.kind,
+        "id": root.id,
+        "count": root.count,
+        "bytes": root.bytes,
+        "outstanding": root.outstanding,
+    })
+}
+
+fn service_json(service: &ServiceResources) -> Value {
+    json!({
+        "service": service.service,
+        "gauges": service.gauges.iter().map(gauge_json).collect::<Vec<_>>(),
+        "refusals": service.refusals.iter().map(|r| json!({"reason": r.reason, "count": r.count})).collect::<Vec<_>>(),
+        "roots": {
+            "total": service.roots.total,
+            "truncated": service.roots.truncated,
+            "items": service.roots.roots.iter().map(root_json).collect::<Vec<_>>(),
+        },
+    })
+}
+
+fn errors_json(errors: &[TransitionFailure]) -> Value {
+    Value::Array(
+        errors
+            .iter()
+            .map(|e| json!({"service": e.part, "message": e.message}))
+            .collect(),
+    )
+}
+
+/// A non-empty, bounded field of an allowance, without control characters.
+fn allowance_field(entry: &Value, field: &str) -> Result<String, String> {
+    let value = entry
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("allow[].{field} (string) is required"))?;
+    if value.is_empty() || value.len() > MAX_ALLOWANCE_FIELD {
+        return Err(format!(
+            "allow[].{field} must be 1 to {MAX_ALLOWANCE_FIELD} bytes"
+        ));
+    }
+    if value.chars().any(|c| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{200B}'..='\u{200F}'
+                    | '\u{202A}'..='\u{202E}'
+                    | '\u{2060}'..='\u{2064}'
+                    | '\u{2066}'..='\u{2069}'
+                    | '\u{FEFF}'
+            )
+    }) {
+        return Err(format!(
+            "allow[].{field} must not contain control or bidi formatting characters"
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn parse_allowances(body: &Value) -> Result<Vec<AllowedRoot>, String> {
+    let entries = match body.get("allow") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(entries)) => entries,
+        Some(_) => return Err("allow must be an array of {service, kind, id, reason}".to_owned()),
+    };
+    if entries.len() > MAX_ALLOWANCES {
+        return Err(format!("allow may list at most {MAX_ALLOWANCES} roots"));
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            Ok(AllowedRoot {
+                service: allowance_field(entry, "service")?,
+                kind: allowance_field(entry, "kind")?,
+                id: allowance_field(entry, "id")?,
+                reason: allowance_field(entry, "reason")?,
+            })
+        })
+        .collect()
+}
+
+fn allowance_json(allowance: &AllowedRoot) -> Value {
+    json!({
+        "service": allowance.service,
+        "kind": allowance.kind,
+        "id": allowance.id,
+        "reason": allowance.reason,
+    })
+}
+
+/// `GET /v1/sessions/{s}/resources` and `POST /v1/sessions/{s}/resources:assertQuiescent`.
+fn resources_route(
+    state: &ControlState,
+    session: &str,
+    project: &str,
+    method: &str,
+    action: &str,
+    body: &Value,
+) -> JsonResponse {
+    let scope = scope_of(state, project);
+    match (method, action) {
+        ("GET", "resources") => {
+            let report = collect_resources(state, session, &scope);
+            ok(json!({
+                "schemaVersion": 1,
+                "session": session,
+                "project": project,
+                "complete": report.errors.is_empty(),
+                "rootBudget": RootBudget::DEFAULT.max_roots,
+                "services": report.services.iter().map(service_json).collect::<Vec<_>>(),
+                "errors": errors_json(&report.errors),
+            }))
+        }
+        ("POST", "resources:assertQuiescent") => {
+            let allowed = match parse_allowances(body) {
+                Ok(allowed) => allowed,
+                Err(message) => return error(400, &format!("INVALID_ARGUMENT : {message}")),
+            };
+            let report = collect_resources(state, session, &scope);
+            if !report.errors.is_empty() {
+                return JsonResponse {
+                    status: 500,
+                    body: json!({
+                        "error": {"code": 500, "status": "INTERNAL", "message": "INTERNAL : a service could not report its resources, so quiescence cannot be asserted"},
+                        "errors": errors_json(&report.errors),
+                    }),
+                };
+            }
+            match assert_quiescent(&report.services, &allowed) {
+                Ok(()) => {
+                    ok(json!({"quiescent": true, "session": session, "allowed": allowed.len()}))
+                }
+                Err(failure) => JsonResponse {
+                    status: 409,
+                    body: json!({
+                        "quiescent": false,
+                        "session": session,
+                        "leaks": failure.leaks.iter().map(|(service, root)| json!({
+                            "service": service,
+                            "kind": root.kind,
+                            "id": root.id,
+                            "count": root.count,
+                            "bytes": root.bytes,
+                        })).collect::<Vec<_>>(),
+                        "staleAllowances": failure.stale_allowances.iter().map(allowance_json).collect::<Vec<_>>(),
+                        "truncatedServices": failure.truncated_services,
+                    }),
+                },
+            }
+        }
+        _ => error(404, "NOT_FOUND"),
+    }
+}
+
 fn functions_route(state: &ControlState, method: &str, rest: &str) -> JsonResponse {
     let Some(functions) = &state.functions else {
         return error(404, "NOT_FOUND : no functions runtime is configured");
@@ -2008,7 +2319,10 @@ pub fn browser_guard(
     if !crate::identity_toolkit::origin_is_local(origin) {
         return Some(error(403, "FORBIDDEN_ORIGIN"));
     }
-    let privileged = method != "GET" && !path.starts_with("/health/");
+    // Decide on the same path the router matches: a query string must not change which
+    // routes are privileged.
+    let path = path.split('?').next().unwrap_or(path);
+    let privileged = (method != "GET" && !path.starts_with("/health/")) || is_resources_path(path);
     let presented = headers
         .authorization
         .as_deref()

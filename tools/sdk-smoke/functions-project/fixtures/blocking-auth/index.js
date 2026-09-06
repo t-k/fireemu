@@ -46,6 +46,37 @@ exports.fxCombinedClaimsOverLimit = beforeUserSignedIn(() => ({
   sessionClaims: { session: "b".repeat(600) },
 }));
 exports.fxLegacyBeforeCreate = functionsV1.auth.user().beforeCreate(validatedMutation);
+for (let bits = 0; bits < 8; bits += 1) {
+  exports[`fxTokenPolicy${bits}`] = beforeUserSignedIn(
+    {
+      accessToken: (bits & 1) !== 0,
+      idToken: (bits & 2) !== 0,
+      refreshToken: (bits & 4) !== 0,
+    },
+    (event) => ({
+      sessionClaims: {
+        credentialKeys: Object.keys(event.credential || {}).sort().join(","),
+      },
+    }),
+  );
+}
+exports.fxBeforeCreateAllTokens = beforeUserCreated(
+  { accessToken: true, idToken: true, refreshToken: true },
+  (event) => ({
+    customClaims: {
+      credentialKeys: Object.keys(event.credential || {}).sort().join(","),
+    },
+  }),
+);
+exports.fxLegacyBeforeSignInTokens = functionsV1
+  .auth.user({
+    blockingOptions: { accessToken: true, idToken: false, refreshToken: true },
+  })
+  .beforeSignIn((_user, context) => ({
+    sessionClaims: {
+      credentialKeys: Object.keys(context.credential || {}).sort().join(","),
+    },
+  }));
 exports.fxPermissionDenied = beforeUserCreated(() => {
   throw new HttpsError("permission-denied", "fixture rejected");
 });

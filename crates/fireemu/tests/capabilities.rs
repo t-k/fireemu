@@ -347,13 +347,18 @@ fn functions_http_metadata_publishes_the_streaming_callable_contract() {
     );
 }
 
-/// The active Firestore transaction implementation validates optimistic read sets at commit.
-/// Public metadata must preserve the measured lock-timing divergence from the official Local
-/// Emulator Suite instead of claiming that unreachable pessimistic wait branches are parity.
+/// The active Firestore transaction implementation locks what a read-write transaction read,
+/// as production does. Public metadata must say so, name the official Local Emulator Suite's
+/// matching lock model, and publish every pinned semantics row with its production backing.
 #[test]
-fn firestore_transaction_metadata_matches_the_optimistic_runtime() {
+fn firestore_transaction_metadata_matches_the_pessimistic_runtime() {
     let transaction = text_of(&manifest()["capabilities"]["FS-TXN-1"]).to_ascii_lowercase();
-    for term in ["optimistic", "official local emulator", "locks"] {
+    for term in [
+        "pessimistic",
+        "official local emulator",
+        "locks",
+        "production",
+    ] {
         assert!(
             transaction.contains(term),
             "FS-TXN-1 does not publish the required transaction term {term}"
@@ -372,11 +377,15 @@ fn firestore_transaction_metadata_matches_the_optimistic_runtime() {
     assert!(
         semantics["profileValue"]
             .as_str()
-            .is_some_and(|value| value.contains("20 rows")),
-        "the Firestore semantics profile does not publish all 20 divergence rows"
+            .is_some_and(|value| value.contains("118 rows")),
+        "the Firestore semantics profile does not publish all 118 measured divergence rows"
     );
     let semantics_note = text_of(&semantics["note"]).to_ascii_lowercase();
-    for term in ["optimistic", "pessimistic", "five families"] {
+    for term in [
+        "production observation",
+        "lock what they read",
+        "five families",
+    ] {
         assert!(
             semantics_note.contains(term),
             "the Firestore semantics profile does not publish {term}"
@@ -400,8 +409,12 @@ fn firestore_transaction_metadata_matches_the_optimistic_runtime() {
         .expect("FS-CLAIM-RPC has a statement")
         .to_ascii_lowercase();
     assert!(
-        statement.contains("except") && statement.contains("transaction concurrency"),
-        "FS-CLAIM-RPC does not exclude the documented transaction-concurrency rows"
+        statement.contains("except") && statement.contains("conformance/divergences.json"),
+        "FS-CLAIM-RPC does not exclude the rows pinned in the divergence register"
+    );
+    assert!(
+        statement.contains("lock what they read"),
+        "FS-CLAIM-RPC does not publish the pessimistic transaction model"
     );
 }
 

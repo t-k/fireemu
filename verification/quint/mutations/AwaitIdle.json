@@ -13,7 +13,7 @@
       "id": "M-FORMAL-IDLE-LIVENESS-001",
       "property": "AwaitIdleEventuallyReturns",
       "operator": "remove-return-idle-fairness",
-      "from": "ReturnIdle.weakFair((observable, previousObservable, depth, used, previousUsed, fenced, ignoreTextIndex, lastAction, lastItem)),",
+      "from": "ReturnIdle.weakFair((observable, previousObservable, depth, used, previousUsed, fenced, ignoreTextIndex, lastAction, lastItem, window, evicted, terminalMarks)),",
       "to": "true,"
     },
     {
@@ -50,6 +50,27 @@
       "operator": "exclude-covered-reservations-from-blocking",
       "from": "state.reservations.intersect(fenced).union(\n    activeItems(state).filter",
       "to": "Set().union(\n    activeItems(state).filter"
+    },
+    {
+      "id": "M-FORMAL-IDLE-WINDOW-BOUND-001",
+      "property": "WindowBounded",
+      "operator": "never-evict-from-the-window",
+      "from": "    val candidates = window.exclude(Set(work))\n    if (candidates.size() >= WINDOW_CAP) {",
+      "to": "    val candidates = window.exclude(Set(work))\n    if (false) {"
+    },
+    {
+      "id": "M-FORMAL-IDLE-WINDOW-EVICTED-MARK-001",
+      "property": "EvictionIsNotCompletion",
+      "operator": "keep-terminal-mark-of-evicted-record",
+      "from": "        terminalMarks' = terminalMarks.exclude(Set(victim, work)),",
+      "to": "        terminalMarks' = terminalMarks.exclude(Set(work)),"
+    },
+    {
+      "id": "M-FORMAL-IDLE-WINDOW-ACCOUNTING-001",
+      "property": "WindowAccounting",
+      "operator": "drop-eviction-count",
+      "from": "        evicted' = evicted + 1,",
+      "to": "        evicted' = evicted,"
     }
   ]
 }

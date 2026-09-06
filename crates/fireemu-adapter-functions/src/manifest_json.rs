@@ -18,9 +18,10 @@
 
 use fireemu_core_functions::cron::Schedule;
 use fireemu_core_functions::manifest::{
-    AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionGeneration, FunctionManifest,
-    FunctionSpec, IgnoredFunction, IgnoredScope, ObjectEvent, PlatformOptions, ScheduleRetryConfig,
-    TaskRateLimits, TaskRetryConfig, Trigger, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    AuthEvent, BlockingAuthTokenPolicy, ConsumeAppCheckToken, DocumentEvent, FunctionGeneration,
+    FunctionManifest, FunctionSpec, IgnoredFunction, IgnoredScope, ObjectEvent, PlatformOptions,
+    ScheduleRetryConfig, TaskRateLimits, TaskRetryConfig, Trigger, DEFAULT_REGION,
+    DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::PathPattern;
 use fireemu_core_types::ids::DatabaseId;
@@ -280,7 +281,24 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                         "manifest: function {name:?}: unknown blocking Auth event {event_type:?}"
                     )
                 })?;
-            Trigger::BlockingAuth { event }
+            let token_flag = |field: &str| -> Result<bool, String> {
+                match trigger.get(field) {
+                    None => Ok(false),
+                    Some(value) => value.as_bool().ok_or_else(|| {
+                        format!(
+                            "manifest: function {name:?}: blocking Auth {field} must be a boolean"
+                        )
+                    }),
+                }
+            };
+            Trigger::BlockingAuth {
+                event,
+                token_policy: BlockingAuthTokenPolicy {
+                    access_token: token_flag("accessToken")?,
+                    id_token: token_flag("idToken")?,
+                    refresh_token: token_flag("refreshToken")?,
+                },
+            }
         }
         "pubsub" => {
             let topic = s(trigger, "topic")
@@ -553,8 +571,17 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                 Trigger::Auth { event } => {
                     json!({"type": "auth", "eventType": event.event_type()})
                 }
-                Trigger::BlockingAuth { event } => {
-                    json!({"type": "blockingAuth", "eventType": event.as_str()})
+                Trigger::BlockingAuth {
+                    event,
+                    token_policy,
+                } => {
+                    json!({
+                        "type": "blockingAuth",
+                        "eventType": event.as_str(),
+                        "accessToken": token_policy.access_token,
+                        "idToken": token_policy.id_token,
+                        "refreshToken": token_policy.refresh_token,
+                    })
                 }
                 Trigger::Storage { event, bucket } => {
                     json!({"type": "storage", "eventType": event.event_type(), "bucket": bucket})

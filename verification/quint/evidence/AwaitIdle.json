@@ -52,8 +52,8 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "3badb445fa0f0bc42bbaab7ff6e4b4b1eed6875087c37fe052402bd6a801f9f2",
-    "crates/fireemu-adapter-functions/src/runtime.rs": "2276c7fcfb47f176178ff26ad9ee667cb8b07c5a8d70524d4f9c5b99bd1275d2",
-    "crates/fireemu-adapter-http/src/control.rs": "f63849d2df76f6fbf13665791df506fd48a7c482dc2f3cb62e24f5f66ba66056",
+    "crates/fireemu-adapter-functions/src/runtime.rs": "4999fdb071479de5e7b3243bed9d645ae07fa0e774d05da06f901e03057a1484",
+    "crates/fireemu-adapter-http/src/control.rs": "9796c4486765c7ef2cd308e4ed45751cafa6602bfc53451e628d7fa64363a9a6",
     "crates/fireemu-core-session/src/idle.rs": "53bd98a30a3d61cf0be88222f4d3700e84cdc46636e885c5f4fb1945532104b8",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
@@ -61,19 +61,19 @@
     "verification/quint/bin/process-group": "b75c438b3ce254d4d112d2005afc52d94e64a1fc22e0d5d86f5652ef30285b94",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/AwaitIdle.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "849a40e26e79968cf3b754b39a6c631e821f0088c44788ff886b9cd2564e9044",
+    "verification/quint/evidence/cargo-authority.json": "175b4cdb99a1c044a350653d487ce8e54ecb87e20fe2be909405682e04f0f95f",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
-    "verification/quint/mutations/AwaitIdle.json": "0bd67626a1419320b33cead2f9d4f932b92ad3208f229cd60c90e791b8a74eac",
+    "verification/quint/mutations/AwaitIdle.json": "9c5fa669d93577a105081976e594d1adb86714677285bf72ba3124d3187c19c7",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
-    "verification/quint/specs/AwaitIdle.qnt": "e56fce2c0b9e4951172c01f23d4986fa5703a083c1475c5edf7d8c5bb61e0059",
+    "verification/quint/specs/AwaitIdle.qnt": "8b666013445c405fcd8d15d5c82854218df24a48394df591586e866302019412",
     "verification/quint/src/await_idle.rs": "985dea3215cfb3d7c671c7afd3e78d916c85953b11deff2eaf927614cdcbc721",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
     "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",
-    "verification/quint/src/model.rs": "a17b646ad378b199594891f3d3db9dd7a2df7fa85b5754956cdaa559562a7042",
+    "verification/quint/src/model.rs": "3298969b625ed3821c3fd6c9b36842c64fc6ee23d5b23b05ca671d2a88e26696",
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
     "verification/quint/src/server.rs": "38050325dd6280331c1b1668e507e0a638d5ccee6ecde090416a59f9ecd3f5da",
@@ -85,7 +85,10 @@
     "CoveredReservationsBlock",
     "NoIdentityReuse",
     "FenceClosedToNewExternalWork",
-    "FenceLifecycleMonotonic"
+    "FenceLifecycleMonotonic",
+    "WindowBounded",
+    "WindowAccounting",
+    "EvictionIsNotCompletion"
   ],
   "temporalProperties": [
     "FencedWorkStaysTerminal",
@@ -131,6 +134,24 @@
     {
       "id": "M-FORMAL-IDLE-RESERVATION-001",
       "property": "CoveredReservationsBlock",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-IDLE-WINDOW-BOUND-001",
+      "property": "WindowBounded",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-IDLE-WINDOW-EVICTED-MARK-001",
+      "property": "EvictionIsNotCompletion",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-IDLE-WINDOW-ACCOUNTING-001",
+      "property": "WindowAccounting",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     }

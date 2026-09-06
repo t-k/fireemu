@@ -11,6 +11,7 @@ import {
 } from "../components/common";
 import {
   advanceClock,
+  assertQuiescent,
   captureSnapshot,
   clearFaultPlan,
   createSession,
@@ -21,9 +22,17 @@ import {
   listSnapshots,
   resetSession,
   restoreSnapshot,
+  sessionResources,
   setClock,
 } from "../api/control";
 import { settle } from "../api/client";
+import {
+  formatQuantity,
+  parseAllowances,
+  saturation,
+  type QuiescenceResult,
+  type ServiceResources,
+} from "../lib/resources";
 
 const ClockPanel: Component = () => {
   const [seconds, setSeconds] = createSignal("60");
@@ -432,6 +441,248 @@ const SessionsPanel: Component = () => {
   );
 };
 
+const ServiceResourcesView: Component<{ service: ServiceResources }> = (props) => (
+  <div class="mb-4" data-testid={`resources-${props.service.service}`}>
+    <h3 class="mb-1 font-semibold">
+      {props.service.service}
+      <Show when={props.service.roots.truncated}>
+        <span class="ml-2 text-xs font-normal text-amber-700 dark:text-amber-300">
+          {t("runtime.resourcesTruncated", {
+            shown: String(props.service.roots.items.length),
+            total: String(props.service.roots.total),
+          })}
+        </span>
+      </Show>
+    </h3>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{t("runtime.gauge")}</th>
+          <th>{t("runtime.measure")}</th>
+          <th class="text-right">{t("runtime.current")}</th>
+          <th class="text-right">{t("runtime.limit")}</th>
+          <th class="text-right">{t("runtime.reclaimable")}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <For each={props.service.gauges}>
+          {(gauge) => (
+            <tr>
+              <td class="mono">{gauge.id}</td>
+              <td>{gauge.measure}</td>
+              <td class="mono text-right">{formatQuantity(gauge.current, gauge.unit)}</td>
+              <td class="mono text-right">
+                {gauge.limit === null ? "" : formatQuantity(gauge.limit, gauge.unit)}
+                <Show when={saturation(gauge) !== null}>
+                  <span class="ml-1 text-xs text-zinc-500">({saturation(gauge)}%)</span>
+                </Show>
+              </td>
+              <td class="mono text-right">
+                {gauge.reclaimable > 0 ? formatQuantity(gauge.reclaimable, gauge.unit) : ""}
+              </td>
+            </tr>
+          )}
+        </For>
+      </tbody>
+    </table>
+    <Show when={props.service.refusals.some((r) => r.count > 0)}>
+      <div class="mt-2 text-sm">
+        <span class="label">{t("runtime.refusals")}</span>
+        <ul class="mono">
+          <For each={props.service.refusals.filter((r) => r.count > 0)}>
+            {(refusal) => (
+              <li>
+                {refusal.reason}: {refusal.count}
+              </li>
+            )}
+          </For>
+        </ul>
+      </div>
+    </Show>
+    <div class="mt-2 text-sm">
+      <span class="label">{t("runtime.roots")}</span>
+      <Show
+        when={props.service.roots.items.length > 0}
+        fallback={<p class="text-sm text-zinc-500">{t("runtime.noRoots")}</p>}
+      >
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{t("runtime.rootKind")}</th>
+              <th>{t("runtime.rootId")}</th>
+              <th class="text-right">{t("runtime.rootCount")}</th>
+              <th class="text-right">{t("runtime.rootBytes")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={props.service.roots.items}>
+              {(root) => (
+                <tr data-outstanding={root.outstanding ? "true" : "false"}>
+                  <td class="mono">
+                    {root.kind}
+                    <Show when={root.outstanding}>
+                      <span class="ml-1 rounded bg-amber-100 px-1 text-xs text-amber-900 dark:bg-amber-900 dark:text-amber-100">
+                        {t("runtime.outstanding")}
+                      </span>
+                    </Show>
+                  </td>
+                  <td class="mono break-all">{root.id}</td>
+                  <td class="mono text-right">{root.count}</td>
+                  <td class="mono text-right">{formatQuantity(root.bytes, "bytes")}</td>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </Show>
+    </div>
+  </div>
+);
+
+const QuiescenceView: Component<{ result: QuiescenceResult }> = (props) => (
+  <Show
+    when={!props.result.quiescent && props.result}
+    fallback={
+      <Notice
+        message={t("runtime.quiescent", {
+          allowed: String(props.result.quiescent ? props.result.allowed : 0),
+        })}
+      />
+    }
+  >
+    {(failure) => (
+      <div
+        class="mb-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+        role="status"
+        data-testid="quiescence-failure"
+      >
+        <div class="font-semibold">{t("runtime.notQuiescent")}</div>
+        <Show when={failure().leaks.length > 0}>
+          <div class="mt-1">{t("runtime.leaks")}</div>
+          <ul class="mono">
+            <For each={failure().leaks}>
+              {(leak) => (
+                <li>
+                  {leak.service} {leak.kind} {leak.id} ({leak.count},{" "}
+                  {formatQuantity(leak.bytes, "bytes")})
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+        <Show when={failure().staleAllowances.length > 0}>
+          <div class="mt-1">{t("runtime.staleAllowances")}</div>
+          <ul class="mono">
+            <For each={failure().staleAllowances}>
+              {(stale) => (
+                <li>
+                  {stale.service} {stale.kind} {stale.id}
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+        <Show when={failure().truncatedServices.length > 0}>
+          <div class="mt-1">
+            {t("runtime.truncatedServices")}: {failure().truncatedServices.join(", ")}
+          </div>
+        </Show>
+      </div>
+    )}
+  </Show>
+);
+
+const ResourcesPanel: Component = () => {
+  const session = appState.session;
+  const [report, { refetch }] = createResource(session, (s) => settle(sessionResources(s)));
+  const [allowances, setAllowances] = createSignal("");
+  const [error, setError] = createSignal<string | null>(null);
+  const [quiescence, setQuiescence] = createSignal<QuiescenceResult | null>(null);
+  const assert = async () => {
+    setError(null);
+    setQuiescence(null);
+    const parsed = parseAllowances(allowances());
+    if (!parsed.ok) {
+      setError(t("runtime.allowancesBadLine", { line: String(parsed.line) }));
+      return;
+    }
+    const r = await assertQuiescent(session(), parsed.allow);
+    r.match(
+      (result) => {
+        setQuiescence(result);
+        void refetch();
+      },
+      (e) => setError(e.message),
+    );
+  };
+  const current = () => report()?.unwrapOr(null) ?? null;
+  return (
+    <Section
+      title={t("runtime.resources")}
+      actions={
+        <>
+          <AsyncButton
+            class="btn"
+            onClick={async () => {
+              await refetch();
+            }}
+            testId="resources-refresh"
+          >
+            {t("runtime.resourcesRefresh")}
+          </AsyncButton>
+          <AsyncButton class="btn btn-primary" onClick={assert} testId="resources-assert">
+            {t("runtime.assertQuiescent")}
+          </AsyncButton>
+        </>
+      }
+    >
+      <p class="mb-3 text-sm text-zinc-600 dark:text-zinc-300">{t("runtime.resourcesIntro")}</p>
+      <ErrorBanner message={error()} />
+      <Show when={report()?.isErr() ? report()?.unwrapOr(null) : null}>
+        <ErrorBanner
+          message={
+            report()?.match(
+              () => null,
+              (e) => e.message,
+            ) ?? null
+          }
+        />
+      </Show>
+      <Show when={quiescence()}>{(result) => <QuiescenceView result={result()} />}</Show>
+      <label class="text-sm">
+        <span class="label">{t("runtime.allowances")}</span>
+        <textarea
+          class="input mono h-20 w-full"
+          data-testid="resources-allowances"
+          spellcheck={false}
+          value={allowances()}
+          onInput={(e) => setAllowances(e.currentTarget.value)}
+        />
+      </label>
+      <Show when={!report.loading} fallback={<Spinner />}>
+        <Show when={current()}>
+          {(r) => (
+            <div class="mt-3" data-testid="resources-report">
+              <Show when={!r().complete}>
+                <ErrorBanner
+                  message={t("runtime.resourcesIncomplete", {
+                    services: r()
+                      .errors.map((e) => `${e.service}: ${e.message}`)
+                      .join("; "),
+                  })}
+                />
+              </Show>
+              <For each={r().services}>
+                {(service) => <ServiceResourcesView service={service} />}
+              </For>
+            </div>
+          )}
+        </Show>
+      </Show>
+    </Section>
+  );
+};
+
 const Runtime: Component = () => (
   <div>
     <h1 class="mb-4 text-xl font-bold">{t("runtime.title")}</h1>
@@ -452,6 +703,7 @@ const Runtime: Component = () => (
         <FaultPlanPanel />
       </div>
     </div>
+    <ResourcesPanel />
   </div>
 );
 

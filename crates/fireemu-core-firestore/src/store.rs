@@ -18,6 +18,7 @@ use fireemu_core_limits::evaluate::{
 };
 use fireemu_core_limits::model::LimitMaximum;
 use fireemu_core_limits::plan::FirestorePlanProfile;
+use fireemu_core_types::admission::EventAdmissionError;
 use fireemu_core_types::hash::Sha256;
 use fireemu_core_types::ids::{CollectionId, DocumentId};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -275,6 +276,10 @@ pub enum FirestoreError {
     Aborted(String),
     /// Limit violated.
     ResourceExhausted(LimitViolation),
+    /// The retained MVCC history cannot grow without violating its explicit budget.
+    HistoryCapacity(HistoryCapacityError),
+    /// A coupled logical event batch could not be reserved before publication.
+    EventAdmission(EventAdmissionError),
     /// Not implemented.
     Unimplemented(String),
 }
@@ -288,9 +293,222 @@ impl fmt::Display for FirestoreError {
             Self::NotFound(p) => write!(f, "document not found: {p}"),
             Self::Aborted(m) => write!(f, "aborted: {m}"),
             Self::ResourceExhausted(v) => write!(f, "resource exhausted: {v}"),
+            Self::HistoryCapacity(error) => write!(f, "history capacity exhausted: {error}"),
+            Self::EventAdmission(error) => write!(f, "event admission failed: {error}"),
             Self::Unimplemented(m) => write!(f, "unimplemented: {m}"),
         }
     }
+}
+
+/// Configurable hard limits for one database's retained MVCC history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryLimits {
+    /// Logical bytes retained by history and its lookup roots.
+    pub max_bytes: u64,
+    /// Document versions, including tombstones.
+    pub max_versions: u64,
+}
+
+impl Default for HistoryLimits {
+    fn default() -> Self {
+        Self {
+            max_bytes: 1 << 30,
+            max_versions: 1_000_000,
+        }
+    }
+}
+
+/// Deterministic logical accounting for the retained MVCC ownership graph.
+///
+/// This is not allocator or RSS accounting. Document payload sizes use Firestore's storage
+/// size model; fixed metadata charges make every retained lookup root explicit and portable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HistoryUsage {
+    /// Newest live document payloads.
+    pub live_document_bytes: u64,
+    /// Older retained document payloads.
+    pub historical_document_bytes: u64,
+    /// Path keys plus retained/live lookup-index references.
+    pub path_and_index_bytes: u64,
+    /// Version tuple metadata.
+    pub version_metadata_bytes: u64,
+    /// Tombstone markers.
+    pub tombstone_bytes: u64,
+    /// Commit-time lookup entries.
+    pub commit_time_bytes: u64,
+    /// Total logical bytes.
+    pub total_bytes: u64,
+    /// Retained versions, including tombstones.
+    pub versions: u64,
+    /// Retained tombstones.
+    pub tombstones: u64,
+    /// Distinct retained paths.
+    pub paths: u64,
+    /// Retained commit-time entries.
+    pub commit_times: u64,
+}
+
+const HISTORY_PATH_KEY_OVERHEAD: u64 = 32;
+const HISTORY_INDEX_REFERENCE_OVERHEAD: u64 = 16;
+const HISTORY_VERSION_METADATA_BYTES: u64 = 16;
+const HISTORY_TOMBSTONE_BYTES: u64 = 1;
+const HISTORY_COMMIT_TIME_BYTES: u64 = 24;
+
+fn history_path_and_index_bytes(path: &DocumentPath, live: bool) -> u64 {
+    let path_bytes = u64::try_from(path.resource_name().len()).unwrap_or(u64::MAX);
+    let retained_roots = 4u64;
+    let live_roots = u64::from(live) * 3;
+    path_bytes
+        .saturating_add(HISTORY_PATH_KEY_OVERHEAD)
+        .saturating_add(
+            (retained_roots + live_roots).saturating_mul(HISTORY_INDEX_REFERENCE_OVERHEAD),
+        )
+}
+
+fn finish_history_usage(mut usage: HistoryUsage) -> HistoryUsage {
+    usage.total_bytes = usage
+        .live_document_bytes
+        .saturating_add(usage.historical_document_bytes)
+        .saturating_add(usage.path_and_index_bytes)
+        .saturating_add(usage.version_metadata_bytes)
+        .saturating_add(usage.tombstone_bytes)
+        .saturating_add(usage.commit_time_bytes);
+    usage
+}
+
+fn add_history_usage(left: HistoryUsage, right: HistoryUsage) -> HistoryUsage {
+    finish_history_usage(HistoryUsage {
+        live_document_bytes: left
+            .live_document_bytes
+            .saturating_add(right.live_document_bytes),
+        historical_document_bytes: left
+            .historical_document_bytes
+            .saturating_add(right.historical_document_bytes),
+        path_and_index_bytes: left
+            .path_and_index_bytes
+            .saturating_add(right.path_and_index_bytes),
+        version_metadata_bytes: left
+            .version_metadata_bytes
+            .saturating_add(right.version_metadata_bytes),
+        tombstone_bytes: left.tombstone_bytes.saturating_add(right.tombstone_bytes),
+        commit_time_bytes: left
+            .commit_time_bytes
+            .saturating_add(right.commit_time_bytes),
+        total_bytes: 0,
+        versions: left.versions.saturating_add(right.versions),
+        tombstones: left.tombstones.saturating_add(right.tombstones),
+        paths: left.paths.saturating_add(right.paths),
+        commit_times: left.commit_times.saturating_add(right.commit_times),
+    })
+}
+
+fn subtract_history_usage(left: HistoryUsage, right: HistoryUsage) -> HistoryUsage {
+    finish_history_usage(HistoryUsage {
+        live_document_bytes: left
+            .live_document_bytes
+            .saturating_sub(right.live_document_bytes),
+        historical_document_bytes: left
+            .historical_document_bytes
+            .saturating_sub(right.historical_document_bytes),
+        path_and_index_bytes: left
+            .path_and_index_bytes
+            .saturating_sub(right.path_and_index_bytes),
+        version_metadata_bytes: left
+            .version_metadata_bytes
+            .saturating_sub(right.version_metadata_bytes),
+        tombstone_bytes: left.tombstone_bytes.saturating_sub(right.tombstone_bytes),
+        commit_time_bytes: left
+            .commit_time_bytes
+            .saturating_sub(right.commit_time_bytes),
+        total_bytes: 0,
+        versions: left.versions.saturating_sub(right.versions),
+        tombstones: left.tombstones.saturating_sub(right.tombstones),
+        paths: left.paths.saturating_sub(right.paths),
+        commit_times: left.commit_times.saturating_sub(right.commit_times),
+    })
+}
+
+fn history_path_usage(
+    path: &DocumentPath,
+    versions: &[(CommitVersion, Option<Arc<Document>>)],
+) -> HistoryUsage {
+    if versions.is_empty() {
+        return HistoryUsage::default();
+    }
+    let live = matches!(versions.last(), Some((_, Some(_))));
+    let mut usage = HistoryUsage {
+        paths: 1,
+        path_and_index_bytes: history_path_and_index_bytes(path, live),
+        ..HistoryUsage::default()
+    };
+    for (index, (_, document)) in versions.iter().enumerate() {
+        usage.versions = usage.versions.saturating_add(1);
+        usage.version_metadata_bytes = usage
+            .version_metadata_bytes
+            .saturating_add(HISTORY_VERSION_METADATA_BYTES);
+        if let Some(document) = document {
+            let bytes = document_size(path, &document.fields).map_or(u64::MAX, |size| size.total);
+            if index + 1 == versions.len() {
+                usage.live_document_bytes = usage.live_document_bytes.saturating_add(bytes);
+            } else {
+                usage.historical_document_bytes =
+                    usage.historical_document_bytes.saturating_add(bytes);
+            }
+        } else {
+            usage.tombstones = usage.tombstones.saturating_add(1);
+            usage.tombstone_bytes = usage
+                .tombstone_bytes
+                .saturating_add(HISTORY_TOMBSTONE_BYTES);
+        }
+    }
+    finish_history_usage(usage)
+}
+
+fn history_path_usage_after_floor(
+    path: &DocumentPath,
+    versions: &[(CommitVersion, Option<Arc<Document>>)],
+    floor: CommitVersion,
+) -> HistoryUsage {
+    let cut = versions
+        .partition_point(|(version, _)| *version <= floor)
+        .saturating_sub(1);
+    let remaining = &versions[cut..];
+    if matches!(remaining, [(version, None)] if *version <= floor) {
+        HistoryUsage::default()
+    } else {
+        history_path_usage(path, remaining)
+    }
+}
+
+/// A rejected history-budget dimension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryCapacityError {
+    /// `bytes` or `versions`.
+    pub dimension: &'static str,
+    /// Projected value.
+    pub current: u64,
+    /// Configured maximum.
+    pub maximum: u64,
+}
+
+impl fmt::Display for HistoryCapacityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} exceeds {}",
+            self.dimension, self.current, self.maximum
+        )
+    }
+}
+
+/// Usage before and after a staged commit, passed to aggregate admission owners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryProjection {
+    /// Usage of the currently published state.
+    pub before: HistoryUsage,
+    /// A conservative reservation ceiling after the commit. Legal compaction may make the
+    /// actually published usage smaller, but never larger.
+    pub after: HistoryUsage,
 }
 
 impl std::error::Error for FirestoreError {}
@@ -311,6 +529,14 @@ struct Transaction {
     conflict_ledger_bytes: u64,
     last_activity: LogicalInstant,
     state: TransactionState,
+    /// Bumped on every operation the client drives through this transaction, so a waiter
+    /// under a clock that does not move can still tell an idle holder from a busy one.
+    activity: u64,
+    /// Set while a commit of this transaction is held back by another transaction's locks
+    /// (the adapter is waiting for that release). Another transaction that then runs into
+    /// this one's locks is the deadlock production resolves by aborting one side: that other
+    /// side is aborted, so this one can proceed.
+    waiting_to_commit: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -342,6 +568,9 @@ pub struct QueryStats {
     /// Documents cloned into the result. Execution borrows every value it filters and orders
     /// on, so this is the only place where a document's heap-backed fields are copied.
     pub cloned_documents: u64,
+    /// Heap-backed field bytes copied into projected results. This excludes stored fields
+    /// inspected only for filters, ordering and cursors.
+    pub cloned_field_bytes: u64,
     /// Retained history paths inspected to establish historical listing visibility.
     pub visibility_checks: u64,
 }
@@ -528,6 +757,14 @@ impl ListingTrie {
     }
 }
 
+/// Reclaimable usage at one immutable database version and retention floor.
+#[derive(Debug, Clone, Copy)]
+struct CompactionForecast {
+    version: CommitVersion,
+    floor: CommitVersion,
+    reclaimed: HistoryUsage,
+}
+
 /// One Firestore database.
 #[derive(Debug, Clone)]
 pub struct FirestoreState {
@@ -551,6 +788,10 @@ pub struct FirestoreState {
     next_transaction: u64,
     transactions: BTreeMap<TransactionId, Transaction>,
     active_transaction_count: usize,
+    /// How many transactions have left the active state (commit, abort, rollback, expiry):
+    /// every one releases the locks its reads held, so a writer refused for contention can
+    /// tell when trying again may succeed.
+    transaction_releases: u64,
     active_transaction_deadlines: BTreeSet<(LogicalInstant, TransactionId)>,
     active_transaction_versions: BTreeMap<CommitVersion, usize>,
     active_transaction_conflict_ledger_bytes: u64,
@@ -569,6 +810,14 @@ pub struct FirestoreState {
     /// Maximum versions retained for one path unless an active transaction pins an older
     /// snapshot.
     max_versions_per_path: usize,
+    /// Whole-database logical history limits.
+    history_limits: HistoryLimits,
+    /// Exact logical usage, maintained with each published history mutation. Keeping this
+    /// cached makes a no-op admission independent of retained-history cardinality.
+    history_usage: HistoryUsage,
+    /// Last immutable compaction forecast. A refused external admission can retry without
+    /// rescanning the retained corpus; every published mutation invalidates it.
+    compaction_forecast: Option<CompactionForecast>,
     /// Paths whose history still holds something a later compaction could drop (more than
     /// one version, or a single tombstone). Compaction only visits these.
     compactable: BTreeSet<DocumentPath>,
@@ -589,6 +838,7 @@ impl Default for FirestoreState {
             next_transaction: 0,
             transactions: BTreeMap::new(),
             active_transaction_count: 0,
+            transaction_releases: 0,
             active_transaction_deadlines: BTreeSet::new(),
             active_transaction_versions: BTreeMap::new(),
             active_transaction_conflict_ledger_bytes: 0,
@@ -600,6 +850,9 @@ impl Default for FirestoreState {
             compaction_floor: CommitVersion::default(),
             capacity_floor: CommitVersion::default(),
             max_versions_per_path: DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
+            history_limits: HistoryLimits::default(),
+            history_usage: HistoryUsage::default(),
+            compaction_forecast: None,
             compactable: BTreeSet::new(),
         }
     }
@@ -639,6 +892,9 @@ const TRANSACTION_NO_LONGER_VALID: &str =
     "The referenced transaction has expired or is no longer valid.";
 const TRANSACTION_CONCURRENT_MODIFICATION: &str =
     "Transaction was aborted due to a concurrent modification.";
+/// Production's answer to a write that collides with the locks an active read-write
+/// transaction holds on what it read (`concurrencyMode: PESSIMISTIC`).
+pub const TOO_MUCH_CONTENTION: &str = "Too much contention on these documents. Please try again.";
 const MAX_FINISHED_TRANSACTION_LINEAGE: usize = 8_192;
 
 fn transaction_ttl() -> LogicalDuration {
@@ -726,31 +982,34 @@ impl QueryObserver {
 }
 
 fn document_in_scope(document: &Document, scope: &QueryScope) -> bool {
+    path_in_scope(&document.path, scope)
+}
+
+/// Whether a document at `path` belongs to the range `scope` selects.
+fn path_in_scope(path: &DocumentPath, scope: &QueryScope) -> bool {
     let parent_len = scope.parent().map_or(0, |parent| parent.pairs().len());
     match scope {
         QueryScope::Collection {
             parent,
             collection_id,
         } => {
-            document.path.pairs().len() == parent_len + 1
-                && document.path.collection_id() == collection_id
+            path.pairs().len() == parent_len + 1
+                && path.collection_id() == collection_id
                 && parent
                     .as_ref()
-                    .is_none_or(|path| document.path.pairs()[..parent_len] == *path.pairs())
+                    .is_none_or(|prefix| path.pairs()[..parent_len] == *prefix.pairs())
         }
         QueryScope::CollectionGroup {
             parent,
             collection_id,
         } => {
-            document.path.collection_id() == collection_id
-                && parent.as_ref().is_none_or(|path| {
-                    document.path.pairs().len() > parent_len
-                        && document.path.pairs()[..parent_len] == *path.pairs()
+            path.collection_id() == collection_id
+                && parent.as_ref().is_none_or(|prefix| {
+                    path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
                 })
         }
-        QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|path| {
-            document.path.pairs().len() > parent_len
-                && document.path.pairs()[..parent_len] == *path.pairs()
+        QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|prefix| {
+            path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
         }),
     }
 }
@@ -939,10 +1198,35 @@ impl FirestoreState {
         Self::default().with_retained_version_limit(max_versions_per_path)
     }
 
+    /// Creates a store with explicit whole-database history limits.
+    #[must_use]
+    pub fn with_history_limits(limits: HistoryLimits) -> Self {
+        Self {
+            history_limits: limits,
+            ..Self::default()
+        }
+    }
+
+    /// Overrides whole-database history limits without changing retained state.
+    #[must_use]
+    pub const fn with_retained_history_limits(mut self, limits: HistoryLimits) -> Self {
+        self.history_limits = limits;
+        self
+    }
+
     /// Sets the maximum retained-version count per document path on this database.
     #[must_use]
     pub fn with_retained_version_limit(mut self, max_versions_per_path: usize) -> Self {
         self.max_versions_per_path = max_versions_per_path.max(1);
+        self
+    }
+
+    /// Starts transaction ids at `offset` instead of zero, so a token is not guessable from
+    /// the count of transactions a database has begun (the adapter draws the offset from the
+    /// session seed). Ids stay monotonic; only the first one moves.
+    #[must_use]
+    pub const fn with_transaction_id_offset(mut self, offset: u64) -> Self {
+        self.next_transaction = offset;
         self
     }
 
@@ -1253,7 +1537,7 @@ impl FirestoreState {
             live_paths,
             listing_trie,
         ) = Self::rebuild_scope_paths(&history);
-        Self {
+        let mut snapshot = Self {
             history,
             direct_collection_paths,
             live_direct_collection_paths,
@@ -1266,6 +1550,7 @@ impl FirestoreState {
             next_transaction: self.next_transaction,
             transactions: BTreeMap::new(),
             active_transaction_count: 0,
+            transaction_releases: 0,
             active_transaction_deadlines: BTreeSet::new(),
             active_transaction_versions: BTreeMap::new(),
             active_transaction_conflict_ledger_bytes: 0,
@@ -1277,8 +1562,13 @@ impl FirestoreState {
             compaction_floor: self.version,
             capacity_floor: self.version,
             max_versions_per_path: self.max_versions_per_path,
+            history_limits: self.history_limits,
+            history_usage: HistoryUsage::default(),
+            compaction_forecast: None,
             compactable: BTreeSet::new(),
-        }
+        };
+        snapshot.history_usage = snapshot.recount_history_usage();
+        snapshot
     }
 
     /// Installs `documents` as one commit, keeping the creation and update times they
@@ -1315,6 +1605,7 @@ impl FirestoreState {
             staged.insert(imported.path, document);
         }
         self.last_commit_time = Some(commit_time);
+        self.compaction_forecast = None;
         if staged.is_empty() {
             return Ok(CommitResult {
                 commit_time,
@@ -1357,6 +1648,7 @@ impl FirestoreState {
                 self.compactable.insert(path);
             }
         }
+        self.history_usage = self.recount_history_usage();
         self.compact(now);
         Ok(CommitResult {
             commit_time,
@@ -1395,6 +1687,18 @@ impl FirestoreState {
                 "read-only transaction cannot be retried as read-write".into(),
             ));
         }
+        // A client retrying an attempt that is still active (its commit was held back by
+        // another transaction's locks and the client gave up waiting) abandons that attempt:
+        // it is rolled back, and its locks released, before the retry begins.
+        if previous_attempt.state == TransactionState::Active {
+            self.finish_transaction(previous, TransactionState::RolledBack);
+        }
+        // Finishing the attempt may have evicted it from the bounded finished lineage.
+        let Some(previous_attempt) = self.transactions.get(previous) else {
+            return Err(FirestoreError::InvalidArgument(
+                "Invalid retry transaction.".into(),
+            ));
+        };
         if !matches!(
             previous_attempt.state,
             TransactionState::RetryableAborted | TransactionState::RolledBack
@@ -1404,10 +1708,9 @@ impl FirestoreState {
             ));
         }
         self.ensure_transaction_capacity()?;
-        self.transactions
-            .get_mut(previous)
-            .expect("retry predecessor was checked above")
-            .state = TransactionState::Retried;
+        if let Some(previous_attempt) = self.transactions.get_mut(previous) {
+            previous_attempt.state = TransactionState::Retried;
+        }
         let read_time = self.read_time(now);
         self.insert_transaction(false, self.version, read_time, now)
     }
@@ -1451,6 +1754,8 @@ impl FirestoreState {
             conflict_ledger_bytes: 0,
             last_activity: now,
             state: TransactionState::Active,
+            activity: 0,
+            waiting_to_commit: false,
         };
         self.active_transaction_deadlines
             .insert((transaction_deadline(&transaction), id.clone()));
@@ -1538,6 +1843,7 @@ impl FirestoreState {
         self.active_transaction_deadlines
             .remove(&(deadline, id.clone()));
         self.active_transaction_count = self.active_transaction_count.saturating_sub(1);
+        self.transaction_releases = self.transaction_releases.wrapping_add(1);
         if let Some(transaction) = self.transactions.get(id) {
             decrement_version_count(
                 &mut self.active_transaction_versions,
@@ -1670,16 +1976,28 @@ impl FirestoreState {
         let expired = now >= previous_deadline;
         if expired {
             self.finish_transaction(id, TransactionState::Finished);
+            self.compact(now);
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
         }
         self.active_transaction_deadlines
             .remove(&(previous_deadline, id.clone()));
         if let Some(transaction) = self.transactions.get_mut(id) {
             transaction.last_activity = now;
+            transaction.activity = transaction.activity.wrapping_add(1);
             self.active_transaction_deadlines
                 .insert((transaction_deadline(transaction), id.clone()));
         }
         Ok(())
+    }
+
+    /// How many operations `id` has driven so far; `None` unless the transaction is active.
+    /// A waiter compares two readings to tell whether the holder went idle.
+    #[must_use]
+    pub fn transaction_activity(&self, id: &TransactionId) -> Option<u64> {
+        self.transactions
+            .get(id)
+            .filter(|t| t.state == TransactionState::Active)
+            .map(|t| t.activity)
     }
 
     /// The version visible at `at` (the latest version committed at or before it; the empty
@@ -1731,6 +2049,211 @@ impl FirestoreState {
         self.history.values().map(Vec::len).sum()
     }
 
+    /// Returns exact deterministic logical usage for every retained MVCC ownership root.
+    #[must_use]
+    pub fn history_usage(&self) -> HistoryUsage {
+        self.history_usage
+    }
+
+    fn recount_history_usage(&self) -> HistoryUsage {
+        let mut usage = HistoryUsage::default();
+        for (path, versions) in &self.history {
+            usage = add_history_usage(usage, history_path_usage(path, versions));
+        }
+        usage.commit_times = u64::try_from(self.commit_times.len()).unwrap_or(u64::MAX);
+        usage.commit_time_bytes = usage.commit_times.saturating_mul(HISTORY_COMMIT_TIME_BYTES);
+        finish_history_usage(usage)
+    }
+
+    fn base_compaction_reclaim(&mut self, floor: CommitVersion) -> HistoryUsage {
+        if floor <= self.compaction_floor {
+            return HistoryUsage::default();
+        }
+        if let Some(forecast) = self
+            .compaction_forecast
+            .filter(|forecast| forecast.version == self.version && forecast.floor == floor)
+        {
+            return forecast.reclaimed;
+        }
+
+        let mut reclaimed = HistoryUsage::default();
+        for path in &self.compactable {
+            let versions = self
+                .history
+                .get(path)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            reclaimed = add_history_usage(
+                reclaimed,
+                subtract_history_usage(
+                    history_path_usage(path, versions),
+                    history_path_usage_after_floor(path, versions, floor),
+                ),
+            );
+        }
+        let removed_commit_times = u64::try_from(
+            self.commit_times
+                .iter()
+                .take_while(|(version, _)| *version < floor)
+                .count(),
+        )
+        .unwrap_or(u64::MAX);
+        reclaimed.commit_times = removed_commit_times;
+        reclaimed.commit_time_bytes =
+            removed_commit_times.saturating_mul(HISTORY_COMMIT_TIME_BYTES);
+        self.compaction_forecast = Some(CompactionForecast {
+            version: self.version,
+            floor,
+            reclaimed,
+        });
+        reclaimed
+    }
+
+    fn projected_retention_floor(
+        &self,
+        projected_capacity_floor: CommitVersion,
+        projected_version: CommitVersion,
+        now: LogicalInstant,
+    ) -> CommitVersion {
+        let window = i128::from(READ_TIME_RETENTION_SECONDS) * 1_000_000_000;
+        let oldest_read = LogicalInstant::from_nanos(now.as_nanos().saturating_sub(window));
+        let mut floor = self.version_at(oldest_read).max(projected_capacity_floor);
+        if let Some(oldest_transaction) = self
+            .transactions
+            .values()
+            .filter(|transaction| {
+                transaction.state == TransactionState::Active
+                    && transaction_deadline(transaction) > now
+            })
+            .map(|transaction| transaction.read_version)
+            .min()
+        {
+            floor = floor.min(oldest_transaction);
+        }
+        floor.max(projected_capacity_floor).min(projected_version)
+    }
+
+    fn projected_history_usage(
+        &mut self,
+        staged: &[StagedChange],
+        now: LogicalInstant,
+    ) -> (HistoryUsage, HistoryUsage) {
+        let mut usage = self.history_usage();
+        let mut projected_capacity_floor = self.capacity_floor;
+        let next_version = CommitVersion(self.version.0.saturating_add(1));
+        if !staged.is_empty() {
+            usage.commit_times = usage.commit_times.saturating_add(1);
+            usage.commit_time_bytes = usage
+                .commit_time_bytes
+                .saturating_add(HISTORY_COMMIT_TIME_BYTES);
+        }
+        for (path, before, after) in staged {
+            usage.versions = usage.versions.saturating_add(1);
+            usage.version_metadata_bytes = usage
+                .version_metadata_bytes
+                .saturating_add(HISTORY_VERSION_METADATA_BYTES);
+            if let Some(before) = before {
+                let bytes = document_size(path, &before.fields).map_or(u64::MAX, |size| size.total);
+                usage.live_document_bytes = usage.live_document_bytes.saturating_sub(bytes);
+                usage.historical_document_bytes =
+                    usage.historical_document_bytes.saturating_add(bytes);
+            }
+            if let Some(after) = after {
+                let bytes = document_size(path, &after.fields).map_or(u64::MAX, |size| size.total);
+                usage.live_document_bytes = usage.live_document_bytes.saturating_add(bytes);
+            } else {
+                usage.tombstones = usage.tombstones.saturating_add(1);
+                usage.tombstone_bytes = usage
+                    .tombstone_bytes
+                    .saturating_add(HISTORY_TOMBSTONE_BYTES);
+            }
+            if self.history.contains_key(path) {
+                if before.is_some() && after.is_none() {
+                    usage.path_and_index_bytes = usage
+                        .path_and_index_bytes
+                        .saturating_sub(3 * HISTORY_INDEX_REFERENCE_OVERHEAD);
+                } else if before.is_none() && after.is_some() {
+                    usage.path_and_index_bytes = usage
+                        .path_and_index_bytes
+                        .saturating_add(3 * HISTORY_INDEX_REFERENCE_OVERHEAD);
+                }
+            } else {
+                usage.paths = usage.paths.saturating_add(1);
+                usage.path_and_index_bytes = usage
+                    .path_and_index_bytes
+                    .saturating_add(history_path_and_index_bytes(path, after.is_some()));
+            }
+            let existing = self
+                .history
+                .get(path)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let evicted_count = existing
+                .len()
+                .saturating_add(1)
+                .saturating_sub(self.max_versions_per_path);
+            if evicted_count > 0 {
+                let oldest_kept = existing
+                    .get(evicted_count)
+                    .map_or(next_version, |(version, _)| *version);
+                projected_capacity_floor = projected_capacity_floor.max(oldest_kept);
+            }
+        }
+        let uncompacted = finish_history_usage(usage);
+
+        let projected_version = if staged.is_empty() {
+            self.version
+        } else {
+            next_version
+        };
+        let floor =
+            self.projected_retention_floor(projected_capacity_floor, projected_version, now);
+
+        // The cached forecast describes the immutable retained state. Replace the reclaim
+        // contribution only for paths this prospective commit changes, keeping retries
+        // proportional to the write set instead of to all retained history.
+        let mut reclaimed = self.base_compaction_reclaim(floor);
+        for (path, _, after) in staged {
+            let existing = self
+                .history
+                .get(path)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let existing_reclaim = subtract_history_usage(
+                history_path_usage(path, existing),
+                history_path_usage_after_floor(path, existing, floor),
+            );
+            reclaimed = subtract_history_usage(reclaimed, existing_reclaim);
+
+            let mut projected = existing.to_vec();
+            projected.push((next_version, after.clone()));
+            let projected_reclaim = subtract_history_usage(
+                history_path_usage(path, &projected),
+                history_path_usage_after_floor(path, &projected, floor),
+            );
+            reclaimed = add_history_usage(reclaimed, projected_reclaim);
+        }
+        (uncompacted, subtract_history_usage(uncompacted, reclaimed))
+    }
+
+    fn check_history_limits(&self, usage: HistoryUsage) -> Result<(), FirestoreError> {
+        if usage.versions > self.history_limits.max_versions {
+            return Err(FirestoreError::HistoryCapacity(HistoryCapacityError {
+                dimension: "versions",
+                current: usage.versions,
+                maximum: self.history_limits.max_versions,
+            }));
+        }
+        if usage.total_bytes > self.history_limits.max_bytes {
+            return Err(FirestoreError::HistoryCapacity(HistoryCapacityError {
+                dimension: "bytes",
+                current: usage.total_bytes,
+                maximum: self.history_limits.max_bytes,
+            }));
+        }
+        Ok(())
+    }
+
     /// Oldest version still stored for any path (`None` when the database is empty).
     #[must_use]
     pub fn oldest_retained_version(&self) -> Option<CommitVersion> {
@@ -1762,6 +2285,14 @@ impl FirestoreState {
         floor.max(self.capacity_floor).min(self.version)
     }
 
+    /// What the next compaction at `now` would release: the logical usage of every retained
+    /// version below the retention floor that no snapshot, transaction or read-time root can
+    /// still reach. Nothing is dropped; the forecast is cached until the store changes.
+    pub fn reclaimable_history_usage(&mut self, now: LogicalInstant) -> HistoryUsage {
+        let floor = self.retention_floor(now);
+        self.base_compaction_reclaim(floor)
+    }
+
     /// Drops every version that no retention root can reach any more and returns the new
     /// compaction floor. Deterministic: the store runs it itself at the end of every commit,
     /// so the floor only depends on the commit sequence and the logical times it was given.
@@ -1777,20 +2308,34 @@ impl FirestoreState {
         if floor <= self.compaction_floor {
             return self.compaction_floor;
         }
+        self.compaction_forecast = None;
         self.compaction_floor = floor;
+        let mut removed_commit_times = 0u64;
         while self
             .commit_times
             .front()
             .is_some_and(|(version, _)| *version < floor)
         {
             self.commit_times.pop_front();
+            removed_commit_times = removed_commit_times.saturating_add(1);
         }
+        self.history_usage.commit_times = self
+            .history_usage
+            .commit_times
+            .saturating_sub(removed_commit_times);
+        self.history_usage.commit_time_bytes = self
+            .history_usage
+            .commit_time_bytes
+            .saturating_sub(removed_commit_times.saturating_mul(HISTORY_COMMIT_TIME_BYTES));
+        self.history_usage = finish_history_usage(self.history_usage);
         let mut compactable = core::mem::take(&mut self.compactable);
         let mut removed_paths = Vec::new();
+        let mut usage_changes = Vec::new();
         compactable.retain(|path| {
             let Some(h) = self.history.get_mut(path) else {
                 return false;
             };
+            let before_usage = history_path_usage(path, h);
             // Keep the newest version at or before the floor plus everything after it; drop
             // the prefix nothing can observe.
             let cut = h.partition_point(|(v, _)| *v <= floor).saturating_sub(1);
@@ -1805,13 +2350,25 @@ impl FirestoreState {
             if emptied {
                 self.history.remove(path);
                 removed_paths.push(path.clone());
+                usage_changes.push((before_usage, HistoryUsage::default()));
                 return false;
             }
+            let after_usage = self
+                .history
+                .get(path)
+                .map_or_else(HistoryUsage::default, |history| {
+                    history_path_usage(path, history)
+                });
+            usage_changes.push((before_usage, after_usage));
             self.history
                 .get(path)
                 .is_some_and(|h| h.len() > 1 || matches!(h.first(), Some((_, None))))
         });
         self.compactable = compactable;
+        for (before, after) in usage_changes {
+            self.history_usage =
+                add_history_usage(subtract_history_usage(self.history_usage, before), after);
+        }
         for path in removed_paths {
             self.remove_scope_path(&path);
         }
@@ -1966,23 +2523,55 @@ impl FirestoreState {
     /// times are strictly monotonic per database even when the clock did not advance, so
     /// `update_time` preconditions cannot be satisfied by a stale timestamp.
     ///
-    /// Transaction concurrency is optimistic: independent writes commit immediately, while a
-    /// transaction whose document or query snapshot changed is aborted before any staged
-    /// write is published. SDKs retry that attempt against a new snapshot.
+    /// Transaction concurrency is pessimistic, as in production: what an active read-write
+    /// transaction read is locked (see `check_contention`), and a transaction whose read set
+    /// nevertheless changed is aborted before any staged write is published. SDKs retry that
+    /// attempt against a new snapshot.
     pub fn commit(
         &mut self,
         writes: &[Write],
         transaction: Option<&TransactionId>,
         now: LogicalInstant,
     ) -> Result<CommitResult, FirestoreError> {
+        self.commit_with_admission(writes, transaction, now, |_| Ok(()))
+            .map(|(result, ())| result)
+    }
+
+    /// Applies `writes` only after `admit` reserves every coupled logical event.
+    ///
+    /// The callback sees the exact result while all source changes are still private. Once it
+    /// returns a reservation, publishing the staged source change has no recoverable failure
+    /// branch; the caller can therefore publish that reservation before releasing its database
+    /// lock.
+    #[allow(clippy::too_many_lines)]
+    pub fn commit_with_admission<R>(
+        &mut self,
+        writes: &[Write],
+        transaction: Option<&TransactionId>,
+        now: LogicalInstant,
+        admit: impl FnOnce(&CommitResult) -> Result<R, FirestoreError>,
+    ) -> Result<(CommitResult, R), FirestoreError> {
+        self.commit_with_history_admission(writes, transaction, now, |result, _| admit(result))
+    }
+
+    /// Applies a commit after both database and aggregate history admission.
+    ///
+    /// The reservation ceiling is computed after legal maintenance and before publication.
+    /// Capacity and coupled-event refusal leave every visible version, transaction and
+    /// commit-time root unchanged; maintenance may only discard already unreachable history.
+    #[allow(clippy::too_many_lines)]
+    pub fn commit_with_history_admission<R>(
+        &mut self,
+        writes: &[Write],
+        transaction: Option<&TransactionId>,
+        now: LogicalInstant,
+        admit: impl FnOnce(&CommitResult, HistoryProjection) -> Result<R, FirestoreError>,
+    ) -> Result<(CommitResult, R), FirestoreError> {
         if let Some(id) = transaction {
             self.validate_transaction_commit(id, writes, now)?;
         }
-
-        // The transform budget is production's alone: the official emulator applies any
-        // number of transforms (measured by `conformance/src/firestore-probe`), so only the
-        // production scope refuses the commit.
-        self.check_transform_budget(writes)?;
+        self.check_contention(writes, transaction, now)?;
+        Self::check_transform_budget(writes)?;
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
         // by one microsecond when the clock did not move between commits.
@@ -2040,21 +2629,42 @@ impl FirestoreState {
             results.push(result);
         }
 
-        // Publish.
-        let changed: Vec<StagedChange> = staged
+        // Build the exact externally visible result before publishing either side.
+        let staged_changes: Vec<StagedChange> = staged
             .into_iter()
             .filter(|(_, staged)| staged.changed)
             .map(|(path, staged)| (path, staged.before, staged.current))
             .collect();
-        // Every accepted commit consumes a commit time, changed documents or not.
+        let changed = !staged_changes.is_empty();
+        let version = if changed { next_version } else { self.version };
+        let published_changes: Arc<[DocumentChange]> = staged_changes
+            .iter()
+            .map(|(path, before, after)| DocumentChange {
+                path: path.clone(),
+                before: before.clone(),
+                after: after.clone(),
+            })
+            .collect();
+        let result = CommitResult {
+            commit_time,
+            write_results: results,
+            version,
+            changes: published_changes,
+        };
+        let before = self.history_usage();
+        let (uncompacted, after) = self.projected_history_usage(&staged_changes, now);
+        self.check_history_limits(after)?;
+        let reservation = admit(&result, HistoryProjection { before, after })?;
+
+        // Publish. All fallible validation and external admission completed above. Every
+        // accepted commit consumes a commit time, changed documents or not.
         self.last_commit_time = Some(commit_time);
-        let mut document_changes = Vec::with_capacity(changed.len());
-        let version = if changed.is_empty() {
-            self.version
-        } else {
+        self.compaction_forecast = None;
+        self.history_usage = uncompacted;
+        if changed {
             self.version = next_version;
             self.commit_times.push_back((next_version, commit_time));
-            for (path, before, doc) in changed {
+            for (path, before, doc) in staged_changes {
                 let became_live = before.is_none() && doc.is_some();
                 let became_missing = before.is_some() && doc.is_none();
                 // A second version, or a tombstone, is something a later compaction can drop.
@@ -2067,11 +2677,6 @@ impl FirestoreState {
                 } else if became_missing {
                     self.remove_live_scope_path(&path);
                 }
-                document_changes.push(DocumentChange {
-                    path: path.clone(),
-                    before,
-                    after: doc.clone(),
-                });
                 self.history
                     .entry(path.clone())
                     .or_default()
@@ -2081,26 +2686,22 @@ impl FirestoreState {
                     self.compactable.insert(path);
                 }
             }
-            next_version
-        };
+        }
         if let Some(id) = transaction {
             self.finish_transaction(id, TransactionState::Finished);
         }
         // Retention is owned by the store: every commit drops the history that has fallen
         // out of the read window and is not pinned by an active transaction.
         self.compact(now);
-        Ok(CommitResult {
-            commit_time,
-            write_results: results,
-            version,
-            changes: Arc::from(document_changes),
-        })
+        debug_assert!(self.history_usage.total_bytes <= after.total_bytes);
+        debug_assert!(self.history_usage.versions <= after.versions);
+        Ok((result, reservation))
     }
 
-    fn check_transform_budget(&self, writes: &[Write]) -> Result<(), FirestoreError> {
-        if self.limit_scope != LimitScope::Production {
-            return Ok(());
-        }
+    /// Production refuses more than the catalogued number of field transforms on one document
+    /// in a commit with `INVALID_ARGUMENT`, in every profile: the official emulator's leniency
+    /// here accepts a write production would reject.
+    fn check_transform_budget(writes: &[Write]) -> Result<(), FirestoreError> {
         let mut transforms_per_document: BTreeMap<&DocumentPath, u64> = BTreeMap::new();
         for write in writes {
             let count = transforms_per_document.entry(write.op.path()).or_default();
@@ -2127,11 +2728,23 @@ impl FirestoreState {
         writes: &[Write],
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
-        self.touch_transaction(id, now)?;
+        let transaction = self.transaction(id)?;
+        if now >= transaction_deadline(transaction) {
+            self.finish_transaction(id, TransactionState::Finished);
+            self.compact(now);
+            return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
+        }
         let transaction = self.transaction(id)?;
         if transaction.read_only && !writes.is_empty() {
             return Err(FirestoreError::InvalidArgument(
-                "read-only transaction cannot write".into(),
+                "Cannot modify entities in a read-only transaction.".into(),
+            ));
+        }
+        if transaction.read_only {
+            // Production refuses committing a read-only transaction at all, even with no
+            // writes, and calls the transaction no longer valid.
+            return Err(FirestoreError::InvalidArgument(
+                TRANSACTION_NO_LONGER_VALID.into(),
             ));
         }
         if self.transaction_conflicted(id)? {
@@ -2143,6 +2756,106 @@ impl FirestoreState {
         Ok(())
     }
 
+    /// Pessimistic locking, as production runs it (`concurrencyMode: PESSIMISTIC`, measured
+    /// in conformance/firestore-production-matrix.json, transactions/lifecycle): every
+    /// document an active read-write transaction read, and every query range it executed,
+    /// is locked until that transaction finishes.
+    ///
+    /// A commit that touches a locked document is refused with `ABORTED` and production's
+    /// wording, and the adapter waits for a release before trying again or giving that answer.
+    /// A commit outside a transaction, or by a transaction none of the lock holders is
+    /// waiting on, leaves everything as it was. A transaction that runs into the locks of a
+    /// holder which is itself waiting to commit is the deadlock production resolves by
+    /// aborting one side: it is aborted (retryable) so the waiting holder can proceed.
+    fn check_contention(
+        &mut self,
+        writes: &[Write],
+        own: Option<&TransactionId>,
+        now: LogicalInstant,
+    ) -> Result<(), FirestoreError> {
+        if writes.is_empty() {
+            return Ok(());
+        }
+        self.prune_transactions(now);
+        if let Some(transaction) = own.and_then(|id| self.transactions.get_mut(id)) {
+            transaction.waiting_to_commit = false;
+        }
+        let floor = self.compaction_floor;
+        let holders: Vec<bool> = self
+            .transactions
+            .iter()
+            .filter(|(id, holder)| {
+                holder.state == TransactionState::Active
+                    && !holder.read_only
+                    && holder.read_version >= floor
+                    && own != Some(*id)
+                    && writes.iter().any(|write| {
+                        let path = write.op.path();
+                        holder.read_set.contains_key(path)
+                            || holder
+                                .queries
+                                .iter()
+                                .any(|(query, _)| path_in_scope(path, &query.scope))
+                    })
+            })
+            .map(|(_, holder)| holder.waiting_to_commit)
+            .collect();
+        if holders.is_empty() {
+            return Ok(());
+        }
+        if let Some(id) = own {
+            if holders.iter().any(|waiting| *waiting) {
+                self.finish_transaction(id, TransactionState::RetryableAborted);
+            } else if let Some(transaction) = self.transactions.get_mut(id) {
+                transaction.waiting_to_commit = true;
+            }
+        }
+        Err(FirestoreError::Aborted(TOO_MUCH_CONTENTION.into()))
+    }
+
+    /// The active read-write transactions whose locks `writes` would collide with, other than
+    /// `own`: what a refused writer is waiting on.
+    #[must_use]
+    pub fn lock_holders(
+        &self,
+        writes: &[Write],
+        own: Option<&TransactionId>,
+    ) -> Vec<TransactionId> {
+        self.transactions
+            .iter()
+            .filter(|(id, holder)| {
+                holder.state == TransactionState::Active
+                    && !holder.read_only
+                    && holder.read_version >= self.compaction_floor
+                    && own != Some(*id)
+                    && writes.iter().any(|write| {
+                        let path = write.op.path();
+                        holder.read_set.contains_key(path)
+                            || holder
+                                .queries
+                                .iter()
+                                .any(|(query, _)| path_in_scope(path, &query.scope))
+                    })
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Whether `id` names a transaction that is still active (a commit refused for lock
+    /// contention may be tried again once the holder finishes).
+    #[must_use]
+    pub fn transaction_is_active(&self, id: &TransactionId) -> bool {
+        self.transactions
+            .get(id)
+            .is_some_and(|t| t.state == TransactionState::Active)
+    }
+
+    /// How many transactions have finished so far; a change means locks were released.
+    #[must_use]
+    pub const fn transaction_releases(&self) -> u64 {
+        self.transaction_releases
+    }
+
     fn transaction_conflicted(&self, id: &TransactionId) -> Result<bool, FirestoreError> {
         let transaction = self.transaction(id)?;
         for (path, observed) in &transaction.read_set {
@@ -2152,7 +2865,7 @@ impl FirestoreState {
         }
         for (query, observed) in &transaction.queries {
             let mut current = QueryObserver::default();
-            self.select(query, None, Consumption::Ordered, |document| {
+            self.select(query, None, &[], Consumption::Ordered, |document| {
                 current.push(document);
             })?;
             if current.finish() != *observed {
@@ -2630,15 +3343,14 @@ impl FirestoreState {
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let mut out: Vec<Document> = Vec::new();
-        let mut stats = self.select(query, version, Consumption::Ordered, |doc| {
-            out.push(doc.clone());
+        let mut stats = self.select(query, version, &[], Consumption::Ordered, |doc| {
+            out.push(project_document(doc, query.projection.as_deref()));
         })?;
         stats.cloned_documents = out.len() as u64;
-        if let Some(projection) = &query.projection {
-            for d in &mut out {
-                d.fields = project(&d.fields, projection);
-            }
-        }
+        stats.cloned_field_bytes = out
+            .iter()
+            .map(|document| fields_retained_bytes(&document.fields))
+            .fold(0u64, u64::saturating_add);
         Ok((out, stats))
     }
 
@@ -2665,14 +3377,10 @@ impl FirestoreState {
             query,
             changed_documents,
             false,
+            &[],
             Consumption::Ordered,
-            |document| documents.push(document.clone()),
+            |document| documents.push(project_document(document, query.projection.as_deref())),
         )?;
-        if let Some(projection) = &query.projection {
-            for document in &mut documents {
-                document.fields = project(&document.fields, projection);
-            }
-        }
         Ok(Some(documents))
     }
 
@@ -2689,6 +3397,7 @@ impl FirestoreState {
         &'a self,
         query: &Query,
         version: Option<CommitVersion>,
+        required_fields: &[&FieldPath],
         consumption: Consumption,
         sink: F,
     ) -> Result<QueryStats, FirestoreError> {
@@ -2699,7 +3408,7 @@ impl FirestoreState {
                 Some(version) => self.get_at(path, version),
                 None => self.get(path),
             });
-        select_from(query, documents, true, consumption, sink)
+        select_from(query, documents, true, required_fields, consumption, sink)
     }
 
     /// Runs aggregations over the query results.
@@ -2727,6 +3436,7 @@ impl FirestoreState {
         aggregations: &[Aggregation],
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Value>, QueryStats), FirestoreError> {
+        let mut required_fields = Vec::new();
         for aggregation in aggregations {
             if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
                 if field.is_document_name() {
@@ -2734,17 +3444,26 @@ impl FirestoreState {
                         "Aggregations are not supported for the property: __key__".into(),
                     ));
                 }
+                if !required_fields.contains(&field) {
+                    required_fields.push(field);
+                }
             }
         }
         let mut accumulators: Vec<Accumulator> = aggregations
             .iter()
             .map(|_| Accumulator::default())
             .collect();
-        let stats = self.select(query, version, Consumption::Unordered, |doc| {
-            for (aggregation, accumulator) in aggregations.iter().zip(&mut accumulators) {
-                accumulator.fold(aggregation, doc);
-            }
-        })?;
+        let stats = self.select(
+            query,
+            version,
+            &required_fields,
+            Consumption::Unordered,
+            |doc| {
+                for (aggregation, accumulator) in aggregations.iter().zip(&mut accumulators) {
+                    accumulator.fold(aggregation, doc);
+                }
+            },
+        )?;
         let values = aggregations
             .iter()
             .zip(accumulators)
@@ -2934,6 +3653,7 @@ fn select_from<'a, I, F>(
     query: &Query,
     documents: I,
     source_is_path_ordered: bool,
+    required_fields: &[&FieldPath],
     consumption: Consumption,
     mut sink: F,
 ) -> Result<QueryStats, FirestoreError>
@@ -2961,6 +3681,12 @@ where
     for document in documents {
         stats.scanned += 1;
         if !document_in_scope(document, scope) {
+            continue;
+        }
+        if required_fields
+            .iter()
+            .any(|field| get_field(&document.fields, field).is_none())
+        {
             continue;
         }
         if let Some(filter) = &query.filter {
@@ -3538,6 +4264,27 @@ pub fn project(
     out
 }
 
+fn project_document(document: &Document, projection: Option<&[FieldPath]>) -> Document {
+    Document {
+        path: document.path.clone(),
+        fields: projection.map_or_else(
+            || document.fields.clone(),
+            |fields| project(&document.fields, fields),
+        ),
+        create_time: document.create_time,
+        update_time: document.update_time,
+        version: document.version,
+    }
+}
+
+fn fields_retained_bytes(fields: &BTreeMap<String, Value>) -> u64 {
+    fields.iter().fold(0u64, |total, (key, value)| {
+        total
+            .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX))
+            .saturating_add(value_retained_bytes(value))
+    })
+}
+
 #[cfg(test)]
 mod scope_index_tests {
     use super::*;
@@ -3653,6 +4400,7 @@ mod scope_index_tests {
     }
 
     fn assert_scope_projection(state: &FirestoreState) {
+        assert_eq!(state.history_usage, state.recount_history_usage());
         let mut direct: BTreeMap<_, BTreeSet<DocumentPath>> = BTreeMap::new();
         let mut groups: BTreeMap<_, BTreeSet<DocumentPath>> = BTreeMap::new();
         let mut live_direct: BTreeMap<_, BTreeSet<DocumentPath>> = BTreeMap::new();
@@ -3762,6 +4510,57 @@ mod scope_index_tests {
             )
             .expect("advance beyond retention");
         assert!(!state.history.contains_key(&path("root/a/children/x")));
+        assert_scope_projection(&state);
+    }
+
+    #[test]
+    fn cached_history_usage_survives_mixed_state_transitions() {
+        let mut state = FirestoreState::new();
+        state
+            .commit(
+                &[set("mixed/a"), set("mixed/b")],
+                None,
+                LogicalInstant::UNIX_EPOCH,
+            )
+            .expect("create two documents");
+        assert_scope_projection(&state);
+
+        state
+            .commit(
+                &[set("mixed/a"), delete("mixed/b"), set("mixed/c")],
+                None,
+                LogicalInstant::from_unix_seconds(1),
+            )
+            .expect("publish an update, delete, and create together");
+        assert_scope_projection(&state);
+
+        let transaction = state
+            .begin_transaction(false, LogicalInstant::from_unix_seconds(2))
+            .expect("begin transaction");
+        state.rollback(&transaction).expect("roll transaction back");
+        assert_scope_projection(&state);
+
+        let forecast_time = LogicalInstant::from_unix_seconds(READ_TIME_RETENTION_SECONDS + 3);
+        let _ = state.projected_history_usage(&[], forecast_time);
+        assert!(state.compaction_forecast.is_some());
+        state
+            .import_documents(
+                vec![ImportedDocument {
+                    path: path("imported/a"),
+                    fields: BTreeMap::new(),
+                    create_time: None,
+                    update_time: None,
+                }],
+                forecast_time,
+            )
+            .expect("import one document");
+        assert!(state.compaction_forecast.is_none());
+        assert_scope_projection(&state);
+        assert_scope_projection(&state.visible_snapshot());
+
+        state.compact(LogicalInstant::from_unix_seconds(
+            READ_TIME_RETENTION_SECONDS * 2 + 4,
+        ));
         assert_scope_projection(&state);
     }
 

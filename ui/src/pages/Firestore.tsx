@@ -21,10 +21,12 @@ import {
   getDocument,
   listCollectionIds,
   listDocuments,
-  setDocument,
+  updateDocument,
 } from "../api/firestore";
 import {
+  applyFieldDiff,
   defaultText,
+  diffFields,
   FIELD_TYPES,
   isDocumentPath,
   lastSegment,
@@ -91,6 +93,7 @@ const hint = (type: FieldType): string => {
 const FieldsEditor: Component<{
   fields: EditableField[];
   onChange: (fields: EditableField[]) => void;
+  disabled?: boolean;
 }> = (props) => {
   const update = (index: number, patch: Partial<EditableField>) =>
     props.onChange(props.fields.map((f, i) => (i === index ? { ...f, ...patch } : f)));
@@ -114,6 +117,7 @@ const FieldsEditor: Component<{
                   <input
                     class="input mono"
                     aria-label={t("firestore.fieldName")}
+                    disabled={props.disabled}
                     value={f.name}
                     onInput={(e) => update(i(), { name: e.currentTarget.value })}
                   />
@@ -122,10 +126,17 @@ const FieldsEditor: Component<{
                   <select
                     class="input"
                     aria-label={t("firestore.fieldType")}
+                    disabled={props.disabled}
                     value={f.type}
                     onChange={(e) => {
                       const type = e.currentTarget.value as FieldType;
-                      update(i(), { type, text: defaultText(type) });
+                      update(i(), {
+                        type,
+                        text: defaultText(type),
+                        original: undefined,
+                        dirty: true,
+                        numberKind: undefined,
+                      });
                     }}
                   >
                     <For each={FIELD_TYPES}>
@@ -141,23 +152,29 @@ const FieldsEditor: Component<{
                         class="input mono"
                         aria-label={t("firestore.fieldValue")}
                         placeholder={hint(f.type)}
-                        disabled={f.type === "null"}
+                        disabled={props.disabled || f.type === "null"}
                         value={f.text}
-                        onInput={(e) => update(i(), { text: e.currentTarget.value })}
+                        onInput={(e) => update(i(), { text: e.currentTarget.value, dirty: true })}
                       />
                     }
                   >
                     <textarea
                       class="input mono h-20"
                       aria-label={t("firestore.fieldValue")}
+                      disabled={props.disabled}
                       placeholder={hint(f.type)}
                       value={f.text}
-                      onInput={(e) => update(i(), { text: e.currentTarget.value })}
+                      onInput={(e) => update(i(), { text: e.currentTarget.value, dirty: true })}
                     />
                   </Show>
                 </td>
                 <td>
-                  <button type="button" class="btn" onClick={() => remove(i())}>
+                  <button
+                    type="button"
+                    class="btn"
+                    disabled={props.disabled}
+                    onClick={() => remove(i())}
+                  >
                     {t("app.delete")}
                   </button>
                 </td>
@@ -170,6 +187,7 @@ const FieldsEditor: Component<{
         type="button"
         class="btn mt-2"
         data-testid="add-field"
+        disabled={props.disabled}
         onClick={() => props.onChange([...props.fields, { name: "", type: "string", text: "" }])}
       >
         {t("firestore.addField")}
@@ -360,6 +378,15 @@ const DocumentView: Component<{
   );
   const [editing, setEditing] = createSignal(false);
   const [fields, setFields] = createSignal<EditableField[]>([]);
+  const [editSession, setEditSession] = createSignal<{
+    root: string;
+    path: string;
+    fields: Record<string, FsValue>;
+    updateTime: string;
+    generation: number;
+  } | null>(null);
+  const [conflict, setConflict] = createSignal(false);
+  const [editBusy, setEditBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
   const [showJson, setShowJson] = createSignal(false);
@@ -370,27 +397,118 @@ const DocumentView: Component<{
       () => false,
       (e) => e.status === 404,
     ) ?? false;
+  let editGeneration = 0;
+  let editOperation = 0;
+  createEffect(() => {
+    void props.root;
+    void props.path;
+    editGeneration += 1;
+    editOperation += 1;
+    setEditing(false);
+    setEditSession(null);
+    setConflict(false);
+    setEditBusy(false);
+  });
   const startEdit = () => {
-    setFields(toEditable(current()?.fields));
+    const selected = current();
+    if (!selected?.updateTime) return;
+    const original = selected.fields ?? {};
+    editGeneration += 1;
+    editOperation += 1;
+    setFields(toEditable(original));
+    setEditSession({
+      root: props.root,
+      path: props.path,
+      fields: original,
+      updateTime: selected.updateTime,
+      generation: editGeneration,
+    });
+    setConflict(false);
     setEditing(true);
   };
   const save = async () => {
+    if (editBusy()) return;
     setError(null);
-    const parsed = parseFields(fields(), props.root);
+    const session = editSession();
+    if (!session) return;
+    const parsed = parseFields(fields(), session.root);
     if (parsed.isErr()) {
       setError(
         t("firestore.invalidValue", { field: parsed.error.field, message: parsed.error.message }),
       );
       return;
     }
-    const r = await setDocument(props.root, props.path, parsed.value);
+    const changes = diffFields(session.fields, parsed.value);
+    if (changes.fieldPaths.length === 0) {
+      setEditing(false);
+      setEditSession(null);
+      return;
+    }
+    const operation = ++editOperation;
+    setEditBusy(true);
+    const r = await updateDocument(
+      session.root,
+      session.path,
+      changes.fields,
+      changes.fieldPaths,
+      session.updateTime,
+    );
+    const staleSession =
+      editSession()?.generation !== session.generation ||
+      editOperation !== operation ||
+      props.root !== session.root ||
+      props.path !== session.path;
+    if (staleSession) return;
+    setEditBusy(false);
     r.match(
       () => {
         setEditing(false);
-        void refetch();
+        setEditSession(null);
+        if (props.root === session.root && props.path === session.path) void refetch();
       },
-      (e) => setError(e.message),
+      (e) => {
+        if (e.code === "FAILED_PRECONDITION") {
+          setConflict(true);
+          setError(t("firestore.editConflict"));
+        } else {
+          setError(e.message);
+        }
+      },
     );
+  };
+  const reloadForReapply = async () => {
+    if (editBusy()) return;
+    const session = editSession();
+    if (!session || props.root !== session.root || props.path !== session.path) return;
+    const draft = fields();
+    const parsedDraft = parseFields(draft, session.root);
+    if (parsedDraft.isErr()) return;
+    const draftChanges = diffFields(session.fields, parsedDraft.value);
+    const operation = ++editOperation;
+    setEditBusy(true);
+    await refetch();
+    if (
+      editSession()?.generation !== session.generation ||
+      editOperation !== operation ||
+      props.root !== session.root ||
+      props.path !== session.path
+    )
+      return;
+    setEditBusy(false);
+    const latest = current();
+    if (!latest?.updateTime) {
+      setError(t("firestore.editConflictDeleted"));
+      return;
+    }
+    setEditSession({
+      ...session,
+      fields: latest.fields ?? {},
+      updateTime: latest.updateTime,
+    });
+    setFields(toEditable(applyFieldDiff(latest.fields ?? {}, draftChanges)));
+    setConflict(false);
+    setError(null);
+    setNotice(t("firestore.draftReapplied"));
   };
   const remove = async () => {
     const r = await deleteDocument(props.root, props.path);
@@ -467,12 +585,39 @@ const DocumentView: Component<{
             </Show>
           }
         >
-          <FieldsEditor fields={fields()} onChange={setFields} />
+          <FieldsEditor fields={fields()} onChange={setFields} disabled={editBusy()} />
+          <Show when={conflict()}>
+            <button
+              type="button"
+              class="btn mt-2"
+              data-testid="document-reload-draft"
+              disabled={editBusy()}
+              onClick={reloadForReapply}
+            >
+              {t("firestore.reloadDraft")}
+            </button>
+          </Show>
           <div class="mt-3 flex gap-2">
-            <AsyncButton class="btn btn-primary" onClick={save} testId="document-save">
+            <AsyncButton
+              class="btn btn-primary"
+              disabled={editBusy()}
+              onClick={save}
+              testId="document-save"
+            >
               {t("app.save")}
             </AsyncButton>
-            <button type="button" class="btn" onClick={() => setEditing(false)}>
+            <button
+              type="button"
+              class="btn"
+              onClick={() => {
+                editGeneration += 1;
+                editOperation += 1;
+                setEditing(false);
+                setEditSession(null);
+                setConflict(false);
+                setEditBusy(false);
+              }}
+            >
               {t("app.cancel")}
             </button>
           </div>

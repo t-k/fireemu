@@ -23,7 +23,7 @@ use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_auth::base32;
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
-use fireemu_core_auth::mfa::{MfaError, PendingSignInContext};
+use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
 use fireemu_core_auth::store::{
     AuthError, AuthStore, FederatedIdentity, LocalId, NewUser, OobRequestType, PendingSignInId,
     RoutedStoreInstall, SecondFactorAssertion, VerificationPurpose,
@@ -275,6 +275,12 @@ pub struct AuthBlockingCredential {
     pub provider_id: String,
     /// Sign-in method. Identity Platform currently uses the provider ID here.
     pub sign_in_method: String,
+    /// OAuth access token supplied by the caller, when credential forwarding is enabled.
+    pub access_token: Option<String>,
+    /// Identity-provider ID token supplied by the caller, when credential forwarding is enabled.
+    pub id_token: Option<String>,
+    /// OAuth refresh token supplied by the caller, when credential forwarding is enabled.
+    pub refresh_token: Option<String>,
 }
 
 impl core::fmt::Debug for AuthBlockingCredential {
@@ -283,6 +289,15 @@ impl core::fmt::Debug for AuthBlockingCredential {
             .field("claims", &self.claims.as_ref().map(|_| "[redacted]"))
             .field("provider_id", &self.provider_id)
             .field("sign_in_method", &self.sign_in_method)
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[redacted]"),
+            )
+            .field("id_token", &self.id_token.as_ref().map(|_| "[redacted]"))
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[redacted]"),
+            )
             .finish()
     }
 }
@@ -342,6 +357,25 @@ pub trait AuthBlockingHook: Send + Sync {
     /// supported events; runtime-backed bridges override this from their discovered manifest.
     fn handles(&self, _event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
         true
+    }
+
+    /// Whether raw caller-supplied identity-provider credentials may be sent to this hook.
+    /// Credentials are omitted by default and are never synthesized for missing fields.
+    fn forward_inbound_credentials(&self) -> bool {
+        false
+    }
+
+    /// Raw fields required by the effective target for one event. The default preserves the
+    /// all-or-nothing policy of existing in-process hooks.
+    fn inbound_credential_policy(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        if self.forward_inbound_credentials() {
+            fireemu_core_functions::manifest::BlockingAuthTokenPolicy::ALL
+        } else {
+            fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default()
+        }
     }
 
     /// Runs one before-create or before-sign-in function. Implementations must return within a
@@ -1335,11 +1369,96 @@ fn apply_blocking_response(
     Ok(session_claims.map(|claims| claims.claims))
 }
 
+fn inbound_credentials_from_request(
+    body: &Value,
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+) -> Option<PendingSignInCredentials> {
+    let request_uri = str_field(body, "requestUri")?;
+    let params = normalized_idp_params(request_uri, str_field(body, "postBody"));
+    let credentials = PendingSignInCredentials::new(
+        policy
+            .access_token
+            .then(|| {
+                params
+                    .get("access_token")
+                    .filter(|token| !token.is_empty())
+                    .cloned()
+            })
+            .flatten(),
+        policy
+            .id_token
+            .then(|| {
+                params
+                    .get("id_token")
+                    .filter(|token| !token.is_empty())
+                    .cloned()
+            })
+            .flatten(),
+        policy
+            .refresh_token
+            .then(|| {
+                params
+                    .get("refresh_token")
+                    .filter(|token| !token.is_empty())
+                    .cloned()
+            })
+            .flatten(),
+    );
+    (credentials.access_token().is_some()
+        || credentials.id_token().is_some()
+        || credentials.refresh_token().is_some())
+    .then_some(credentials)
+}
+
+fn blocking_credential(
+    provider_id: &str,
+    claims: Option<Value>,
+    inbound_credentials: Option<&PendingSignInCredentials>,
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+) -> Option<AuthBlockingCredential> {
+    let has_inbound_credentials = inbound_credentials.is_some_and(|credentials| {
+        credentials.access_token().is_some()
+            || credentials.id_token().is_some()
+            || credentials.refresh_token().is_some()
+    });
+    if claims.is_none() && !has_inbound_credentials {
+        return None;
+    }
+    Some(AuthBlockingCredential {
+        claims,
+        provider_id: provider_id.to_owned(),
+        sign_in_method: provider_id.to_owned(),
+        access_token: policy
+            .access_token
+            .then(|| {
+                inbound_credentials
+                    .and_then(|credentials| credentials.access_token().map(str::to_owned))
+            })
+            .flatten(),
+        id_token: policy
+            .id_token
+            .then(|| {
+                inbound_credentials
+                    .and_then(|credentials| credentials.id_token().map(str::to_owned))
+            })
+            .flatten(),
+        refresh_token: policy
+            .refresh_token
+            .then(|| {
+                inbound_credentials
+                    .and_then(|credentials| credentials.refresh_token().map(str::to_owned))
+            })
+            .flatten(),
+    })
+}
+
 fn blocking_context(
     response: &JsonResponse,
     event: fireemu_core_functions::manifest::BlockingAuthEvent,
     pending: Option<&PendingSignInContext>,
     sign_in_method: Option<&str>,
+    inbound_credentials: Option<&PendingSignInCredentials>,
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
 ) -> AuthBlockingContext {
     if let Some(pending) = pending {
         let provider_id = pending.sign_in_provider();
@@ -1348,12 +1467,9 @@ fn blocking_context(
         let claims = is_idp
             .then(|| pending.sign_in_attributes().and_then(claim_value_to_json))
             .flatten();
-        let credential = provider_id.filter(|_| is_idp).and_then(|provider_id| {
-            claims.clone().map(|claims| AuthBlockingCredential {
-                claims: Some(claims),
-                provider_id: provider_id.to_owned(),
-                sign_in_method: provider_id.to_owned(),
-            })
+        let inbound_credentials = pending.inbound_credentials().or(inbound_credentials);
+        let credential = provider_id.and_then(|provider_id| {
+            blocking_credential(provider_id, claims.clone(), inbound_credentials, policy)
         });
         return AuthBlockingContext {
             credential,
@@ -1379,11 +1495,7 @@ fn blocking_context(
         .then(|| profile.clone())
         .flatten();
     let credential = provider_id.and_then(|provider_id| {
-        claims.map(|claims| AuthBlockingCredential {
-            claims: Some(claims),
-            provider_id: provider_id.to_owned(),
-            sign_in_method: provider_id.to_owned(),
-        })
+        blocking_credential(provider_id, claims.clone(), inbound_credentials, policy)
     });
     AuthBlockingContext {
         credential,
@@ -1422,6 +1534,19 @@ fn blocking_sign_in_method<'a>(
     }
 }
 
+fn discard_pending_inbound_credentials(
+    store: &Arc<Mutex<AuthStore>>,
+    pending: Option<&PendingSignInId>,
+) {
+    let Some(pending) = pending else {
+        return;
+    };
+    let mut store = store
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    store.clear_pending_sign_in_credentials(pending);
+}
+
 // The request parts stay separate here so the ordinary dispatcher remains the one source of
 // route behavior; grouping them in a second request type would duplicate that boundary.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1442,6 +1567,7 @@ fn dispatch_with_blocking_hook(
         .and_then(PendingSignInId::parse)
         .and_then(|pending| {
             Some((
+                pending.clone(),
                 store.pending_sign_in_user(&pending)?,
                 store.pending_sign_in_context(&pending)?.clone(),
             ))
@@ -1475,7 +1601,7 @@ fn dispatch_with_blocking_hook(
         .as_deref()
         .and_then(|uid| candidate.user_by_id(uid))
         .map(|user| user.local_id.clone())
-        .or_else(|| pending_continuation.as_ref().map(|(uid, _)| uid.clone()));
+        .or_else(|| pending_continuation.as_ref().map(|(_, uid, _)| uid.clone()));
     let speculative_uid = uid.clone();
     let is_new = is_authentication
         && uid_text.as_deref().is_some_and(|uid| {
@@ -1488,9 +1614,20 @@ fn dispatch_with_blocking_hook(
         handler,
         body,
         &response,
-        pending_continuation.as_ref().map(|(_, context)| context),
+        pending_continuation.as_ref().map(|(_, _, context)| context),
     )
     .map(str::to_owned);
+    let before_create_policy = blocking.inbound_credential_policy(
+        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+    );
+    let before_sign_in_policy = blocking.inbound_credential_policy(
+        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+    );
+    let retained_policy = before_create_policy.union(before_sign_in_policy);
+    let inbound_credentials = retained_policy
+        .any()
+        .then(|| inbound_credentials_from_request(body, retained_policy))
+        .flatten();
     let project = store.project_id().to_owned();
     let tenant = store.tenant_id().map(str::to_owned);
     drop(store);
@@ -1510,6 +1647,8 @@ fn dispatch_with_blocking_hook(
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
                         None,
                         sign_in_method.as_deref(),
+                        inbound_credentials.as_ref(),
+                        before_create_policy,
                     );
                     match blocking.invoke_for_with_context(
                         &project,
@@ -1550,8 +1689,10 @@ fn dispatch_with_blocking_hook(
                     let context = blocking_context(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                        pending_continuation.as_ref().map(|(_, context)| context),
+                        pending_continuation.as_ref().map(|(_, _, context)| context),
                         sign_in_method.as_deref(),
+                        inbound_credentials.as_ref(),
+                        before_sign_in_policy,
                     );
                     match blocking.invoke_for_with_context(
                         &project,
@@ -1562,7 +1703,11 @@ fn dispatch_with_blocking_hook(
                     ) {
                         Ok(value) => value,
                         Err(failure) => {
-                            return error(failure.identity_status(), &failure.client_message())
+                            discard_pending_inbound_credentials(
+                                store_arc,
+                                pending_continuation.as_ref().map(|(pending, _, _)| pending),
+                            );
+                            return error(failure.identity_status(), &failure.client_message());
                         }
                     }
                 };
@@ -1573,6 +1718,10 @@ fn dispatch_with_blocking_hook(
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                         &value,
                     ) {
+                        discard_pending_inbound_credentials(
+                            store_arc,
+                            pending_continuation.as_ref().map(|(pending, _, _)| pending),
+                        );
                         return error(400, &reason);
                     }
                     blocking_responses.push((
@@ -2085,6 +2234,7 @@ struct DispatchOptions {
     stateless_refresh_tokens: bool,
     fake_custom_token_expiry: FakeCustomTokenExpiry,
     query_limits: AuthQueryLimits,
+    inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
 }
 
 impl From<&AuthState> for DispatchOptions {
@@ -2094,6 +2244,18 @@ impl From<&AuthState> for DispatchOptions {
             stateless_refresh_tokens: state.stateless_refresh_tokens,
             fake_custom_token_expiry: state.fake_custom_token_expiry,
             query_limits: state.query_limits,
+            inbound_credential_policy: state.blocking.as_deref().map_or_else(
+                fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
+                |blocking| {
+                    blocking
+                        .inbound_credential_policy(
+                            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                        )
+                        .union(blocking.inbound_credential_policy(
+                            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                        ))
+                },
+            ),
         }
     }
 }
@@ -2144,7 +2306,9 @@ fn dispatch(
         Handler::SignInWithEmailLink => sign_in_with_email_link(store, body, at),
         Handler::SendVerificationCode => send_verification_code(store, body, at),
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
-        Handler::SignInWithIdp => sign_in_with_idp(store, body, at),
+        Handler::SignInWithIdp => {
+            sign_in_with_idp(store, body, at, options.inbound_credential_policy)
+        }
         Handler::CreateAuthUri => create_auth_uri(store, body),
         Handler::Projects => JsonResponse {
             status: 200,
@@ -2671,9 +2835,10 @@ fn sign_up(
         let Some(email) = new_user.email.as_deref() else {
             return error(400, "MISSING_EMAIL");
         };
-        if store
-            .user_by_email(email)
-            .is_some_and(|u| u.local_id != uid)
+        if !store.config().allow_duplicate_emails
+            && store
+                .user_by_email(email)
+                .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
         }
@@ -2692,7 +2857,7 @@ fn sign_up(
         }
     };
     if let Some(password) = password {
-        if let Err(e) = store.set_password(&uid, password) {
+        if let Err(e) = store.set_password(&uid, password, at) {
             return auth_error(&e);
         }
     }
@@ -2831,6 +2996,11 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         Ok(uid) => uid,
         Err(e) => return auth_error(&e),
     };
+    // Production always carries `displayName`, empty when the account has none.
+    let display_name = store
+        .user(&uid)
+        .and_then(|u| u.display_name.clone())
+        .unwrap_or_default();
     finish_sign_in(
         store,
         &uid,
@@ -2839,6 +3009,7 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         &[
             ("kind", json!("identitytoolkit#VerifyPasswordResponse")),
             ("registered", json!(true)),
+            ("displayName", json!(display_name)),
         ],
     )
 }
@@ -2864,6 +3035,26 @@ fn finish_sign_in_with_attributes(
     extra: &[(&str, Value)],
     sign_in_attributes: Option<&ClaimValue>,
 ) -> JsonResponse {
+    finish_sign_in_with_attributes_and_credentials(
+        store,
+        uid,
+        at,
+        provider,
+        extra,
+        sign_in_attributes,
+        None,
+    )
+}
+
+fn finish_sign_in_with_attributes_and_credentials(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    at: LogicalInstant,
+    provider: Option<fireemu_core_auth::store::Provider>,
+    extra: &[(&str, Value)],
+    sign_in_attributes: Option<&ClaimValue>,
+    inbound_credentials: Option<&PendingSignInCredentials>,
+) -> JsonResponse {
     let factors = mfa_info(store, uid, true);
     if !factors.is_empty() {
         // Second factor required: no ID token yet, only a pending credential.
@@ -2877,12 +3068,23 @@ fn finish_sign_in_with_attributes(
             .find(|(field, _)| *field == "isNewUser")
             .and_then(|(_, value)| value.as_bool())
             .unwrap_or(false);
-        let context =
-            PendingSignInContext::new(sign_in_provider, is_new_user, sign_in_attributes.cloned());
+        let context = PendingSignInContext::new_with_credentials(
+            sign_in_provider,
+            is_new_user,
+            sign_in_attributes.cloned(),
+            inbound_credentials.cloned(),
+        );
         return match store.start_mfa_sign_in_with_context(uid, at, context) {
             Ok(pending) => {
                 let mut body = json!({"mfaPendingCredential": pending.as_str(), "mfaInfo": factors, "localId": uid.as_str(), "email": email});
                 for (k, v) in extra {
+                    // The pending-second-factor answer carries no profile fields on the
+                    // official emulator (conformance/fixtures/auth/mfa-enrollment-eligibility);
+                    // production's shape for it is unobserved, so the token answer alone
+                    // carries `displayName`.
+                    if *k == "displayName" {
+                        continue;
+                    }
                     body[*k] = v.clone();
                 }
                 JsonResponse { status: 200, body }
@@ -2944,6 +3146,13 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     for f in &u.federated {
         providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
     }
+    // Production omits every default-valued field (proto3 JSON): no `disabled: false`, no
+    // empty `mfaInfo` or `providerUserInfo`, `emailVerified` only with an address, and
+    // `validSince` once tokens were ever revoked or a password set. The password hash is the
+    // redacted marker production sends a caller without hash-config permission
+    // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
+    let has_password = store.has_password(uid);
+    let valid_since = (has_password || u.tokens_revoked).then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
         "tenantId": store.tenant_id(),
@@ -2951,17 +3160,23 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "displayName": u.display_name,
         "photoUrl": u.photo_url,
         "phoneNumber": u.phone_number,
-        "emailVerified": u.email_verified,
-        "disabled": u.disabled,
+        "emailVerified": u.email.as_ref().map(|_| u.email_verified),
+        "disabled": u.disabled.then_some(true),
         // Absent, not "{}", when no claim is set: what the Admin SDK reads back as no claims.
         "customAttributes": (u.custom_claims.canonical_json() != "{}").then(|| u.custom_claims.canonical_json()),
-        "providerUserInfo": providers,
-        "mfaInfo": mfa,
+        "providerUserInfo": (!providers.is_empty()).then_some(providers),
+        "mfaInfo": (!mfa.is_empty()).then_some(mfa),
+        "passwordHash": has_password.then_some(REDACTED_PASSWORD_HASH),
+        "passwordUpdatedAt": store.password_updated_at(uid).map(|t| t.as_nanos() / 1_000_000),
         "createdAt": (u.created_at.as_nanos() / 1_000_000).to_string(),
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
-        "validSince": (u.tokens_valid_after.as_nanos() / 1_000_000_000).to_string(),
+        "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
     })
 }
+
+/// The `passwordHash` production returns to a caller without permission to read hash
+/// configuration: base64 of `REDACTED`.
+const REDACTED_PASSWORD_HASH: &str = "UkVEQUNURUQ=";
 
 /// Maximum identifiers per lookup (Admin SDK `getUsers`).
 const MAX_LOOKUP_IDENTIFIERS: usize = 100;
@@ -3462,9 +3677,10 @@ fn update(
         return error(400, "OPERATION_NOT_ALLOWED");
     }
     if let Some(email) = &plan.email {
-        if store
-            .user_by_email(email)
-            .is_some_and(|u| u.local_id != uid)
+        if !store.config().allow_duplicate_emails
+            && store
+                .user_by_email(email)
+                .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
         }
@@ -3543,7 +3759,7 @@ fn update(
         }
     }
     if let Some(password) = &plan.password {
-        if let Err(e) = store.set_password(&uid, password) {
+        if let Err(e) = store.set_password(&uid, password, at) {
             return auth_error(&e);
         }
         // Setting a password makes the session a password session.
@@ -3588,7 +3804,12 @@ fn update(
             response["newEmail"] = json!(u.email);
         }
     }
-    response["providerUserInfo"] = user_json(store, &uid)["providerUserInfo"].clone();
+    let record = user_json(store, &uid);
+    for key in ["providerUserInfo", "passwordHash"] {
+        if let Some(value) = record.get(key) {
+            response[key] = value.clone();
+        }
+    }
     if credentials_changed && plan.disable != Some(true) {
         if let Some(provider) = session_provider {
             match issue_tokens_with(store, &uid, None, at, None, Some(provider)) {
@@ -3715,7 +3936,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         Err(e) => return auth_error(&e),
     };
     if let Some(password) = &password {
-        if let Err(e) = store.set_password(&uid, password) {
+        if let Err(e) = store.set_password(&uid, password, at) {
             // Unreachable after validate_password; keep the store consistent regardless.
             let _ = store.delete_user_by_id(uid.as_str());
             return auth_error(&e);
@@ -4327,13 +4548,28 @@ fn phone_enrollment_refusal(
     None
 }
 
+/// The session of an MFA enrollment request. The v2 enrollment routes answer a missing
+/// `idToken` with `INVALID_ID_TOKEN` in production (conformance/auth-production-matrix.json,
+/// tokens/errors#mfa-enrollment-start-without-token); the official emulator says
+/// `MISSING_ID_TOKEN`.
+fn verify_enrollment_session(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> Result<Session, JsonResponse> {
+    if matches!(body.get("idToken"), None | Some(Value::Null)) {
+        return Err(error(400, "INVALID_ID_TOKEN"));
+    }
+    verify_session(store, body, at)
+}
+
 fn mfa_enrollment_start(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
     totp_extension_enabled: bool,
 ) -> JsonResponse {
-    let session = match verify_session(store, body, at) {
+    let session = match verify_enrollment_session(store, body, at) {
         Ok(s) => s,
         Err(r) => return r,
     };
@@ -4400,7 +4636,7 @@ fn mfa_enrollment_finalize(
     body: &Value,
     at: LogicalInstant,
 ) -> JsonResponse {
-    let session = match verify_session(store, body, at) {
+    let session = match verify_enrollment_session(store, body, at) {
         Ok(s) => s,
         Err(r) => return r,
     };
@@ -4666,9 +4902,10 @@ fn send_oob_code(
                 let Some(new_email) = str_field(body, "newEmail") else {
                     return error(400, "MISSING_NEW_EMAIL");
                 };
-                if store
-                    .user_by_email(new_email)
-                    .is_some_and(|u| u.local_id != uid)
+                if !store.config().allow_duplicate_emails
+                    && store
+                        .user_by_email(new_email)
+                        .is_some_and(|u| u.local_id != uid)
                 {
                     return error(400, "EMAIL_EXISTS");
                 }
@@ -4730,7 +4967,7 @@ fn reset_password(
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at) {
         return auth_error(&e);
     }
-    if let Err(e) = store.set_password(&uid, new_password) {
+    if let Err(e) = store.set_password(&uid, new_password, at) {
         return auth_error(&e);
     }
     // A reset advances `validSince` and verifies the address (the user read the mail). The
@@ -4814,9 +5051,10 @@ fn sign_in_with_email_link(
             Ok(uid) => uid,
             Err(r) => return r,
         };
-        if store
-            .user_by_email(email)
-            .is_some_and(|u| u.local_id != uid)
+        if !store.config().allow_duplicate_emails
+            && store
+                .user_by_email(email)
+                .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
         }
@@ -5233,7 +5471,12 @@ fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
 /// merges the request URI's query, the post body and the URI fragment). The `id_token` (a fake
 /// JWT or strict JSON) or a JSON `access_token` carries the claims; a `SAMLResponse` carries
 /// the SAML assertion. With an `idToken` on the request the identity is linked to that user.
-fn sign_in_with_idp(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn sign_in_with_idp(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+) -> JsonResponse {
     let ResolvedIdp {
         provider_id,
         info,
@@ -5312,13 +5555,18 @@ fn sign_in_with_idp(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> 
         }
     }
 
-    finish_sign_in_with_attributes(
+    let inbound_credentials = inbound_credential_policy
+        .any()
+        .then(|| inbound_credentials_from_request(body, inbound_credential_policy))
+        .flatten();
+    finish_sign_in_with_attributes_and_credentials(
         store,
         &uid,
         at,
         Some(fireemu_core_auth::store::Provider::Federated(provider_id)),
         &base,
         info.sign_in_attributes.as_ref(),
+        inbound_credentials.as_ref(),
     )
 }
 
@@ -5677,7 +5925,8 @@ fn emulator_route(
         // `PATCH` replaces the switches the request names and reads the rest back. The
         // official emulator applies both; `enableImprovedEmailPrivacy` changes what a
         // password sign-in, a password reset and `createAuthUri` reveal, while
-        // `allowDuplicateEmails` is recorded for export and does not yet admit duplicates.
+        // `allowDuplicateEmails` is persisted in the export and controls the email ownership
+        // policy of the selected project.
         ("PATCH", "config") => {
             let mut config = store.config();
             if let Some(v) = body

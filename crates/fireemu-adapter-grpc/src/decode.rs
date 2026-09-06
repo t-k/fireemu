@@ -19,6 +19,13 @@ use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
 pub enum DecodeError {
     /// Malformed resource name.
     InvalidParent(String),
+    /// A database id the project cannot have (production answers `NOT_FOUND` for it).
+    UnknownDatabase {
+        /// The project the request named.
+        project: String,
+        /// The database id the project cannot have.
+        database: String,
+    },
     /// Malformed field path.
     InvalidFieldPath(String),
     /// Malformed value.
@@ -35,6 +42,7 @@ impl DecodeError {
     pub fn grpc_code(&self) -> tonic::Code {
         match self {
             Self::Unsupported(_) => tonic::Code::Unimplemented,
+            Self::UnknownDatabase { .. } => tonic::Code::NotFound,
             _ => tonic::Code::InvalidArgument,
         }
     }
@@ -44,6 +52,10 @@ impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidParent(m) => write!(f, "invalid parent: {m}"),
+            Self::UnknownDatabase { project, database } => write!(
+                f,
+                "The database {database} does not exist for project {project}"
+            ),
             Self::InvalidFieldPath(m) => write!(f, "invalid field path: {m}"),
             Self::InvalidValue(m) => write!(f, "invalid value: {m}"),
             Self::InvalidQuery(m) => write!(f, "invalid query: {m}"),
@@ -78,8 +90,12 @@ pub fn parse_parent(parent: &str) -> Result<Parent, DecodeError> {
     };
     let project =
         ProjectId::try_new(project).map_err(|e| DecodeError::InvalidParent(e.to_string()))?;
-    let database =
-        DatabaseId::try_new(database).map_err(|e| DecodeError::InvalidParent(e.to_string()))?;
+    // A database id production would never have created (uppercase letters, bad length) is a
+    // database that does not exist, not a malformed request.
+    let database = DatabaseId::try_new(database).map_err(|_| DecodeError::UnknownDatabase {
+        project: project.as_str().to_owned(),
+        database: database.to_owned(),
+    })?;
     let document = match tail {
         "" => None,
         t => {
@@ -352,11 +368,13 @@ pub fn decode_structured_query(
     let from = match query.from.as_slice() {
         [from] => from,
         [] => {
-            // The official emulator scans every collection under the parent for a query
-            // without a selector; fireemu asks for the selector (a documented divergence).
-            return Err(DecodeError::InvalidQuery(
-                "StructuredQuery.from requires exactly one collection selector.".into(),
-            ));
+            // Production and the official emulator both answer a query without a selector
+            // with every document under the parent (conformance/firestore-production-
+            // matrix.json, errors/rest-shapes#run-query-without-from).
+            &pb::structured_query::CollectionSelector {
+                collection_id: String::new(),
+                all_descendants: true,
+            }
         }
         _ => {
             return Err(DecodeError::InvalidQuery(
@@ -364,7 +382,9 @@ pub fn decode_structured_query(
             ))
         }
     };
-    let scope = if from.collection_id.is_empty() && from.all_descendants {
+    // An empty collection id selects every document under the parent whatever the
+    // `allDescendants` flag says: production serves it, and so does the official emulator.
+    let scope = if from.collection_id.is_empty() {
         QueryScope::kindless_all_descendants(parent.document.clone())
     } else {
         let collection_id = CollectionId::try_new(from.collection_id.as_str())

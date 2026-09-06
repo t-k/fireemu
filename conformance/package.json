@@ -20,7 +20,11 @@
     "selftest": "node --test src/*.test.mjs",
     "lint": "oxlint src functions",
     "fmt": "oxfmt .",
-    "fmt:check": "oxfmt --check ."
+    "fmt:check": "oxfmt --check .",
+    "firestore:production": "node src/firestore-probe/run.mjs record-production",
+    "auth-probe": "node src/auth-probe/run.mjs record",
+    "auth-probe:check": "node src/auth-probe/run.mjs check",
+    "auth-probe:production": "node src/auth-probe/run.mjs record-production"
   },
   "dependencies": {
     "@google-cloud/pubsub": "4.11.0",

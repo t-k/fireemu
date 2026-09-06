@@ -1,4 +1,5 @@
-//! Conformance boundary tests for optimistic transaction retries around a conditional lock.
+//! Conformance boundary tests for transaction retries around a conditional lock under
+//! production's pessimistic locking.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -68,13 +69,29 @@ fn protected_action_and_release_wait_for_the_losing_retry() {
     let mut driver = TransactionConditionalLockDriver::new();
     read_both(&mut driver);
     driver.commit("c1").expect("c1 commits lock");
+    // Held back by c2's read lock: not committed, and the protected action cannot run yet.
+    assert_eq!(driver.project().expect("held commit").phase["c1"], "Held");
+    assert!(!driver.project().expect("held commit").locked);
+    assert!(driver.run_protected_action("c1").is_err());
+    driver
+        .abort_stale("c2")
+        .expect("the deadlock victim aborts");
+    assert_eq!(
+        driver.project().expect("completed commit").phase["c1"],
+        "Committed"
+    );
     driver
         .run_protected_action("c1")
         .expect("winner runs protected action");
     assert!(driver.release("c1").is_err());
     assert!(driver.project().expect("held lock").locked);
 
-    reject_loser(&mut driver, "c2");
+    driver
+        .retry("c2")
+        .expect("retry begins from aborted lineage");
+    driver
+        .reject_locked("c2")
+        .expect("retry observes committed lock");
     driver.release("c1").expect("release after loser rejects");
     let projected = driver.project().expect("released projection");
     assert!(!projected.locked);

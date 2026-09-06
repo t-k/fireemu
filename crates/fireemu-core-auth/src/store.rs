@@ -318,6 +318,9 @@ pub struct UserRecord {
     pub last_sign_in_at: Option<LogicalInstant>,
     /// Tokens issued before this instant are revoked.
     pub tokens_valid_after: LogicalInstant,
+    /// Whether tokens were ever revoked after creation: production reports `validSince` only
+    /// then (or once a password is set), so a lookup of a fresh account carries none.
+    pub tokens_revoked: bool,
     /// Linked federated identities.
     pub federated: Vec<FederatedIdentity>,
     /// Salted password digest (local test hashing, not Firebase's scrypt). `None` for users
@@ -340,6 +343,9 @@ pub struct PasswordDigest {
     digest: [u8; 20],
     /// The emulator salt and plaintext this credential was imported with.
     emulator: Option<(String, String)>,
+    /// When the password was last set through the API (`passwordUpdatedAt`); `None` for an
+    /// imported credential whose history the artifact did not carry.
+    updated_at: Option<LogicalInstant>,
 }
 
 impl fmt::Debug for PasswordDigest {
@@ -357,6 +363,7 @@ impl PasswordDigest {
             salt,
             digest: crate::sha1::sha1(&input),
             emulator: None,
+            updated_at: None,
         }
     }
 
@@ -1123,6 +1130,7 @@ impl AuthStore {
                 created_at: user.created_at,
                 last_sign_in_at: user.last_sign_in_at,
                 tokens_valid_after: user.tokens_valid_after,
+                tokens_revoked: user.tokens_valid_after > Self::whole_second(user.created_at),
                 federated: user.federated,
                 password,
             }),
@@ -1177,12 +1185,12 @@ impl AuthStore {
             .map(Arc::as_ref)
     }
 
-    /// Changes the email (unique across users).
+    /// Changes the email, enforcing uniqueness unless the project enables duplicate emails.
     pub fn set_email(&mut self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
         if !email.contains('@') || email.chars().any(char::is_control) {
             return Err(AuthError::InvalidEmail);
         }
-        if self.email_owned_by_other(email, Some(uid)) {
+        if !self.config.allow_duplicate_emails && self.email_owned_by_other(email, Some(uid)) {
             return Err(AuthError::EmailExists);
         }
         let user = self
@@ -1393,7 +1401,10 @@ impl AuthStore {
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(AuthError::InvalidEmail);
             }
-            if enforce_unique_email && self.email_owned_by_other(email, None) {
+            if enforce_unique_email
+                && !self.config.allow_duplicate_emails
+                && self.email_owned_by_other(email, None)
+            {
                 return Err(AuthError::EmailExists);
             }
         }
@@ -1429,6 +1440,7 @@ impl AuthStore {
             created_at: now,
             last_sign_in_at: None,
             tokens_valid_after: Self::whole_second(now),
+            tokens_revoked: false,
             federated: Vec::new(),
             password: None,
         }));
@@ -1830,6 +1842,7 @@ impl AuthStore {
                             user.phone_number = None;
                             user.federated.clear();
                             user.tokens_valid_after = Self::whole_second(now);
+                            user.tokens_revoked = true;
                         }
                         if let Some(phone) = old_phone {
                             Self::remove_index_owner(&mut self.local_ids_for_phone, &phone, &uid);
@@ -2041,7 +2054,12 @@ impl AuthStore {
     }
 
     /// Sets a password credential.
-    pub fn set_password(&mut self, uid: &LocalId, password: &str) -> Result<(), AuthError> {
+    pub fn set_password(
+        &mut self,
+        uid: &LocalId,
+        password: &str,
+        now: LogicalInstant,
+    ) -> Result<(), AuthError> {
         Self::validate_password(password)?;
         let mut salt = [0u8; 16];
         salt[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
@@ -2051,9 +2069,34 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        user.password = Some(PasswordDigest::new(salt, password));
+        let mut digest = PasswordDigest::new(salt, password);
+        digest.updated_at = Some(now);
+        user.password = Some(digest);
         self.activate_email_owner(uid);
         Ok(())
+    }
+
+    /// Restores the recorded `passwordUpdatedAt` of an imported password credential; a
+    /// no-op without a password.
+    pub fn set_password_updated_at(&mut self, uid: &LocalId, at: LogicalInstant) {
+        if let Some(digest) = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .and_then(|u| u.password.as_mut())
+        {
+            digest.updated_at = Some(at);
+        }
+    }
+
+    /// When `uid`'s password was last set through the API (`passwordUpdatedAt`); `None`
+    /// without a password or for an imported credential.
+    #[must_use]
+    pub fn password_updated_at(&self, uid: &LocalId) -> Option<LogicalInstant> {
+        self.users
+            .get(uid)
+            .and_then(|u| u.password.as_ref())
+            .and_then(|p| p.updated_at)
     }
 
     /// Removes the password credential (`deleteProvider: password`, `deleteAttribute:
@@ -2110,6 +2153,7 @@ impl AuthStore {
                     salt: [0_u8; 16],
                     digest: [0_u8; 20],
                     emulator: None,
+                    updated_at: None,
                 };
                 let _ = dummy.verify(password);
                 return Err(AuthError::InvalidCredentials);
@@ -2524,6 +2568,18 @@ impl AuthStore {
             .map(|pending| &pending.context)
     }
 
+    /// Drops raw credentials retained by a pending second-factor sign-in without consuming its
+    /// pending credential or non-secret first-factor provenance.
+    pub fn clear_pending_sign_in_credentials(&mut self, pending: &PendingSignInId) -> bool {
+        let Some(owner) = self.pending_sign_in_owners.get(&pending.0).cloned() else {
+            return false;
+        };
+        self.users
+            .get_mut(&owner)
+            .map(Arc::make_mut)
+            .is_some_and(|user| user.mfa.clear_pending_sign_in_credentials(&pending.0))
+    }
+
     /// Completes the second-factor step.
     pub fn finalize_mfa_sign_in(
         &mut self,
@@ -2638,6 +2694,7 @@ impl AuthStore {
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
         user.tokens_valid_after = user.tokens_valid_after.max(Self::whole_second(now));
+        user.tokens_revoked = true;
         self.activate_email_owner(uid);
         Ok(())
     }
@@ -2680,32 +2737,35 @@ pub struct RestoreReport {
     pub totp_factors_dropped: usize,
 }
 
-/// A default snapshot of an Auth store: everything the store owns except TOTP secret
-/// material. Enrolled TOTP factors are kept with a detached secret and pending TOTP
-/// enrollments are not kept at all, so the captured part holds no shared secret
-/// (`INV-AUTH-003`, ADR-034). On restore each factor is rebound to the secret the live
-/// store still holds for the same enrollment; a factor whose secret is gone is dropped and
-/// counted in the [`RestoreReport`], never restored as an unusable factor and never claimed
-/// faithful.
+/// A default snapshot of an Auth store: everything the store owns except TOTP secret material
+/// and raw identity-provider credentials. Enrolled TOTP factors are kept with a detached secret,
+/// pending TOTP enrollments are not kept, and pending MFA sign-ins retain only non-secret
+/// provenance. The captured part therefore holds no raw credential material (`INV-AUTH-003`,
+/// ADR-034). On restore each factor is rebound to the secret the live store still holds for the
+/// same enrollment; a factor whose secret is gone is dropped and counted in the
+/// [`RestoreReport`], never restored as an unusable factor and never claimed faithful.
 #[derive(Debug, Clone)]
 pub struct AuthSnapshot(AuthStore);
 
 impl AuthSnapshot {
-    /// Copies `store` without its TOTP secret material.
+    /// Copies `store` without TOTP secret material or raw identity-provider credentials.
     ///
     /// Copy-on-write per user (`SNAP-MEM-03`): cloning the store bumps each user's `Arc`
-    /// refcount rather than deep-copying it, so a user with no TOTP secret -- the common case --
-    /// is shared by reference with the live store. Only a user that actually holds secret
-    /// material is cloned through [`Arc::make_mut`] and detached, so the snapshot still carries
-    /// no shared secret (`INV-AUTH-003`, ADR-034) while every unchanged user stays shared.
+    /// refcount rather than deep-copying it, so a user with no TOTP secret or raw credential --
+    /// the common case -- is shared by reference with the live store. Only a user that actually
+    /// holds either sensitive value is cloned through [`Arc::make_mut`] and detached, so the
+    /// snapshot still carries no raw credential material (`INV-AUTH-003`, ADR-034) while every
+    /// unchanged user stays shared.
     #[must_use]
     pub fn capture(store: &AuthStore) -> Self {
         let mut copy = store.clone();
         for user in copy.users.values_mut() {
-            if user.mfa.holds_no_totp_secret() {
+            if user.mfa.holds_no_totp_secret() && user.mfa.holds_no_inbound_credentials() {
                 continue;
             }
-            Arc::make_mut(user).mfa.detach_totp_secrets();
+            let mfa = &mut Arc::make_mut(user).mfa;
+            mfa.detach_totp_secrets();
+            mfa.detach_inbound_credentials();
         }
         Self(copy)
     }

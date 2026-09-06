@@ -14,8 +14,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
+import { frozenExpectations, readValidatedDivergenceRegister } from "../divergence-authority.mjs";
 import { CLAIMS, AREA_NAMES } from "./matrix.mjs";
 import { PROGRAMS } from "./programs.mjs";
+import { programExpectation } from "./program-expectations.mjs";
 import { generated, render, shrink } from "./generate.mjs";
 
 const PROJECT = "demo-rules-matrix";
@@ -144,34 +146,7 @@ async function probeFireemu(inPath, outPath, script = "src/rules-probe/session.m
   return JSON.parse(await readFile(outPath, "utf8"));
 }
 
-/**
- * Rows where fireemu deliberately answers something else, keyed by claim id. Each names the
- * answer fireemu gives and why; `check` gates those rows against `fireemu`, so the
- * divergence is pinned rather than merely tolerated, and an unlisted difference still fails.
- */
-const DIVERGENCES = {
-  "gen-0082": {
-    fireemu: "error",
-    reason:
-      "The official compiler's static type checker rejects a method that no type of the " +
-      "receiver has (`[].upper()`) while it compiles the file. fireemu type-checks at " +
-      "evaluation time, so the same program loads and the same request is denied, with the " +
-      "error raised one stage later.",
-  },
-  "gen-0123": {
-    fireemu: "error",
-    reason:
-      "Same static type check on an operator rather than a method: the official compiler " +
-      "refuses `['a', 'b'] + -2.5` at load, fireemu raises on it at evaluation.",
-  },
-  "gen-0220": {
-    fireemu: "error",
-    reason:
-      "Same static type check, reached through `({} is path).toBase64()`: a compile error " +
-      "for the official compiler, an evaluation error for fireemu. The decision is the " +
-      "same in both.",
-  },
-};
+const DIVERGENCES = frozenExpectations(readValidatedDivergenceRegister().rulesMatrixDivergences);
 
 const claimList = () => [...CLAIMS, ...generated(SEED, GENERATED)];
 
@@ -271,9 +246,19 @@ async function check() {
   let diverged = 0;
   for (const row of matrix.claims) {
     const got = result.claims[row.id] ?? "not-run";
-    const expected = row.divergence ? row.divergence.fireemu : row.oracle;
+    const divergence = DIVERGENCES[row.id];
+    if (row.divergence && !divergence) {
+      mismatches.push({
+        ...row,
+        expected: "verified authority",
+        fireemu: got,
+        node: byId.get(row.id)?.node,
+      });
+      continue;
+    }
+    const expected = divergence ? divergence.fireemu : row.oracle;
     if (got === expected) {
-      if (row.divergence) diverged += 1;
+      if (divergence) diverged += 1;
       continue;
     }
     mismatches.push({ ...row, expected, fireemu: got, node: byId.get(row.id)?.node });
@@ -366,7 +351,6 @@ async function recordPrograms() {
           id: p.id,
           area: p.area,
           oracle: oracle[p.id] ?? { missing: true },
-          ...(PROGRAM_DIVERGENCES[p.id] ? { divergence: PROGRAM_DIVERGENCES[p.id] } : {}),
         })),
       },
       null,
@@ -375,12 +359,6 @@ async function recordPrograms() {
   );
   console.log(`recorded ${PROGRAMS.length} programs`);
 }
-
-/**
- * Programs where fireemu deliberately answers something else. `fireemu` holds the answer it
- * is pinned to, exactly as the claim divergences are.
- */
-const PROGRAM_DIVERGENCES = {};
 
 async function checkPrograms() {
   const recorded = JSON.parse(await readFile(PROGRAMS_JSON, "utf8"));
@@ -395,7 +373,13 @@ async function checkPrograms() {
   let failures = 0;
   let messageDrift = 0;
   for (const row of recorded.programs) {
-    const expected = row.divergence ? row.divergence.fireemu : row.oracle;
+    const expectation = programExpectation(row);
+    if (expectation.isErr()) {
+      failures += 1;
+      console.error(`\n${expectation.error}`);
+      continue;
+    }
+    const { expected } = expectation.value;
     const actual = got[row.id] ?? { missing: true };
     if (JSON.stringify(decision(expected)) !== JSON.stringify(decision(actual))) {
       failures += 1;

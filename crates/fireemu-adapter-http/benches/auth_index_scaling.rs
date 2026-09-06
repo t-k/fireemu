@@ -35,7 +35,7 @@ fn state(users: usize) -> AuthState {
     // regression to the previous `values().find(...)` implementation.
     let target = target.expect("benchmark has at least one user");
     store.set_email(&target, "target@example.com").unwrap();
-    store.set_password(&target, "password1").unwrap();
+    store.set_password(&target, "password1", now).unwrap();
     store
         .set_phone_number(&target, Some("+15550000001"))
         .unwrap();

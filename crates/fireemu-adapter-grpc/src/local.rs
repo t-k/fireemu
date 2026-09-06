@@ -2845,7 +2845,7 @@ impl LocalBackend {
         loop {
             let (handle, marker) = self.release_marker(req)?;
             match self.commit_once(req, guard) {
-                Err(status) if Self::should_wait_for_release(req, &status, deadline) => {
+                Err(status) if self.should_wait_for_release(req, &handle, &status, deadline) => {
                     handle.wait_for_release(marker, deadline);
                 }
                 outcome => return outcome,
@@ -2880,19 +2880,32 @@ impl LocalBackend {
         Ok((handle, marker))
     }
 
-    /// Whether a refused commit should wait for a transaction to finish and try again: only
-    /// a commit outside a transaction refused for lock contention before the deadline. A
-    /// contended transactional commit is the deadlock production resolves by aborting one
-    /// side, and the store has already aborted it.
+    /// Whether a refused commit should wait for a transaction to finish and try again: a
+    /// commit refused for lock contention before the deadline, unless it was a transaction's
+    /// own commit and the store aborted that transaction as the deadlock victim.
     #[must_use]
     pub fn should_wait_for_release(
+        &self,
         req: &pb::CommitRequest,
+        handle: &DatabaseHandle,
         status: &Status,
         deadline: std::time::Instant,
     ) -> bool {
-        req.transaction.is_empty()
-            && Self::is_contention(status)
-            && std::time::Instant::now() < deadline
+        if !Self::is_contention(status) || std::time::Instant::now() >= deadline {
+            return false;
+        }
+        if req.transaction.is_empty() {
+            return true;
+        }
+        let Ok(parent) = parse_parent(&format!("{}/documents", req.database)) else {
+            return false;
+        };
+        match Self::txn(&parent, &req.transaction) {
+            Ok(Some(txn)) => handle
+                .read(|db| db.transaction_is_active(&txn))
+                .unwrap_or(false),
+            _ => false,
+        }
     }
 
     /// Whether `status` is the lock contention refusal.

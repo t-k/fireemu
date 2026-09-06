@@ -1338,7 +1338,10 @@ async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() 
         })
         .await
         .unwrap();
-    let conflict = client
+    // The first committer is held back (this backend waits zero seconds, so the answer is the
+    // contention refusal) and stays active; the other transaction then runs into a waiting
+    // holder and is the deadlock victim, aborted for its client to retry.
+    let held = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("acct/a", &[("balance", i(80))])],
@@ -1347,16 +1350,36 @@ async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() 
         })
         .await
         .unwrap_err();
-    assert_eq!(conflict.code(), tonic::Code::Aborted);
+    assert_eq!(held.code(), tonic::Code::Aborted);
+    let victim = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("acct/a", &[("balance", i(70))])],
+            transaction: other.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(victim.code(), tonic::Code::Aborted);
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
-            writes: vec![update_write("acct/a", &[("balance", i(90))])],
-            transaction: other,
+            writes: vec![update_write("acct/a", &[("balance", i(80))])],
+            transaction: txn.clone(),
             ..Default::default()
         })
         .await
         .unwrap();
+    // Released: the out-of-band write goes through now.
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("acct/a", &[("balance", i(90))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let txn = other;
     let retry = || pb::BeginTransactionRequest {
         database: DB.to_owned(),
         options: Some(pb::TransactionOptions {
@@ -1405,7 +1428,9 @@ async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() 
 #[tokio::test]
 async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
     const CLIENTS: usize = 20;
-    let (mut client, _, handle) = start().await;
+    // A held-back commit waits for the holders to finish, as the daemon does; the deadlock
+    // rule aborts the others, so every round makes progress.
+    let (mut client, handle) = start_with_contention_wait(std::time::Duration::from_secs(30)).await;
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),

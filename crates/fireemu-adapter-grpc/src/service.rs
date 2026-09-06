@@ -542,8 +542,9 @@ impl Firestore for GatewayService {
                 };
                 match attempt {
                     Err(status)
-                        if LocalBackend::should_wait_for_release(
+                        if local.should_wait_for_release(
                             request.get_ref(),
+                            &handle,
                             &status,
                             deadline,
                         ) =>

@@ -519,10 +519,12 @@ fn a_read_write_transaction_locks_what_it_read_until_it_finishes() {
 }
 
 #[test]
-fn two_transactions_contending_for_one_document_abort_the_first_committer() {
-    // Both read the lock document, so both hold a read lock on it. The first to commit finds
-    // the other's lock and is aborted for its client to retry; the second then commits, and
-    // the retried first transaction reads the committed state.
+fn two_transactions_contending_for_one_document_resolve_like_a_deadlock() {
+    // Both read the lock document, so both hold a read lock on it. The first to commit runs
+    // into the other's lock and is held back (the adapter waits for a release); the other's
+    // commit then runs into a holder that is waiting, which is the deadlock production
+    // resolves by aborting one side: it is aborted for its client to retry, and the first
+    // commit goes through once tried again.
     let mut s = FirestoreState::new();
     s.commit(
         &[set("locks/l", &[("locked", Value::Boolean(false))])],
@@ -535,25 +537,33 @@ fn two_transactions_contending_for_one_document_abort_the_first_committer() {
     let _ = s.get_in_transaction(&first, &path("locks/l")).unwrap();
     let _ = s.get_in_transaction(&second, &path("locks/l")).unwrap();
     let take = set("locks/l", &[("locked", Value::Boolean(true))]);
-    let refused = s
+    let held = s
         .commit(std::slice::from_ref(&take), Some(&first), t(2))
         .unwrap_err();
     assert!(
-        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
-        "{refused}"
+        matches!(&held, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{held}"
+    );
+    assert!(s.transaction_is_active(&first), "held back, not aborted");
+    let victim = s
+        .commit(std::slice::from_ref(&take), Some(&second), t(3))
+        .unwrap_err();
+    assert!(
+        matches!(&victim, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{victim}"
+    );
+    assert!(
+        !s.transaction_is_active(&second),
+        "the deadlock victim is aborted"
     );
     assert_eq!(
         s.get(&path("locks/l")).unwrap().fields.get("locked"),
         Some(&Value::Boolean(false))
     );
-    // The aborted transaction is finished (its locks are gone) and cannot be reused.
-    assert!(matches!(
-        s.get_in_transaction(&first, &path("locks/l")),
-        Err(FirestoreError::Aborted(_))
-    ));
-    s.commit(std::slice::from_ref(&take), Some(&second), t(3))
+    // The victim's locks are gone: the held-back commit goes through.
+    s.commit(std::slice::from_ref(&take), Some(&first), t(4))
         .unwrap();
-    let retry = s.retry_transaction(&first, t(4)).unwrap();
+    let retry = s.retry_transaction(&second, t(5)).unwrap();
     let seen = s
         .get_in_transaction(&retry, &path("locks/l"))
         .unwrap()

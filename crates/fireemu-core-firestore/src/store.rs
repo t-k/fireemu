@@ -529,6 +529,11 @@ struct Transaction {
     conflict_ledger_bytes: u64,
     last_activity: LogicalInstant,
     state: TransactionState,
+    /// Set while a commit of this transaction is held back by another transaction's locks
+    /// (the adapter is waiting for that release). Another transaction that then runs into
+    /// this one's locks is the deadlock production resolves by aborting one side: that other
+    /// side is aborted, so this one can proceed.
+    waiting_to_commit: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1670,6 +1675,16 @@ impl FirestoreState {
                 "read-only transaction cannot be retried as read-write".into(),
             ));
         }
+        // A client retrying an attempt that is still active (its commit was held back by
+        // another transaction's locks and the client gave up waiting) abandons that attempt:
+        // it is rolled back, and its locks released, before the retry begins.
+        if previous_attempt.state == TransactionState::Active {
+            self.finish_transaction(previous, TransactionState::RolledBack);
+        }
+        let previous_attempt = self
+            .transactions
+            .get(previous)
+            .expect("the previous attempt was found above");
         if !matches!(
             previous_attempt.state,
             TransactionState::RetryableAborted | TransactionState::RolledBack
@@ -1726,6 +1741,7 @@ impl FirestoreState {
             conflict_ledger_bytes: 0,
             last_activity: now,
             state: TransactionState::Active,
+            waiting_to_commit: false,
         };
         self.active_transaction_deadlines
             .insert((transaction_deadline(&transaction), id.clone()));
@@ -2717,11 +2733,14 @@ impl FirestoreState {
     /// Pessimistic locking, as production runs it (`concurrencyMode: PESSIMISTIC`, measured
     /// in conformance/firestore-production-matrix.json, transactions/lifecycle): every
     /// document an active read-write transaction read, and every query range it executed,
-    /// is locked until that transaction finishes. A commit outside the transaction that
-    /// touches a locked document is refused with `ABORTED` and production's wording (the
-    /// adapter waits for the release before giving that answer); a commit by another
-    /// transaction is the deadlock production resolves by aborting one side, so the
-    /// committing transaction is aborted and left for its client to retry.
+    /// is locked until that transaction finishes.
+    ///
+    /// A commit that touches a locked document is refused with `ABORTED` and production's
+    /// wording, and the adapter waits for a release before trying again or giving that answer.
+    /// A commit outside a transaction, or by a transaction none of the lock holders is
+    /// waiting on, leaves everything as it was. A transaction that runs into the locks of a
+    /// holder which is itself waiting to commit is the deadlock production resolves by
+    /// aborting one side: it is aborted (retryable) so the waiting holder can proceed.
     fn check_contention(
         &mut self,
         writes: &[Write],
@@ -2732,27 +2751,49 @@ impl FirestoreState {
             return Ok(());
         }
         self.prune_transactions(now);
-        let contended = self.transactions.iter().any(|(id, holder)| {
-            holder.state == TransactionState::Active
-                && !holder.read_only
-                && holder.read_version >= self.compaction_floor
-                && own != Some(id)
-                && writes.iter().any(|write| {
-                    let path = write.op.path();
-                    holder.read_set.contains_key(path)
-                        || holder
-                            .queries
-                            .iter()
-                            .any(|(query, _)| path_in_scope(path, &query.scope))
-                })
-        });
-        if !contended {
+        if let Some(transaction) = own.and_then(|id| self.transactions.get_mut(id)) {
+            transaction.waiting_to_commit = false;
+        }
+        let floor = self.compaction_floor;
+        let holders: Vec<bool> = self
+            .transactions
+            .iter()
+            .filter(|(id, holder)| {
+                holder.state == TransactionState::Active
+                    && !holder.read_only
+                    && holder.read_version >= floor
+                    && own != Some(*id)
+                    && writes.iter().any(|write| {
+                        let path = write.op.path();
+                        holder.read_set.contains_key(path)
+                            || holder
+                                .queries
+                                .iter()
+                                .any(|(query, _)| path_in_scope(path, &query.scope))
+                    })
+            })
+            .map(|(_, holder)| holder.waiting_to_commit)
+            .collect();
+        if holders.is_empty() {
             return Ok(());
         }
         if let Some(id) = own {
-            self.finish_transaction(id, TransactionState::RetryableAborted);
+            if holders.iter().any(|waiting| *waiting) {
+                self.finish_transaction(id, TransactionState::RetryableAborted);
+            } else if let Some(transaction) = self.transactions.get_mut(id) {
+                transaction.waiting_to_commit = true;
+            }
         }
         Err(FirestoreError::Aborted(TOO_MUCH_CONTENTION.into()))
+    }
+
+    /// Whether `id` names a transaction that is still active (a commit refused for lock
+    /// contention may be tried again once the holder finishes).
+    #[must_use]
+    pub fn transaction_is_active(&self, id: &TransactionId) -> bool {
+        self.transactions
+            .get(id)
+            .is_some_and(|t| t.state == TransactionState::Active)
     }
 
     /// How many transactions have finished so far; a change means locks were released.

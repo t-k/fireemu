@@ -69,6 +69,9 @@ publish_runs = release.dig("jobs", "publish", "steps").map { |step| step["run"] 
 assert(publish_runs.include?("npm@11.9.0"), "release publish must pin an npm version that supports Trusted Publishing")
 assert(publish_runs.include?("npm publish ./npm/fireemu"), "release publish must treat the launcher as a local path")
 assert(!publish_runs.include?("gh release create"), "npm releases must be represented by Git tags without GitHub Releases")
+release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
+assert(!release_source.include?("NPM_TOKEN"), "release publish must authenticate through Trusted Publishing")
+assert(!release_source.include?("NODE_AUTH_TOKEN"), "release publish must not inject a registry token")
 
 %w[lint test verify platforms package ui].each do |name|
   assert(jobs.fetch(name).fetch("if") == "${{ github.event_name == 'workflow_dispatch' }}", "#{name} must be manual-only before publication")

@@ -378,7 +378,6 @@ jobs:
       # them would leave a version on the registry that cannot be installed.
       - name: publish the platform packages
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PUBLISH: ${{ needs.plan.outputs.publish }}
         run: |
           for dir in npm/platforms/build/*/; do
@@ -390,7 +389,6 @@ jobs:
           done
       - name: publish the launcher
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PUBLISH: ${{ needs.plan.outputs.publish }}
         run: |
           if [ "$PUBLISH" = "true" ]; then

@@ -1088,8 +1088,22 @@ mod dispatch_tests {
         entered.wait();
 
         let second_handle = handle.clone();
-        let second = std::thread::spawn(move || second_handle.retry_pending_dead_letters());
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        let (second_waiting_sender, second_waiting_receiver) = std::sync::mpsc::sync_channel(0);
+        let second = std::thread::spawn(move || {
+            loop {
+                match second_handle.dead_letter_gate.try_lock() {
+                    Ok(gate) => drop(gate),
+                    Err(std::sync::TryLockError::WouldBlock) => break,
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        panic!("dead-letter gate was poisoned")
+                    }
+                }
+                std::thread::yield_now();
+            }
+            second_waiting_sender.send(()).unwrap();
+            second_handle.retry_pending_dead_letters();
+        });
+        second_waiting_receiver.recv().unwrap();
         release.wait();
 
         first.join().unwrap();

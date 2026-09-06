@@ -642,3 +642,143 @@ fn the_rule_coverage_route_reports_every_expression_by_its_source_position() {
         assert!(node.get("values").is_none(), "{node}");
     }
 }
+
+/// Production Firestore's REST wire, recorded in `conformance/firestore-production-matrix.json`:
+/// no `done` marker on the last query element, offsets reported in a leading result-less
+/// element, no `nextPageToken` on the last page, and batch results with found documents in
+/// name order ahead of the missing ones.
+#[test]
+fn rest_wire_follows_production_not_the_official_emulator() {
+    let s = state(None);
+    let (status, _) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": (1..=3).map(|n| json!({"update": {"name": format!("projects/demo-app/databases/(default)/documents/q/{n}"), "fields": {"v": {"integerValue": n.to_string()}}}})).collect::<Vec<_>>()}),
+    );
+    assert_eq!(status, 200);
+
+    let (status, rows) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "q"}], "orderBy": [{"field": {"fieldPath": "v"}}]}}),
+    );
+    assert_eq!(status, 200, "{rows}");
+    assert_eq!(rows.as_array().unwrap().len(), 3);
+    assert!(
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r.get("done").is_none()),
+        "production sends no done marker over REST: {rows}"
+    );
+
+    let (status, rows) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "q"}], "orderBy": [{"field": {"fieldPath": "v"}}], "offset": 2}}),
+    );
+    assert_eq!(status, 200, "{rows}");
+    assert_eq!(rows[0]["skippedResults"], 2, "{rows}");
+    assert!(rows[0].get("document").is_none(), "{rows}");
+    assert!(rows[0]["readTime"].is_string());
+    assert_eq!(rows[1]["document"]["fields"]["v"]["integerValue"], "3");
+    assert!(rows[1].get("skippedResults").is_none());
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+
+    let (status, rows) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "q"}], "offset": 10}}),
+    );
+    assert_eq!(status, 200, "{rows}");
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["skippedResults"], 3, "{rows}");
+    assert!(rows[0].get("done").is_none());
+
+    let (status, agg) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runAggregationQuery"),
+        json!({"structuredAggregationQuery": {"structuredQuery": {"from": [{"collectionId": "q"}]}, "aggregations": [{"alias": "count", "count": {}}]}}),
+    );
+    assert_eq!(status, 200, "{agg}");
+    assert!(agg[0].get("done").is_none(), "{agg}");
+}
+
+/// Production issues no `nextPageToken` on the last page (full or not) and answers a batch
+/// get with found documents in name order ahead of the missing ones.
+#[test]
+fn rest_listing_and_batch_get_follow_production() {
+    let s = state(None);
+    let (status, _) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": (1..=3).map(|n| json!({"update": {"name": format!("projects/demo-app/databases/(default)/documents/q/{n}"), "fields": {"v": {"integerValue": n.to_string()}}}})).collect::<Vec<_>>()}),
+    );
+    assert_eq!(status, 200);
+    let (status, page) = call(&s, "GET", &format!("{DOCS}/q?pageSize=3"), json!({}));
+    assert_eq!(status, 200, "{page}");
+    assert_eq!(page["documents"].as_array().unwrap().len(), 3);
+    assert!(
+        page.get("nextPageToken").is_none(),
+        "a full last page carries no token: {page}"
+    );
+    let (status, page) = call(&s, "GET", &format!("{DOCS}/q?pageSize=2"), json!({}));
+    assert_eq!(status, 200, "{page}");
+    let token = page["nextPageToken"]
+        .as_str()
+        .expect("more documents follow")
+        .to_owned();
+    let (status, last) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/q?pageSize=2&pageToken={token}"),
+        json!({}),
+    );
+    assert_eq!(status, 200, "{last}");
+    assert_eq!(last["documents"].as_array().unwrap().len(), 1);
+    assert!(last.get("nextPageToken").is_none(), "{last}");
+
+    let (status, ids) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:listCollectionIds"),
+        json!({"pageSize": 1}),
+    );
+    assert_eq!(status, 200, "{ids}");
+    assert_eq!(ids["collectionIds"], json!(["q"]));
+    assert!(ids.get("nextPageToken").is_none(), "{ids}");
+
+    let (status, batch) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [
+            "projects/demo-app/databases/(default)/documents/q/3",
+            "projects/demo-app/databases/(default)/documents/q/none",
+            "projects/demo-app/databases/(default)/documents/q/1"
+        ]}),
+    );
+    assert_eq!(status, 200, "{batch}");
+    let order: Vec<String> = batch
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            r["found"]["name"]
+                .as_str()
+                .or_else(|| r["missing"].as_str())
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(order, ["1", "3", "none"], "{batch}");
+}

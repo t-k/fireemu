@@ -2388,7 +2388,9 @@ impl LocalBackend {
                 .collect();
             guard(access.db(), version, ReadCheck::Documents(&reads))?;
             access.record_document_reads(&reads)?;
-            let items = req
+            // Production answers the found documents in name order and the missing names
+            // after them, whatever order the request listed them in.
+            let mut items: Vec<BatchGetItem> = req
                 .documents
                 .iter()
                 .zip(reads)
@@ -2397,6 +2399,10 @@ impl LocalBackend {
                     None => BatchGetItem::Missing(name.clone()),
                 })
                 .collect();
+            items.sort_by_cached_key(|item| match item {
+                BatchGetItem::Found(d) => (0u8, d.path.resource_name()),
+                BatchGetItem::Missing(name) => (1u8, name.clone()),
+            });
             Ok(BatchGetOutcome {
                 items,
                 transaction: access.report().to_vec(),
@@ -2964,6 +2970,8 @@ impl LocalBackend {
         } else {
             DEFAULT_LIST_PAGE_SIZE
         };
+        // One document beyond the page decides whether a `nextPageToken` is issued.
+        let scan_size = page_size.saturating_add(1);
         let mut proof_query = accepted.query.clone();
         proof_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
         let bounded_name_page = txn.is_none() && !ordered;
@@ -2988,7 +2996,7 @@ impl LocalBackend {
                         &req.collection_id,
                         version,
                         after_path.as_ref(),
-                        page_size,
+                        scan_size,
                     )
                     .0
                     .into_iter()
@@ -3007,7 +3015,7 @@ impl LocalBackend {
                     .collect()
             } else if bounded_ordered_page {
                 let mut page_query = accepted.query.clone();
-                page_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
+                page_query.limit = Some(u32::try_from(scan_size).unwrap_or(u32::MAX));
                 let cursor = after_path
                     .as_ref()
                     .map(|path| {
@@ -3044,7 +3052,7 @@ impl LocalBackend {
                                     &req.collection_id,
                                     version,
                                     Some(after_path),
-                                    page_size,
+                                    scan_size,
                                 );
                             if cursor_is_missing {
                                 continued_missing_suffix = true;
@@ -3053,7 +3061,7 @@ impl LocalBackend {
                             }
                         }
                     }
-                    if !continued_missing_suffix && documents.len() < page_size {
+                    if !continued_missing_suffix && documents.len() < scan_size {
                         missing = access
                             .db()
                             .list_missing_parents_page_at(
@@ -3061,7 +3069,7 @@ impl LocalBackend {
                                 &req.collection_id,
                                 version,
                                 None,
-                                page_size - documents.len(),
+                                scan_size - documents.len(),
                             )
                             .1;
                     }
@@ -3083,7 +3091,7 @@ impl LocalBackend {
                         &req.collection_id,
                         version,
                         after_path.as_ref(),
-                        page_size,
+                        scan_size,
                     ),
                     (None, false) => access.db().list_documents_at(
                         parent.document.as_ref(),
@@ -3132,9 +3140,10 @@ impl LocalBackend {
                     }
                 }
             }
-            // A full page carries a token whether or not anything follows, as the backend
-            // and the official emulator issue it; the next page is then simply empty.
-            let full = documents.len() >= page_size;
+            // A token is issued only when a document follows the page: production answers
+            // the last page, full or not, without one (the official emulator issues a token
+            // for every full page and then an empty page).
+            let full = documents.len() > page_size;
             documents.truncate(page_size);
             let next_page_token = if full {
                 documents.last().map_or(String::new(), |d| {
@@ -3177,7 +3186,8 @@ impl LocalBackend {
             if let Some(after) = &after {
                 ids.retain(|id| id > after);
             }
-            let full = ids.len() >= page_size;
+            // As for documents: a token only when a collection id follows the page.
+            let full = ids.len() > page_size;
             ids.truncate(page_size);
             let next_page_token = if full {
                 ids.last().map_or(String::new(), |id| {
@@ -3492,10 +3502,25 @@ fn query_responses(
             ..Default::default()
         });
     }
-    // Reported on the first result; an offset past the end reports nothing, as the
-    // official emulator answers it.
-    if let Some(first) = responses.first_mut().filter(|r| r.document.is_some()) {
-        first.skipped_results = skipped_results;
+    // Production reports an offset in a leading result-less response (`readTime` and
+    // `skippedResults`, no document) ahead of the documents; an offset past the end is that
+    // single response with every skipped document counted. The official emulator attaches
+    // the count to the first document instead and omits it past the end.
+    if skipped_results != 0 {
+        if responses.first().is_some_and(|r| r.document.is_none()) {
+            responses[0].skipped_results = skipped_results;
+        } else {
+            responses.insert(
+                0,
+                pb::RunQueryResponse {
+                    transaction: Vec::new(),
+                    document: None,
+                    read_time,
+                    skipped_results,
+                    ..Default::default()
+                },
+            );
+        }
     }
     if let Some(last) = responses.last_mut() {
         // The last response says so, so a client can tell the end of the results from a

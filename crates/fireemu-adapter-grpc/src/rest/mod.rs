@@ -1015,12 +1015,8 @@ impl RestState {
                 if r.skipped_results != 0 {
                     v["skippedResults"] = json!(r.skipped_results);
                 }
-                if matches!(
-                    r.continuation_selector,
-                    Some(pb::run_query_response::ContinuationSelector::Done(true))
-                ) {
-                    v["done"] = json!(true);
-                }
+                // Production Firestore sends no `done` marker over REST (the official emulator
+                // does); the last element is simply the last element of the array.
                 v
             })
             .collect();
@@ -1100,7 +1096,7 @@ impl RestState {
                     .collect()
             })
             .unwrap_or_default();
-        let mut v = json!({"result": {"aggregateFields": fields}, "readTime": optional_timestamp_to_json(response.read_time.as_ref()), "done": true});
+        let mut v = json!({"result": {"aggregateFields": fields}, "readTime": optional_timestamp_to_json(response.read_time.as_ref())});
         if !response.transaction.is_empty() {
             v["transaction"] = Value::String(base64_encode(&response.transaction));
         }

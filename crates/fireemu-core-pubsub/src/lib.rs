@@ -25,7 +25,7 @@ pub use error::{Code, PubSubError, Result};
 pub use filter::Filter;
 pub use message::{PubsubMessage, StoredMessage};
 pub use name::{SubscriptionName, TopicName};
-pub use state::{PubSubState, Snapshot};
+pub use state::{DeadLetterForward, PubSubState, PullResult, Snapshot};
 pub use subscription::{
     DeadLetterPolicy, PushConfig, ReceivedMessage, RetryPolicy, SubscriptionConfig,
     SubscriptionState,

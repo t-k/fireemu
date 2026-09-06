@@ -7,7 +7,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use fireemu_adapter_pubsub::{serve_pubsub, BridgeMessage, PubSubHandle, TopicDelivery};
+use fireemu_adapter_pubsub::{
+    serve_pubsub, BridgeMessage, PubSubHandle, TopicDelivery, TopicDeliveryError,
+    TopicDeliveryReservation,
+};
 use fireemu_core_pubsub::PubSubState;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -94,11 +97,63 @@ async fn start_with_bridge(bridge: Option<Arc<dyn TopicDelivery>>) -> Harness {
 }
 
 #[derive(Default)]
-struct RecordingTopicDelivery(Mutex<Vec<String>>);
+struct RecordingTopicDelivery(Arc<Mutex<Vec<String>>>);
 
 impl TopicDelivery for RecordingTopicDelivery {
-    fn deliver(&self, topic: &str, _messages: &[BridgeMessage]) {
-        self.0.lock().unwrap().push(topic.to_owned());
+    fn reserve(
+        &self,
+        topic: &str,
+        _messages: &[BridgeMessage],
+    ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+        Ok(Box::new(RecordingReservation {
+            topics: self.0.clone(),
+            topic: topic.to_owned(),
+        }))
+    }
+}
+
+struct RecordingReservation {
+    topics: Arc<Mutex<Vec<String>>>,
+    topic: String,
+}
+
+struct RejectingTopicDelivery;
+
+impl TopicDelivery for RejectingTopicDelivery {
+    fn reserve(
+        &self,
+        _topic: &str,
+        _messages: &[BridgeMessage],
+    ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+        Err(TopicDeliveryError::Capacity)
+    }
+}
+
+struct ToggleTopicDelivery {
+    destination: String,
+    accept_destination: Arc<AtomicBool>,
+    committed: Arc<Mutex<Vec<String>>>,
+}
+
+impl TopicDelivery for ToggleTopicDelivery {
+    fn reserve(
+        &self,
+        topic: &str,
+        _messages: &[BridgeMessage],
+    ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+        if topic == self.destination && !self.accept_destination.load(Ordering::Acquire) {
+            return Err(TopicDeliveryError::Capacity);
+        }
+        Ok(Box::new(RecordingReservation {
+            topics: self.committed.clone(),
+            topic: topic.to_owned(),
+        }))
+    }
+}
+
+impl TopicDeliveryReservation for RecordingReservation {
+    fn commit(self: Box<Self>) {
+        self.topics.lock().unwrap().push(self.topic.clone());
     }
 }
 
@@ -126,6 +181,196 @@ async fn functions_bridge_receives_the_full_source_topic_resource() {
         *delivery.0.lock().unwrap(),
         vec!["projects/other-project/topics/jobs"]
     );
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn bridge_capacity_refusal_does_not_publish_to_the_broker() {
+    let harness = start_with_bridge(Some(Arc::new(RejectingTopicDelivery))).await;
+    let mut publisher = harness.publisher().await;
+    let mut subscriber = harness.subscriber().await;
+    let topic = "projects/demo-app/topics/atomic-refusal";
+    let subscription = "projects/demo-app/subscriptions/atomic-refusal";
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: subscription.to_owned(),
+            topic: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let error = publisher
+        .publish(pb::PublishRequest {
+            topic: topic.to_owned(),
+            messages: vec![msg(b"must not be visible")],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+
+    let pulled = subscriber
+        .pull(pb::PullRequest {
+            subscription: subscription.to_owned(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert!(pulled.is_empty());
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn dead_letter_transfer_retries_after_destination_admission_recovers() {
+    let destination = "projects/demo-app/topics/retry-dead".to_owned();
+    let accept_destination = Arc::new(AtomicBool::new(false));
+    let committed = Arc::new(Mutex::new(Vec::new()));
+    let delivery = Arc::new(ToggleTopicDelivery {
+        destination: destination.clone(),
+        accept_destination: accept_destination.clone(),
+        committed: committed.clone(),
+    });
+    let harness = start_with_bridge(Some(delivery)).await;
+    let mut publisher = harness.publisher().await;
+    let mut subscriber = harness.subscriber().await;
+    let source_topic = "projects/demo-app/topics/retry-source";
+    let source_subscription = "projects/demo-app/subscriptions/retry-source";
+    let destination_subscription = "projects/demo-app/subscriptions/retry-dead";
+
+    for topic in [source_topic, destination.as_str()] {
+        publisher
+            .create_topic(pb::Topic {
+                name: topic.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: source_subscription.to_owned(),
+            topic: source_topic.to_owned(),
+            dead_letter_policy: Some(pb::DeadLetterPolicy {
+                dead_letter_topic: destination.clone(),
+                max_delivery_attempts: 5,
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: destination_subscription.to_owned(),
+            topic: destination.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    publisher
+        .publish(pb::PublishRequest {
+            topic: source_topic.to_owned(),
+            messages: vec![msg(b"retry me")],
+        })
+        .await
+        .unwrap();
+
+    for _ in 0..5 {
+        let received = subscriber
+            .pull(pb::PullRequest {
+                subscription: source_subscription.to_owned(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages;
+        assert_eq!(received.len(), 1);
+        subscriber
+            .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                subscription: source_subscription.to_owned(),
+                ack_ids: vec![received[0].ack_id.clone()],
+                ack_deadline_seconds: 0,
+            })
+            .await
+            .unwrap();
+    }
+
+    let exhausted = subscriber
+        .pull(pb::PullRequest {
+            subscription: source_subscription.to_owned(),
+            max_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert!(exhausted.is_empty());
+    assert!(subscriber
+        .pull(pb::PullRequest {
+            subscription: destination_subscription.to_owned(),
+            max_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
+    assert_eq!(
+        committed.lock().unwrap().clone(),
+        vec![source_topic.to_owned()]
+    );
+
+    accept_destination.store(true, Ordering::Release);
+    // The acknowledgement request is empty on purpose: it models any destination capacity
+    // recovery event and proves that a second source pull is unnecessary.
+    subscriber
+        .acknowledge(pb::AcknowledgeRequest {
+            subscription: destination_subscription.to_owned(),
+            ack_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let forwarded = subscriber
+        .pull(pb::PullRequest {
+            subscription: destination_subscription.to_owned(),
+            max_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(forwarded.len(), 1);
+    assert_eq!(forwarded[0].message.as_ref().unwrap().data, b"retry me");
+    assert_eq!(
+        committed.lock().unwrap().clone(),
+        vec![source_topic.to_owned(), destination.clone()]
+    );
+    assert!(subscriber
+        .pull(pb::PullRequest {
+            subscription: source_subscription.to_owned(),
+            max_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
     harness.shutdown().await;
 }
 

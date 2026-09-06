@@ -55,11 +55,11 @@ fn apply_stream_request(
     sub: &SubscriptionName,
     req: &pb::StreamingPullRequest,
 ) {
+    if !req.ack_ids.is_empty() {
+        let _ = handle.acknowledge(sub, &req.ack_ids);
+    }
     let now = handle.now();
     let mut state = handle.state();
-    if !req.ack_ids.is_empty() {
-        let _ = state.acknowledge(sub, &req.ack_ids);
-    }
     for (id, secs) in req
         .modify_deadline_ack_ids
         .iter()
@@ -84,6 +84,7 @@ impl Subscriber for SubscriberService {
             .state()
             .create_subscription(config)
             .map_err(|e| status(&e))?;
+        self.handle.retry_pending_dead_letters();
         self.handle.schedule_push(&topic);
         Ok(Response::new(self.subscription_proto(&name)?))
     }
@@ -241,6 +242,7 @@ impl Subscriber for SubscriberService {
             .state()
             .delete_subscription(&name)
             .map_err(|e| status(&e))?;
+        self.handle.retry_pending_dead_letters();
         Ok(Response::new(()))
     }
 
@@ -267,7 +269,6 @@ impl Subscriber for SubscriberService {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
         self.handle
-            .state()
             .acknowledge(&name, &req.ack_ids)
             .map_err(|e| status(&e))?;
         Ok(Response::new(()))
@@ -280,12 +281,7 @@ impl Subscriber for SubscriberService {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
         let max = usize::try_from(req.max_messages.max(0)).unwrap_or(0);
-        let now = self.handle.now();
-        let received = self
-            .handle
-            .state()
-            .pull(&name, max, now)
-            .map_err(|e| status(&e))?;
+        let received = self.handle.pull(&name, max).map_err(|e| status(&e))?;
         Ok(Response::new(pb::PullResponse {
             received_messages: received.iter().map(received_to_proto).collect(),
         }))
@@ -332,8 +328,7 @@ impl Subscriber for SubscriberService {
                         }
                     }
                     _ = interval.tick() => {
-                        let now = handle.now();
-                        let pulled = { handle.state().pull(&name, 100, now) };
+                        let pulled = handle.pull(&name, 100);
                         match pulled {
                             Ok(msgs) if !msgs.is_empty() => {
                                 let resp = pb::StreamingPullResponse {

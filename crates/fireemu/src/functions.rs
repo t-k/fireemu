@@ -3118,10 +3118,35 @@ impl PubSubBridge {
     }
 }
 
+struct EmptyPubSubReservation;
+
+impl fireemu_adapter_pubsub::TopicDeliveryReservation for EmptyPubSubReservation {
+    fn commit(self: Box<Self>) {}
+}
+
+struct FunctionsPubSubReservation(
+    Option<fireemu_adapter_functions::runtime::EventBatchReservation>,
+);
+
+impl fireemu_adapter_pubsub::TopicDeliveryReservation for FunctionsPubSubReservation {
+    fn commit(mut self: Box<Self>) {
+        if let Some(reservation) = self.0.take() {
+            reservation.publish();
+        }
+    }
+}
+
 impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
-    fn deliver(&self, topic: &str, messages: &[fireemu_adapter_pubsub::BridgeMessage]) {
+    fn reserve(
+        &self,
+        topic: &str,
+        messages: &[fireemu_adapter_pubsub::BridgeMessage],
+    ) -> Result<
+        Box<dyn fireemu_adapter_pubsub::TopicDeliveryReservation>,
+        fireemu_adapter_pubsub::TopicDeliveryError,
+    > {
         let Some(topic) = owned_pubsub_topic(self.0.project(), topic) else {
-            return;
+            return Ok(Box::new(EmptyPubSubReservation));
         };
         // The runtime consumes the same `{data: <base64>, attributes, orderingKey}` message
         // shape the control publish route produces (`pubsub_event` reads `data` verbatim as the
@@ -3130,6 +3155,7 @@ impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
             .iter()
             .map(|m| {
                 let mut value = serde_json::json!({
+                    "messageId": m.message.message_id,
                     "data": base64_encode(&m.message.message.data),
                     "attributes": &m.message.message.attributes,
                 });
@@ -3140,7 +3166,23 @@ impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
                 value
             })
             .collect();
-        let _ = self.0.publish(topic.topic(), &values);
+        self.0
+            .reserve_pubsub_events(topic.topic(), &values)
+            .map(|reservation| {
+                Box::new(FunctionsPubSubReservation(Some(reservation)))
+                    as Box<dyn fireemu_adapter_pubsub::TopicDeliveryReservation>
+            })
+            .map_err(|error| match error {
+                fireemu_adapter_functions::runtime::SourceEventAdmissionError::Capacity => {
+                    fireemu_adapter_pubsub::TopicDeliveryError::Capacity
+                }
+                fireemu_adapter_functions::runtime::SourceEventAdmissionError::Unavailable => {
+                    fireemu_adapter_pubsub::TopicDeliveryError::Unavailable
+                }
+                fireemu_adapter_functions::runtime::SourceEventAdmissionError::InvalidEvent => {
+                    fireemu_adapter_pubsub::TopicDeliveryError::InvalidEvent
+                }
+            })
     }
 }
 
@@ -3179,7 +3221,7 @@ mod tests {
     #[cfg(unix)]
     use std::process::Command;
     use std::sync::atomic::AtomicBool;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use super::path_node_candidates;
@@ -3194,7 +3236,7 @@ mod tests {
         snapshot_functions_source, source_scan_pacing_delay, stream_source_chunks,
         update_watch_hash, validate_functions_codebase_budget, FunctionsSourceEntryBudget,
         FunctionsSourceFileVersion, FunctionsSourceScanBudget, FunctionsSourceStamp,
-        NodeInstallation, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        NodeInstallation, PubSubBridge, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
         MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
         MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
     };
@@ -3202,6 +3244,7 @@ mod tests {
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
     };
+    use fireemu_core_session::clock::VirtualClock;
     use serde_json::json;
 
     #[test]
@@ -4337,6 +4380,105 @@ mod tests {
         );
         assert!(owned_pubsub_topic("demo-app", "projects/other-project/topics/jobs").is_none());
         assert!(owned_pubsub_topic("demo-app", "jobs").is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pubsub_bridge_capacity_refusal_keeps_the_broker_batch_invisible() {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_adapter_pubsub::PubSubHandle;
+        use fireemu_core_pubsub::{PubsubMessage, SubscriptionConfig};
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::LogicalInstant;
+        use std::time::Duration;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spawn = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(20),
+        };
+        let runner = Runner::spawn_spec(&spawn).await.unwrap();
+        let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let clock = Arc::new(Mutex::new(VirtualClock::new(now)));
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 4,
+                max_catch_up_runs: 1000,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+            },
+            clock.clone(),
+            Arc::new(runner),
+            Some(spawn),
+        );
+        let topic = TopicName::new("demo-app", "jobs").unwrap();
+        let subscription = SubscriptionName::new("demo-app", "jobs-sub").unwrap();
+        let state = Arc::new(Mutex::new(PubSubState::new(42)));
+        {
+            let mut state = state.lock().unwrap();
+            state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+            state
+                .create_subscription(SubscriptionConfig {
+                    name: subscription.clone(),
+                    topic: topic.clone(),
+                    ack_deadline_seconds: 10,
+                    enable_message_ordering: false,
+                    filter: Filter::always(),
+                    dead_letter_policy: None,
+                    retry_policy: None,
+                    push_config: PushConfig::default(),
+                })
+                .unwrap();
+        }
+        let bridge = Arc::new(PubSubBridge::new(runtime.clone()));
+        let handle = PubSubHandle::new(state.clone(), clock, Some(bridge));
+        let mut reservations = Vec::new();
+        for index in 0..fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS {
+            reservations.push(
+                runtime
+                    .reserve_pubsub_events(
+                        "jobs",
+                        &[json!({
+                            "messageId": format!("held-{index}"),
+                            "data": "aA=="
+                        })],
+                    )
+                    .unwrap(),
+            );
+        }
+
+        let error = handle
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: b"must stay hidden".to_vec(),
+                    ..PubsubMessage::default()
+                }],
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), fireemu_core_pubsub::Code::ResourceExhausted);
+        assert!(state
+            .lock()
+            .unwrap()
+            .pull(&subscription, 10, now)
+            .unwrap()
+            .is_empty());
+
+        drop(reservations);
+        runtime.runner().shutdown().await;
     }
 
     #[test]

@@ -2215,7 +2215,10 @@ fn control_state(
     }
     snapshot_hooks.push(Arc::new(snapshots::StorageRules(storage_rules.clone())));
     if let Some(runtime) = functions {
-        snapshot_hooks.push(Arc::new(snapshots::Functions(runtime.clone())));
+        snapshot_hooks.push(Arc::new(snapshots::Functions::new(
+            runtime.clone(),
+            pubsub_handle.publication_gate(),
+        )));
     }
     if let Some(gate) = &app_check {
         snapshot_hooks.push(Arc::new(snapshots::AppCheck(gate.clone())));
@@ -2223,14 +2226,16 @@ fn control_state(
     // The default session's scope is wiped by the project hooks; the shared functions
     // runtime is reset afterwards.
     let mut reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>> = Vec::new();
-    if let Some(runtime) = functions {
-        let runtime = runtime.clone();
-        reset_hooks.push(Arc::new(move || runtime.reset()) as Arc<dyn Fn() + Send + Sync>);
-    }
     let pubsub_for_reset = pubsub.clone();
+    let pubsub_handle_for_reset = pubsub_handle.clone();
+    let functions_for_reset = functions.cloned();
     let pubsub_resources = pubsub_resources.to_vec();
     let pubsub_project = cfg.auth_project.clone();
     reset_hooks.push(Arc::new(move || {
+        let _publication = pubsub_handle_for_reset.lock_publication();
+        if let Some(runtime) = &functions_for_reset {
+            runtime.reset();
+        }
         if let Ok(mut state) = pubsub_for_reset.lock() {
             state.clear_project(&pubsub_project);
             functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)

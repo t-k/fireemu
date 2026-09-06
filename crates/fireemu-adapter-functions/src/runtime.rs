@@ -1876,6 +1876,61 @@ impl FunctionsRuntime {
         }
     }
 
+    /// Reserves the complete Pub/Sub topic-trigger fan-out for broker messages that already have
+    /// stable Pub/Sub message ids. The returned reservation is committed only after the broker
+    /// publication becomes visible, so capacity refusal cannot lose a broker event.
+    pub fn reserve_pubsub_events(
+        self: &Arc<Self>,
+        topic: &str,
+        messages: &[Value],
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        if !self.background_triggers_enabled() {
+            return Ok(self.empty_event_reservation());
+        }
+        let time = self.now();
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| SourceEventAdmissionError::Unavailable)?;
+        let mut drafts = Vec::new();
+        for message in messages {
+            let message_id = message
+                .get("messageId")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or(SourceEventAdmissionError::InvalidEvent)?;
+            for function in self.manifest.pubsub_matches(topic) {
+                let payload = Arc::new(pubsub_event(
+                    message_id,
+                    &self.config.project,
+                    topic,
+                    message,
+                    time,
+                ));
+                let copies = self.delivery_copies(
+                    &function.name,
+                    "google.cloud.pubsub.topic.v1.messagePublished",
+                );
+                for _ in 0..copies {
+                    drafts.push(DeliveryDraft {
+                        function: function.name.clone(),
+                        event_type: "google.cloud.pubsub.topic.v1.messagePublished".to_owned(),
+                        subject: format!("topics/{topic}"),
+                        time,
+                        payload: Arc::clone(&payload),
+                        parent: None,
+                    });
+                }
+            }
+        }
+        let reservation = self.reserve_drafts(EventSource::PubSub, drafts, &mut inner);
+        drop(inner);
+        if let Err(error) = &reservation {
+            self.note_admission_refusal(*error);
+        }
+        reservation
+    }
+
     /// Publishes messages on `topic`: one event per message and subscribed function.
     /// Returns the message IDs (assigned even when nothing is subscribed, as Pub/Sub does).
     pub fn publish(&self, topic: &str, messages: &[Value]) -> Vec<String> {

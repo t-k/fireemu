@@ -21,7 +21,7 @@ use fireemu_core_pubsub::{
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
 
-use crate::{BridgeMessage, PubSubHandle, MAX_MESSAGE_BYTES};
+use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
 
 const MAX_JSON_BYTES: usize = MAX_MESSAGE_BYTES + 1024 * 1024;
 
@@ -204,6 +204,8 @@ fn dispatch_topic(
                 .topic_labels(&topic)
                 .cloned()
                 .map_err(RestError::from_core)?;
+            drop(state);
+            handle.retry_pending_dead_letters();
             Ok((StatusCode::OK, topic_json(&topic, &labels)))
         }
         (&Method::GET, None) => {
@@ -219,6 +221,7 @@ fn dispatch_topic(
                 .state()
                 .delete_topic(&topic)
                 .map_err(RestError::from_core)?;
+            handle.retry_pending_dead_letters();
             Ok((StatusCode::OK, json!({})))
         }
         (&Method::POST, Some("publish")) => publish(topic, body, handle),
@@ -265,6 +268,7 @@ fn dispatch_subscription(
                 .state()
                 .delete_subscription(&subscription)
                 .map_err(RestError::from_core)?;
+            handle.retry_pending_dead_letters();
             Ok((StatusCode::OK, json!({})))
         }
         (&Method::POST, Some("pull")) => pull(subscription, body, handle),
@@ -372,22 +376,13 @@ fn publish(
         .iter()
         .map(message_from_json)
         .collect::<Result<Vec<_>, _>>()?;
-    let published = {
-        let mut state = handle.state();
-        state
-            .publish_shared(&topic, messages, handle.now())
-            .map_err(RestError::from_core)?
-    };
+    let published = handle
+        .publish(&topic, messages)
+        .map_err(RestError::from_core)?;
     let ids = published
         .iter()
         .map(|message| message.message_id.clone())
         .collect::<Vec<_>>();
-    let bridge = published
-        .into_iter()
-        .map(|message| BridgeMessage { message })
-        .collect::<Vec<_>>();
-    handle.bridge_deliver(&topic.to_full(), &bridge);
-    handle.schedule_push(&topic);
     Ok((StatusCode::OK, json!({"messageIds": ids})))
 }
 
@@ -481,6 +476,7 @@ fn create_subscription(
         .clone();
     let response = subscription_json(&state, &config);
     drop(state);
+    handle.retry_pending_dead_letters();
     handle.schedule_push(&topic);
     Ok((StatusCode::OK, response))
 }
@@ -707,8 +703,7 @@ fn pull(
         .transpose()?
         .unwrap_or(100);
     let received = handle
-        .state()
-        .pull(&subscription, max, handle.now())
+        .pull(&subscription, max)
         .map_err(RestError::from_core)?;
     Ok((
         StatusCode::OK,
@@ -726,7 +721,6 @@ fn acknowledge(
 ) -> Result<(StatusCode, Value), RestError> {
     let ack_ids = string_array(body, "ackIds")?;
     handle
-        .state()
         .acknowledge(&subscription, &ack_ids)
         .map_err(RestError::from_core)?;
     Ok((StatusCode::OK, json!({})))

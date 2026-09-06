@@ -166,6 +166,8 @@ enum Delivery {
     },
     /// Acknowledged (kept for seek).
     Acked,
+    /// Exhausted and waiting for dead-letter destination admission.
+    ForwardPending,
 }
 
 #[derive(Debug, Clone)]
@@ -409,7 +411,7 @@ impl SubscriptionState {
             .any(|e| match &e.state {
                 Delivery::Outstanding { .. } => true,
                 Delivery::Available { available_at } => *available_at <= now,
-                Delivery::Acked => false,
+                Delivery::Acked | Delivery::ForwardPending => false,
             })
     }
 
@@ -427,7 +429,7 @@ impl SubscriptionState {
             .iter()
             .filter(|(_, index)| match &self.entries[**index].state {
                 Delivery::Outstanding { deadline, .. } => *deadline <= now,
-                Delivery::Available { .. } | Delivery::Acked => false,
+                Delivery::Available { .. } | Delivery::Acked | Delivery::ForwardPending => false,
             })
             .map(|(ack_id, _)| ack_id.clone())
             .collect();
@@ -485,9 +487,8 @@ impl SubscriptionState {
             // rather than delivered again.
             if let Some(limit) = max_attempts {
                 if self.entries[i].delivery_attempt >= limit {
-                    self.entries[i].state = Delivery::Acked;
+                    self.entries[i].state = Delivery::ForwardPending;
                     out.dead_lettered.push(Arc::clone(&self.entries[i].stored));
-                    blocked_keys.remove(&ordering_key);
                     continue;
                 }
             }
@@ -521,6 +522,29 @@ impl SubscriptionState {
         }
         self.advance_first_unacked();
         acked
+    }
+
+    /// Completes a dead-letter transfer for a retained message. The source is acknowledged only
+    /// after the destination publication has been admitted.
+    pub fn complete_forward(&mut self, message_id: &str) -> bool {
+        let Some(entry) = self.entries.iter_mut().find(|entry| {
+            entry.stored.message_id == message_id && entry.state == Delivery::ForwardPending
+        }) else {
+            return false;
+        };
+        entry.state = Delivery::Acked;
+        self.advance_first_unacked();
+        true
+    }
+
+    /// Returns exhausted messages whose dead-letter destination has not accepted them yet.
+    #[must_use]
+    pub fn pending_forwards(&self) -> Vec<Arc<StoredMessage>> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.state == Delivery::ForwardPending)
+            .map(|entry| Arc::clone(&entry.stored))
+            .collect()
     }
 
     /// Modifies the ack deadline of one outstanding message. A deadline of zero seconds nacks

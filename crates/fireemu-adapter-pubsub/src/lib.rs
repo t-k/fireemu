@@ -27,7 +27,10 @@ mod subscriber;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use fireemu_core_pubsub::PubSubState;
+use fireemu_core_pubsub::{
+    DeadLetterForward, PubSubError, PubSubState, PubsubMessage, ReceivedMessage, StoredMessage,
+    SubscriptionName, TopicName,
+};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::time::LogicalInstant;
@@ -173,14 +176,35 @@ pub struct BridgeMessage {
     pub message: Arc<fireemu_core_pubsub::StoredMessage>,
 }
 
+/// Why a topic-trigger admission failed before broker publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopicDeliveryError {
+    /// The complete trigger fan-out would exceed the Functions retention bound.
+    Capacity,
+    /// The Functions runtime is shutting down or otherwise unavailable.
+    Unavailable,
+    /// A generated trigger event was invalid.
+    InvalidEvent,
+}
+
+/// A reserved topic-trigger fan-out that becomes visible only after the broker publication is
+/// committed.
+pub trait TopicDeliveryReservation: Send {
+    /// Commits every delivery admitted by the reservation.
+    fn commit(self: Box<Self>);
+}
+
 /// Bridge to the Functions runtime: a message published on a topic is also delivered to any
-/// Cloud Function subscribed to that topic (EVTINFRA-02). The daemon implements this by calling
-/// the existing `FunctionsRuntime::publish`, so the topic-trigger path is unchanged and the new
-/// broker state is additive.
+/// Cloud Function subscribed to that topic (EVTINFRA-02). Admission is fallible and occurs before
+/// the broker makes the publication visible.
 pub trait TopicDelivery: Send + Sync {
-    /// Deliver `messages` published on the canonical `projects/{project}/topics/{topic}`
-    /// resource to subscribed functions.
-    fn deliver(&self, topic: &str, messages: &[BridgeMessage]);
+    /// Reserves the complete topic-trigger fan-out for `messages` published on the canonical
+    /// `projects/{project}/topics/{topic}` resource.
+    fn reserve(
+        &self,
+        topic: &str,
+        messages: &[BridgeMessage],
+    ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError>;
 }
 
 /// The shared state a Pub/Sub adapter serves: the core registry, the virtual clock and the
@@ -190,6 +214,7 @@ pub struct PubSubHandle {
     state: Arc<Mutex<PubSubState>>,
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
+    publication_gate: Arc<Mutex<()>>,
     push_dispatch: Arc<Mutex<PushDispatchState>>,
     push_dispatcher: Arc<Mutex<PushDispatcherLifecycle>>,
     push_ready_notify: Arc<Notify>,
@@ -208,6 +233,7 @@ impl PubSubHandle {
             state,
             clock,
             bridge,
+            publication_gate: Arc::new(Mutex::new(())),
             push_dispatch: Arc::new(Mutex::new(PushDispatchState::default())),
             push_dispatcher: Arc::new(Mutex::new(PushDispatcherLifecycle::default())),
             push_ready_notify: Arc::new(Notify::new()),
@@ -225,13 +251,137 @@ impl PubSubHandle {
         self.state.lock().expect("pubsub state lock")
     }
 
-    /// Delivers published messages to subscribed functions through the bridge, if one is wired.
-    fn bridge_deliver(&self, topic: &str, messages: &[BridgeMessage]) {
-        if let Some(bridge) = &self.bridge {
-            if !messages.is_empty() {
-                bridge.deliver(topic, messages);
+    /// Locks the publication coordinator. Reset and snapshot restore paths use this same lock so
+    /// a Functions reservation cannot be invalidated between admission and commit.
+    pub fn lock_publication(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.publication_gate
+            .lock()
+            .expect("Pub/Sub publication lock")
+    }
+
+    /// Shares the publication coordinator with session reset and snapshot hooks.
+    #[must_use]
+    pub fn publication_gate(&self) -> Arc<Mutex<()>> {
+        self.publication_gate.clone()
+    }
+
+    fn topic_delivery_error(error: TopicDeliveryError) -> PubSubError {
+        match error {
+            TopicDeliveryError::Capacity => {
+                PubSubError::resource_exhausted("Functions topic-trigger admission was exhausted")
+            }
+            TopicDeliveryError::Unavailable => {
+                PubSubError::failed_precondition("Functions topic-trigger runtime is unavailable")
+            }
+            TopicDeliveryError::InvalidEvent => {
+                PubSubError::invalid_argument("Functions topic-trigger event is invalid")
             }
         }
+    }
+
+    /// Prepares and commits one publication through the broker and every configured topic
+    /// delivery bridge. A bridge reservation is dropped automatically when broker admission
+    /// fails, so neither side can observe a partial publication.
+    fn publish_locked(
+        &self,
+        topic: &TopicName,
+        messages: Vec<PubsubMessage>,
+    ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
+        let now = self.now();
+        let mut state = self.state();
+        let prepared = state.prepare_publish(topic, messages, now)?;
+        let bridge_reservation = self
+            .bridge
+            .as_ref()
+            .map(|bridge| {
+                let bridge_messages = prepared
+                    .published_messages()
+                    .iter()
+                    .cloned()
+                    .map(|message| BridgeMessage { message })
+                    .collect::<Vec<_>>();
+                bridge
+                    .reserve(&topic.to_full(), &bridge_messages)
+                    .map_err(Self::topic_delivery_error)
+            })
+            .transpose()?;
+        let published = state.commit_prepared(prepared, now)?;
+        drop(state);
+        if let Some(reservation) = bridge_reservation {
+            reservation.commit();
+        }
+        self.schedule_push(topic);
+        Ok(published)
+    }
+
+    /// Publishes a batch through broker admission and every configured topic delivery bridge.
+    /// The broker is unchanged when a bridge refuses the complete fan-out.
+    pub fn publish(
+        &self,
+        topic: &TopicName,
+        messages: Vec<PubsubMessage>,
+    ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
+        let _publication = self.lock_publication();
+        self.publish_locked(topic, messages)
+    }
+
+    /// Pulls from the broker and routes exhausted messages through the same publication
+    /// coordinator used by ordinary publishes. A destination admission failure leaves the source
+    /// message pending for a later retry, while the source pull response remains successful.
+    pub(crate) fn pull(
+        &self,
+        subscription: &SubscriptionName,
+        max: usize,
+    ) -> Result<Vec<ReceivedMessage>, PubSubError> {
+        let now = self.now();
+        let outcome = {
+            let mut state = self.state();
+            state.pull_with_dead_letters(subscription, max, now)?
+        };
+        self.commit_dead_letters(outcome.dead_lettered);
+        Ok(outcome.received)
+    }
+
+    fn commit_dead_letter(&self, forward: DeadLetterForward) {
+        let _publication = self.lock_publication();
+        let published = self.publish_locked(
+            &forward.dead_letter_topic,
+            vec![forward.message.message.clone()],
+        );
+        if published.is_ok() {
+            let mut state = self.state();
+            let _ = state
+                .complete_dead_letter(&forward.source_subscription, &forward.message.message_id);
+        }
+    }
+
+    fn commit_dead_letters(&self, forwards: Vec<DeadLetterForward>) {
+        for forward in forwards {
+            self.commit_dead_letter(forward);
+        }
+    }
+
+    /// Retries dead-letter transfers that were retained after a destination admission failure.
+    /// Callers invoke this after an acknowledgement or another operation that may reclaim
+    /// destination retention capacity.
+    pub(crate) fn retry_pending_dead_letters(&self) {
+        let pending = self.state().pending_dead_letters();
+        self.commit_dead_letters(pending);
+    }
+
+    pub(crate) fn acknowledge(
+        &self,
+        subscription: &SubscriptionName,
+        ack_ids: &[String],
+    ) -> Result<usize, PubSubError> {
+        let result = {
+            let mut state = self.state();
+            state.acknowledge(subscription, ack_ids)
+        };
+        if result.is_ok() {
+            self.retry_pending_dead_letters();
+        }
+        result
     }
 
     fn is_current_push_generation(&self, subscription: &str, generation: u64) -> bool {
@@ -373,10 +523,7 @@ impl PubSubHandle {
         if !self.is_current_push_generation(&key, work.generation) {
             return false;
         }
-        let received = self
-            .state()
-            .pull(&work.subscription, 100, self.now())
-            .unwrap_or_default();
+        let received = self.pull(&work.subscription, 100).unwrap_or_default();
         if received.is_empty() {
             return false;
         }
@@ -418,13 +565,14 @@ impl PubSubHandle {
         generation: u64,
         ack_id: &str,
     ) -> bool {
-        let dispatch = self.push_dispatch.lock().expect("push dispatch lock");
-        if dispatch.shutting_down || dispatch.generations.get(key).copied() != Some(generation) {
-            return false;
+        {
+            let dispatch = self.push_dispatch.lock().expect("push dispatch lock");
+            if dispatch.shutting_down || dispatch.generations.get(key).copied() != Some(generation)
+            {
+                return false;
+            }
         }
-        self.state()
-            .acknowledge(subscription, &[ack_id.to_owned()])
-            .is_ok()
+        self.acknowledge(subscription, &[ack_id.to_owned()]).is_ok()
     }
 
     fn nack_push_if_current(

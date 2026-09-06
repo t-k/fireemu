@@ -3,12 +3,12 @@
 
 use tonic::{Request, Response, Status};
 
-use fireemu_core_pubsub::{PubsubMessage, TopicName};
+use fireemu_core_pubsub::TopicName;
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::publisher_server::Publisher;
 
 use crate::convert::{message_from_proto, status, topic_to_proto};
-use crate::{BridgeMessage, PubSubHandle};
+use crate::PubSubHandle;
 
 /// Publisher service over the shared Pub/Sub state.
 pub struct PublisherService {
@@ -44,6 +44,7 @@ impl Publisher for PublisherService {
             .state()
             .create_topic(name.clone(), labels)
             .map_err(|e| status(&e))?;
+        self.handle.retry_pending_dead_letters();
         let created = topic_to_proto(
             &name,
             self.handle
@@ -69,26 +70,16 @@ impl Publisher for PublisherService {
     ) -> Result<Response<pb::PublishResponse>, Status> {
         let req = request.into_inner();
         let topic = TopicName::parse(&req.topic).map_err(|e| status(&e))?;
-        let messages: Vec<PubsubMessage> =
-            req.messages.into_iter().map(message_from_proto).collect();
-        let now = self.handle.now();
-        let published = {
-            let mut state = self.handle.state();
-            state
-                .publish_shared(&topic, messages, now)
-                .map_err(|e| status(&e))?
-        };
+        let messages = req.messages.into_iter().map(message_from_proto).collect();
+        let published = self.handle.publish(&topic, messages);
+        if published.is_ok() {
+            self.handle.retry_pending_dead_letters();
+        }
+        let published = published.map_err(|e| status(&e))?;
         let ids: Vec<String> = published
             .iter()
             .map(|message| message.message_id.clone())
             .collect();
-        // Bridge to subscribed Cloud Functions (EVTINFRA-02), preserving the topic-trigger path.
-        let bridge: Vec<BridgeMessage> = published
-            .into_iter()
-            .map(|message| BridgeMessage { message })
-            .collect();
-        self.handle.bridge_deliver(&topic.to_full(), &bridge);
-        self.handle.schedule_push(&topic);
         Ok(Response::new(pb::PublishResponse { message_ids: ids }))
     }
 
@@ -167,6 +158,7 @@ impl Publisher for PublisherService {
             .state()
             .delete_topic(&name)
             .map_err(|e| status(&e))?;
+        self.handle.retry_pending_dead_letters();
         Ok(Response::new(()))
     }
 

@@ -436,7 +436,21 @@ impl SnapshotHook for AppCheck {
 
 /// The functions runtime (shared) keeps no snapshot state: a restore resets it (queue,
 /// schedules and the runner belong to the state that was replaced).
-pub struct Functions(pub Arc<FunctionsRuntime>);
+pub struct Functions {
+    runtime: Arc<FunctionsRuntime>,
+    publication_gate: Arc<Mutex<()>>,
+}
+
+impl Functions {
+    /// Builds the shared Functions snapshot hook with the Pub/Sub publication coordinator.
+    #[must_use]
+    pub fn new(runtime: Arc<FunctionsRuntime>, publication_gate: Arc<Mutex<()>>) -> Self {
+        Self {
+            runtime,
+            publication_gate,
+        }
+    }
+}
 
 impl SnapshotHook for Functions {
     fn name(&self) -> &'static str {
@@ -452,7 +466,11 @@ impl SnapshotHook for Functions {
         Ok(())
     }
     fn restore(&self, _: &Scope, _: &SnapshotPart) -> Result<(), TransitionFailure> {
-        self.0.reset();
+        let _publication = self
+            .publication_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.runtime.reset();
         Ok(())
     }
 }

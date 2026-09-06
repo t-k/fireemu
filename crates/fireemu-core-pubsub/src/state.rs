@@ -63,6 +63,47 @@ pub struct Snapshot {
     pub captured_messages: Arc<Vec<Arc<StoredMessage>>>,
 }
 
+/// One exhausted source message waiting for dead-letter destination admission.
+#[derive(Debug, Clone)]
+pub struct DeadLetterForward {
+    /// The source subscription that owns the pending message.
+    pub source_subscription: SubscriptionName,
+    /// The configured destination topic.
+    pub dead_letter_topic: TopicName,
+    /// The source message retained until the transfer completes.
+    pub message: Arc<StoredMessage>,
+}
+
+/// The result of a pull before dead-letter forwarding is committed.
+#[derive(Debug, Clone, Default)]
+pub struct PullResult {
+    /// Messages delivered to the caller.
+    pub received: Vec<ReceivedMessage>,
+    /// Messages that became eligible for dead-letter forwarding during the pull.
+    pub dead_lettered: Vec<DeadLetterForward>,
+}
+
+/// A fully admitted publication that has not become visible to subscriptions yet.
+#[derive(Debug)]
+pub struct PreparedPublication {
+    topic_key: String,
+    topic_incarnation: u64,
+    initial_message_counter: u64,
+    next_message_counter: u64,
+    published: Vec<Arc<StoredMessage>>,
+    subscription_keys: Vec<String>,
+    snapshot_names: Vec<String>,
+    snapshot_total_bytes: usize,
+}
+
+impl PreparedPublication {
+    /// The shared records that will be visible after commit.
+    #[must_use]
+    pub fn published_messages(&self) -> &[Arc<StoredMessage>] {
+        &self.published
+    }
+}
+
 /// A topic and the record of which subscriptions attach to it.
 #[derive(Debug, Clone)]
 struct TopicEntry {
@@ -929,6 +970,146 @@ impl PubSubState {
 
     // --- Publish / deliver ------------------------------------------------------------------
 
+    fn publish_admission(
+        &self,
+        topic_key: &str,
+        topic_incarnation: u64,
+        published: &[Arc<StoredMessage>],
+    ) -> Result<(Vec<String>, Vec<String>, usize)> {
+        let subscription_keys: Vec<String> = self
+            .topic_subs
+            .get(topic_key)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+        for key in &subscription_keys {
+            if self.function_subscriptions.contains(key) {
+                continue;
+            }
+            if let Some(sub) = self.subscriptions.get(key) {
+                sub.ensure_enqueue_capacity(
+                    published
+                        .iter()
+                        .filter(|stored| sub.admits(&stored.message.attributes))
+                        .map(AsRef::as_ref),
+                )?;
+            }
+        }
+        let (snapshot_names, snapshot_total_bytes) =
+            self.snapshot_publish_admission(topic_key, topic_incarnation, published)?;
+        Ok((subscription_keys, snapshot_names, snapshot_total_bytes))
+    }
+
+    /// Prepares a publication after validating broker capacity and assigning stable message ids.
+    /// The returned records are not visible to subscriptions until [`Self::commit_prepared`] is
+    /// called. Expired snapshots may be reclaimed as part of this admission.
+    pub fn prepare_publish(
+        &mut self,
+        topic: &TopicName,
+        messages: Vec<PubsubMessage>,
+        now: LogicalInstant,
+    ) -> Result<PreparedPublication> {
+        let topic_key = topic.to_full();
+        let topic_incarnation = self
+            .topics
+            .get(&topic_key)
+            .ok_or_else(|| PubSubError::not_found(format!("topic {topic_key} not found")))?
+            .incarnation;
+        if messages.len() > MAX_MESSAGES_PER_PUBLISH {
+            return Err(PubSubError::invalid_argument(format!(
+                "a publish request carries at most {MAX_MESSAGES_PER_PUBLISH} messages"
+            )));
+        }
+        for message in &messages {
+            message.validate()?;
+        }
+        self.remove_expired_snapshots(now);
+
+        let initial_message_counter = self.message_counter;
+        let mut next_message_counter = initial_message_counter;
+        let mut published = Vec::with_capacity(messages.len());
+        for message in messages {
+            next_message_counter = next_message_counter.checked_add(1).ok_or_else(|| {
+                PubSubError::resource_exhausted("Pub/Sub message identifier space exhausted")
+            })?;
+            let message_id = next_message_counter.to_string();
+            published.push(Arc::new(StoredMessage {
+                message_id,
+                publish_time: now,
+                message,
+            }));
+        }
+
+        let (subscription_keys, snapshot_names, snapshot_total_bytes) =
+            self.publish_admission(&topic_key, topic_incarnation, &published)?;
+        Ok(PreparedPublication {
+            topic_key,
+            topic_incarnation,
+            initial_message_counter,
+            next_message_counter,
+            published,
+            subscription_keys,
+            snapshot_names,
+            snapshot_total_bytes,
+        })
+    }
+
+    /// Commits a previously admitted publication atomically after rechecking its state boundary.
+    pub fn commit_prepared(
+        &mut self,
+        prepared: PreparedPublication,
+        now: LogicalInstant,
+    ) -> Result<Vec<Arc<StoredMessage>>> {
+        let topic_incarnation = self
+            .topics
+            .get(&prepared.topic_key)
+            .map(|topic| topic.incarnation)
+            .ok_or_else(|| {
+                PubSubError::not_found(format!("topic {} not found", prepared.topic_key))
+            })?;
+        if topic_incarnation != prepared.topic_incarnation
+            || self.message_counter != prepared.initial_message_counter
+        {
+            return Err(PubSubError::failed_precondition(
+                "the prepared Pub/Sub publication is no longer current",
+            ));
+        }
+        let (subscription_keys, snapshot_names, snapshot_total_bytes) = self.publish_admission(
+            &prepared.topic_key,
+            prepared.topic_incarnation,
+            &prepared.published,
+        )?;
+        if subscription_keys != prepared.subscription_keys
+            || snapshot_names != prepared.snapshot_names
+            || snapshot_total_bytes != prepared.snapshot_total_bytes
+        {
+            return Err(PubSubError::failed_precondition(
+                "the Pub/Sub publication admission changed before commit",
+            ));
+        }
+
+        let publish_time = prepared
+            .published
+            .first()
+            .map_or(now, |message| message.publish_time);
+        for key in &prepared.subscription_keys {
+            if self.function_subscriptions.contains(key) {
+                continue;
+            }
+            if let Some(sub) = self.subscriptions.get_mut(key) {
+                for stored in &prepared.published {
+                    if sub.admits(&stored.message.attributes) {
+                        sub.enqueue(Arc::clone(stored), publish_time)
+                            .expect("publish admission preflight guaranteed capacity");
+                    }
+                }
+            }
+        }
+        self.retain_snapshot_publication(&prepared.snapshot_names, &prepared.published);
+        self.snapshot_retained_bytes = prepared.snapshot_total_bytes;
+        self.message_counter = prepared.next_message_counter;
+        Ok(prepared.published)
+    }
+
     fn snapshot_publish_admission(
         &self,
         topic_key: &str,
@@ -1030,85 +1211,47 @@ impl PubSubState {
         messages: Vec<PubsubMessage>,
         now: LogicalInstant,
     ) -> Result<Vec<Arc<StoredMessage>>> {
-        let topic_key = topic.to_full();
-        let topic_incarnation = self
-            .topics
-            .get(&topic_key)
-            .ok_or_else(|| PubSubError::not_found(format!("topic {topic_key} not found")))?
-            .incarnation;
-        if messages.len() > MAX_MESSAGES_PER_PUBLISH {
-            return Err(PubSubError::invalid_argument(format!(
-                "a publish request carries at most {MAX_MESSAGES_PER_PUBLISH} messages"
-            )));
-        }
-        for m in &messages {
-            m.validate()?;
-        }
-        self.remove_expired_snapshots(now);
-        let sub_keys: Vec<String> = self
-            .topic_subs
-            .get(&topic_key)
-            .map(|s| s.iter().cloned().collect())
-            .unwrap_or_default();
-
-        let mut next_counter = self.message_counter;
-        let mut published = Vec::with_capacity(messages.len());
-        for message in messages {
-            next_counter = next_counter.checked_add(1).ok_or_else(|| {
-                PubSubError::resource_exhausted("Pub/Sub message identifier space exhausted")
-            })?;
-            let message_id = next_counter.to_string();
-            let stored = Arc::new(StoredMessage {
-                message_id: message_id.clone(),
-                publish_time: now,
-                message,
-            });
-            published.push(stored);
-        }
-
-        for key in &sub_keys {
-            if self.function_subscriptions.contains(key) {
-                continue;
-            }
-            if let Some(sub) = self.subscriptions.get(key) {
-                sub.ensure_enqueue_capacity(
-                    published
-                        .iter()
-                        .filter(|stored| sub.admits(&stored.message.attributes))
-                        .map(AsRef::as_ref),
-                )?;
-            }
-        }
-        let (snapshot_names, snapshot_total_bytes) =
-            self.snapshot_publish_admission(&topic_key, topic_incarnation, &published)?;
-
-        for key in &sub_keys {
-            if self.function_subscriptions.contains(key) {
-                continue;
-            }
-            if let Some(sub) = self.subscriptions.get_mut(key) {
-                for stored in &published {
-                    if sub.admits(&stored.message.attributes) {
-                        sub.enqueue(Arc::clone(stored), now)
-                            .expect("publish admission preflight guaranteed capacity");
-                    }
-                }
-            }
-        }
-        self.retain_snapshot_publication(&snapshot_names, &published);
-        self.snapshot_retained_bytes = snapshot_total_bytes;
-        self.message_counter = next_counter;
-        Ok(published)
+        let prepared = self.prepare_publish(topic, messages, now)?;
+        self.commit_prepared(prepared, now)
     }
 
     /// Delivers up to `max` messages from a subscription. Dead-lettered messages are forwarded
-    /// to the subscription's dead-letter topic (when it exists) before returning.
+    /// to the subscription's dead-letter topic (when it exists) before returning. The source is
+    /// completed only after each destination publication succeeds.
     pub fn pull(
         &mut self,
         name: &SubscriptionName,
         max: usize,
         now: LogicalInstant,
     ) -> Result<Vec<ReceivedMessage>> {
+        let outcome = self.pull_with_dead_letters(name, max, now)?;
+        for forward in outcome.dead_lettered {
+            if self
+                .publish(
+                    &forward.dead_letter_topic,
+                    vec![forward.message.message.clone()],
+                    now,
+                )
+                .is_ok()
+            {
+                let _ = self.complete_dead_letter(
+                    &forward.source_subscription,
+                    &forward.message.message_id,
+                );
+            }
+        }
+        Ok(outcome.received)
+    }
+
+    /// Delivers up to `max` messages and returns newly exhausted messages without attempting the
+    /// destination publication. Adapters use this seam to route the transfer through the shared
+    /// publication coordinator.
+    pub fn pull_with_dead_letters(
+        &mut self,
+        name: &SubscriptionName,
+        max: usize,
+        now: LogicalInstant,
+    ) -> Result<PullResult> {
         let key = name.to_full();
         if !self.subscriptions.contains_key(&key) {
             return Err(PubSubError::not_found(format!(
@@ -1127,38 +1270,67 @@ impl PubSubState {
                 .expect("subscription present");
             sub.pull(max, now, || format!("ack-{:016x}", seed_bump.next_u64()))
         };
-        // Forward dead-lettered messages, if a dead-letter topic is configured and exists.
-        if !outcome.dead_lettered.is_empty() {
-            if let Some(dl_topic) = self
-                .subscriptions
-                .get(&key)
-                .and_then(|s| s.config().dead_letter_policy.as_ref())
-                .map(|d| d.dead_letter_topic.clone())
-            {
-                self.forward_dead_letters(&dl_topic, outcome.dead_lettered, now);
-            }
-        }
-        Ok(outcome.received)
+        let dead_letter_topic = self
+            .subscriptions
+            .get(&key)
+            .and_then(|s| s.config().dead_letter_policy.as_ref())
+            .map(|policy| policy.dead_letter_topic.clone());
+        let received = outcome.received;
+        let dead_lettered = match dead_letter_topic {
+            Some(topic) => outcome
+                .dead_lettered
+                .into_iter()
+                .map(|message| DeadLetterForward {
+                    source_subscription: name.clone(),
+                    dead_letter_topic: topic.clone(),
+                    message,
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        Ok(PullResult {
+            received,
+            dead_lettered,
+        })
     }
 
-    /// Forwards exhausted messages to a dead-letter topic. Best effort: a missing dead-letter
-    /// topic drops them, exactly as the service does.
-    fn forward_dead_letters(
+    /// Returns every source message waiting for dead-letter destination admission.
+    #[must_use]
+    pub fn pending_dead_letters(&self) -> Vec<DeadLetterForward> {
+        self.subscriptions
+            .values()
+            .flat_map(|subscription| {
+                let source_subscription = subscription.config().name.clone();
+                let dead_letter_topic = subscription
+                    .config()
+                    .dead_letter_policy
+                    .as_ref()
+                    .map(|policy| policy.dead_letter_topic.clone());
+                subscription
+                    .pending_forwards()
+                    .into_iter()
+                    .filter_map(move |message| {
+                        dead_letter_topic
+                            .clone()
+                            .map(|dead_letter_topic| DeadLetterForward {
+                                source_subscription: source_subscription.clone(),
+                                dead_letter_topic,
+                                message,
+                            })
+                    })
+            })
+            .collect()
+    }
+
+    /// Marks a dead-letter source message complete after its destination publication succeeds.
+    pub fn complete_dead_letter(
         &mut self,
-        dl_topic: &TopicName,
-        messages: Vec<Arc<StoredMessage>>,
-        now: LogicalInstant,
-    ) {
-        if !self.topics.contains_key(&dl_topic.to_full()) {
-            return;
-        }
-        let bodies: Vec<PubsubMessage> = messages
-            .into_iter()
-            .map(|message| message.message.clone())
-            .collect();
-        // Ignore the result: a dead-letter republish that hits a bound is dropped rather than
-        // failing the original pull.
-        let _ = self.publish(dl_topic, bodies, now);
+        source_subscription: &SubscriptionName,
+        message_id: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .sub_mut(source_subscription)?
+            .complete_forward(message_id))
     }
 
     /// Acknowledges messages on a subscription. Unknown ack ids are ignored.
@@ -1317,6 +1489,39 @@ mod tests {
             &first_message[0].message,
             &second_message[0].message
         ));
+    }
+
+    #[test]
+    fn prepared_publication_is_invisible_until_commit() {
+        let mut state = PubSubState::new(42);
+        let now = LogicalInstant::from_unix_seconds(1000);
+        let topic = topic("demo-app", "prepared");
+        let subscription = SubscriptionName::new("demo-app", "prepared-sub").unwrap();
+        state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+        state
+            .create_subscription(sub_cfg(
+                "demo-app",
+                "prepared-sub",
+                "prepared",
+                Filter::always(),
+            ))
+            .unwrap();
+
+        let prepared = state
+            .prepare_publish(&topic, vec![data(b"held back")], now)
+            .unwrap();
+        assert_eq!(prepared.published_messages().len(), 1);
+        assert!(state.pull(&subscription, 10, now).unwrap().is_empty());
+
+        let published = state.commit_prepared(prepared, now).unwrap();
+        assert_eq!(published.len(), 1);
+        assert_eq!(
+            state.pull(&subscription, 10, now).unwrap()[0]
+                .message
+                .message
+                .data,
+            b"held back"
+        );
     }
 
     #[test]
@@ -1529,6 +1734,73 @@ mod tests {
             .unwrap();
         assert_eq!(dead.len(), 1);
         assert_eq!(dead[0].message.message.data, b"poison");
+    }
+
+    #[test]
+    fn dead_letter_forward_remains_pending_until_a_recreated_destination_accepts_it() {
+        use crate::subscription::{DeadLetterPolicy, MIN_DEAD_LETTER_ATTEMPTS};
+        let mut state = PubSubState::new(4);
+        let mut now = LogicalInstant::from_unix_seconds(0);
+        let main_topic = topic("p", "main");
+        let dead_topic = topic("p", "dead");
+        let source = SubscriptionName::new("p", "main-sub").unwrap();
+        let dead_sub = SubscriptionName::new("p", "dead-sub").unwrap();
+        state
+            .create_topic(main_topic.clone(), BTreeMap::new())
+            .unwrap();
+        state
+            .create_topic(dead_topic.clone(), BTreeMap::new())
+            .unwrap();
+        let mut source_config = sub_cfg("p", "main-sub", "main", Filter::always());
+        source_config.dead_letter_policy = Some(DeadLetterPolicy {
+            dead_letter_topic: dead_topic.clone(),
+            max_delivery_attempts: MIN_DEAD_LETTER_ATTEMPTS,
+        });
+        state.create_subscription(source_config).unwrap();
+        state
+            .create_subscription(sub_cfg("p", "dead-sub", "dead", Filter::always()))
+            .unwrap();
+        state
+            .publish(&main_topic, vec![data(b"recoverable poison")], now)
+            .unwrap();
+
+        for _ in 0..MIN_DEAD_LETTER_ATTEMPTS {
+            assert_eq!(state.pull(&source, 10, now).unwrap().len(), 1);
+            now = now
+                .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(11))
+                .unwrap();
+            state.expire_all(now);
+        }
+        state.delete_topic(&dead_topic).unwrap();
+        assert!(state.pull(&source, 10, now).unwrap().is_empty());
+        assert_eq!(state.pending_dead_letters().len(), 1);
+        assert!(state.pull(&source, 10, now).unwrap().is_empty());
+
+        state.delete_subscription(&dead_sub).unwrap();
+        state
+            .create_topic(dead_topic.clone(), BTreeMap::new())
+            .unwrap();
+        state
+            .create_subscription(sub_cfg("p", "dead-sub", "dead", Filter::always()))
+            .unwrap();
+
+        let pending = state.pending_dead_letters();
+        assert_eq!(pending.len(), 1);
+        let forward = &pending[0];
+        state
+            .publish(
+                &forward.dead_letter_topic,
+                vec![forward.message.message.clone()],
+                now,
+            )
+            .unwrap();
+        assert!(state
+            .complete_dead_letter(&forward.source_subscription, &forward.message.message_id)
+            .unwrap());
+        assert!(state.pending_dead_letters().is_empty());
+        let dead = state.pull(&dead_sub, 10, now).unwrap();
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].message.message.data, b"recoverable poison");
     }
 
     #[test]

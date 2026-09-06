@@ -994,3 +994,54 @@ fn a_contended_rest_commit_waits_for_the_transaction_to_finish() {
     let (_, doc) = call(&s, "GET", &format!("{DOCS}/blocked/doc"), Value::Null);
     assert_eq!(doc["fields"]["v"]["integerValue"], "2", "{doc}");
 }
+
+/// A read at the commit time a commit just reported is served, even when the commit time was
+/// aligned past a clock that did not move (production serves it; the official emulator's REST
+/// adapter misparses `?readTime=`).
+#[test]
+fn a_read_at_the_latest_commit_time_is_served() {
+    let s = state(None);
+    let (status, first) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/rt/a"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{first}");
+    let (status, second) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/rt/a", "fields": {"v": {"integerValue": "2"}}}}]}),
+    );
+    assert_eq!(status, 200, "{second}");
+    let commit_time = second["commitTime"].as_str().unwrap();
+    assert_ne!(commit_time, first["updateTime"].as_str().unwrap());
+    let (status, at_second) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/rt/a?readTime={commit_time}"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{at_second}");
+    assert_eq!(at_second["fields"]["v"]["integerValue"], "2");
+    let (status, at_first) = call(
+        &s,
+        "GET",
+        &format!(
+            "{DOCS}/rt/a?readTime={}",
+            first["updateTime"].as_str().unwrap()
+        ),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{at_first}");
+    assert_eq!(at_first["fields"]["v"]["integerValue"], "1");
+    // Past the latest commit is still the future.
+    let (status, body) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/rt/a?readTime=2030-01-01T00:00:00Z"),
+        Value::Null,
+    );
+    assert_eq!(status, 400, "{body}");
+}

@@ -2202,10 +2202,25 @@ impl LocalBackend {
     /// Validates a `read_time` selector: a well-formed, microsecond-precision timestamp that
     /// is not in the future and lies within the retention window
     /// ([`READ_TIME_RETENTION_SECONDS`]).
+    /// The latest instant a `read_time` may name for `parent`'s database: the clock, or the
+    /// last commit time when commits were aligned past a clock that did not move (a read at
+    /// the commit time a commit just reported is valid in production).
+    fn read_time_horizon(
+        &self,
+        parent: &Parent,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> fireemu_core_types::time::LogicalInstant {
+        self.database_handle(parent)
+            .ok()
+            .and_then(|handle| handle.read(|db| db.read_time(now)))
+            .unwrap_or(now)
+    }
+
     fn read_time_selector(
         &self,
         ts: &prost_types::Timestamp,
         now: fireemu_core_types::time::LogicalInstant,
+        horizon: fireemu_core_types::time::LogicalInstant,
     ) -> Result<fireemu_core_types::time::LogicalInstant, Status> {
         if !(0..1_000_000_000).contains(&ts.nanos) {
             return Err(Status::invalid_argument("read_time: nanos out of range"));
@@ -2216,7 +2231,7 @@ impl LocalBackend {
             ));
         }
         let at = crate::encode::decode_instant(ts);
-        if at.as_nanos() > now.as_nanos() {
+        if at.as_nanos() > horizon.max(now).as_nanos() {
             return Err(Status::invalid_argument(
                 "read_time must not be in the future",
             ));
@@ -2270,7 +2285,7 @@ impl LocalBackend {
             }
             Some(pb::transaction_options::Mode::ReadOnly(ro)) => match &ro.consistency_selector {
                 Some(pb::transaction_options::read_only::ConsistencySelector::ReadTime(ts)) => {
-                    let at = self.read_time_selector(ts, now)?;
+                    let at = self.read_time_selector(ts, now, db.read_time(now))?;
                     db.begin_transaction_at(at, now)
                 }
                 None => db.begin_transaction(true, now),
@@ -2386,9 +2401,10 @@ impl LocalBackend {
             Some(pb::get_document_request::ConsistencySelector::Transaction(t)) => {
                 (Some(Self::required_txn(&parent, t)?), None)
             }
-            Some(pb::get_document_request::ConsistencySelector::ReadTime(ts)) => {
-                (None, Some(self.read_time_selector(ts, now)?))
-            }
+            Some(pb::get_document_request::ConsistencySelector::ReadTime(ts)) => (
+                None,
+                Some(self.read_time_selector(ts, now, self.read_time_horizon(&parent, now))?),
+            ),
             None => (None, None),
         };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
@@ -2472,7 +2488,11 @@ impl LocalBackend {
                 SnapshotSelector::NewTransaction(options)
             }
             Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(self.read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(self.read_time_selector(
+                    ts,
+                    now,
+                    self.read_time_horizon(&parent, now),
+                )?)
             }
             None => SnapshotSelector::Latest,
         };
@@ -2788,7 +2808,7 @@ impl LocalBackend {
                         Some(
                             pb::transaction_options::read_only::ConsistencySelector::ReadTime(ts),
                         ) => {
-                            let at = self.read_time_selector(ts, now)?;
+                            let at = self.read_time_selector(ts, now, db.read_time(now))?;
                             db.begin_transaction_at(at, now)
                         }
                         None => db.begin_transaction(true, now),
@@ -2954,7 +2974,11 @@ impl LocalBackend {
                 SnapshotSelector::NewTransaction(options)
             }
             Some(pb::run_query_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(self.read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(self.read_time_selector(
+                    ts,
+                    now,
+                    self.read_time_horizon(&parent, now),
+                )?)
             }
             None => SnapshotSelector::Latest,
         };
@@ -3014,7 +3038,11 @@ impl LocalBackend {
                 options,
             )) => SnapshotSelector::NewTransaction(options),
             Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(self.read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(self.read_time_selector(
+                    ts,
+                    now,
+                    self.read_time_horizon(&parent, now),
+                )?)
             }
             None => SnapshotSelector::Latest,
         };
@@ -3062,9 +3090,10 @@ impl LocalBackend {
         self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
-            Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => {
-                (None, Some(self.read_time_selector(ts, now)?))
-            }
+            Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => (
+                None,
+                Some(self.read_time_selector(ts, now, self.read_time_horizon(&parent, now))?),
+            ),
             Some(pb::list_documents_request::ConsistencySelector::Transaction(t)) => {
                 (Some(Self::required_txn(&parent, t)?), None)
             }

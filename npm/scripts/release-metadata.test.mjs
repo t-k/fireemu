@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { platformManifest } from "../platforms/build-platform.mjs";
+import { platformManifest, RUNNER_FILES } from "../platforms/build-platform.mjs";
 import { PLATFORMS } from "../platforms/platforms.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -38,4 +38,12 @@ test("every public distribution reference names the canonical repository", () =>
     { cwd: repoRoot, encoding: "utf8" },
   );
   assert.equal(search.status, 1, search.stdout || search.stderr);
+});
+
+test("the platform package includes every local runner module", () => {
+  const entrypoint = readFileSync(resolve(repoRoot, "tools/runner-node/index.mjs"), "utf8");
+  const localImports = [...entrypoint.matchAll(/from "\.\/(.+\.mjs)";/g)].map((match) => match[1]);
+  for (const file of ["index.mjs", ...localImports]) {
+    assert.ok(RUNNER_FILES.includes(file), `${file} is imported by the runner but is not packaged`);
+  }
 });

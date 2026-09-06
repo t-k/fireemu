@@ -36,6 +36,9 @@ export const RUNNER_FILES = [
   "index.mjs",
   "callable-app-check.mjs",
   "callable-app-check-loader.mjs",
+  "blocking-error.mjs",
+  "blocking-response.mjs",
+  "log-context.mjs",
 ];
 
 function parseArgs(argv) {

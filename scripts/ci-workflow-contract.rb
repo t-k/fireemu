@@ -36,6 +36,9 @@ end
 release = load_workflow("release.yml")
 release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
 assert(!release_source.match?(/uses:\s+[^\s]+@(v\d+|stable)\b/), "release actions must be pinned to immutable commits")
+toolchain_source = File.read(File.join(ROOT, "rust-toolchain.toml"))
+toolchain_channel = toolchain_source.match(/^channel\s*=\s*"([^"]+)"$/)&.captures&.first
+assert(toolchain_channel, "rust-toolchain.toml must declare a channel")
 release.fetch("jobs").each do |job, definition|
   definition.fetch("steps", []).select { |step| step["uses"]&.start_with?("actions/setup-node@") }.each do |step|
     assert(step.dig("with", "node-version").to_s == "24", "release #{job} must use Node 24")
@@ -43,6 +46,9 @@ release.fetch("jobs").each do |job, definition|
   definition.fetch("steps", []).select { |step| step["uses"]&.start_with?("pnpm/action-setup@") }.each do |step|
     assert(step.dig("with", "version"), "release #{job} must pin the pnpm version")
   end
+end
+release.dig("jobs", "build", "steps").select { |step| step["uses"]&.start_with?("dtolnay/rust-toolchain@") }.each do |step|
+  assert(step.dig("with", "toolchain") == toolchain_channel, "release build must install targets for #{toolchain_channel}")
 end
 assert(release.dig("jobs", "publish", "environment") == "npm-release", "release publish must use the protected npm-release environment")
 assert(release.dig("concurrency", "cancel-in-progress") == false, "release publication must never be cancelled in progress")

@@ -116,6 +116,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.94.0
           targets: ${{ matrix.platform.target }}
       - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
         with:

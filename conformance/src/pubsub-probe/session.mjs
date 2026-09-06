@@ -14,11 +14,12 @@ const outPath = process.env.PUBSUB_PROBE_OUT;
 const emulatorHost = process.env.PUBSUB_EMULATOR_HOST;
 
 async function rest(method, path, body = {}) {
-  const response = await fetch(`http://${emulatorHost}${path}`, {
+  const init = {
     method,
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  };
+  if (method !== "GET" && method !== "HEAD") init.body = JSON.stringify(body);
+  const response = await fetch(`http://${emulatorHost}${path}`, init);
   const text = await response.text();
   let responseBody = {};
   if (text !== "") {

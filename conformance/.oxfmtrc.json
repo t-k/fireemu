@@ -5,6 +5,7 @@
     "fixtures",
     ".runs",
     "pnpm-lock.yaml",
+    "*-matrix.json",
     "**/*.md",
     "ORACLE.md",
     "DEBT.md"

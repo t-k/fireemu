@@ -4507,9 +4507,9 @@ const MFA_INELIGIBLE_PROVIDERS: &[&str] = &["anonymous", "phone", "custom", "gc.
 
 /// The refusals the official emulator makes before a phone factor is enrolled (measured:
 /// `auth/mfa-error-shapes` and `auth/mfa-enrollment-eligibility`): an ineligible first
-/// factor, an unverified email (the start step only: the finalize step checks the code
-/// first and never the flag), and a number already enrolled on the account. None of them
-/// has a side effect.
+/// factor, an unverified email, and a number already enrolled on the account. TOTP finalize
+/// applies the email check before consuming its pending state; phone finalize keeps its
+/// phone-code validation order. None of these refusals has a side effect.
 fn phone_enrollment_refusal(
     store: &AuthStore,
     session: &Session,

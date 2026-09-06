@@ -795,6 +795,14 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
         &json!({"email": "a@example.com", "password": "hunter22"}),
     );
     let id_token = body["idToken"].as_str().unwrap().to_owned();
+    let uid = body["localId"].as_str().unwrap().to_owned();
+    let (status, verified) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "emailVerified": true}),
+    );
+    assert_eq!(status, 200, "{verified}");
 
     let (status, start) = post(
         &s,

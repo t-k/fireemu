@@ -113,14 +113,11 @@ impl ProjectHooks for Projects {
             seed = (seed ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
         }
         let mut store = AuthStore::new(project, SplitMix64::new(seed), TotpPolicy::default());
-        if let Some(signer) = self
-            .registry
-            .default_store()
-            .lock()
-            .ok()
-            .and_then(|s| s.signer_arc())
-        {
-            store.set_signer(signer);
+        if let Ok(default) = self.registry.default_store().lock() {
+            store.set_config(default.config());
+            if let Some(signer) = default.signer_arc() {
+                store.set_signer(signer);
+            }
         }
         // A statically registered project may be reused by a new session; it starts with a
         // fresh epoch, so a token of the previous session never authorizes this one. The

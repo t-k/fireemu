@@ -169,6 +169,10 @@
         "forwardInboundCredentials": {
           "type": "boolean",
           "description": "Allow blocking Auth Functions to receive caller-supplied IdP access, ID and refresh tokens. Defaults to false."
+        },
+        "improvedEmailPrivacy": {
+          "type": "boolean",
+          "description": "Email enumeration protection, as production enables it for every new project: wrong-password and unknown-address sign-ins answer INVALID_LOGIN_CREDENTIALS and a password reset for an unknown address is acknowledged. Defaults to true; false restores the official Auth emulator's EMAIL_NOT_FOUND and INVALID_PASSWORD answers."
         }
       }
     },

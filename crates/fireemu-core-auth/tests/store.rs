@@ -307,8 +307,11 @@ fn passwords_are_validated_hashed_and_verified() {
         AuthStore::validate_password("12345\u{1}"),
         Err(AuthError::WeakPassword)
     );
-    assert_eq!(s.set_password(&a, "short"), Err(AuthError::WeakPassword));
-    s.set_password(&a, "correct horse").unwrap();
+    assert_eq!(
+        s.set_password(&a, "short", t(0)),
+        Err(AuthError::WeakPassword)
+    );
+    s.set_password(&a, "correct horse", t(0)).unwrap();
     // The default mode reports what the official emulator reports; improved email privacy
     // collapses both refusals into one.
     assert_eq!(
@@ -348,7 +351,7 @@ fn passwords_are_validated_hashed_and_verified() {
         Err(AuthError::UserDisabled)
     );
     assert_eq!(
-        s.set_password(&ghost, "long enough"),
+        s.set_password(&ghost, "long enough", t(0)),
         Err(AuthError::UserNotFound)
     );
 }
@@ -625,7 +628,7 @@ fn a_verified_email_recycles_an_unverified_account() {
     let uid = s
         .create_user(NewUser::email("shared@example.com"), t0())
         .unwrap();
-    s.set_password(&uid, "hunter22").unwrap();
+    s.set_password(&uid, "hunter22", t(0)).unwrap();
     assert!(s.has_password(&uid));
     let outcome = s
         .sign_in_with_idp(

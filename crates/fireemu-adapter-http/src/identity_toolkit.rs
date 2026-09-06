@@ -2857,7 +2857,7 @@ fn sign_up(
         }
     };
     if let Some(password) = password {
-        if let Err(e) = store.set_password(&uid, password) {
+        if let Err(e) = store.set_password(&uid, password, at) {
             return auth_error(&e);
         }
     }
@@ -2996,6 +2996,11 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         Ok(uid) => uid,
         Err(e) => return auth_error(&e),
     };
+    // Production always carries `displayName`, empty when the account has none.
+    let display_name = store
+        .user(&uid)
+        .and_then(|u| u.display_name.clone())
+        .unwrap_or_default();
     finish_sign_in(
         store,
         &uid,
@@ -3004,6 +3009,7 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         &[
             ("kind", json!("identitytoolkit#VerifyPasswordResponse")),
             ("registered", json!(true)),
+            ("displayName", json!(display_name)),
         ],
     )
 }
@@ -3133,6 +3139,13 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     for f in &u.federated {
         providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
     }
+    // Production omits every default-valued field (proto3 JSON): no `disabled: false`, no
+    // empty `mfaInfo` or `providerUserInfo`, `emailVerified` only with an address, and
+    // `validSince` once tokens were ever revoked or a password set. The password hash is the
+    // redacted marker production sends a caller without hash-config permission
+    // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
+    let has_password = store.has_password(uid);
+    let valid_since = (has_password || u.tokens_revoked).then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
         "tenantId": store.tenant_id(),
@@ -3140,17 +3153,23 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "displayName": u.display_name,
         "photoUrl": u.photo_url,
         "phoneNumber": u.phone_number,
-        "emailVerified": u.email_verified,
-        "disabled": u.disabled,
+        "emailVerified": u.email.as_ref().map(|_| u.email_verified),
+        "disabled": u.disabled.then_some(true),
         // Absent, not "{}", when no claim is set: what the Admin SDK reads back as no claims.
         "customAttributes": (u.custom_claims.canonical_json() != "{}").then(|| u.custom_claims.canonical_json()),
-        "providerUserInfo": providers,
-        "mfaInfo": mfa,
+        "providerUserInfo": (!providers.is_empty()).then_some(providers),
+        "mfaInfo": (!mfa.is_empty()).then_some(mfa),
+        "passwordHash": has_password.then_some(REDACTED_PASSWORD_HASH),
+        "passwordUpdatedAt": store.password_updated_at(uid).map(|t| t.as_nanos() / 1_000_000),
         "createdAt": (u.created_at.as_nanos() / 1_000_000).to_string(),
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
-        "validSince": (u.tokens_valid_after.as_nanos() / 1_000_000_000).to_string(),
+        "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
     })
 }
+
+/// The `passwordHash` production returns to a caller without permission to read hash
+/// configuration: base64 of `REDACTED`.
+const REDACTED_PASSWORD_HASH: &str = "UkVEQUNURUQ=";
 
 /// Maximum identifiers per lookup (Admin SDK `getUsers`).
 const MAX_LOOKUP_IDENTIFIERS: usize = 100;
@@ -3733,7 +3752,7 @@ fn update(
         }
     }
     if let Some(password) = &plan.password {
-        if let Err(e) = store.set_password(&uid, password) {
+        if let Err(e) = store.set_password(&uid, password, at) {
             return auth_error(&e);
         }
         // Setting a password makes the session a password session.
@@ -3778,7 +3797,12 @@ fn update(
             response["newEmail"] = json!(u.email);
         }
     }
-    response["providerUserInfo"] = user_json(store, &uid)["providerUserInfo"].clone();
+    let record = user_json(store, &uid);
+    for key in ["providerUserInfo", "passwordHash"] {
+        if let Some(value) = record.get(key) {
+            response[key] = value.clone();
+        }
+    }
     if credentials_changed && plan.disable != Some(true) {
         if let Some(provider) = session_provider {
             match issue_tokens_with(store, &uid, None, at, None, Some(provider)) {
@@ -3905,7 +3929,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         Err(e) => return auth_error(&e),
     };
     if let Some(password) = &password {
-        if let Err(e) = store.set_password(&uid, password) {
+        if let Err(e) = store.set_password(&uid, password, at) {
             // Unreachable after validate_password; keep the store consistent regardless.
             let _ = store.delete_user_by_id(uid.as_str());
             return auth_error(&e);
@@ -4517,13 +4541,28 @@ fn phone_enrollment_refusal(
     None
 }
 
+/// The session of an MFA enrollment request. The v2 enrollment routes answer a missing
+/// `idToken` with `INVALID_ID_TOKEN` in production (conformance/auth-production-matrix.json,
+/// tokens/errors#mfa-enrollment-start-without-token); the official emulator says
+/// `MISSING_ID_TOKEN`.
+fn verify_enrollment_session(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> Result<Session, JsonResponse> {
+    if matches!(body.get("idToken"), None | Some(Value::Null)) {
+        return Err(error(400, "INVALID_ID_TOKEN"));
+    }
+    verify_session(store, body, at)
+}
+
 fn mfa_enrollment_start(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
     totp_extension_enabled: bool,
 ) -> JsonResponse {
-    let session = match verify_session(store, body, at) {
+    let session = match verify_enrollment_session(store, body, at) {
         Ok(s) => s,
         Err(r) => return r,
     };
@@ -4590,7 +4629,7 @@ fn mfa_enrollment_finalize(
     body: &Value,
     at: LogicalInstant,
 ) -> JsonResponse {
-    let session = match verify_session(store, body, at) {
+    let session = match verify_enrollment_session(store, body, at) {
         Ok(s) => s,
         Err(r) => return r,
     };
@@ -4921,7 +4960,7 @@ fn reset_password(
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at) {
         return auth_error(&e);
     }
-    if let Err(e) = store.set_password(&uid, new_password) {
+    if let Err(e) = store.set_password(&uid, new_password, at) {
         return auth_error(&e);
     }
     // A reset advances `validSince` and verifies the address (the user read the mail). The

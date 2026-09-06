@@ -7,6 +7,7 @@
     "indexValidationPolicy": "firebase"
   },
   "daemon": { "clockStart": "2026-01-02T03:04:05Z" },
+  "auth": { "improvedEmailPrivacy": false },
   "appCheck": {
     "enabled": true,
     "tokenSigning": "instance-rsa",

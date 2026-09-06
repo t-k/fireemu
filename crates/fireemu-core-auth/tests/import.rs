@@ -126,7 +126,7 @@ fn a_credential_created_through_the_api_has_no_emulator_form_to_export() {
         .import_user(account("user"))
         .expect("the import succeeds");
     store
-        .set_password(&uid, "chosen-later")
+        .set_password(&uid, "chosen-later", t(0))
         .expect("the password is set");
     assert!(
         store

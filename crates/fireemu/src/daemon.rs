@@ -949,6 +949,13 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             SplitMix64::new(cfg.seed ^ 0xA0),
             cfg.auth_totp.unwrap_or_default(),
         )));
+        if let Ok(mut store) = auth_store.lock() {
+            let config = fireemu_core_auth::store::ProjectAuthConfig {
+                enable_improved_email_privacy: cfg.auth_improved_email_privacy,
+                ..store.config()
+            };
+            store.set_config(config);
+        }
         // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
         // wanted they are generated concurrently on blocking tasks. They are always separate
         // keys: the Auth key is derived from the session seed, the App Check key is drawn from

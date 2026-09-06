@@ -215,6 +215,7 @@ pub struct PubSubHandle {
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
     publication_gate: Arc<Mutex<()>>,
+    dead_letter_gate: Arc<Mutex<()>>,
     push_dispatch: Arc<Mutex<PushDispatchState>>,
     push_dispatcher: Arc<Mutex<PushDispatcherLifecycle>>,
     push_ready_notify: Arc<Notify>,
@@ -234,6 +235,7 @@ impl PubSubHandle {
             clock,
             bridge,
             publication_gate: Arc::new(Mutex::new(())),
+            dead_letter_gate: Arc::new(Mutex::new(())),
             push_dispatch: Arc::new(Mutex::new(PushDispatchState::default())),
             push_dispatcher: Arc::new(Mutex::new(PushDispatcherLifecycle::default())),
             push_ready_notify: Arc::new(Notify::new()),
@@ -263,6 +265,15 @@ impl PubSubHandle {
     #[must_use]
     pub fn publication_gate(&self) -> Arc<Mutex<()>> {
         self.publication_gate.clone()
+    }
+
+    /// Serializes dead-letter snapshots with destination publication and source completion. The
+    /// gate is acquired before the state and publication locks so a pull cannot race a retry with
+    /// a stale `ForwardPending` snapshot.
+    fn lock_dead_letter(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.dead_letter_gate
+            .lock()
+            .expect("Pub/Sub dead-letter lock")
     }
 
     fn topic_delivery_error(error: TopicDeliveryError) -> PubSubError {
@@ -333,12 +344,13 @@ impl PubSubHandle {
         subscription: &SubscriptionName,
         max: usize,
     ) -> Result<Vec<ReceivedMessage>, PubSubError> {
+        let _dead_letter = self.lock_dead_letter();
         let now = self.now();
         let outcome = {
             let mut state = self.state();
             state.pull_with_dead_letters(subscription, max, now)?
         };
-        self.commit_dead_letters(&outcome.dead_lettered);
+        self.commit_dead_letters_locked(&outcome.dead_lettered);
         Ok(outcome.received)
     }
 
@@ -355,7 +367,7 @@ impl PubSubHandle {
         }
     }
 
-    fn commit_dead_letters(&self, forwards: &[DeadLetterForward]) {
+    fn commit_dead_letters_locked(&self, forwards: &[DeadLetterForward]) {
         for forward in forwards {
             self.commit_dead_letter(forward);
         }
@@ -365,8 +377,9 @@ impl PubSubHandle {
     /// Callers invoke this after an acknowledgement or another operation that may reclaim
     /// destination retention capacity.
     pub(crate) fn retry_pending_dead_letters(&self) {
+        let _dead_letter = self.lock_dead_letter();
         let pending = self.state().pending_dead_letters();
-        self.commit_dead_letters(&pending);
+        self.commit_dead_letters_locked(&pending);
     }
 
     pub(crate) fn acknowledge(
@@ -722,9 +735,57 @@ pub async fn serve_pubsub(
 mod dispatch_tests {
     use super::*;
     use fireemu_core_pubsub::{
+        subscription::{DeadLetterPolicy, DEFAULT_ACK_DEADLINE_SECONDS, MIN_DEAD_LETTER_ATTEMPTS},
         Filter, PubsubMessage, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
     };
     use fireemu_core_types::time::LogicalInstant;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    struct BlockingDeadLetterDelivery {
+        destination: String,
+        block_first_commit: Arc<AtomicBool>,
+        entered: Arc<Barrier>,
+        release: Arc<Barrier>,
+        destination_commits: Arc<AtomicUsize>,
+    }
+
+    struct BlockingDeadLetterReservation {
+        block_commit: bool,
+        entered: Arc<Barrier>,
+        release: Arc<Barrier>,
+        destination_commits: Arc<AtomicUsize>,
+    }
+
+    impl TopicDelivery for BlockingDeadLetterDelivery {
+        fn reserve(
+            &self,
+            topic: &str,
+            _messages: &[BridgeMessage],
+        ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+            let block_commit = topic == self.destination
+                && self
+                    .block_first_commit
+                    .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok();
+            Ok(Box::new(BlockingDeadLetterReservation {
+                block_commit,
+                entered: self.entered.clone(),
+                release: self.release.clone(),
+                destination_commits: self.destination_commits.clone(),
+            }))
+        }
+    }
+
+    impl TopicDeliveryReservation for BlockingDeadLetterReservation {
+        fn commit(self: Box<Self>) {
+            if self.block_commit {
+                self.entered.wait();
+                self.release.wait();
+            }
+            self.destination_commits.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 
     fn subscription(index: usize, topic: &TopicName) -> SubscriptionName {
         let name = SubscriptionName::new("demo-project", format!("push-{index:04}"))
@@ -945,6 +1006,96 @@ mod dispatch_tests {
             dispatch.active.get(&first.to_full()),
             Some(&new_first.generation)
         );
+    }
+
+    #[test]
+    fn concurrent_dead_letter_retries_forward_a_pending_message_once() {
+        let source_topic = TopicName::new("demo-project", "source").unwrap();
+        let destination_topic = TopicName::new("demo-project", "dead-letter").unwrap();
+        let source_subscription =
+            SubscriptionName::new("demo-project", "source-subscription").unwrap();
+        let now = LogicalInstant::UNIX_EPOCH;
+        let state = Arc::new(Mutex::new(PubSubState::new(42)));
+        {
+            let mut state = state.lock().unwrap();
+            state
+                .create_topic(source_topic.clone(), BTreeMap::new())
+                .unwrap();
+            state
+                .create_topic(destination_topic.clone(), BTreeMap::new())
+                .unwrap();
+            state
+                .create_subscription(SubscriptionConfig {
+                    name: source_subscription.clone(),
+                    topic: source_topic.clone(),
+                    ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
+                    enable_message_ordering: false,
+                    filter: Filter::always(),
+                    dead_letter_policy: Some(DeadLetterPolicy {
+                        dead_letter_topic: destination_topic.clone(),
+                        max_delivery_attempts: MIN_DEAD_LETTER_ATTEMPTS,
+                    }),
+                    retry_policy: None,
+                    push_config: PushConfig::default(),
+                })
+                .unwrap();
+            state
+                .publish(
+                    &source_topic,
+                    vec![PubsubMessage {
+                        data: b"pending dead letter".to_vec(),
+                        ..PubsubMessage::default()
+                    }],
+                    now,
+                )
+                .unwrap();
+
+            let mut current = now;
+            for _ in 0..MIN_DEAD_LETTER_ATTEMPTS {
+                let outcome = state
+                    .pull_with_dead_letters(&source_subscription, 1, current)
+                    .unwrap();
+                assert_eq!(outcome.received.len(), 1);
+                current = current
+                    .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(11))
+                    .unwrap();
+                state.expire_all(current);
+            }
+            let outcome = state
+                .pull_with_dead_letters(&source_subscription, 1, current)
+                .unwrap();
+            assert!(outcome.received.is_empty());
+            assert_eq!(outcome.dead_lettered.len(), 1);
+        }
+
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let destination_commits = Arc::new(AtomicUsize::new(0));
+        let handle = PubSubHandle::new(
+            state.clone(),
+            Arc::new(Mutex::new(VirtualClock::new(now))),
+            Some(Arc::new(BlockingDeadLetterDelivery {
+                destination: destination_topic.to_full(),
+                block_first_commit: Arc::new(AtomicBool::new(true)),
+                entered: entered.clone(),
+                release: release.clone(),
+                destination_commits: destination_commits.clone(),
+            })),
+        );
+
+        let first_handle = handle.clone();
+        let first = std::thread::spawn(move || first_handle.retry_pending_dead_letters());
+        entered.wait();
+
+        let second_handle = handle.clone();
+        let second = std::thread::spawn(move || second_handle.retry_pending_dead_letters());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        release.wait();
+
+        first.join().unwrap();
+        second.join().unwrap();
+        assert_eq!(destination_commits.load(Ordering::SeqCst), 1);
+        assert!(state.lock().unwrap().pending_dead_letters().is_empty());
     }
 
     #[tokio::test]

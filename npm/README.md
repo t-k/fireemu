@@ -115,7 +115,7 @@ only -- never tokens, keys, or the contents of a configuration file.
 
 ## Documentation and source
 
-<https://github.com/reckona/fireemu>
+<https://github.com/t-k/fireemu>
 
 ## License
 

@@ -79,7 +79,7 @@ function noBinaryMessage() {
     "",
     `Reinstall with optional dependencies enabled, or install ${pkg} directly.`,
     "If your platform is not on that list, fireemu does not publish a binary for it yet;",
-    "build one from source (https://github.com/reckona/fireemu) and point",
+    "build one from source (https://github.com/t-k/fireemu) and point",
     "FIREEMU_BINARY_PATH at it.",
   ].join("\n");
 }

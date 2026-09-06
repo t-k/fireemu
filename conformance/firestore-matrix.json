@@ -2,7 +2,25 @@
   "version": 1,
   "recordedAgainst": {
     "firebaseTools": "15.28.2",
-    "note": "the Firestore emulator jar that firebase-tools pins; see ORACLE.md"
+    "note": "the Firestore emulator jar that firebase-tools pins; see ORACLE.md",
+    "evidenceSchema": 1,
+    "evidence": {
+      "identity": {
+        "sourceSha": "ff2376ed8da9efab3ecd4f1b6f963f3ec100e281",
+        "packageVersion": "0.0.0-dev",
+        "packageManifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
+        "packageIntegrity": null,
+        "artifactSha256": null,
+        "artifactPlatform": null,
+        "profile": "official-emulator",
+        "configDigest": "sha256-728c1ff5b7060009b1f54e3dad7b6367a5161544ad3535c94d38f16ca6a24d77",
+        "rulesDigest": "sha256-95b6b2680f3d3d64231ca4f90b88f348e09439665a2ea77befe5d0e64277a428",
+        "sdkLockDigest": "sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
+        "corpusDigest": "sha256-d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b",
+        "indexDigest": "sha256-a9f372c0d89a79f46de701d9228d75ab30db91dd631388d5fc1f4edf84332d3d",
+        "databaseDigest": "sha256-163cbb73917a2b1603a32eee8a0c4f906c56d8abd1ffa98ae8219305d6b82c4c"
+      }
+    }
   },
   "programs": [
     {

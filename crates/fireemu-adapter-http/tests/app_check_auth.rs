@@ -187,6 +187,21 @@ fn an_enforced_mfa_finalize_without_app_check_does_not_consume_the_assertion() {
         .as_str()
         .expect("sign-up returns an ID token")
         .to_owned();
+    let verified = handle_with(
+        &h.auth,
+        "POST",
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &RequestHeaders {
+            authorization: Some("Bearer owner".to_owned()),
+            content_type: Some("application/json".to_owned()),
+            ..RequestHeaders::default()
+        },
+        &json!({
+            "localId": signed_up.body["localId"],
+            "emailVerified": true
+        }),
+    );
+    assert_eq!(verified.status, 200, "{}", verified.body);
 
     let started = h.post(
         &format!("{V2}/accounts/mfaEnrollment:start"),

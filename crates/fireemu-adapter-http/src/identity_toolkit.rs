@@ -4650,6 +4650,9 @@ fn mfa_enrollment_finalize(
         }
         return finalize_phone_enrollment(store, &session, phone, body, at);
     }
+    if let Some(refusal) = phone_enrollment_refusal(store, &session, None, true) {
+        return refusal;
+    }
     let info = body.get("totpVerificationInfo");
     let session = info
         .and_then(|i| i.get("sessionInfo"))

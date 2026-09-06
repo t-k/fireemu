@@ -947,6 +947,57 @@ fn totp_enrollment_checks_first_factor_and_email_before_allocating_state() {
 }
 
 #[test]
+fn totp_finalize_rechecks_email_eligibility_before_consuming_state() {
+    let mut s = state();
+    s.totp_extension_enabled = true;
+    let user = sign_up(&s, "totp-finalize-eligibility@example.com");
+    let local_id = user["localId"].as_str().unwrap().to_owned();
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    verify_email(&s, &local_id);
+
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": id_token, "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let info = &started["totpSessionInfo"];
+    let session_info = info["sessionInfo"].as_str().unwrap().to_owned();
+
+    let uid = s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id(&local_id)
+        .expect("the user remains present")
+        .local_id
+        .clone();
+    s.store
+        .lock()
+        .unwrap()
+        .user_mut(&uid)
+        .expect("the user remains present")
+        .email_verified = false;
+    let (status, refused) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({
+            "idToken": id_token,
+            "totpVerificationInfo": {
+                "sessionInfo": session_info,
+                "verificationCode": "000000"
+            }
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors."
+    );
+    assert_eq!(s.store.lock().unwrap().pending_mfa_user_count(), 1);
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn phone_second_factor_enrollment_and_sign_in() {
     let contexts = Arc::new(Mutex::new(Vec::new()));

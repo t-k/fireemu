@@ -14,122 +14,122 @@ own answer (marked below).
 
 | step | status | code | oracle |
 | --- | --- | --- | --- |
-| ascending | 200 | OK | 42 documents: ord/null, ord/false, ord/true, ord/nan, ord/int-neg, ord/dbl-neg, ord/dbl-zero, ord/int-zero, ord/dbl-small, ord/int-two, ord/int-big, ord/dbl-inf, ord/ts-early, ord/ts-late, ord/str-empty, ord/str-B, ord/str-a, ord/str-aa, ord/str-e-acute, ord/str-kanji, ord/str-emoji, ord/bytes-empty, ord/bytes-01, ord/bytes-0102, ord/bytes-ff, ord/ref-other-col, ord/ref-a, ord/ref-b-sub, ord/ref-c, ord/geo-south, ord/geo-north-west, ord/geo-north-east, ord/arr-empty, ord/arr-1, ord/arr-1-2, ord/arr-2, ord/arr-str, ord/map-empty, ord/map-a1, ord/map-a1-b0, ord/map-a2, ord/map-b0 |
-| descending | 200 | OK | 42 documents: ord/map-b0, ord/map-a2, ord/map-a1-b0, ord/map-a1, ord/map-empty, ord/arr-str, ord/arr-2, ord/arr-1-2, ord/arr-1, ord/arr-empty, ord/geo-north-east, ord/geo-north-west, ord/geo-south, ord/ref-c, ord/ref-b-sub, ord/ref-a, ord/ref-other-col, ord/bytes-ff, ord/bytes-0102, ord/bytes-01, ord/bytes-empty, ord/str-emoji, ord/str-kanji, ord/str-e-acute, ord/str-aa, ord/str-a, ord/str-B, ord/str-empty, ord/ts-late, ord/ts-early, ord/dbl-inf, ord/int-big, ord/int-two, ord/dbl-small, ord/int-zero, ord/dbl-zero, ord/dbl-neg, ord/int-neg, ord/nan, ord/true, ord/false, ord/null |
-| ascending-name-only | 200 | OK | 5 documents: ord/arr-1, ord/arr-1-2, ord/arr-2, ord/arr-empty, ord/arr-str |
+| ascending (divergence) | 200 | OK | 42 documents: ord/null, ord/false, ord/true, ord/nan, ord/int-neg, ord/dbl-neg, ord/dbl-zero, ord/int-zero, ord/dbl-small, ord/int-two, ord/int-big, ord/dbl-inf, ord/ts-early, ord/ts-late, ord/str-empty, ord/str-B, ord/str-a, ord/str-aa, ord/str-e-acute, ord/str-kanji, ord/str-emoji, ord/bytes-empty, ord/bytes-01, ord/bytes-0102, ord/bytes-ff, ord/ref-other-col, ord/ref-a, ord/ref-b-sub, ord/ref-c, ord/geo-south, ord/geo-north-west, ord/geo-north-east, ord/arr-empty, ord/arr-1, ord/arr-1-2, ord/arr-2, ord/arr-str, ord/map-empty, ord/map-a1, ord/map-a1-b0, ord/map-a2, ord/map-b0 |
+| descending (divergence) | 200 | OK | 42 documents: ord/map-b0, ord/map-a2, ord/map-a1-b0, ord/map-a1, ord/map-empty, ord/arr-str, ord/arr-2, ord/arr-1-2, ord/arr-1, ord/arr-empty, ord/geo-north-east, ord/geo-north-west, ord/geo-south, ord/ref-c, ord/ref-b-sub, ord/ref-a, ord/ref-other-col, ord/bytes-ff, ord/bytes-0102, ord/bytes-01, ord/bytes-empty, ord/str-emoji, ord/str-kanji, ord/str-e-acute, ord/str-aa, ord/str-a, ord/str-B, ord/str-empty, ord/ts-late, ord/ts-early, ord/dbl-inf, ord/int-big, ord/int-two, ord/dbl-small, ord/int-zero, ord/dbl-zero, ord/dbl-neg, ord/int-neg, ord/nan, ord/true, ord/false, ord/null |
+| ascending-name-only (divergence) | 200 | OK | 5 documents: ord/arr-1, ord/arr-1-2, ord/arr-2, ord/arr-empty, ord/arr-str |
 | descending-name-only (divergence) | 400 | FAILED_PRECONDITION | `Firestore does not support descending key scans` |
-| no-order-is-name-order | 200 | OK | 6 documents: ord/arr-1, ord/arr-1-2, ord/arr-2, ord/arr-empty, ord/arr-str, ord/bytes-01 |
-| select-name-only | 200 | OK | 4 documents: ord/null, ord/false, ord/true, ord/nan |
+| no-order-is-name-order (divergence) | 200 | OK | 6 documents: ord/arr-1, ord/arr-1-2, ord/arr-2, ord/arr-empty, ord/arr-str, ord/bytes-01 |
+| select-name-only (divergence) | 200 | OK | 4 documents: ord/null, ord/false, ord/true, ord/nan |
 
 ## values/numeric-ties (10)
 
 | step | status | code | oracle |
 | --- | --- | --- | --- |
-| ascending | 200 | OK | 10 documents: num/h, num/g, num/d, num/e, num/f, num/a, num/b, num/c, num/i, num/j |
-| equal-int-matches-double | 200 | OK | 2 documents: num/a, num/b |
-| equal-double-matches-int | 200 | OK | 2 documents: num/a, num/b |
-| zero-equals-negative-zero | 200 | OK | 3 documents: num/d, num/e, num/f |
-| nan-equals-nothing | 200 | OK | 1 entries |
-| is-nan | 200 | OK | 1 documents: num/h |
-| is-not-nan | 200 | OK | 9 documents: num/g, num/d, num/e, num/f, num/a, num/b, num/c, num/i, num/j |
-| greater-than-negative-infinity | 200 | OK | 8 documents: num/d, num/e, num/f, num/a, num/b, num/c, num/i, num/j |
-| less-than-nan | 200 | OK | 1 entries |
-| not-equal-one | 200 | OK | 8 documents: num/h, num/g, num/d, num/e, num/f, num/c, num/i, num/j |
+| ascending (divergence) | 200 | OK | 10 documents: num/h, num/g, num/d, num/e, num/f, num/a, num/b, num/c, num/i, num/j |
+| equal-int-matches-double (divergence) | 200 | OK | 2 documents: num/a, num/b |
+| equal-double-matches-int (divergence) | 200 | OK | 2 documents: num/a, num/b |
+| zero-equals-negative-zero (divergence) | 200 | OK | 3 documents: num/d, num/e, num/f |
+| nan-equals-nothing (divergence) | 200 | OK | 1 entries |
+| is-nan (divergence) | 200 | OK | 1 documents: num/h |
+| is-not-nan (divergence) | 200 | OK | 9 documents: num/g, num/d, num/e, num/f, num/a, num/b, num/c, num/i, num/j |
+| greater-than-negative-infinity (divergence) | 200 | OK | 8 documents: num/d, num/e, num/f, num/a, num/b, num/c, num/i, num/j |
+| less-than-nan (divergence) | 200 | OK | 1 entries |
+| not-equal-one (divergence) | 200 | OK | 8 documents: num/h, num/g, num/d, num/e, num/f, num/c, num/i, num/j |
 
 ## queries/filters (30)
 
 | step | status | code | oracle |
 | --- | --- | --- | --- |
-| equal-string | 200 | OK | 3 documents: flt/a, flt/c, flt/g |
-| equal-null | 200 | OK | 1 entries |
-| is-null | 200 | OK | 1 documents: flt/d |
-| is-not-null | 200 | OK | 5 documents: flt/a, flt/c, flt/g, flt/b, flt/f |
-| not-equal-excludes-null-and-missing | 200 | OK | 2 documents: flt/b, flt/f |
-| not-equal-null | 200 | OK | 1 entries |
-| range-is-type-restricted | 200 | OK | 3 documents: flt/b, flt/d, flt/c |
-| range-on-string | 200 | OK | 1 documents: flt/e |
+| equal-string (divergence) | 200 | OK | 3 documents: flt/a, flt/c, flt/g |
+| equal-null (divergence) | 200 | OK | 1 entries |
+| is-null (divergence) | 200 | OK | 1 documents: flt/d |
+| is-not-null (divergence) | 200 | OK | 5 documents: flt/a, flt/c, flt/g, flt/b, flt/f |
+| not-equal-excludes-null-and-missing (divergence) | 200 | OK | 2 documents: flt/b, flt/f |
+| not-equal-null (divergence) | 200 | OK | 1 entries |
+| range-is-type-restricted (divergence) | 200 | OK | 3 documents: flt/b, flt/d, flt/c |
+| range-on-string (divergence) | 200 | OK | 1 documents: flt/e |
 | range-implies-order | 400 | INVALID_ARGUMENT | `order by clause cannot contain more fields after the key` |
-| array-contains | 200 | OK | 2 documents: flt/a, flt/f |
-| array-contains-null | 200 | OK | 1 entries |
-| array-contains-nan | 200 | OK | 1 entries |
-| array-contains-array | 200 | OK | 1 entries |
-| array-contains-any | 200 | OK | 3 documents: flt/a, flt/b, flt/f |
-| in | 200 | OK | 2 documents: flt/b, flt/f |
-| in-with-double-for-int | 200 | OK | 3 documents: flt/a, flt/e, flt/g |
-| not-in | 200 | OK | 2 documents: flt/b, flt/f |
-| not-in-with-null-candidate | 200 | OK | 1 entries |
-| equal-on-array-value | 200 | OK | 1 documents: flt/b |
-| equal-on-map-value | 200 | OK | 1 documents: flt/b |
-| nested-field-path | 200 | OK | 1 documents: flt/g |
-| nested-field-path-on-map | 200 | OK | 1 documents: flt/a |
-| or-filter | 200 | OK | 2 documents: flt/b, flt/c |
-| and-of-or | 200 | OK | 3 documents: flt/a, flt/g, flt/b |
-| two-equalities | 200 | OK | 2 documents: flt/a, flt/g |
-| two-inequalities-on-different-fields | 200 | OK | 3 documents: flt/a, flt/g, flt/b |
-| inequality-and-order-on-another-field | 200 | OK | 5 documents: flt/d, flt/a, flt/g, flt/c, flt/b |
-| inequality-then-order-on-it-explicitly-second | 200 | OK | 5 documents: flt/d, flt/a, flt/g, flt/c, flt/b |
-| order-by-missing-field-excludes | 200 | OK | 3 documents: flt/c, flt/a, flt/b |
-| order-by-two-fields | 200 | OK | 6 documents: flt/d, flt/c, flt/g, flt/a, flt/b, flt/f |
+| array-contains (divergence) | 200 | OK | 2 documents: flt/a, flt/f |
+| array-contains-null (divergence) | 200 | OK | 1 entries |
+| array-contains-nan (divergence) | 200 | OK | 1 entries |
+| array-contains-array (divergence) | 200 | OK | 1 entries |
+| array-contains-any (divergence) | 200 | OK | 3 documents: flt/a, flt/b, flt/f |
+| in (divergence) | 200 | OK | 2 documents: flt/b, flt/f |
+| in-with-double-for-int (divergence) | 200 | OK | 3 documents: flt/a, flt/e, flt/g |
+| not-in (divergence) | 200 | OK | 2 documents: flt/b, flt/f |
+| not-in-with-null-candidate (divergence) | 200 | OK | 1 entries |
+| equal-on-array-value (divergence) | 200 | OK | 1 documents: flt/b |
+| equal-on-map-value (divergence) | 200 | OK | 1 documents: flt/b |
+| nested-field-path (divergence) | 200 | OK | 1 documents: flt/g |
+| nested-field-path-on-map (divergence) | 200 | OK | 1 documents: flt/a |
+| or-filter (divergence) | 200 | OK | 2 documents: flt/b, flt/c |
+| and-of-or (divergence) | 200 | OK | 3 documents: flt/a, flt/g, flt/b |
+| two-equalities (divergence) | 200 | OK | 2 documents: flt/a, flt/g |
+| two-inequalities-on-different-fields (divergence) | 200 | OK | 3 documents: flt/a, flt/g, flt/b |
+| inequality-and-order-on-another-field (divergence) | 200 | OK | 5 documents: flt/d, flt/a, flt/g, flt/c, flt/b |
+| inequality-then-order-on-it-explicitly-second (divergence) | 200 | OK | 5 documents: flt/d, flt/a, flt/g, flt/c, flt/b |
+| order-by-missing-field-excludes (divergence) | 200 | OK | 3 documents: flt/c, flt/a, flt/b |
+| order-by-two-fields (divergence) | 200 | OK | 6 documents: flt/d, flt/c, flt/g, flt/a, flt/b, flt/f |
 
 ## queries/cursors (15)
 
 | step | status | code | oracle |
 | --- | --- | --- | --- |
-| start-at-inclusive | 200 | OK | 4 documents: cur/b, cur/c, cur/d, cur/e |
-| start-after | 200 | OK | 2 documents: cur/d, cur/e |
-| end-before | 200 | OK | 3 documents: cur/a, cur/b, cur/c |
-| end-at-inclusive | 200 | OK | 4 documents: cur/a, cur/b, cur/c, cur/d |
-| start-at-with-name-tiebreak | 200 | OK | 3 documents: cur/c, cur/d, cur/e |
-| start-at-prefix-of-order | 200 | OK | 2 documents: cur/c, cur/d |
-| descending-start-after | 200 | OK | 3 documents: cur/c, cur/b, cur/a |
-| cursor-of-another-type | 200 | OK | 1 entries |
-| cursor-on-name-only | 200 | OK | 3 documents: cur/d, cur/e, cur/f |
+| start-at-inclusive (divergence) | 200 | OK | 4 documents: cur/b, cur/c, cur/d, cur/e |
+| start-after (divergence) | 200 | OK | 2 documents: cur/d, cur/e |
+| end-before (divergence) | 200 | OK | 3 documents: cur/a, cur/b, cur/c |
+| end-at-inclusive (divergence) | 200 | OK | 4 documents: cur/a, cur/b, cur/c, cur/d |
+| start-at-with-name-tiebreak (divergence) | 200 | OK | 3 documents: cur/c, cur/d, cur/e |
+| start-at-prefix-of-order (divergence) | 200 | OK | 2 documents: cur/c, cur/d |
+| descending-start-after (divergence) | 200 | OK | 3 documents: cur/c, cur/b, cur/a |
+| cursor-of-another-type (divergence) | 200 | OK | 1 entries |
+| cursor-on-name-only (divergence) | 200 | OK | 3 documents: cur/d, cur/e, cur/f |
 | cursor-with-too-many-values | 400 | INVALID_ARGUMENT | `Cursor has too many values.` |
-| offset-and-limit | 200 | OK | 2 documents: cur/c, cur/d |
-| offset-past-the-end | 200 | OK | 1 entries |
-| limit-zero | 200 | OK | 1 entries |
-| limit-to-last-shape | 200 | OK | 2 documents: cur/e, cur/d |
-| start-at-with-empty-values | 200 | OK | 5 documents: cur/a, cur/b, cur/c, cur/d, cur/e |
+| offset-and-limit (divergence) | 200 | OK | 2 documents: cur/c, cur/d |
+| offset-past-the-end (divergence) | 200 | OK | 1 entries |
+| limit-zero (divergence) | 200 | OK | 1 entries |
+| limit-to-last-shape (divergence) | 200 | OK | 2 documents: cur/e, cur/d |
+| start-at-with-empty-values (divergence) | 200 | OK | 5 documents: cur/a, cur/b, cur/c, cur/d, cur/e |
 
 ## queries/collection-group (10)
 
 | step | status | code | oracle |
 | --- | --- | --- | --- |
-| all-descendants | 200 | OK | 5 documents: cg/a/items/1, cg/a/items/2, cg/b/items/1, cg/b/items/1/items/deep, items/root |
-| all-descendants-by-field | 200 | OK | 5 documents: items/root, cg/a/items/1, cg/a/items/2, cg/b/items/1, cg/b/items/1/items/deep |
-| all-descendants-under-a-parent | 200 | OK | 2 documents: cg/b/items/1, cg/b/items/1/items/deep |
-| subcollection-query | 200 | OK | 2 documents: cg/a/items/1, cg/a/items/2 |
-| group-start-at-a-full-reference | 200 | OK | 3 documents: cg/b/items/1, cg/b/items/1/items/deep, items/root |
-| group-with-name-range | 200 | OK | 2 documents: cg/b/items/1, cg/b/items/1/items/deep |
-| name-equality | 200 | OK | 1 documents: cg/a/items/2 |
-| name-in | 200 | OK | 2 documents: cg/a/items/2, items/root |
-| missing-collection | 200 | OK | 1 entries |
+| all-descendants (divergence) | 200 | OK | 5 documents: cg/a/items/1, cg/a/items/2, cg/b/items/1, cg/b/items/1/items/deep, items/root |
+| all-descendants-by-field (divergence) | 200 | OK | 5 documents: items/root, cg/a/items/1, cg/a/items/2, cg/b/items/1, cg/b/items/1/items/deep |
+| all-descendants-under-a-parent (divergence) | 200 | OK | 2 documents: cg/b/items/1, cg/b/items/1/items/deep |
+| subcollection-query (divergence) | 200 | OK | 2 documents: cg/a/items/1, cg/a/items/2 |
+| group-start-at-a-full-reference (divergence) | 200 | OK | 3 documents: cg/b/items/1, cg/b/items/1/items/deep, items/root |
+| group-with-name-range (divergence) | 200 | OK | 2 documents: cg/b/items/1, cg/b/items/1/items/deep |
+| name-equality (divergence) | 200 | OK | 1 documents: cg/a/items/2 |
+| name-in (divergence) | 200 | OK | 2 documents: cg/a/items/2, items/root |
+| missing-collection (divergence) | 200 | OK | 1 entries |
 | partition-query (divergence) | 501 | UNIMPLEMENTED | `Method google.firestore.v1.Firestore/PartitionQuery is unimplemented` |
 
 ## queries/aggregations (23)
 
 | step | status | code | oracle |
 | --- | --- | --- | --- |
-| count-all | 200 | OK | 1 aggregation results |
-| count-up-to | 200 | OK | 1 aggregation results |
-| count-with-filter | 200 | OK | 1 aggregation results |
-| count-with-limit | 200 | OK | 1 aggregation results |
-| count-with-offset | 200 | OK | 1 aggregation results |
-| count-empty | 200 | OK | 1 aggregation results |
-| sum-integers | 200 | OK | 1 aggregation results |
-| sum-mixed-numbers | 200 | OK | 1 aggregation results |
-| sum-doubles-only | 200 | OK | 1 aggregation results |
-| sum-empty | 200 | OK | 1 aggregation results |
-| sum-missing-field | 200 | OK | 1 aggregation results |
-| sum-overflow-saturates-or-promotes | 200 | OK | 1 aggregation results |
-| avg-integers | 200 | OK | 1 aggregation results |
-| avg-with-nan | 200 | OK | 1 aggregation results |
-| avg-empty | 200 | OK | 1 aggregation results |
-| several-aggregations | 200 | OK | 1 aggregation results |
-| count-collection-group | 200 | OK | 1 aggregation results |
-| count-with-cursor | 200 | OK | 1 aggregation results |
-| count-beside-a-sum-over-a-missing-field | 200 | OK | 1 aggregation results |
-| count-beside-an-avg-over-a-missing-field | 200 | OK | 1 aggregation results |
+| count-all (divergence) | 200 | OK | 1 aggregation results |
+| count-up-to (divergence) | 200 | OK | 1 aggregation results |
+| count-with-filter (divergence) | 200 | OK | 1 aggregation results |
+| count-with-limit (divergence) | 200 | OK | 1 aggregation results |
+| count-with-offset (divergence) | 200 | OK | 1 aggregation results |
+| count-empty (divergence) | 200 | OK | 1 aggregation results |
+| sum-integers (divergence) | 200 | OK | 1 aggregation results |
+| sum-mixed-numbers (divergence) | 200 | OK | 1 aggregation results |
+| sum-doubles-only (divergence) | 200 | OK | 1 aggregation results |
+| sum-empty (divergence) | 200 | OK | 1 aggregation results |
+| sum-missing-field (divergence) | 200 | OK | 1 aggregation results |
+| sum-overflow-saturates-or-promotes (divergence) | 200 | OK | 1 aggregation results |
+| avg-integers (divergence) | 200 | OK | 1 aggregation results |
+| avg-with-nan (divergence) | 200 | OK | 1 aggregation results |
+| avg-empty (divergence) | 200 | OK | 1 aggregation results |
+| several-aggregations (divergence) | 200 | OK | 1 aggregation results |
+| count-collection-group (divergence) | 200 | OK | 1 aggregation results |
+| count-with-cursor (divergence) | 200 | OK | 1 aggregation results |
+| count-beside-a-sum-over-a-missing-field (divergence) | 200 | OK | 1 aggregation results |
+| count-beside-an-avg-over-a-missing-field (divergence) | 200 | OK | 1 aggregation results |
 | duplicate-alias | 400 | INVALID_ARGUMENT | `Aggregation aliases contain duplicate alias: x.` |
 | no-aggregations | 400 | INVALID_ARGUMENT | `Aggregations can not be empty.` |
 | sum-on-name | 400 | INVALID_ARGUMENT | `Aggregations are not supported for the property: __key__` |
@@ -138,12 +138,12 @@ own answer (marked below).
 
 | step | status | code | oracle |
 | --- | --- | --- | --- |
-| select-fields | 200 | OK | 2 documents: prj/a, prj/b |
-| select-missing-field | 200 | OK | 2 documents: prj/a, prj/b |
-| select-with-empty-list | 200 | OK | 2 documents: prj/a, prj/b |
+| select-fields (divergence) | 200 | OK | 2 documents: prj/a, prj/b |
+| select-missing-field (divergence) | 200 | OK | 2 documents: prj/a, prj/b |
+| select-with-empty-list (divergence) | 200 | OK | 2 documents: prj/a, prj/b |
 | list-documents | 200 | OK | 2 documents |
 | list-documents-page-size-one | 200 | OK | 1 documents |
-| list-documents-next-page | 200 | OK | 1 documents |
+| list-documents-next-page (divergence) | 200 | OK | 1 documents |
 | list-documents-with-mask | 200 | OK | 2 documents |
 | list-documents-descending | 200 | OK | 2 documents |
 | list-documents-show-missing | 200 | OK | 3 documents |
@@ -152,10 +152,10 @@ own answer (marked below).
 | list-empty-collection | 200 | OK | object() |
 | list-collection-ids-root | 200 | OK | object(collectionIds) |
 | list-collection-ids-of-a-missing-document | 200 | OK | object(collectionIds) |
-| list-collection-ids-paged | 200 | OK | object(collectionIds,nextPageToken) |
+| list-collection-ids-paged (divergence) | 200 | OK | object(collectionIds,nextPageToken) |
 | get-with-mask | 200 | OK | document |
 | get-missing-parent-document | 404 | NOT_FOUND | `Document (projects/demo-firestore-probe/databases/(default)/documents/prj/missing-parent) not found.` |
-| batch-get-mixed | 200 | OK | found 2, missing 1 |
+| batch-get-mixed (divergence) | 200 | OK | found 2, missing 1 |
 
 ## writes/preconditions-and-masks (34)
 
@@ -173,7 +173,7 @@ own answer (marked below).
 | replace-without-mask | 200 | OK | commit(1 results) |
 | read-after-replace | 200 | OK | document |
 | update-time-precondition-matches | 200 | OK | commit(1 results) |
-| update-time-precondition-is-stale | 400 | FAILED_PRECONDITION | `the stored version (1788626393762990) does not match the required base version (1788626393757403)` |
+| update-time-precondition-is-stale | 400 | FAILED_PRECONDITION | `the stored version (1788660244359867) does not match the required base version (1788660244357086)` |
 | update-time-precondition-on-a-missing-document | 400 | FAILED_PRECONDITION | `the stored version (0) does not match the required base version (1577836800000000)` |
 | delete-missing-is-ok | 200 | OK | commit(1 results) |
 | delete-missing-with-exists-true | 404 | NOT_FOUND | `no entity to update: app: "dev~demo-firestore-probe" path <   Element {     type: "wr"     name: "none"   } > ` |
@@ -240,19 +240,19 @@ own answer (marked below).
 | commit-finished-transaction-again | 409 | ABORTED | `The referenced transaction has expired or is no longer valid.` |
 | begin-contended | 200 | OK | object(transaction) |
 | read-contended | 200 | OK | found 1, missing 0 |
-| out-of-band-write (divergence) | 409 | ABORTED | `Transaction lock timeout.` |
-| contended-commit-is-aborted (divergence) | 200 | OK | commit(1 results) |
-| counter-keeps-the-out-of-band-value (divergence) | 200 | OK | document |
+| out-of-band-write | 409 | ABORTED | `Transaction lock timeout.` |
+| contended-commit-is-aborted | 200 | OK | commit(1 results) |
+| counter-keeps-the-out-of-band-value | 200 | OK | document |
 | begin-unread | 200 | OK | object(transaction) |
 | out-of-band-write-2 | 200 | OK | commit(1 results) |
 | blind-write-in-a-transaction-commits | 200 | OK | commit(1 results) |
 | begin-query | 200 | OK | object(transaction) |
-| query-in-transaction | 200 | OK | 3 documents: tx/counter, tx/other, tx/third |
-| phantom-write (divergence) | 409 | ABORTED | `Transaction lock timeout.` |
-| commit-after-a-phantom-row (divergence) | 200 | OK | commit(1 results) |
+| query-in-transaction (divergence) | 200 | OK | 3 documents: tx/counter, tx/other, tx/third |
+| phantom-write | 409 | ABORTED | `Transaction lock timeout.` |
+| commit-after-a-phantom-row | 200 | OK | commit(1 results) |
 | begin-read-only | 200 | OK | object(transaction) |
 | read-only-commit-with-writes | 400 | INVALID_ARGUMENT | `Cannot modify entities in a read-only transaction.` |
-| read-only-commit-without-writes | 200 | OK | object() |
+| read-only-commit-without-writes (divergence) | 200 | OK | object() |
 | begin-rolled-back | 200 | OK | object(transaction) |
 | rollback | 200 | OK | object() |
 | commit-after-rollback | 409 | ABORTED | `The referenced transaction has expired or is no longer valid.` |
@@ -261,8 +261,8 @@ own answer (marked below).
 | commit-with-malformed-transaction | 400 | INVALID_ARGUMENT | `Payload isn't valid for request.` |
 | batch-get-with-new-transaction | 200 | OK | found 1, missing 0 |
 | commit-the-new-transaction | 400 | INVALID_ARGUMENT | `Cannot modify entities in a read-only transaction.` |
-| run-query-with-new-transaction | 200 | OK | 1 documents: tx/counter |
-| begin-with-read-time-in-the-past | 400 | FAILED_PRECONDITION | `The requested 'read_time' is too old.` |
+| run-query-with-new-transaction (divergence) | 200 | OK | 1 documents: tx/counter |
+| begin-with-read-time-in-the-past (divergence) | 400 | FAILED_PRECONDITION | `The requested 'read_time' is too old.` |
 | begin-read-write-with-retry-transaction | 200 | OK | object(transaction) |
 | batch-get-with-both-transaction-and-read-time | 400 | INVALID_ARGUMENT | `Payload isn't valid for request.` |
 
@@ -286,18 +286,18 @@ own answer (marked below).
 | in-with-empty-array | 400 | INVALID_ARGUMENT | `'IN' requires an non-empty ArrayValue.` |
 | in-with-non-array | 400 | INVALID_ARGUMENT | `'IN' requires an ArrayValue.` |
 | in-with-thirty-one-values | 400 | INVALID_ARGUMENT | `'IN' supports up to 30 comparison values.` |
-| in-with-thirty-values | 200 | OK | 1 documents: err/a |
-| array-contains-with-array-operand-and-any | 200 | OK | 1 entries |
+| in-with-thirty-values (divergence) | 200 | OK | 1 documents: err/a |
+| array-contains-with-array-operand-and-any (divergence) | 200 | OK | 1 entries |
 | two-not-in | 400 | INVALID_ARGUMENT | `Only a single 'NOT_EQUAL', 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query.` |
 | not-in-with-in | 400 | INVALID_ARGUMENT | `'NOT_IN' cannot be used in the same query with 'IN', 'ARRAY_CONTAINS_ANY' or 'OR'.` |
-| two-array-contains | 400 | FAILED_PRECONDITION | `Only a single array-contains clause is allowed in a query` |
+| two-array-contains (divergence) | 400 | FAILED_PRECONDITION | `Only a single array-contains clause is allowed in a query` |
 | not-equal-with-not-in | 400 | INVALID_ARGUMENT | `Only a single 'NOT_EQUAL', 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query.` |
-| empty-composite | 200 | OK | 1 documents: err/a |
+| empty-composite (divergence) | 200 | OK | 1 documents: err/a |
 | composite-without-op | 400 | INVALID_ARGUMENT | `Unsupported CompositeFilter operator.` |
 | invalid-field-path | 400 | INVALID_ARGUMENT | `Invalid property path "a..b". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property pat` |
 | empty-field-path | 400 | INVALID_ARGUMENT | `Invalid empty property path string.` |
 | order-by-empty-field | 400 | INVALID_ARGUMENT | `Invalid empty property path string.` |
-| order-by-without-direction | 200 | OK | 1 documents: err/a |
+| order-by-without-direction (divergence) | 200 | OK | 1 documents: err/a |
 | cursor-arity-mismatch | 400 | INVALID_ARGUMENT | `Cursor has too many values.` |
 | negative-limit | 400 | INVALID_ARGUMENT | `limit is negative` |
 | negative-offset | 400 | INVALID_ARGUMENT | `offset is negative` |
@@ -311,7 +311,7 @@ own answer (marked below).
 | integer-value-out-of-range | 400 | INVALID_ARGUMENT | `Payload isn't valid for request.` |
 | timestamp-out-of-range | 400 | INVALID_ARGUMENT | `Payload isn't valid for request.` |
 | read-time-in-the-future | 400 | INVALID_ARGUMENT | `The requested 'read_time' cannot be in the future.` |
-| read-time-in-the-distant-past | 400 | FAILED_PRECONDITION | `The requested 'read_time' is too old.` |
+| read-time-in-the-distant-past (divergence) | 400 | FAILED_PRECONDITION | `The requested 'read_time' is too old.` |
 | write-with-invalid-document-name | 400 | INVALID_ARGUMENT | `Document name "projects/demo-firestore-probe/databases/(default)/documents/err" lacks "/" at index 63.` |
 | write-to-another-database (divergence) | 200 | OK | commit(1 results) |
 | write-with-empty-field-name | 400 | INVALID_ARGUMENT | `The property.name is the empty string.` |
@@ -352,7 +352,7 @@ own answer (marked below).
 | document-id-with-slash-encoded | 200 | OK | commit(1 results) |
 | document-id-with-double-underscore | 400 | INVALID_ARGUMENT | `Resource id "__x__" is invalid because it is reserved.` |
 | collection-id-with-double-underscore | 400 | INVALID_ARGUMENT | `Collection id "__err__" is invalid because it is reserved.` |
-| five-hundred-and-one-transforms | 200 | OK | commit(1 results) |
+| five-hundred-and-one-transforms (divergence) | 200 | OK | commit(1 results) |
 | five-hundred-transforms | 200 | OK | commit(1 results) |
 | batch-get-with-a-bad-name | 400 | INVALID_ARGUMENT | `Document name "not/a/valid/name/at/all/x" lacks "projects" at index 0.` |
 | batch-get-with-a-collection-name | 400 | INVALID_ARGUMENT | `Document name "projects/demo-firestore-probe/databases/(default)/documents/err" lacks "/" at index 63.` |
@@ -384,7 +384,7 @@ own answer (marked below).
 | default-database-is-separate | 404 | NOT_FOUND | `Document (projects/demo-firestore-probe/databases/(default)/documents/em/a) not found.` |
 | clear-named-database | 200 | OK | object() |
 | named-database-cleared | 404 | NOT_FOUND | `Document (projects/demo-firestore-probe/databases/named-db/documents/em/a) not found.` |
-| database-with-uppercase-name (divergence) | 404 | NOT_FOUND | `Document (projects/demo-firestore-probe/databases/Named/documents/em/a) not found.` |
+| database-with-uppercase-name | 404 | NOT_FOUND | `Document (projects/demo-firestore-probe/databases/Named/documents/em/a) not found.` |
 | list-databases | 404 | non-json | `Not Found ` |
 | get-database | 404 | non-json | `Not Found ` |
 | get-named-database | 404 | non-json | `Not Found ` |
@@ -396,11 +396,11 @@ own answer (marked below).
 | read-current | 200 | OK | document |
 | write-v2 | 200 | OK | commit(1 results) |
 | read-at-the-first-update-time (divergence) | 400 | INVALID_ARGUMENT | `Only timestamps past epoch are supported.` |
-| read-at-the-second-update-time | 400 | INVALID_ARGUMENT | `Only timestamps past epoch are supported.` |
-| query-at-the-first-update-time | 200 | OK | 1 documents: rt/a |
+| read-at-the-second-update-time (divergence) | 400 | INVALID_ARGUMENT | `Only timestamps past epoch are supported.` |
+| query-at-the-first-update-time (divergence) | 200 | OK | 1 documents: rt/a |
 | batch-get-at-the-first-update-time | 200 | OK | found 1, missing 0 |
 | list-at-the-first-update-time (divergence) | 400 | INVALID_ARGUMENT | `Only timestamps past epoch are supported.` |
-| count-at-the-first-update-time | 200 | OK | 1 aggregation results |
+| count-at-the-first-update-time (divergence) | 200 | OK | 1 aggregation results |
 | begin-read-only-at-the-first-update-time | 200 | OK | object(transaction) |
 | read-in-the-read-only-transaction | 200 | OK | found 1, missing 0 |
 

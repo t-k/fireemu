@@ -463,7 +463,8 @@ async function recordProduction() {
           const same = (a, b) => canonical(decision(a)) === canonical(decision(b));
           let status;
           const needsIndex =
-            prod.code === "FAILED_PRECONDITION" && /requires an index/.test(prod.message ?? "");
+            prod.code === "FAILED_PRECONDITION" &&
+            /requires an? (\S+ )?index/.test(prod.message ?? "");
           if (same(prod, emulator) && same(prod, fireemu)) status = "parity";
           else if (needsIndex && !same(prod, fireemu)) status = "production-needs-index";
           else if (same(prod, fireemu)) status = "fireemu-matches-production";

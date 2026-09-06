@@ -500,7 +500,7 @@
     "notes": [
       "ExecutePipeline is not served by this entry: FS-PIPE-RPC-1 owns it and decodes, identifies and validates a pipeline, then answers a well-formed one with UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY rather than executing it",
       "history retention: a version is kept while any retention root can still reach it, namely the one-hour read_time window (READ_TIME_RETENTION_SECONDS), the read version of every transaction that is still inside its budget, and the newest version or tombstone of every path; everything older is compacted away at the end of the commit that makes it unreachable, and a read_time below the retained history is FAILED_PRECONDITION instead of an answer from another version. Named snapshots are independent copies: restoring one reproduces exactly what it captured, whatever the live database compacted since.",
-      "conformance: the Firestore semantics matrix also gates preconditions, update masks, field transforms, batched writes and the transaction lifecycle; conformance/src/firestore-probe/divergences.mjs pins every deliberate difference, including the optimistic transaction model (fireemu aborts the reading transaction at commit where the official emulator locks and refuses the out-of-band writer)"
+      "conformance: the Firestore semantics matrix also gates preconditions, update masks, field transforms, batched writes and the transaction lifecycle; conformance/divergences.json pins every deliberate difference from the official emulator, each with the production observation (conformance/firestore-production-matrix.json) that justifies following production instead: no `done` marker and a leading readTime/skippedResults element over REST, production's validation codes, and the redacted marker fields production serves"
     ],
     "status": "implemented"
   },
@@ -522,8 +522,8 @@
   },
   "FS-TXN-1": {
     "notes": [
-      "optimistic MVCC keeps transactions serializable: document read sets and executed query result sets are re-validated at commit, and a stale transaction is refused with retryable ABORTED without publishing its staged writes",
-      "the official Local Emulator Suite instead locks documents read by a transaction and collection ranges scanned by its queries, then refuses a conflicting out-of-band writer with ABORTED 'Transaction lock timeout.'; the five affected transaction-concurrency rows are a documented emulator divergence, and no production behavior is inferred from either local model",
+      "pessimistic locking, as production runs it (concurrencyMode PESSIMISTIC): every document a read-write transaction read and every range it queried or listed is locked until the transaction finishes; a commit outside the transaction that touches a locked document waits for the release (15 s in the daemon) and is then refused with ABORTED 'Too much contention on these documents. Please try again.' in production's words, and the transaction's own commit succeeds",
+      "two transactions that both read a document and both commit into it are the deadlock production resolves by aborting one side: the first committer is aborted with the same retryable ABORTED for its client to retry, the second commits; the official Local Emulator Suite locks the same way and refuses the out-of-band writer with ABORTED 'Transaction lock timeout.', so the transaction-concurrency rows of the semantics matrix are parity on status and code (conformance/firestore-production-matrix.json, transactions/lifecycle, recorded against production 2026-09-05)",
       "conformance: firestore/transaction-read-set-abort (conformance/README.md)"
     ],
     "precision": "boundary-conformance",

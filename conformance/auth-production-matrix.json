@@ -8,10 +8,9 @@
     "note": "The production project id and API key are never recorded. Rows compare HTTP status, the Identity Toolkit error code and the normalized success body; tokens, ids, expiry and timestamps are placeholders and the human sentence production appends to some error codes is not compared."
   },
   "summary": {
-    "parity": 13,
-    "emulators-diverge-from-production": 7,
-    "three-way-difference": 2,
-    "fireemu-divergence": 1
+    "parity": 14,
+    "fireemu-matches-production": 8,
+    "emulators-diverge-from-production": 1
   },
   "programs": [
     {
@@ -102,6 +101,7 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "displayName": "",
               "email": "fireemu-auth-probe-<run>-primary@example.com",
               "idToken": "<idToken>",
               "kind": "<kind>",
@@ -110,7 +110,7 @@
               "registered": true
             }
           },
-          "status": "emulators-diverge-from-production"
+          "status": "fireemu-matches-production"
         },
         "wrong-password": {
           "production": {
@@ -125,10 +125,10 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_PASSWORD",
-            "message": "INVALID_PASSWORD"
+            "code": "INVALID_LOGIN_CREDENTIALS",
+            "message": "INVALID_LOGIN_CREDENTIALS"
           },
-          "status": "emulators-diverge-from-production"
+          "status": "fireemu-matches-production"
         },
         "unknown-email": {
           "production": {
@@ -143,10 +143,10 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "EMAIL_NOT_FOUND",
-            "message": "EMAIL_NOT_FOUND"
+            "code": "INVALID_LOGIN_CREDENTIALS",
+            "message": "INVALID_LOGIN_CREDENTIALS"
           },
-          "status": "emulators-diverge-from-production"
+          "status": "fireemu-matches-production"
         },
         "lookup": {
           "production": {
@@ -207,11 +207,11 @@
               "kind": "<kind>",
               "users": [
                 {
-                  "disabled": false,
                   "email": "fireemu-auth-probe-<run>-primary@example.com",
                   "emailVerified": false,
                   "localId": "<localId>",
-                  "mfaInfo": [],
+                  "passwordHash": "UkVEQUNURUQ=",
+                  "passwordUpdatedAt": "<passwordUpdatedAt>",
                   "providerUserInfo": [
                     {
                       "email": "fireemu-auth-probe-<run>-primary@example.com",
@@ -225,7 +225,7 @@
               ]
             }
           },
-          "status": "three-way-difference"
+          "status": "fireemu-matches-production"
         },
         "update-display-name": {
           "production": {
@@ -279,6 +279,7 @@
               "emailVerified": false,
               "kind": "<kind>",
               "localId": "<localId>",
+              "passwordHash": "UkVEQUNURUQ=",
               "providerUserInfo": [
                 {
                   "displayName": "Probe User",
@@ -290,7 +291,7 @@
               ]
             }
           },
-          "status": "three-way-difference"
+          "status": "fireemu-matches-production"
         },
         "delete": {
           "production": {
@@ -329,10 +330,10 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "EMAIL_NOT_FOUND",
-            "message": "EMAIL_NOT_FOUND"
+            "code": "INVALID_LOGIN_CREDENTIALS",
+            "message": "INVALID_LOGIN_CREDENTIALS"
           },
-          "status": "emulators-diverge-from-production"
+          "status": "fireemu-matches-production"
         }
       }
     },
@@ -483,17 +484,12 @@
               "kind": "<kind>",
               "users": [
                 {
-                  "disabled": false,
-                  "emailVerified": false,
-                  "localId": "<localId>",
-                  "mfaInfo": [],
-                  "providerUserInfo": [],
-                  "validSince": "<validSince>"
+                  "localId": "<localId>"
                 }
               ]
             }
           },
-          "status": "fireemu-divergence"
+          "status": "parity"
         },
         "delete-anonymous": {
           "production": {
@@ -629,11 +625,14 @@
             "message": "EMAIL_NOT_FOUND"
           },
           "fireemu": {
-            "status": 400,
-            "code": "EMAIL_NOT_FOUND",
-            "message": "EMAIL_NOT_FOUND"
+            "status": 200,
+            "code": "OK",
+            "body": {
+              "email": "fireemu-auth-probe-<run>-nobody@example.com",
+              "kind": "<kind>"
+            }
           },
-          "status": "emulators-diverge-from-production"
+          "status": "fireemu-matches-production"
         },
         "mfa-enrollment-start-without-token": {
           "production": {
@@ -648,10 +647,10 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "MISSING_ID_TOKEN",
-            "message": "MISSING_ID_TOKEN"
+            "code": "INVALID_ID_TOKEN",
+            "message": "INVALID_ID_TOKEN"
           },
-          "status": "emulators-diverge-from-production"
+          "status": "fireemu-matches-production"
         }
       }
     }

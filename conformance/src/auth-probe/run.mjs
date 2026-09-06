@@ -109,7 +109,13 @@ async function probeOracle(inPath, outPath) {
   return JSON.parse(await readFile(outPath, "utf8"));
 }
 
-async function probeFireemu(inPath, outPath) {
+/**
+ * Runs the programs against fireemu. `record` and `check` compare fireemu with the official
+ * Auth emulator, so they run it with `auth-probe.fireemu.json`, which switches off the
+ * production default fireemu follows and the official emulator lacks (email enumeration
+ * protection); `record-production` runs fireemu as shipped (`auth-probe.fireemu.production.json`).
+ */
+async function probeFireemu(inPath, outPath, config = "auth-probe.fireemu.json") {
   const binary =
     process.env.FIREEMU_BIN ??
     ["target/release/fireemu", "target/debug/fireemu"]
@@ -122,7 +128,7 @@ async function probeFireemu(inPath, outPath) {
     args: [
       "exec",
       "--config",
-      join(CONFORMANCE_DIR, "auth-probe.fireemu.json"),
+      join(CONFORMANCE_DIR, config),
       "--project",
       PROJECT,
       "--only",
@@ -199,27 +205,53 @@ async function record() {
   );
 }
 
+/**
+ * The production answers recorded by `record-production`, keyed by row. A row where fireemu
+ * disagrees with the official emulator but matches production is accepted: production is
+ * the authority fireemu follows, and the official emulator's answer is the documented one.
+ */
+async function recordedProduction() {
+  if (!existsSync(PRODUCTION_JSON)) return new Map();
+  const production = JSON.parse(await readFile(PRODUCTION_JSON, "utf8"));
+  return new Map(
+    production.programs.flatMap((p) =>
+      Object.entries(p.steps).map(([id, row]) => [rowKey(p.id, id), row.production]),
+    ),
+  );
+}
+
 async function check() {
   const matrix = JSON.parse(await readFile(MATRIX_JSON, "utf8"));
+  const production = await recordedProduction();
   const inPath = await writePrograms();
   const got = await probeFireemu(inPath, join(RUN_DIR, "fireemu.json"));
   let rows = 0;
   let failures = 0;
+  let followsProduction = 0;
   for (const program of matrix.programs) {
     for (const [stepId, recorded] of Object.entries(program.steps)) {
       rows += 1;
       const expected = recorded.oracle;
       const actual = got[program.id]?.steps?.[stepId] ?? { missing: true };
-      if (canonical(decision(expected)) !== canonical(decision(actual))) {
-        failures += 1;
-        console.error(`\n${rowKey(program.id, stepId)} disagrees`);
-        console.error(`  expected ${JSON.stringify(decision(expected))}`);
-        console.error(`  fireemu  ${JSON.stringify(decision(actual))}`);
+      if (canonical(decision(expected)) === canonical(decision(actual))) continue;
+      const key = rowKey(program.id, stepId);
+      const prod = production.get(key);
+      if (prod && canonical(decision(prod)) === canonical(decision(actual))) {
+        followsProduction += 1;
+        console.log(`${key}: follows production where the official emulator differs`);
+        continue;
       }
+      failures += 1;
+      console.error(`\n${key} disagrees`);
+      console.error(`  expected ${JSON.stringify(decision(expected))}`);
+      console.error(`  fireemu  ${JSON.stringify(decision(actual))}`);
     }
   }
   if (failures === 0) {
-    console.log(`ok: ${rows} rows agree with the recorded oracle`);
+    console.log(
+      `ok: ${rows} rows agree with the recorded oracle ` +
+        `(${followsProduction} follow production where the official emulator differs)`,
+    );
     return 0;
   }
   console.error(`\n${failures} of ${rows} rows disagree`);
@@ -250,7 +282,7 @@ async function recordProduction() {
     timeoutMs: 600_000,
   });
   const production = JSON.parse(await readFile(productionOut, "utf8"));
-  const fireemu = await probeFireemu(inPath, fireemuOut);
+  const fireemu = await probeFireemu(inPath, fireemuOut, "auth-probe.fireemu.production.json");
   const matrix = JSON.parse(await readFile(MATRIX_JSON, "utf8"));
   const counts = {};
   const dropSecrets = (value) =>

@@ -21,6 +21,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   # Reproducibility inputs. The compiler is pinned by rust-toolchain.toml; the two paths a
@@ -41,8 +45,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
       - id: matrix
@@ -72,16 +76,16 @@ jobs:
   ui:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
       - run: pnpm -C ui install --frozen-lockfile
       - run: pnpm -C ui build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ui-dist
           path: ui/dist
@@ -96,11 +100,11 @@ jobs:
         platform: ${{ fromJSON(needs.plan.outputs.platforms) }}
     runs-on: ${{ matrix.platform.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ui-dist
           path: ui/dist
@@ -108,13 +112,13 @@ jobs:
         shell: bash
         run: test -f ui/dist/index.html
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           targets: ${{ matrix.platform.target }}
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
         with:
           tool: cargo-nextest
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
         with:
           key: ${{ matrix.platform.target }}
 
@@ -180,12 +184,12 @@ jobs:
           fi
           ls -l dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: package-${{ matrix.platform.name }}
           path: npm/platforms/build/${{ matrix.platform.name }}
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: archive-${{ matrix.platform.name }}
           path: dist/*
@@ -200,8 +204,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ui-dist
           path: ui/dist
@@ -234,14 +238,14 @@ jobs:
     needs: [plan, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10.32.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: package-linux-x64
           path: npm/platforms/build/linux-x64
@@ -266,7 +270,7 @@ jobs:
           (cd "${{ steps.install.outputs.dir }}" && npm sbom --sbom-format cyclonedx --omit dev) \
             > "sbom/fireemu-${VERSION}.npm.cdx.json"
           node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "sbom/fireemu-${VERSION}.npm.cdx.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: sbom-npm
           path: sbom/*
@@ -282,13 +286,14 @@ jobs:
   publish:
     needs: [plan, build, verify-artifact]
     runs-on: ubuntu-latest
+    environment: npm-release
     permissions:
       contents: write # create the release and attach its assets
       id-token: write # npm publish --provenance, and build attestations
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -296,12 +301,12 @@ jobs:
         run: npm install --global npm@11.9.0
 
       - name: collect the platform packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: package-*
           path: npm/platforms/build
       - name: collect the archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: archive-*
           path: dist
@@ -322,8 +327,8 @@ jobs:
       # Software bills of materials: the Rust dependency graph of the daemon (CycloneDX from
       # Cargo.lock, licences included) and the npm tree of an installation (from
       # verify-artifact). Both are release assets and both are in SHA256SUMS.
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
         with:
           tool: cargo-cyclonedx
       - name: the cargo SBOM
@@ -333,7 +338,7 @@ jobs:
           cargo cyclonedx --manifest-path crates/fireemu/Cargo.toml --format json --all
           mv crates/fireemu/*.cdx.json "dist/fireemu-${VERSION}.cargo.cdx.json"
       - name: collect the npm SBOM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: sbom-npm
           path: dist
@@ -344,13 +349,12 @@ jobs:
           sha256sum fireemu-* > SHA256SUMS
           cat SHA256SUMS
 
-      # Provenance for the archives. Not every repository is entitled to attestations, and a
-      # release should not fail for want of one, so this is best effort and reported either way.
+      # Provenance for the archives is a release gate. A tag must not publish packages when the
+      # corresponding GitHub attestation cannot be created.
       - name: build provenance
         id: attest
         if: needs.plan.outputs.publish == 'true'
-        continue-on-error: true
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
         with:
           subject-path: "dist/fireemu-*"
       - name: provenance outcome
@@ -394,7 +398,7 @@ jobs:
 
       - name: the dry run's artifacts
         if: needs.plan.outputs.publish != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: dry-run-archives
           path: dist/*

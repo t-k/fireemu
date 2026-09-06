@@ -5,7 +5,7 @@
     "evidenceSchema": 1,
     "evidence": {
       "identity": {
-        "sourceSha": "sha256-684b9fb73d82c75a1fe86cf88d4bed6e9ab1813b4bb229c66eefbfcdbb82fc64",
+        "sourceSha": "sha256-5f5dae84ecd20e9b2797923aef24e1b141da995f29dda6cd10c420111404e39b",
         "packageVersion": "0.0.0-dev",
         "packageManifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
         "packageIntegrity": null,
@@ -85,8 +85,8 @@
                   "localId": "<localId>",
                   "emailVerified": false,
                   "email": "fireemu-auth-probe-<run>-primary@example.com",
-                  "salt": "fakeSaltUxss6V4qhLIRzALZy48G",
-                  "passwordHash": "fakeHash:salt=fakeSaltUxss6V4qhLIRzALZy48G:password=password123",
+                  "salt": "fakeSaltMWYIPZuNmBT9X5W2kXec",
+                  "passwordHash": "fakeHash:salt=fakeSaltMWYIPZuNmBT9X5W2kXec:password=password123",
                   "passwordUpdatedAt": "<passwordUpdatedAt>",
                   "validSince": "<validSince>",
                   "providerUserInfo": [
@@ -121,7 +121,7 @@
               ],
               "email": "fireemu-auth-probe-<run>-primary@example.com",
               "displayName": "Probe User",
-              "passwordHash": "fakeHash:salt=fakeSaltUxss6V4qhLIRzALZy48G:password=password123"
+              "passwordHash": "fakeHash:salt=fakeSaltMWYIPZuNmBT9X5W2kXec:password=password123"
             }
           }
         },

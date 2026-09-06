@@ -33,6 +33,15 @@
       ]
     },
     {
+      "collectionGroup": "flt",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "s", "order": "ASCENDING" },
+        { "fieldPath": "n", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "cur",
       "queryScope": "COLLECTION",
       "fields": [

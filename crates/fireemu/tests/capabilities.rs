@@ -500,6 +500,27 @@ fn the_limit_metadata_agrees_with_the_enforcement() {
 }
 
 #[test]
+fn firestore_rest_capability_matches_the_served_production_wire() {
+    let text = text_of(&manifest()["capabilities"]["FS-REST-1"]);
+    assert!(
+        text.contains("readTime selectors are validated and served through REST"),
+        "FS-REST-1 must describe the implemented readTime behavior: {text}"
+    );
+    assert!(
+        text.contains("without a synthetic done marker"),
+        "FS-REST-1 must describe the implemented terminal response shape: {text}"
+    );
+    assert!(
+        !text.contains("readTime selectors and findNearest are refused explicitly"),
+        "FS-REST-1 must not claim that readTime is refused: {text}"
+    );
+    assert!(
+        !text.contains("the last RunQuery response says done"),
+        "FS-REST-1 must not claim a done marker: {text}"
+    );
+}
+
+#[test]
 fn the_manifest_states_every_app_check_capability_with_its_status_and_precision() {
     let manifest = manifest();
     let capabilities = manifest["capabilities"]

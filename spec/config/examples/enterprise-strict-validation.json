@@ -9,23 +9,13 @@
     "catalog": "firestore-enterprise-native-2026-08-27",
     "queryCatalog": null,
     "rulesCatalog": "firebase-rules-2026-08-25",
-    "enforcement": "strict",
-    "warningThresholds": [
-      {"basisPoints": 7500, "severity": "notice"},
-      {"basisPoints": 8500, "severity": "warning"},
-      {"basisPoints": 9500, "severity": "critical"}
-    ],
-    "perLimitWarningThresholds": {
-      "RULES-SOURCE-SIZE": [
-        {"basisPoints": 7500, "severity": "notice"},
-        {"basisPoints": 8500, "severity": "warning"},
-        {"basisPoints": 9500, "severity": "critical"}
-      ]
-    },
+    "enforcement": "observe",
+    "warningThresholds": [],
+    "perLimitWarningThresholds": {},
     "warningsAsErrors": [],
-    "quotaAccounting": "observe",
+    "quotaAccounting": "off",
     "firestorePlan": {
-      "billingEnabled": true,
+      "billingEnabled": false,
       "compositeIndexLimitOverride": null,
       "singleFieldConfigLimitOverride": null,
       "enterpriseIndexLimitOverride": null

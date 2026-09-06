@@ -469,9 +469,9 @@
   "FS-REST-1": {
     "notes": [
       "served on the Firestore port next to gRPC",
-      "readTime selectors and findNearest are refused explicitly",
+      "readTime selectors are validated and served through REST, while findNearest is refused explicitly",
       "conformance: firestore/rest-error-shapes, firestore/lite-rest-transport (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
-      "REST wire shapes follow the measured proto3 JSON of the official emulator: empty fields are left out, timestamps carry 0/3/6/9 fraction digits, the last RunQuery response says done, the first carries skippedResults, and an unknown route or method answers the plain-text 404 the official adapter answers"
+      "REST wire shapes follow the measured production-compatible JSON: empty fields are left out, timestamps carry 0/3/6/9 fraction digits, the last RunQuery and RunAggregationQuery responses arrive without a synthetic done marker, the first carries skippedResults when an offset is applied, and an unknown route or method answers the plain-text 404 the official adapter answers"
     ],
     "status": "implemented"
   },

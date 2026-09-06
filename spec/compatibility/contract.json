@@ -155,17 +155,17 @@
         "limits.enforcement": {
           "value": "observe",
           "status": "not-implemented",
-          "note": "the limits section is accepted by the loader and read by nothing; the Standard query limits are switched by firestore.enforceLimits, which the profile derives"
+          "note": "the limits section is schema-validated; neutral observe is accepted as metadata, while strict enforcement is rejected as not implemented. The Standard query limits are switched by firestore.enforceLimits, which the profile derives"
         },
         "limits.quotaAccounting": {
           "value": "off",
           "status": "not-implemented",
-          "note": "accepted by the loader and read by nothing; no quota is accounted"
+          "note": "neutral off is accepted as metadata; observe and enforce are rejected as not implemented and no quota is accounted"
         },
         "limits.warningsAsErrors": {
           "value": [],
           "status": "not-implemented",
-          "note": "accepted by the loader and read by nothing"
+          "note": "the neutral empty list is accepted as metadata; non-empty warning promotion is rejected as not implemented"
         },
         "rules.staticLimitChecks": {
           "value": false,
@@ -393,12 +393,12 @@
         "limits.enforcement": {
           "value": "strict",
           "status": "not-implemented",
-          "note": "the limits section is accepted by the loader and read by nothing; the Standard query limits are switched by firestore.enforceLimits, which the profile derives"
+          "note": "strict enforcement is rejected as not implemented; neutral limits metadata is schema-validated and the Standard query limits are switched by firestore.enforceLimits, which the profile derives"
         },
         "limits.quotaAccounting": {
           "value": "observe",
           "status": "not-implemented",
-          "note": "accepted by the loader and read by nothing; no quota is accounted"
+          "note": "observe accounting is rejected as not implemented; neutral off is accepted as metadata and no quota is accounted"
         },
         "rules.staticLimitChecks": {
           "value": true,

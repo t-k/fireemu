@@ -4,13 +4,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fireemu_adapter_http::signing::RsaSigner;
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 use fireemu_core_types::hash::{hex_lower, sha256};
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 use zeroize::Zeroizing;
 
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 const CACHE_MAGIC: &[u8; 16] = b"fireemu-rsa-v1\0\0";
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 const CACHE_DOMAIN: &[u8] = b"fireemu/session-rsa/chacha20-rsa2048-e65537/v1\0";
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 const CACHE_MAX_BYTES: u64 = 64 * 1024;
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 const CACHE_MAX_BYTES_USIZE: usize = 64 * 1024;
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 const MANAGED_DIRECTORIES: [&str; 3] = ["fireemu", "session-rsa", "v1"];
 
 /// A session signer and whether it came from a validated cache entry.
@@ -23,6 +30,7 @@ struct CachedSessionSigner {
 }
 
 #[derive(Clone, Copy)]
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 struct CacheFileMetadata {
     regular: bool,
     owner: u32,
@@ -31,6 +39,7 @@ struct CacheFileMetadata {
     size: u64,
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 fn secure_file_metadata(metadata: CacheFileMetadata, effective_uid: u32) -> bool {
     metadata.regular
         && metadata.owner == effective_uid
@@ -39,6 +48,7 @@ fn secure_file_metadata(metadata: CacheFileMetadata, effective_uid: u32) -> bool
         && metadata.size <= CACHE_MAX_BYTES
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 fn seed_digest(seed: u64) -> [u8; 32] {
     let mut input = Vec::with_capacity(CACHE_DOMAIN.len() + 8);
     input.extend_from_slice(CACHE_DOMAIN);
@@ -46,6 +56,7 @@ fn seed_digest(seed: u64) -> [u8; 32] {
     sha256(&input)
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 fn entry_name(seed: u64) -> String {
     format!("{}-rsa2048-e65537.pk8", hex_lower(&seed_digest(seed)))
 }
@@ -144,6 +155,7 @@ fn load_or_generate_at(_root: &Path, seed: u64) -> Result<CachedSessionSigner, S
     generate(seed)
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 fn encode_envelope(seed: u64, der: &[u8]) -> Zeroizing<Vec<u8>> {
     let digest = seed_digest(seed);
     let Ok(length) = u32::try_from(der.len()) else {
@@ -161,6 +173,7 @@ fn encode_envelope(seed: u64, der: &[u8]) -> Zeroizing<Vec<u8>> {
     envelope
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 fn decode_envelope(seed: u64, envelope: &[u8]) -> Result<Arc<RsaSigner>, ()> {
     const PREFIX: usize = 16 + 32 + 4;
     const SUFFIX: usize = 32;

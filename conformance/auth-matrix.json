@@ -5,7 +5,7 @@
     "evidenceSchema": 1,
     "evidence": {
       "identity": {
-        "sourceSha": "sha256-dee4822dcab0af5e65a65d55237fd971466377a381dd9ca325d7eb29809551e0",
+        "sourceSha": "sha256-8b93b5490ff8472d0f331fc12a9dd9b19b8ffb8bd8ac14b26f8a40a2a2df941a",
         "packageVersion": "0.0.0-dev",
         "packageManifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
         "packageIntegrity": null,

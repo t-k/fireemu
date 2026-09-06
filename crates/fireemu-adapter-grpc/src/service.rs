@@ -423,9 +423,17 @@ impl Firestore for GatewayService {
                 "UpdateDocument",
             )?;
             let (parent, write) = LocalBackend::plan_update(request.get_ref())?;
-            let guard = self.write_guard(&caller);
             return local
-                .execute_planned_with(&parent, &write, request.get_ref().mask.as_ref(), &*guard)
+                .retry_on_contention_async(&parent, None, std::slice::from_ref(&write), || {
+                    let guard = self.write_guard(&caller);
+                    local.execute_planned_once(
+                        &parent,
+                        &write,
+                        request.get_ref().mask.as_ref(),
+                        &*guard,
+                    )
+                })
+                .await
                 .map(Response::new);
         }
         self.client()?.update_document(request.into_inner()).await
@@ -441,9 +449,13 @@ impl Firestore for GatewayService {
                 &request.get_ref().name,
                 "DeleteDocument",
             )?;
-            let guard = self.write_guard(&caller);
+            let (parent, write) = LocalBackend::plan_delete(request.get_ref())?;
             return local
-                .delete_document_with(request.get_ref(), &*guard)
+                .retry_on_contention_async(&parent, None, std::slice::from_ref(&write), || {
+                    let guard = self.write_guard(&caller);
+                    local.delete_document_once(request.get_ref(), &*guard)
+                })
+                .await
                 .map(Response::new);
         }
         self.client()?.delete_document(request.into_inner()).await
@@ -530,34 +542,18 @@ impl Firestore for GatewayService {
     ) -> Result<Response<pb::CommitResponse>, Status> {
         if let Some(local) = self.local_backend() {
             let caller = self.caller(request.metadata(), &request.get_ref().database, "Commit")?;
-            // A commit outside a transaction that collides with an active transaction's locks
-            // waits (off the runtime) for a release, then tries again; the guard is rebuilt
-            // per attempt so nothing non-Send is held across the wait.
-            let deadline = std::time::Instant::now() + local.contention_wait();
-            loop {
-                let (handle, marker) = local.release_marker(request.get_ref())?;
-                let attempt = {
+            // A commit that collides with an active transaction's locks waits (off the
+            // runtime) for a release, then tries again; the guard is rebuilt per attempt so
+            // nothing non-Send is held across the wait.
+            let (parent, writes) = LocalBackend::plan_commit(request.get_ref())?;
+            let own = LocalBackend::txn_of(&parent, &request.get_ref().transaction)?;
+            return local
+                .retry_on_contention_async(&parent, own.as_ref(), &writes, || {
                     let guard = self.write_guard(&caller);
                     local.commit_once(request.get_ref(), &*guard)
-                };
-                match attempt {
-                    Err(status) if LocalBackend::is_contention(&status) => {
-                        let released = local.expire_lock_leases(request.get_ref(), &handle);
-                        if !local.should_wait_for_release(
-                            request.get_ref(),
-                            &handle,
-                            &status,
-                            deadline,
-                        ) {
-                            return Err(status);
-                        }
-                        if !released {
-                            LocalBackend::await_release(handle, marker, deadline).await;
-                        }
-                    }
-                    outcome => return outcome.map(Response::new),
-                }
-            }
+                })
+                .await
+                .map(Response::new);
         }
         self.client()?.commit(request.into_inner()).await
     }
@@ -895,9 +891,13 @@ impl Firestore for GatewayService {
                 &request.get_ref().parent,
                 "CreateDocument",
             )?;
-            let guard = self.write_guard(&caller);
+            let (parent, lease) = LocalBackend::plan_create_lease(request.get_ref())?;
             return local
-                .create_document_with(request.get_ref(), &*guard)
+                .retry_on_contention_async(&parent, None, std::slice::from_ref(&lease), || {
+                    let guard = self.write_guard(&caller);
+                    local.create_document_once(request.get_ref(), &*guard)
+                })
+                .await
                 .map(Response::new);
         }
         self.client()?.create_document(request.into_inner()).await

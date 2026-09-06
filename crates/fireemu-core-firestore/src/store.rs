@@ -529,6 +529,9 @@ struct Transaction {
     conflict_ledger_bytes: u64,
     last_activity: LogicalInstant,
     state: TransactionState,
+    /// Bumped on every operation the client drives through this transaction, so a waiter
+    /// under a clock that does not move can still tell an idle holder from a busy one.
+    activity: u64,
     /// Set while a commit of this transaction is held back by another transaction's locks
     /// (the adapter is waiting for that release). Another transaction that then runs into
     /// this one's locks is the deadlock production resolves by aborting one side: that other
@@ -1751,6 +1754,7 @@ impl FirestoreState {
             conflict_ledger_bytes: 0,
             last_activity: now,
             state: TransactionState::Active,
+            activity: 0,
             waiting_to_commit: false,
         };
         self.active_transaction_deadlines
@@ -1979,10 +1983,21 @@ impl FirestoreState {
             .remove(&(previous_deadline, id.clone()));
         if let Some(transaction) = self.transactions.get_mut(id) {
             transaction.last_activity = now;
+            transaction.activity = transaction.activity.wrapping_add(1);
             self.active_transaction_deadlines
                 .insert((transaction_deadline(transaction), id.clone()));
         }
         Ok(())
+    }
+
+    /// How many operations `id` has driven so far; `None` unless the transaction is active.
+    /// A waiter compares two readings to tell whether the holder went idle.
+    #[must_use]
+    pub fn transaction_activity(&self, id: &TransactionId) -> Option<u64> {
+        self.transactions
+            .get(id)
+            .filter(|t| t.state == TransactionState::Active)
+            .map(|t| t.activity)
     }
 
     /// The version visible at `at` (the latest version committed at or before it; the empty

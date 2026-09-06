@@ -2076,6 +2076,19 @@ impl AuthStore {
         Ok(())
     }
 
+    /// Restores the recorded `passwordUpdatedAt` of an imported password credential; a
+    /// no-op without a password.
+    pub fn set_password_updated_at(&mut self, uid: &LocalId, at: LogicalInstant) {
+        if let Some(digest) = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .and_then(|u| u.password.as_mut())
+        {
+            digest.updated_at = Some(at);
+        }
+    }
+
     /// When `uid`'s password was last set through the API (`passwordUpdatedAt`); `None`
     /// without a password or for an imported credential.
     #[must_use]

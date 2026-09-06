@@ -699,6 +699,129 @@ async fn an_abandoned_waiting_holder_does_not_abort_other_transactions_forever()
     handle.abort();
 }
 
+/// The lease is enforced on every write path, not only Commit: a single-document update
+/// against an abandoned holder goes through once the lease has run out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_document_update_also_expires_the_lock_lease() {
+    let (mut client, handle) = start_with_contention_wait_and_lease(
+        std::time::Duration::ZERO,
+        std::time::Duration::from_millis(300),
+    )
+    .await;
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let _ = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/updates/doc"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                txn,
+            )),
+            ..Default::default()
+        })
+        .await;
+    let started = std::time::Instant::now();
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let outcome = client
+            .update_document(pb::UpdateDocumentRequest {
+                document: Some(pb::Document {
+                    name: format!("{DOCS}/updates/doc"),
+                    fields: HashMap::from([("v".to_owned(), i(1))]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await;
+        match outcome {
+            Ok(_) => break,
+            Err(status) if status.code() == tonic::Code::Aborted && attempts < 100 => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(status) => panic!("unexpected refusal: {status}"),
+        }
+    }
+    assert!(attempts >= 2);
+    assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    handle.abort();
+}
+
+/// A holder that keeps driving its transaction is not idle: the lease does not roll it back
+/// while it reads, and starts counting once it stops.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_busy_holder_keeps_its_locks_past_the_lease() {
+    let (mut client, handle) = start_with_contention_wait_and_lease(
+        std::time::Duration::ZERO,
+        std::time::Duration::from_millis(300),
+    )
+    .await;
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let read = |client: &mut FirestoreClient<tonic::transport::Channel>, txn: Vec<u8>| {
+        let mut client = client.clone();
+        async move {
+            let _ = client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/busy/doc"),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(txn),
+                    ),
+                    ..Default::default()
+                })
+                .await;
+        }
+    };
+    read(&mut client, txn.clone()).await;
+    let write = pb::CommitRequest {
+        database: DB.to_owned(),
+        writes: vec![update_write("busy/doc", &[("v", i(1))])],
+        ..Default::default()
+    };
+    // For twice the lease the holder reads every 50 ms; every write attempt is refused.
+    let busy_until = std::time::Instant::now() + std::time::Duration::from_millis(700);
+    while std::time::Instant::now() < busy_until {
+        read(&mut client, txn.clone()).await;
+        let refused = client.commit(write.clone()).await.unwrap_err();
+        assert_eq!(
+            refused.code(),
+            tonic::Code::Aborted,
+            "a busy holder keeps its locks"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    // Idle now: the lease runs out and the writer gets through.
+    let idle_since = std::time::Instant::now();
+    loop {
+        match client.commit(write.clone()).await {
+            Ok(_) => break,
+            Err(status) if status.code() == tonic::Code::Aborted => {
+                assert!(idle_since.elapsed() < std::time::Duration::from_secs(10));
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(status) => panic!("unexpected refusal: {status}"),
+        }
+    }
+    // The lease clock started at the last refused attempt, up to one busy-loop pause before
+    // `idle_since`.
+    assert!(idle_since.elapsed() >= std::time::Duration::from_millis(200));
+    handle.abort();
+}
+
 /// A contended commit that waits past the bound is refused with production's wording.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_contended_commit_is_refused_after_the_wait_bound() {

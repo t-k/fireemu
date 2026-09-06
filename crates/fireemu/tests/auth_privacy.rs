@@ -3,32 +3,26 @@
 //! acknowledges a password reset for an address it does not know. Switching the key off
 //! restores the official Auth emulator's revealing answers.
 
+#![cfg(unix)]
+
 mod census;
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
+use trusted_temp::TrustedTempDir;
 
 fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     port
-}
-
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "fireemu-auth-privacy-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 fn http(port: u16, method: &str, path: &str, body: &Value) -> (u16, Value) {
@@ -58,13 +52,15 @@ fn http(port: u16, method: &str, path: &str, body: &Value) -> (u16, Value) {
 
 struct Daemon {
     child: Child,
-    _banner: Arc<Mutex<String>>,
+    banner: Arc<Mutex<String>>,
     hub_port: u16,
+    /// Owned for the daemon's lifetime; removed when the test ends.
+    _dir: TrustedTempDir,
 }
 
 impl Daemon {
     fn start(name: &str, auth: &Value) -> Self {
-        let dir = scratch(name);
+        let dir = TrustedTempDir::new(&format!("auth-privacy-{name}"));
         let config = dir.join("fireemu.json");
         std::fs::write(
             &config,
@@ -104,9 +100,15 @@ impl Daemon {
             .spawn()
             .unwrap();
         let stdout = child.stdout.take().unwrap();
-        let banner = Arc::new(Mutex::new(String::new()));
-        let collected = Arc::clone(&banner);
-        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        // The child is owned (and killed on drop) before anything below can panic.
+        let daemon = Self {
+            child,
+            banner: Arc::new(Mutex::new(String::new())),
+            hub_port,
+            _dir: dir,
+        };
+        let collected = Arc::clone(&daemon.banner);
+        let (tx, rx) = mpsc::channel::<()>();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut ready = Some(tx);
@@ -125,11 +127,7 @@ impl Daemon {
         });
         rx.recv_timeout(Duration::from_secs(60))
             .expect("the daemon became ready");
-        Self {
-            child,
-            _banner: banner,
-            hub_port,
-        }
+        daemon
     }
 
     fn auth_port(&self) -> u16 {

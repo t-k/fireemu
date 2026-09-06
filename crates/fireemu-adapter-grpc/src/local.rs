@@ -63,7 +63,7 @@ struct DatabaseEntry {
     /// When each transaction first blocked a writer (wall clock). A transaction that keeps
     /// writers blocked for the lock lease is rolled back the way production expires an idle
     /// transaction, so a virtual clock that does not move cannot hold a lock forever.
-    blocking_since: Mutex<BTreeMap<TransactionId, std::time::Instant>>,
+    blocking_since: Mutex<BTreeMap<TransactionId, (std::time::Instant, u64)>>,
 }
 
 impl DatabaseEntry {
@@ -1795,14 +1795,16 @@ impl LocalBackend {
         writes: &[Write],
         guard: WriteGuard<'_>,
     ) -> Result<crate::streams::WireCommit, Status> {
-        self.fault(parent.project.as_str(), "firestore.commit")?;
-        let now = self.write_time();
-        let result = self.with_db(parent, |db| {
-            guard(db, writes, now)?;
-            let result = self.commit_with_events(parent, db, writes, None, now)?;
-            Ok(result)
-        })?;
-        Ok(crate::streams::WireCommit::from_result(&result))
+        self.retry_on_contention(parent, None, writes, || {
+            self.fault(parent.project.as_str(), "firestore.commit")?;
+            let now = self.write_time();
+            let result = self.with_db(parent, |db| {
+                guard(db, writes, now)?;
+                let result = self.commit_with_events(parent, db, writes, None, now)?;
+                Ok(result)
+            })?;
+            Ok(crate::streams::WireCommit::from_result(&result))
+        })
     }
 
     /// Current version and read time of a database (Listen boundaries, resume tokens).
@@ -2195,6 +2197,11 @@ impl LocalBackend {
         let mut bytes = encode_transaction(id);
         bytes.extend_from_slice(&database_tag(parent).to_be_bytes());
         bytes
+    }
+
+    /// The transaction a wire token names, if any (public form of the token check).
+    pub fn txn_of(parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
+        Self::txn(parent, bytes)
     }
 
     fn txn(parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
@@ -2656,6 +2663,19 @@ impl LocalBackend {
         mask: Option<&pb::DocumentMask>,
         guard: WriteGuard<'_>,
     ) -> Result<pb::Document, Status> {
+        self.retry_on_contention(parent, None, std::slice::from_ref(write), || {
+            self.execute_planned_once(parent, write, mask, guard)
+        })
+    }
+
+    /// One attempt at a planned write: no waiting for lock contention.
+    pub fn execute_planned_once(
+        &self,
+        parent: &Parent,
+        write: &Write,
+        mask: Option<&pb::DocumentMask>,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::Document, Status> {
         self.fault(parent.project.as_str(), "firestore.commit")?;
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
@@ -2675,6 +2695,46 @@ impl LocalBackend {
     /// Plans, authorizes and publishes a create under one database critical section. An auto-ID
     /// is serialized with the source commit and restored when any later gate refuses it.
     pub fn create_document_with(
+        &self,
+        req: &pb::CreateDocumentRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::Document, Status> {
+        let (parent, lease) = Self::plan_create_lease(req)?;
+        self.retry_on_contention(&parent, None, std::slice::from_ref(&lease), || {
+            self.create_document_once(req, guard)
+        })
+    }
+
+    /// The database a create addresses and a stand-in write at the target collection (the
+    /// document id may not exist yet), which names the same locked ranges the real write
+    /// would, for lease bookkeeping.
+    pub fn plan_create_lease(req: &pb::CreateDocumentRequest) -> Result<(Parent, Write), Status> {
+        let parent = parse_parent(&req.parent).map_err(status)?;
+        let collection = CollectionId::try_new(req.collection_id.as_str())
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let document_id = if req.document_id.is_empty() {
+            "_"
+        } else {
+            req.document_id.as_str()
+        };
+        let relative = match &parent.document {
+            Some(path) => format!("{}/{}/{document_id}", path.relative(), collection.as_str()),
+            None => format!("{}/{document_id}", collection.as_str()),
+        };
+        let path = DocumentPath::parse(&parent.project, &parent.database, &relative)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        Ok((
+            parent,
+            Write {
+                op: WriteOp::Delete { path },
+                precondition: None,
+                transforms: Vec::new(),
+            },
+        ))
+    }
+
+    /// One attempt at a create: no waiting for lock contention.
+    pub fn create_document_once(
         &self,
         req: &pb::CreateDocumentRequest,
         guard: WriteGuard<'_>,
@@ -2793,6 +2853,18 @@ impl LocalBackend {
         guard: WriteGuard<'_>,
     ) -> Result<(), Status> {
         let (parent, write) = Self::plan_delete(req)?;
+        self.retry_on_contention(&parent, None, std::slice::from_ref(&write), || {
+            self.delete_document_once(req, guard)
+        })
+    }
+
+    /// One attempt at a delete: no waiting for lock contention.
+    pub fn delete_document_once(
+        &self,
+        req: &pb::DeleteDocumentRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<(), Status> {
+        let (parent, write) = Self::plan_delete(req)?;
         self.fault(parent.project.as_str(), "firestore.commit")?;
         let now = self.write_time();
         self.with_db(&parent, |db| {
@@ -2867,25 +2939,61 @@ impl LocalBackend {
         self.commit_with(req, &allow_all)
     }
 
-    /// `Commit` with a write guard. A commit outside a transaction that collides with the
-    /// locks of an active read-write transaction waits for a release up to the configured
-    /// contention wait (blocking the calling thread; the REST surface runs on a blocking
-    /// thread) and is then refused the way production refuses it.
+    /// `Commit` with a write guard. A commit that collides with the locks of an active
+    /// read-write transaction waits for a release up to the configured contention wait
+    /// (blocking the calling thread; the REST surface runs on a blocking thread) and is then
+    /// refused the way production refuses it.
     pub fn commit_with(
         &self,
         req: &pb::CommitRequest,
         guard: WriteGuard<'_>,
     ) -> Result<pb::CommitResponse, Status> {
+        let (parent, writes) = Self::plan_commit(req)?;
+        let own = Self::txn(&parent, &req.transaction)?;
+        self.retry_on_contention(&parent, own.as_ref(), &writes, || {
+            self.commit_once(req, guard)
+        })
+    }
+
+    /// One attempt at `Commit`: no waiting for lock contention.
+    pub fn commit_once(
+        &self,
+        req: &pb::CommitRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::CommitResponse, Status> {
+        let (parent, writes) = Self::plan_commit(req)?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
+        let txn = Self::txn(&parent, &req.transaction)?;
+        let now = self.write_time();
+        let result = self.with_db(&parent, |db| {
+            guard(db, &writes, now)?;
+            let result = self.commit_with_events(&parent, db, &writes, txn.as_ref(), now)?;
+            Ok(result)
+        })?;
+        Ok(encode_commit(&result))
+    }
+
+    /// Runs `attempt` until it is not refused for lock contention. A refusal runs the lease
+    /// bookkeeping (a holder that kept writers blocked while idle for the lock lease is rolled
+    /// back), then waits for a transaction of `parent`'s database to finish, up to the
+    /// contention wait, and tries again; past the deadline, or once the refused transaction
+    /// itself is gone (the deadlock victim), the refusal is returned. `lease_writes` names
+    /// the documents the attempt writes, for the bookkeeping.
+    pub fn retry_on_contention<T>(
+        &self,
+        parent: &Parent,
+        own: Option<&TransactionId>,
+        lease_writes: &[Write],
+        mut attempt: impl FnMut() -> Result<T, Status>,
+    ) -> Result<T, Status> {
         let deadline = std::time::Instant::now() + self.contention_wait;
         loop {
-            let (handle, marker) = self.release_marker(req)?;
-            match self.commit_once(req, guard) {
+            let handle = self.database_handle(parent)?;
+            let marker = handle.release_marker();
+            match attempt() {
                 Err(status) if Self::is_contention(&status) => {
-                    // Lease bookkeeping runs on every refusal, whichever side was refused, so
-                    // a holder that keeps writers blocked is rolled back even when the refused
-                    // side cannot wait.
-                    let released = self.expire_lock_leases(req, &handle);
-                    if !self.should_wait_for_release(req, &handle, &status, deadline) {
+                    let released = self.expire_lock_leases(&handle, lease_writes, own);
+                    if !Self::should_wait_for_release(&handle, own, deadline) {
                         return Err(status);
                     }
                     if !released {
@@ -2897,16 +3005,80 @@ impl LocalBackend {
         }
     }
 
-    /// Bookkeeping for a commit refused for lock contention: notes when each holder first
-    /// blocked a writer and rolls back a holder that has blocked writers for the lock lease.
-    /// `true` when a holder was rolled back, so the commit is worth trying again at once.
-    pub fn expire_lock_leases(&self, req: &pb::CommitRequest, handle: &DatabaseHandle) -> bool {
-        let Ok((parent, writes)) = Self::plan_commit(req) else {
+    /// [`Self::retry_on_contention`] for an async caller: the wait runs off the runtime.
+    pub async fn retry_on_contention_async<T>(
+        &self,
+        parent: &Parent,
+        own: Option<&TransactionId>,
+        lease_writes: &[Write],
+        mut attempt: impl FnMut() -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        let deadline = std::time::Instant::now() + self.contention_wait;
+        loop {
+            let handle = self.database_handle(parent)?;
+            let marker = handle.release_marker();
+            match attempt() {
+                Err(status) if Self::is_contention(&status) => {
+                    let released = self.expire_lock_leases(&handle, lease_writes, own);
+                    if !Self::should_wait_for_release(&handle, own, deadline) {
+                        return Err(status);
+                    }
+                    if !released {
+                        let waiter = handle.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            waiter.wait_for_release(marker, deadline)
+                        })
+                        .await;
+                    }
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    /// Whether a refused attempt should wait for a transaction to finish and try again:
+    /// before the deadline, and, for a transaction's own commit, only while that transaction
+    /// is still active (the store aborts the deadlock victim).
+    fn should_wait_for_release(
+        handle: &DatabaseHandle,
+        own: Option<&TransactionId>,
+        deadline: std::time::Instant,
+    ) -> bool {
+        if std::time::Instant::now() >= deadline {
             return false;
-        };
-        let own = Self::txn(&parent, &req.transaction).ok().flatten();
-        let holders = handle
-            .read(|db| db.lock_holders(&writes, own.as_ref()))
+        }
+        own.is_none_or(|txn| {
+            handle
+                .read(|db| db.transaction_is_active(txn))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Whether `status` is the lock contention refusal.
+    #[must_use]
+    pub fn is_contention(status: &Status) -> bool {
+        status.code() == tonic::Code::Aborted
+            && status.message() == fireemu_core_firestore::store::TOO_MUCH_CONTENTION
+    }
+
+    /// Lease bookkeeping for a refused attempt: notes when each holder of a colliding lock
+    /// first blocked a writer and how active it was then, and rolls back a holder that has
+    /// blocked writers for the lock lease without driving its transaction in the meantime
+    /// (production expires an idle transaction; a busy one keeps its locks). `true` when a
+    /// holder was rolled back, so the attempt is worth repeating at once.
+    pub fn expire_lock_leases(
+        &self,
+        handle: &DatabaseHandle,
+        lease_writes: &[Write],
+        own: Option<&TransactionId>,
+    ) -> bool {
+        let holders: Vec<(TransactionId, u64)> = handle
+            .read(|db| {
+                db.lock_holders(lease_writes, own)
+                    .into_iter()
+                    .filter_map(|id| db.transaction_activity(&id).map(|activity| (id, activity)))
+                    .collect()
+            })
             .unwrap_or_default();
         let now = std::time::Instant::now();
         let expired: Vec<TransactionId> = {
@@ -2929,11 +3101,15 @@ impl LocalBackend {
             }
             holders
                 .iter()
-                .filter(|id| {
-                    now.duration_since(*since.entry((*id).clone()).or_insert(now))
-                        >= self.lock_lease
+                .filter(|(id, activity)| {
+                    let entry = since.entry(id.clone()).or_insert((now, *activity));
+                    if entry.1 != *activity {
+                        // The holder drove its transaction since: not idle, the lease restarts.
+                        *entry = (now, *activity);
+                    }
+                    now.duration_since(entry.0) >= self.lock_lease
                 })
-                .cloned()
+                .map(|(id, _)| id.clone())
                 .collect()
         };
         if expired.is_empty() {
@@ -2951,75 +3127,6 @@ impl LocalBackend {
             }
         }
         true
-    }
-
-    /// One attempt at `Commit`: no waiting for lock contention.
-    pub fn commit_once(
-        &self,
-        req: &pb::CommitRequest,
-        guard: WriteGuard<'_>,
-    ) -> Result<pb::CommitResponse, Status> {
-        let (parent, writes) = Self::plan_commit(req)?;
-        self.fault(parent.project.as_str(), "firestore.commit")?;
-        let txn = Self::txn(&parent, &req.transaction)?;
-        let now = self.write_time();
-        let result = self.with_db(&parent, |db| {
-            guard(db, &writes, now)?;
-            let result = self.commit_with_events(&parent, db, &writes, txn.as_ref(), now)?;
-            Ok(result)
-        })?;
-        Ok(encode_commit(&result))
-    }
-
-    /// The database a commit addresses and its current release marker, read before an
-    /// attempt so a release during the attempt is never missed.
-    pub fn release_marker(&self, req: &pb::CommitRequest) -> Result<(DatabaseHandle, u64), Status> {
-        let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
-        let handle = self.database_handle(&parent)?;
-        let marker = handle.release_marker();
-        Ok((handle, marker))
-    }
-
-    /// Whether a refused commit should wait for a transaction to finish and try again: a
-    /// commit refused for lock contention before the deadline, unless it was a transaction's
-    /// own commit and the store aborted that transaction as the deadlock victim.
-    #[must_use]
-    pub fn should_wait_for_release(
-        &self,
-        req: &pb::CommitRequest,
-        handle: &DatabaseHandle,
-        status: &Status,
-        deadline: std::time::Instant,
-    ) -> bool {
-        if !Self::is_contention(status) || std::time::Instant::now() >= deadline {
-            return false;
-        }
-        if req.transaction.is_empty() {
-            return true;
-        }
-        let Ok(parent) = parse_parent(&format!("{}/documents", req.database)) else {
-            return false;
-        };
-        match Self::txn(&parent, &req.transaction) {
-            Ok(Some(txn)) => handle
-                .read(|db| db.transaction_is_active(&txn))
-                .unwrap_or(false),
-            _ => false,
-        }
-    }
-
-    /// Whether `status` is the lock contention refusal.
-    #[must_use]
-    pub fn is_contention(status: &Status) -> bool {
-        status.code() == tonic::Code::Aborted
-            && status.message() == fireemu_core_firestore::store::TOO_MUCH_CONTENTION
-    }
-
-    /// Waits off the async runtime for a transaction of the commit's database to finish
-    /// after `marker` was read, or for `deadline`.
-    pub async fn await_release(handle: DatabaseHandle, marker: u64, deadline: std::time::Instant) {
-        let _ =
-            tokio::task::spawn_blocking(move || handle.wait_for_release(marker, deadline)).await;
     }
 
     /// `Rollback`.
@@ -3582,6 +3689,25 @@ impl LocalBackend {
                 write_results,
                 status: statuses,
             })
+        })
+        .inspect(|response| {
+            // A batch is not atomic and does not wait, but a write refused for lock contention
+            // still counts towards the holder's lease.
+            let contended: Vec<Write> = response
+                .status
+                .iter()
+                .zip(req.writes.iter())
+                .filter(|(status, _)| {
+                    status.code == i32::from(tonic::Code::Aborted)
+                        && status.message == fireemu_core_firestore::store::TOO_MUCH_CONTENTION
+                })
+                .filter_map(|(_, write)| decode_write(write).ok())
+                .collect();
+            if !contended.is_empty() {
+                if let Ok(handle) = self.database_handle(&parent) {
+                    let _ = self.expire_lock_leases(&handle, &contended, None);
+                }
+            }
         })
     }
 }

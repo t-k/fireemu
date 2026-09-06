@@ -139,7 +139,7 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.platform.os }}" = "win32" ]; then
-            cargo nextest run --workspace --lib --profile pr
+            cargo nextest run --workspace --exclude fireemu-verification-quint --lib --profile pr
           else
             cargo nextest run --workspace --profile pr
           fi

@@ -50,6 +50,11 @@ end
 release.dig("jobs", "build", "steps").select { |step| step["uses"]&.start_with?("dtolnay/rust-toolchain@") }.each do |step|
   assert(step.dig("with", "toolchain") == toolchain_channel, "release build must install targets for #{toolchain_channel}")
 end
+release_build_runs = release.dig("jobs", "build", "steps").map { |step| step["run"] }.compact.join("\n")
+assert(
+  release_build_runs.include?("cargo nextest run --workspace --exclude fireemu-verification-quint --lib --profile pr"),
+  "release Windows tests must exclude the Unix-only Quint verification crate"
+)
 assert(release.dig("jobs", "publish", "environment") == "npm-release", "release publish must use the protected npm-release environment")
 assert(release.dig("concurrency", "cancel-in-progress") == false, "release publication must never be cancelled in progress")
 publish_runs = release.dig("jobs", "publish", "steps").map { |step| step["run"] }.compact.join("\n")

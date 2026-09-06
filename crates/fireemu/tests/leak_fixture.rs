@@ -79,8 +79,8 @@ fn record_child(pid: u32) {
 
 // --- the nested driver ------------------------------------------------------------------
 
-/// A nested nextest run in its own process group. Dropping it terminates and reaps the whole
-/// group, whatever happened to the assertions.
+/// A nested nextest run in its own process group. Dropping it terminates the verified fixture
+/// child group, whatever happened to the assertions.
 struct NestedRun {
     pgid: i32,
     pidfile: PathBuf,
@@ -178,20 +178,21 @@ impl NestedRun {
             .and_then(|s| s.trim().parse().ok())
     }
 
-    /// Terminates and reaps the nested run. Idempotent; also runs from `Drop`.
+    /// Terminates the verified fixture child group. Idempotent; also runs from `Drop`.
     ///
-    /// Two groups matter: the one this driver created for `cargo nextest` itself, and the one
-    /// each fixture explicitly created for its child. Never the group of the test doing the
-    /// cleaning.
+    /// Nested cargo has already been waited and its numeric process group can be reused. Only
+    /// signal a currently live fixture child whose PID, process group and command still match
+    /// the identity established by the fixture.
     fn cleanup(&mut self) {
         if self.cleaned {
             return;
         }
         self.cleaned = true;
         let cleanup_grace = Duration::from_millis(250);
-        if let Some(pid) = self.fixture_child() {
-            census::kill_process_group_with_grace(pid, cleanup_grace);
-            census::kill_pid(pid);
+        if let Some(process) = self.fixture_child().and_then(census::find) {
+            if process.pgid == process.pid && process.command.contains("sleep") {
+                census::kill_process_group_with_grace(process.pgid, cleanup_grace);
+            }
         }
         for path in [&self.pidfile, &self.stdout_file, &self.stderr_file] {
             let _ = std::fs::remove_file(path);

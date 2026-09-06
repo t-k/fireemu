@@ -2325,6 +2325,17 @@ async fn run_query_streams_bounded_batches_and_releases_its_snapshot_pin() {
             .count(),
         65
     );
+    let names = responses
+        .iter()
+        .filter_map(|response| response.as_ref().ok()?.document.as_ref())
+        .map(|document| document.name.rsplit('/').next().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        (0..65)
+            .map(|index| format!("{index:03}"))
+            .collect::<Vec<_>>()
+    );
     let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
     assert_eq!(
         backend.read_unadmitted(&parent, |state| state

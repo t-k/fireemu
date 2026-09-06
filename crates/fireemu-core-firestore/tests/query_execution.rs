@@ -658,6 +658,29 @@ fn a_finite_limit_bounds_candidates_and_only_selected_documents_are_cloned() {
 }
 
 #[test]
+fn name_continuation_seeks_the_ordered_scope_index() {
+    let db = large_collection(500);
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.limit = Some(32);
+
+    let (first, first_stats) = db.run_query_with_stats(&query, None).unwrap();
+    assert_eq!(first.len(), 32);
+    assert_eq!(first[0].fields.get("n"), Some(&Value::Integer(0)));
+    assert_eq!(first[31].fields.get("n"), Some(&Value::Integer(31)));
+    assert_eq!(first_stats.scanned, 32);
+    assert_eq!(first_stats.peak_candidates, 32);
+
+    let (second, second_stats) = db
+        .run_query_after_document_with_stats(&query, None, &first[31].path)
+        .unwrap();
+    assert_eq!(second.len(), 32);
+    assert_eq!(second[0].fields.get("n"), Some(&Value::Integer(32)));
+    assert_eq!(second[31].fields.get("n"), Some(&Value::Integer(63)));
+    assert_eq!(second_stats.scanned, 32);
+    assert_eq!(second_stats.peak_candidates, 32);
+}
+
+#[test]
 fn collection_scope_and_name_limit_visit_only_the_requested_rows() {
     let mut db = FirestoreState::new();
     let now = LogicalInstant::from_unix_seconds(1_788_000_000);

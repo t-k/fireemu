@@ -9,6 +9,8 @@
 
 use std::sync::Arc;
 
+use fireemu_core_firestore::path::DocumentPath;
+use fireemu_core_firestore::query::{Direction, Query};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
 use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
@@ -17,6 +19,7 @@ use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::decode::{decode_structured_query, parse_parent};
+use crate::encode::decode_document_name;
 use crate::gateway::{Gateway, Rejection};
 use crate::local::LocalBackend;
 use crate::rules::{is_owner_credential, same_epoch, Principal, RulesEnforcer};
@@ -581,6 +584,15 @@ impl Firestore for GatewayService {
         let req = request.into_inner();
         if let Some(local) = self.local_backend() {
             let local = Arc::clone(local);
+            let name_ascending_continuation = match req.query_type.as_ref() {
+                Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
+                    let parent = parse_parent(&req.parent)
+                        .map_err(|error| Rejection::Decode(error).to_status())?;
+                    let accepted = local.accepted_query(&parent, query)?;
+                    is_name_ascending_query(&accepted.query)
+                }
+                None => false,
+            };
             let original_limit = req.query_type.as_ref().and_then(|query| match query {
                 pb::run_query_request::QueryType::StructuredQuery(query) => query.limit,
             });
@@ -634,6 +646,11 @@ impl Firestore for GatewayService {
                 .iter()
                 .filter(|response| response.document.is_some())
                 .count();
+            let first_after_document = if name_ascending_continuation {
+                last_query_document_path(&first)?
+            } else {
+                None
+            };
             let (sender, receiver) = tokio::sync::mpsc::channel(RUN_QUERY_CHANNEL_CAPACITY);
             let rules = self.rules.clone();
             tokio::spawn(async move {
@@ -649,6 +666,7 @@ impl Firestore for GatewayService {
                 }
                 let mut delivered = i32::try_from(first_documents).unwrap_or(i32::MAX);
                 let mut batch_documents = delivered;
+                let mut after_document = first_after_document;
                 while batch_documents == RUN_QUERY_BATCH_SIZE
                     && original_limit.is_none_or(|limit| delivered < limit)
                 {
@@ -668,18 +686,32 @@ impl Firestore for GatewayService {
                             .await;
                         return;
                     }
-                    set_run_query_page(
-                        &mut page,
-                        original_offset.saturating_add(delivered),
-                        original_limit.map(|limit| limit.saturating_sub(delivered)),
-                    );
+                    let continuation = after_document.clone();
+                    if name_ascending_continuation {
+                        set_run_query_page(
+                            &mut page,
+                            0,
+                            original_limit.map(|limit| limit.saturating_sub(delivered)),
+                        );
+                    } else {
+                        set_run_query_page(
+                            &mut page,
+                            original_offset.saturating_add(delivered),
+                            original_limit.map(|limit| limit.saturating_sub(delivered)),
+                        );
+                    }
                     let authorization = req.clone();
                     let batch = blocking_read(
                         local.clone(),
                         rules.clone(),
                         caller.clone(),
                         move |local, guard| {
-                            local.run_query_authorized_as(&page, &authorization, guard)
+                            local.run_query_authorized_as_after(
+                                &page,
+                                &authorization,
+                                guard,
+                                continuation.as_ref(),
+                            )
                         },
                     )
                     .await;
@@ -700,6 +732,23 @@ impl Firestore for GatewayService {
                             .count(),
                     )
                     .unwrap_or(i32::MAX);
+                    if name_ascending_continuation && batch_documents > 0 {
+                        after_document = match last_query_document_path(&responses) {
+                            Ok(Some(path)) => Some(path),
+                            Ok(None) => {
+                                let _ = sender
+                                    .send(Err(Status::internal(
+                                        "RunQuery page returned documents without names",
+                                    )))
+                                    .await;
+                                return;
+                            }
+                            Err(error) => {
+                                let _ = sender.send(Err(error)).await;
+                                return;
+                            }
+                        };
+                    }
                     for response in responses {
                         if sender.send(Ok(response)).await.is_err() {
                             return;
@@ -968,6 +1017,27 @@ fn set_run_query_page(req: &mut pb::RunQueryRequest, offset: i32, remaining: Opt
     query.limit = Some(remaining.map_or(RUN_QUERY_BATCH_SIZE, |remaining| {
         remaining.min(RUN_QUERY_BATCH_SIZE)
     }));
+}
+
+fn is_name_ascending_query(query: &Query) -> bool {
+    matches!(
+        query.effective_order_by().as_slice(),
+        [order] if order.field.is_document_name() && order.direction == Direction::Ascending
+    )
+}
+
+fn last_query_document_path(
+    responses: &[pb::RunQueryResponse],
+) -> Result<Option<DocumentPath>, Status> {
+    responses
+        .iter()
+        .rev()
+        .find_map(|response| response.document.as_ref())
+        .map(|document| {
+            decode_document_name(&document.name)
+                .map_err(|_| Status::internal("RunQuery response contained an invalid name"))
+        })
+        .transpose()
 }
 
 fn database_name_from_query_parent(parent: &str) -> String {

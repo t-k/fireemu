@@ -938,6 +938,23 @@ impl SnapshotAccess<'_> {
         }
     }
 
+    fn run_query_with_stats_after_document(
+        &mut self,
+        query: &Query,
+        after: &DocumentPath,
+    ) -> Result<(Vec<Document>, QueryStats), Status> {
+        let version = self.version()?;
+        match (&mut self.state, &self.selected.transaction) {
+            (SnapshotState::Exclusive(db), Some(transaction)) => db
+                .run_query_in_transaction_after_document_with_stats(transaction, query, after)
+                .map_err(|error| status_from_error(&error)),
+            (SnapshotState::Shared(db), None) => db
+                .run_query_after_document_with_stats(query, version, after)
+                .map_err(|error| status_from_error(&error)),
+            _ => Err(Status::internal("invalid Firestore snapshot access mode")),
+        }
+    }
+
     fn record_query(&mut self, query: &Query) -> Result<(), Status> {
         match (&mut self.state, &self.selected.transaction) {
             (SnapshotState::Shared(_), None) => Ok(()),
@@ -3096,15 +3113,28 @@ impl LocalBackend {
     /// Waits, without blocking a thread, until a transaction of any database finishes after
     /// `seen` was read or until `deadline`; `true` when one finished.
     pub async fn await_any_release(&self, seen: u64, deadline: std::time::Instant) -> bool {
+        self.await_any_release_after_registration(seen, deadline, || {})
+            .await
+    }
+
+    /// Waits for a release while registering the notification before checking the generation.
+    /// The probe is a deterministic test seam for the notification/check race.
+    async fn await_any_release_after_registration(
+        &self,
+        seen: u64,
+        deadline: std::time::Instant,
+        mut after_registration: impl FnMut(),
+    ) -> bool {
         loop {
-            if self.release_count() != seen {
-                return true;
-            }
             let now = std::time::Instant::now();
             if now >= deadline {
                 return false;
             }
             let notified = self.release_notify.notified();
+            after_registration();
+            if self.release_count() != seen {
+                return true;
+            }
             if tokio::time::timeout(deadline - now, notified)
                 .await
                 .is_err()
@@ -3257,7 +3287,7 @@ impl LocalBackend {
         req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        self.run_query_authorized_as(req, req, guard)
+        self.run_query_authorized_as_after(req, req, guard, None)
     }
 
     /// Executes a bounded page while authorizing the caller's original query shape.
@@ -3268,6 +3298,19 @@ impl LocalBackend {
         req: &pb::RunQueryRequest,
         authorization_req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
+    ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
+        self.run_query_authorized_as_after(req, authorization_req, guard, None)
+    }
+
+    /// Executes a bounded page after an exclusive document path while authorizing the caller's
+    /// original query shape. The continuation is valid only for the canonical ascending
+    /// `__name__` order selected by the caller.
+    pub fn run_query_authorized_as_after(
+        &self,
+        req: &pb::RunQueryRequest,
+        authorization_req: &pb::RunQueryRequest,
+        guard: ReadGuard<'_>,
+        after_document: Option<&DocumentPath>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
@@ -3322,11 +3365,20 @@ impl LocalBackend {
                     query: &authorization.query,
                 },
             )?;
-            let (docs, stats) = access.run_query_with_stats(&accepted.query)?;
+            let (docs, stats) = match after_document {
+                Some(after) => {
+                    access.run_query_with_stats_after_document(&accepted.query, after)?
+                }
+                None => access.run_query_with_stats(&accepted.query)?,
+            };
             let read_time = Some(encode_instant(access.read_time(now)?));
             // The rows the offset skipped, reported on the first result as the backend does.
-            let skipped = i32::try_from(u64::from(accepted.query.offset).min(stats.matched))
-                .unwrap_or(i32::MAX);
+            let skipped = if after_document.is_some() {
+                0
+            } else {
+                i32::try_from(u64::from(accepted.query.offset).min(stats.matched))
+                    .unwrap_or(i32::MAX)
+            };
             Ok((
                 query_responses(&docs, read_time, access.report(), skipped),
                 authorization.warnings.clone(),
@@ -4376,5 +4428,25 @@ mod lock_tests {
             concurrent.is_ok(),
             "the second GetDocument waited for the first"
         );
+    }
+
+    #[tokio::test]
+    async fn release_wait_checks_generation_after_registering_notification() {
+        let backend = backend();
+        let seen = backend.release_count();
+        let signal = Arc::clone(&backend);
+        let released = backend
+            .await_any_release_after_registration(
+                seen,
+                std::time::Instant::now() + Duration::from_secs(1),
+                move || {
+                    signal
+                        .release_count
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    signal.release_notify.notify_waiters();
+                },
+            )
+            .await;
+        assert!(released);
     }
 }

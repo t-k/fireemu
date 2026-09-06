@@ -1463,6 +1463,91 @@ impl FirestoreState {
         }
     }
 
+    /// Returns document paths strictly after `after` for a name-ascending scope.
+    ///
+    /// The scope indexes are ordered by resource name, so this range starts the iterator at the
+    /// continuation boundary instead of scanning and rejecting the prefix before it.
+    fn scope_paths_after<'a>(
+        &'a self,
+        scope: &'a QueryScope,
+        version: Option<CommitVersion>,
+        after: &'a DocumentPath,
+    ) -> Box<dyn Iterator<Item = &'a DocumentPath> + 'a> {
+        use core::ops::Bound::{Excluded, Unbounded};
+
+        match scope {
+            QueryScope::Collection {
+                parent,
+                collection_id,
+            } => {
+                let paths = if version.is_some() {
+                    &self.direct_collection_paths
+                } else {
+                    &self.live_direct_collection_paths
+                };
+                Box::new(
+                    paths
+                        .get(&(parent.clone(), collection_id.clone()))
+                        .into_iter()
+                        .flat_map(move |paths| {
+                            paths
+                                .range::<DocumentPath, _>((Excluded(after), Unbounded))
+                                .map(AsRef::as_ref)
+                        }),
+                )
+            }
+            QueryScope::CollectionGroup {
+                parent,
+                collection_id,
+            } => {
+                let paths = if version.is_some() {
+                    &self.collection_group_paths
+                } else {
+                    &self.live_collection_group_paths
+                };
+                let Some(paths) = paths.get(collection_id) else {
+                    return Box::new(core::iter::empty());
+                };
+                let paths = paths
+                    .range::<DocumentPath, _>((Excluded(after), Unbounded))
+                    .map(AsRef::as_ref);
+                if let Some(parent) = parent {
+                    Box::new(paths.take_while(move |path| is_strict_descendant(path, parent)))
+                } else {
+                    Box::new(paths)
+                }
+            }
+            QueryScope::KindlessAllDescendants { parent } => {
+                if version.is_some() {
+                    if let Some(parent) = parent {
+                        Box::new(
+                            self.history
+                                .range::<DocumentPath, _>((Excluded(after), Unbounded))
+                                .map(|(path, _)| path)
+                                .take_while(move |path| is_strict_descendant(path, parent)),
+                        )
+                    } else {
+                        Box::new(
+                            self.history
+                                .range::<DocumentPath, _>((Excluded(after), Unbounded))
+                                .map(|(path, _)| path),
+                        )
+                    }
+                } else {
+                    let paths = self
+                        .live_paths
+                        .range::<DocumentPath, _>((Excluded(after), Unbounded))
+                        .map(AsRef::as_ref);
+                    if let Some(parent) = parent {
+                        Box::new(paths.take_while(move |path| is_strict_descendant(path, parent)))
+                    } else {
+                        Box::new(paths)
+                    }
+                }
+            }
+        }
+    }
+
     /// All live documents (latest versions), in path order.
     fn live_documents(&self, at: Option<CommitVersion>) -> impl Iterator<Item = &Document> {
         self.history.iter().filter_map(move |(path, _)| match at {
@@ -2448,6 +2533,32 @@ impl FirestoreState {
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let read_version = self.transaction(id)?.read_version;
         let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
+        self.record_transaction_query(id, query, &docs)?;
+        Ok((docs, stats))
+    }
+
+    /// Runs a name-ascending query inside a transaction after an exclusive document path.
+    /// The continuation uses the retained scope index while recording the same query
+    /// observation and returned documents in the transaction read set.
+    pub fn run_query_in_transaction_after_document_with_stats(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        after: &DocumentPath,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        let read_version = self.transaction(id)?.read_version;
+        let (docs, stats) =
+            self.run_query_after_document_with_stats(query, Some(read_version), after)?;
+        self.record_transaction_query(id, query, &docs)?;
+        Ok((docs, stats))
+    }
+
+    fn record_transaction_query(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        docs: &[Document],
+    ) -> Result<(), FirestoreError> {
         let already_recorded = self
             .transactions
             .get(id)
@@ -2490,7 +2601,7 @@ impl FirestoreState {
         }
         let observation = (!already_recorded).then(|| query_observation(&docs));
         if let Some(t) = self.transactions.get_mut(id) {
-            for d in &docs {
+            for d in docs {
                 t.read_set.insert(d.path.clone(), Some(d.version));
             }
             t.conflict_ledger_bytes = t.conflict_ledger_bytes.saturating_add(additional);
@@ -2501,7 +2612,7 @@ impl FirestoreState {
                 t.queries.push((query.clone(), observation));
             }
         }
-        Ok((docs, stats))
+        Ok(())
     }
 
     /// Number of distinct query snapshots retained by an active transaction.
@@ -3346,6 +3457,45 @@ impl FirestoreState {
         let mut stats = self.select(query, version, &[], Consumption::Ordered, |doc| {
             out.push(project_document(doc, query.projection.as_deref()));
         })?;
+        stats.cloned_documents = out.len() as u64;
+        stats.cloned_field_bytes = out
+            .iter()
+            .map(|document| fields_retained_bytes(&document.fields))
+            .fold(0u64, u64::saturating_add);
+        Ok((out, stats))
+    }
+
+    /// Executes a name-ascending query strictly after `after` using the ordered scope index.
+    /// Other query orderings are rejected because a resource-name range is not a valid
+    /// continuation for them.
+    pub fn run_query_after_document_with_stats(
+        &self,
+        query: &Query,
+        version: Option<CommitVersion>,
+        after: &DocumentPath,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        let order = query.effective_order_by();
+        if order.len() != 1
+            || !order[0].field.is_document_name()
+            || order[0].direction != Direction::Ascending
+        {
+            return Err(FirestoreError::InvalidArgument(
+                "document continuation requires ascending __name__ order".into(),
+            ));
+        }
+        let mut out = Vec::new();
+        let mut stats = select_from(
+            query,
+            self.scope_paths_after(&query.scope, version, after)
+                .filter_map(|path| match version {
+                    Some(version) => self.get_at(path, version),
+                    None => self.get(path),
+                }),
+            true,
+            &[],
+            Consumption::Ordered,
+            |doc| out.push(project_document(doc, query.projection.as_deref())),
+        )?;
         stats.cloned_documents = out.len() as u64;
         stats.cloned_field_bytes = out
             .iter()

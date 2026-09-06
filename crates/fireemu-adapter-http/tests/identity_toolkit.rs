@@ -936,6 +936,13 @@ fn expired_enrollment_session_and_disabled_user() {
     );
     let id_token = body["idToken"].as_str().unwrap().to_owned();
     let uid = body["localId"].as_str().unwrap().to_owned();
+    let (status, verified) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "emailVerified": true}),
+    );
+    assert_eq!(status, 200, "{verified}");
     let (_, start) = post(
         &s,
         &format!("{V2}/accounts/mfaEnrollment:start"),

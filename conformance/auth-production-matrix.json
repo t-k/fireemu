@@ -3,9 +3,127 @@
   "recordedAgainst": {
     "target": "production Identity Toolkit (v1 and v2 REST) with the project's web API key",
     "officialEmulatorMatrix": {
-      "firebaseTools": "15.28.2"
+      "firebaseTools": "15.28.2",
+      "evidenceSchema": 1,
+      "evidence": {
+        "identity": {
+          "sourceSha": "sha256-dee4822dcab0af5e65a65d55237fd971466377a381dd9ca325d7eb29809551e0",
+          "packageVersion": "0.0.0-dev",
+          "packageManifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
+          "packageIntegrity": null,
+          "artifactSha256": null,
+          "artifactPlatform": null,
+          "profile": "official-emulator",
+          "configDigest": "sha256-97d26a3c2eb4985663a7d7a24e277d5749918bb98fcb004f2678e0bde745b3d4",
+          "rulesDigest": null,
+          "sdkLockDigest": "sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
+          "corpusDigest": "sha256-91b279e3be6b07f85859b3ce9e402382d9b0935907acd59b8a44d8d4c0ec6281",
+          "indexDigest": null,
+          "databaseDigest": "sha256-1d6854935ad15b2cff02730990e988bbd23a7dbf6be823c63e25f5b6a044052f"
+        }
+      }
     },
+    "evidenceSchema": 1,
     "note": "The production project id and API key are never recorded. Rows compare HTTP status, the Identity Toolkit error code and the normalized success body; tokens, ids, expiry and timestamps are placeholders and the human sentence production appends to some error codes is not compared."
+  },
+  "evidence": {
+    "schemaVersion": 1,
+    "verified": true,
+    "validation": [],
+    "observations": {
+      "production": {
+        "schemaVersion": 1,
+        "observation": {
+          "side": "production",
+          "mode": "live",
+          "startedAt": "2026-09-06T16:07:08.780Z",
+          "finishedAt": "2026-09-06T16:07:16.241Z",
+          "database": {
+            "target": "production Identity Toolkit"
+          }
+        },
+        "source": {
+          "gitSha": "cda9b0e03e5851d27dbcea2675ccfd49ef744064",
+          "sourceTreeDigest": "sha256-dee4822dcab0af5e65a65d55237fd971466377a381dd9ca325d7eb29809551e0",
+          "trackedTreeClean": true
+        },
+        "package": {
+          "name": "fireemu",
+          "version": "0.0.0-dev",
+          "manifest": "fireemu/package.json",
+          "manifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
+          "integrity": "sha512-4mjvTz7xVDNCHLXnwCXibcXEhPn611MQ1XGW1JKcgcDypnhVd058f5C8CElJ9i5Hy/5sdsXopgRbrTIX6pO7QA=="
+        },
+        "artifact": null,
+        "runtime": {
+          "profile": "production",
+          "config": null,
+          "configDigest": null,
+          "rules": null,
+          "rulesDigest": null
+        },
+        "inputs": {
+          "sdkLock": "conformance/pnpm-lock.yaml",
+          "sdkLockDigest": "sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
+          "corpus": "conformance/.runs/auth-probe/programs.json",
+          "corpusDigest": "sha256-91b279e3be6b07f85859b3ce9e402382d9b0935907acd59b8a44d8d4c0ec6281",
+          "indexFiles": [],
+          "indexDigest": null
+        }
+      },
+      "fireemu": {
+        "schemaVersion": 1,
+        "observation": {
+          "side": "fireemu",
+          "mode": "live",
+          "startedAt": "2026-09-06T16:07:16.261Z",
+          "finishedAt": "2026-09-06T16:07:16.322Z",
+          "database": {
+            "target": "fireemu local Auth"
+          }
+        },
+        "source": {
+          "gitSha": "cda9b0e03e5851d27dbcea2675ccfd49ef744064",
+          "sourceTreeDigest": "sha256-dee4822dcab0af5e65a65d55237fd971466377a381dd9ca325d7eb29809551e0",
+          "trackedTreeClean": true
+        },
+        "package": {
+          "name": "fireemu",
+          "version": "0.0.0-dev",
+          "manifest": "@fireemu/darwin-arm64/package.json",
+          "manifestDigest": "sha256-3d77a32c7bd9262ba29526bed2c4bf8df57cfdbfa1186e7e725ed484e8500a68",
+          "integrity": "sha512-4mjvTz7xVDNCHLXnwCXibcXEhPn611MQ1XGW1JKcgcDypnhVd058f5C8CElJ9i5Hy/5sdsXopgRbrTIX6pO7QA=="
+        },
+        "artifact": {
+          "file": "fireemu",
+          "bytes": 11905760,
+          "sha256": "sha256-3675ba99f1d7f1bed36cca9e31de11a8d11d10ee8332e6a465f20bb82eb4e864",
+          "platform": "darwin-arm64",
+          "packageIntegrity": "sha512-4mjvTz7xVDNCHLXnwCXibcXEhPn611MQ1XGW1JKcgcDypnhVd058f5C8CElJ9i5Hy/5sdsXopgRbrTIX6pO7QA=="
+        },
+        "runtime": {
+          "profile": "firebase",
+          "config": "conformance/auth-probe.fireemu.production.json",
+          "configDigest": "sha256-4a9ffd3d584a2b34d3924243e5e09fde0681afcfdc3cffcff7364da89e92f5d9",
+          "rules": null,
+          "rulesDigest": null
+        },
+        "inputs": {
+          "sdkLock": "conformance/pnpm-lock.yaml",
+          "sdkLockDigest": "sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
+          "corpus": "conformance/.runs/auth-probe/programs.json",
+          "corpusDigest": "sha256-91b279e3be6b07f85859b3ce9e402382d9b0935907acd59b8a44d8d4c0ec6281",
+          "indexFiles": [],
+          "indexDigest": null
+        }
+      },
+      "officialEmulator": {
+        "side": "official-emulator",
+        "mode": "stored",
+        "matrixDigest": "sha256-1e085e084593999c48dd41d26bfd059adf2d2e4f729cf46db4ad85464cf2d890",
+        "source": "auth-matrix.json"
+      }
+    }
   },
   "summary": {
     "parity": 14,

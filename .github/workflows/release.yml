@@ -148,6 +148,10 @@ jobs:
         if: contains(matrix.platform.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: GNU tar for deterministic macOS archives
+        if: matrix.platform.os == 'darwin'
+        run: brew install gnu-tar
+
       - name: build the daemon
         run: cargo build --release --locked -p fireemu --target ${{ matrix.platform.target }}
 
@@ -186,7 +190,9 @@ jobs:
           else
             # Deterministic: a fixed member order, owner and mtime, and no gzip timestamp,
             # so the archive of a reproducible binary is itself reproducible.
-            tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${SOURCE_DATE_EPOCH}" \
+            tar_command=tar
+            if [ "${{ matrix.platform.os }}" = "darwin" ]; then tar_command=gtar; fi
+            "$tar_command" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${SOURCE_DATE_EPOCH}" \
               -C npm/platforms/build -cf - "${NAME}" | gzip -n > "dist/${base}.tar.gz"
           fi
           ls -l dist

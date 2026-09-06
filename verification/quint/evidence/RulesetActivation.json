@@ -75,7 +75,7 @@
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
     "verification/quint/src/ruleset_activation.rs": "4124018df50bda98aadcd0624e11d2e095b6bcff7b1e404c38aea81434b592ac",
-    "verification/quint/src/server.rs": "38050325dd6280331c1b1668e507e0a638d5ccee6ecde090416a59f9ecd3f5da",
+    "verification/quint/src/server.rs": "07dcb8709d2a22637101cc337c97b647dc5406ce837ddb6c10485b674d6d3518",
     "verification/quint/tests/ruleset_activation_connect.rs": "389b2b15a5f13fcd7682ac5cd7d7e6b1c71e164326622cc664fa79bb86374cf3"
   },
   "invariants": [

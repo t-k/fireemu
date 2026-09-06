@@ -400,6 +400,7 @@ fn listener_endpoints(pid: u32) -> Result<BTreeSet<SocketAddr>, String> {
     parse_lsof_listener_output(&output.stdout)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_lsof_listener_output(output: &[u8]) -> Result<BTreeSet<SocketAddr>, String> {
     let mut endpoints = BTreeSet::new();
     for line in output.split(|byte| *byte == b'\n') {

@@ -1610,6 +1610,9 @@ async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() 
 #[allow(clippy::too_many_lines)]
 async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
     const CLIENTS: usize = 20;
+    // Every round commits the held-back transaction and aborts the others as deadlock
+    // victims, so a client may lose many rounds in a row before its turn.
+    const ATTEMPTS: usize = CLIENTS * 4;
     // A held-back commit waits for the holders to finish, as the daemon does; the deadlock
     // rule aborts the others, so every round makes progress.
     let (mut client, handle) = start_with_contention_wait(std::time::Duration::from_secs(30)).await;
@@ -1628,9 +1631,6 @@ async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
             let first_reads = first_reads.clone();
             tokio::spawn(async move {
                 let mut retry_transaction = Vec::new();
-                // Every round commits the held-back transaction and aborts the others as
-                // deadlock victims, so a client may lose many rounds in a row before its turn.
-                const ATTEMPTS: usize = CLIENTS * 4;
                 for attempt in 0..ATTEMPTS {
                     let transaction = client
                         .begin_transaction(pb::BeginTransactionRequest {

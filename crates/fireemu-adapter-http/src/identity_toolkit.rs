@@ -3078,6 +3078,13 @@ fn finish_sign_in_with_attributes_and_credentials(
             Ok(pending) => {
                 let mut body = json!({"mfaPendingCredential": pending.as_str(), "mfaInfo": factors, "localId": uid.as_str(), "email": email});
                 for (k, v) in extra {
+                    // The pending-second-factor answer carries no profile fields on the
+                    // official emulator (conformance/fixtures/auth/mfa-enrollment-eligibility);
+                    // production's shape for it is unobserved, so the token answer alone
+                    // carries `displayName`.
+                    if *k == "displayName" {
+                        continue;
+                    }
                     body[*k] = v.clone();
                 }
                 JsonResponse { status: 200, body }

@@ -183,22 +183,36 @@ impl TransactionConditionalLockDriver {
             ));
         }
         let transaction = self.transaction(client)?.clone();
-        self.store
-            .commit(
-                &[set_lock_write(true)],
-                Some(&transaction),
-                LogicalInstant::UNIX_EPOCH,
-            )
-            .map_err(|error| firestore_error(&error))?;
-        self.set_phase(client, "Committed")?;
+        match self.store.commit(
+            &[set_lock_write(true)],
+            Some(&transaction),
+            LogicalInstant::UNIX_EPOCH,
+        ) {
+            Ok(_) => self.set_phase(client, "Committed")?,
+            // Held back by the other client's read lock (the adapter waits for the release);
+            // the commit completes when that client's commit is aborted as the deadlock victim.
+            Err(FirestoreError::Aborted(_)) if self.store.transaction_is_active(&transaction) => {
+                self.set_phase(client, "Held")?;
+            }
+            Err(error) => return Err(firestore_error(&error)),
+        }
         self.record_action("Commit")
     }
 
     /// Confirms the other stale transaction is rejected as retryable `ABORTED`.
     pub fn abort_stale(&mut self, client: &str) -> Result {
         self.require_phase(client, "Read")?;
-        if !self.locked()? {
-            return Err(invalid_data("a stale abort requires the committed lock"));
+        let held: Vec<String> = CLIENTS
+            .into_iter()
+            .filter(|other| {
+                *other != client && self.phase.get(*other).map(String::as_str) == Some("Held")
+            })
+            .map(str::to_owned)
+            .collect();
+        if !self.locked()? && held.is_empty() {
+            return Err(invalid_data(
+                "a stale abort requires the committed lock or a held-back commit",
+            ));
         }
         let transaction = self.transaction(client)?.clone();
         match self.store.commit(
@@ -215,6 +229,19 @@ impl TransactionConditionalLockDriver {
             Ok(_) => return Err(invalid_data("stale production transaction committed")),
         }
         self.set_phase(client, "Aborted")?;
+        // The victim released its lock: a held-back commit goes through now, as the adapter's
+        // wait loop retries it in the daemon.
+        for other in held {
+            let held_transaction = self.transaction(&other)?.clone();
+            self.store
+                .commit(
+                    &[set_lock_write(true)],
+                    Some(&held_transaction),
+                    LogicalInstant::UNIX_EPOCH,
+                )
+                .map_err(|error| firestore_error(&error))?;
+            self.set_phase(&other, "Committed")?;
+        }
         self.record_action("AbortStale")
     }
 

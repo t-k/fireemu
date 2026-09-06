@@ -1681,10 +1681,12 @@ impl FirestoreState {
         if previous_attempt.state == TransactionState::Active {
             self.finish_transaction(previous, TransactionState::RolledBack);
         }
-        let previous_attempt = self
-            .transactions
-            .get(previous)
-            .expect("the previous attempt was found above");
+        // Finishing the attempt may have evicted it from the bounded finished lineage.
+        let Some(previous_attempt) = self.transactions.get(previous) else {
+            return Err(FirestoreError::InvalidArgument(
+                "Invalid retry transaction.".into(),
+            ));
+        };
         if !matches!(
             previous_attempt.state,
             TransactionState::RetryableAborted | TransactionState::RolledBack
@@ -1694,10 +1696,9 @@ impl FirestoreState {
             ));
         }
         self.ensure_transaction_capacity()?;
-        self.transactions
-            .get_mut(previous)
-            .expect("retry predecessor was checked above")
-            .state = TransactionState::Retried;
+        if let Some(previous_attempt) = self.transactions.get_mut(previous) {
+            previous_attempt.state = TransactionState::Retried;
+        }
         let read_time = self.read_time(now);
         self.insert_transaction(false, self.version, read_time, now)
     }

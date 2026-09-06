@@ -5,9 +5,9 @@
     {
       "id": "M-FORMAL-TXN-LOCK-WINNER-001",
       "property": "OneWinner",
-      "operator": "allow-a-stale-transaction-to-commit",
-      "from": "CLIENTS.forall(other => observable.observations.get(other) == List(false)),\n    not(observable.locked),",
-      "to": "CLIENTS.forall(other => observable.observations.get(other) == List(false)),\n    true,"
+      "operator": "commit-past-a-held-back-commit",
+      "from": "    CLIENTS.exclude(Set(client)).forall(other => observable.phase.get(other) != \"Held\"),\n    // Another client still holding",
+      "to": "    true,\n    // Another client still holding"
     },
     {
       "id": "M-FORMAL-TXN-LOCK-RETRY-001",

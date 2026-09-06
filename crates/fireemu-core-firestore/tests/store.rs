@@ -572,6 +572,25 @@ fn two_transactions_contending_for_one_document_resolve_like_a_deadlock() {
 }
 
 #[test]
+fn retrying_an_active_attempt_evicted_from_the_finished_lineage_is_refused_not_a_panic() {
+    // Rolling back the active attempt puts it into the bounded finished lineage, which may
+    // evict it at once (it has the smallest id); the retry is then refused like any unknown
+    // predecessor instead of panicking and poisoning the database lock.
+    let mut s = FirestoreState::new();
+    let oldest = s.begin_transaction(false, t(0)).unwrap();
+    for _ in 0..8_192 {
+        let id = s.begin_transaction(false, t(0)).unwrap();
+        s.rollback(&id).unwrap();
+    }
+    let outcome = s.retry_transaction(&oldest, t(1));
+    assert!(
+        matches!(outcome, Ok(_) | Err(FirestoreError::InvalidArgument(_))),
+        "{outcome:?}"
+    );
+    assert!(!s.transaction_is_active(&oldest));
+}
+
+#[test]
 fn an_expired_transaction_releases_its_locks() {
     let mut s = FirestoreState::new();
     let txn = s.begin_transaction(false, t(0)).unwrap();

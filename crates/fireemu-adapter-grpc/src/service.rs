@@ -541,15 +541,17 @@ impl Firestore for GatewayService {
                     local.commit_once(request.get_ref(), &*guard)
                 };
                 match attempt {
-                    Err(status)
-                        if local.should_wait_for_release(
+                    Err(status) if LocalBackend::is_contention(&status) => {
+                        let released = local.expire_lock_leases(request.get_ref(), &handle);
+                        if !local.should_wait_for_release(
                             request.get_ref(),
                             &handle,
                             &status,
                             deadline,
-                        ) =>
-                    {
-                        if !local.expire_lock_leases(request.get_ref(), &handle) {
+                        ) {
+                            return Err(status);
+                        }
+                        if !released {
                             LocalBackend::await_release(handle, marker, deadline).await;
                         }
                     }

@@ -1,4 +1,6 @@
-// Two optimistic transactions contend for one application-level conditional lock.
+// Two read-write transactions contend for one application-level conditional lock under
+// production's pessimistic locking: a commit that runs into the other client's read lock is
+// held back and completes when that client's own commit is aborted as the deadlock victim.
 
 module TransactionConditionalLock {
   const CLIENTS: Set[str]
@@ -15,7 +17,7 @@ module TransactionConditionalLock {
   var lastAction: str
   var actionTaken: ActionTaken
 
-  pure val PHASES = Set("Ready", "Read", "Committed", "Aborted", "Retried", "Rejected", "Done")
+  pure val PHASES = Set("Ready", "Read", "Held", "Committed", "Aborted", "Retried", "Rejected", "Done")
   pure val ACTIONS = Set(
     "Init", "ReadUnlocked", "Commit", "AbortStale", "Retry", "RejectLocked",
     "RunProtectedAction", "Release"
@@ -57,9 +59,15 @@ module TransactionConditionalLock {
     observable.phase.get(client) == "Read",
     CLIENTS.forall(other => observable.observations.get(other) == List(false)),
     not(observable.locked),
+    // A commit that runs into a held-back commit is the deadlock victim (abortStale), never
+    // a second winner.
+    CLIENTS.exclude(Set(client)).forall(other => observable.phase.get(other) != "Held"),
+    // Another client still holding its read lock holds this commit back; it completes when
+    // that client's commit is aborted (abortStale).
+    val heldBack = CLIENTS.exclude(Set(client)).exists(other => observable.phase.get(other) == "Read")
     record("Commit", client, {
-      phase: observable.phase.set(client, "Committed"),
-      locked: true,
+      phase: observable.phase.set(client, if (heldBack) "Held" else "Committed"),
+      locked: not(heldBack),
       observations: observable.observations,
       acted: observable.acted,
     }),
@@ -67,10 +75,18 @@ module TransactionConditionalLock {
 
   action abortStale(client) = all {
     observable.phase.get(client) == "Read",
-    observable.locked,
+    or {
+      observable.locked,
+      CLIENTS.exclude(Set(client)).exists(other => observable.phase.get(other) == "Held"),
+    },
+    // The stale commit is aborted: as the deadlock victim when the other commit is held
+    // back (which then completes), or as a stale read set once the lock is committed.
     record("AbortStale", client, {
-      phase: observable.phase.set(client, "Aborted"),
-      locked: observable.locked,
+      phase: CLIENTS.exclude(Set(client)).fold(
+        observable.phase.set(client, "Aborted"),
+        (phases, other) => if (phases.get(other) == "Held") phases.set(other, "Committed") else phases
+      ),
+      locked: true,
       observations: observable.observations,
       acted: observable.acted,
     }),
@@ -150,8 +166,9 @@ module TransactionConditionalLock {
     lastAction.in(ACTIONS),
   }
 
+  // A held-back commit is the winner in waiting: nobody else may commit past it.
   val OneWinner = CLIENTS.filter(client =>
-    observable.phase.get(client).in(Set("Committed", "Done"))).size() <= 1
+    observable.phase.get(client).in(Set("Held", "Committed", "Done"))).size() <= 1
 
   val AtMostOneProtectedAction = observable.acted.size() <= 1
 

@@ -2868,8 +2868,15 @@ impl LocalBackend {
         loop {
             let (handle, marker) = self.release_marker(req)?;
             match self.commit_once(req, guard) {
-                Err(status) if self.should_wait_for_release(req, &handle, &status, deadline) => {
-                    if !self.expire_lock_leases(req, &handle) {
+                Err(status) if Self::is_contention(&status) => {
+                    // Lease bookkeeping runs on every refusal, whichever side was refused, so
+                    // a holder that keeps writers blocked is rolled back even when the refused
+                    // side cannot wait.
+                    let released = self.expire_lock_leases(req, &handle);
+                    if !self.should_wait_for_release(req, &handle, &status, deadline) {
+                        return Err(status);
+                    }
+                    if !released {
                         handle.wait_for_release(marker, deadline);
                     }
                 }
@@ -2894,7 +2901,20 @@ impl LocalBackend {
             let Ok(mut since) = handle.0.blocking_since.lock() else {
                 return false;
             };
-            since.retain(|id, _| holders.contains(id));
+            // Forget holders that finished; keep the clock of every still-active holder, so
+            // writers with different write sets do not reset each other's lease.
+            let stale: Vec<TransactionId> = since
+                .keys()
+                .filter(|id| {
+                    !handle
+                        .read(|db| db.transaction_is_active(id))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            for id in stale {
+                since.remove(&id);
+            }
             holders
                 .iter()
                 .filter(|id| {

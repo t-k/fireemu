@@ -15,7 +15,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { CONFORMANCE_DIR, REPO_ROOT } from "./config.mjs";
 
 const execFile = promisify(execFileCallback);
-const gitShaPattern = /^[0-9a-f]{7,64}$/;
+const sourceShaPattern = /^(?:[0-9a-f]{7,64}|sha256-[0-9a-f]{64})$/;
 const IDENTITY_FIELDS = Object.freeze([
   "sourceSha",
   "packageVersion",
@@ -74,6 +74,19 @@ export function resolveFireemuBinary() {
 const git = async (args) => {
   const result = await execFile("git", args, { cwd: REPO_ROOT, encoding: "utf8" });
   return result.stdout.trim();
+};
+
+const generatedProbeOutputs =
+  /^(?:conformance\/(?:auth|firestore|pubsub|rules|storage)-matrix\.json|conformance\/(?:auth|firestore)-production-matrix\.json|conformance\/(?:AUTH|FIRESTORE)-PRODUCTION-MATRIX\.md|conformance\/FIRESTORE-MATRIX\.md|conformance\/ORACLE\.md)$/;
+
+const sourceTreeDigest = async () => {
+  const entries = (await git(["ls-files", "-s"]))
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.match(/^(\d+)\s+([0-9a-f]+)\s+\d\t(.+)$/))
+    .filter((match) => match && !generatedProbeOutputs.test(match[3]))
+    .map((match) => `${match[1]} ${match[2]} ${match[3]}`);
+  return "sha256-" + createHash("sha256").update(entries.join("\n")).digest("hex");
 };
 
 const cargoVersion = async () => {
@@ -138,7 +151,7 @@ const packageIntegrity = async () => {
  */
 export function evidenceIdentity(evidence) {
   return {
-    sourceSha: evidence?.source?.gitSha ?? null,
+    sourceSha: evidence?.source?.sourceTreeDigest ?? evidence?.source?.gitSha ?? null,
     packageVersion: evidence?.package?.version ?? null,
     packageManifestDigest: evidence?.package?.manifestDigest ?? null,
     packageIntegrity: evidence?.package?.integrity ?? evidence?.artifact?.packageIntegrity ?? null,
@@ -192,7 +205,12 @@ export function validateLiveEvidence(
   if (evidence?.observation?.mode !== "live") {
     errors.push("observation: live observation required");
   }
-  if (!gitShaPattern.test(identity.sourceSha ?? "")) errors.push("sourceSha: invalid git SHA");
+  if (!sourceShaPattern.test(identity.sourceSha ?? "")) {
+    errors.push("sourceSha: invalid source tree digest");
+  }
+  if (evidence?.source?.gitSha && !/^[0-9a-f]{7,64}$/.test(evidence.source.gitSha)) {
+    errors.push("gitSha: invalid git SHA");
+  }
   if (evidence?.source?.trackedTreeClean !== true) {
     errors.push("source: tracked working tree is dirty");
   }
@@ -266,6 +284,7 @@ export async function collectEvidence({
 }) {
   const [
     sha,
+    sourceDigest,
     trackedStatus,
     sourceVersion,
     sourceManifest,
@@ -278,6 +297,7 @@ export async function collectEvidence({
     integrity,
   ] = await Promise.all([
     git(["rev-parse", "HEAD"]),
+    sourceTreeDigest(),
     git(["status", "--porcelain", "--untracked-files=no"]),
     cargoVersion(),
     fileRecord(join(REPO_ROOT, "crates/fireemu/Cargo.toml"), "crates/fireemu/Cargo.toml"),
@@ -305,6 +325,7 @@ export async function collectEvidence({
     },
     source: {
       gitSha: sha,
+      sourceTreeDigest: sourceDigest,
       trackedTreeClean: trackedStatus === "",
     },
     package: {

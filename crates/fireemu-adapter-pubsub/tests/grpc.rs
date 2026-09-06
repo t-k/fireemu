@@ -470,6 +470,182 @@ async fn creating_subscription_for_missing_topic_is_not_found() {
 }
 
 #[tokio::test]
+async fn grpc_rejects_unsupported_subscription_options_before_creation() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let topic = "projects/demo-app/topics/unsupported-options";
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    let options = vec![
+        (
+            "bigquery_config",
+            pb::Subscription {
+                bigquery_config: Some(pb::BigQueryConfig {
+                    table: "demo.dataset.table".to_owned(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "cloud_storage_config",
+            pb::Subscription {
+                cloud_storage_config: Some(pb::CloudStorageConfig::default()),
+                ..Default::default()
+            },
+        ),
+        (
+            "bigtable_config",
+            pb::Subscription {
+                bigtable_config: Some(pb::BigtableConfig::default()),
+                ..Default::default()
+            },
+        ),
+        (
+            "retain_acked_messages",
+            pb::Subscription {
+                retain_acked_messages: true,
+                ..Default::default()
+            },
+        ),
+        (
+            "message_retention_duration",
+            pb::Subscription {
+                message_retention_duration: Some(prost_types::Duration {
+                    seconds: 600,
+                    nanos: 0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "expiration_policy",
+            pb::Subscription {
+                expiration_policy: Some(pb::ExpirationPolicy {
+                    ttl: Some(prost_types::Duration {
+                        seconds: 86_400,
+                        nanos: 0,
+                    }),
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "detached",
+            pb::Subscription {
+                detached: true,
+                ..Default::default()
+            },
+        ),
+        (
+            "enable_exactly_once_delivery",
+            pb::Subscription {
+                enable_exactly_once_delivery: true,
+                ..Default::default()
+            },
+        ),
+        (
+            "message_transforms",
+            pb::Subscription {
+                message_transforms: vec![pb::MessageTransform::default()],
+                ..Default::default()
+            },
+        ),
+        (
+            "labels",
+            pb::Subscription {
+                labels: HashMap::from([(String::from("owner"), String::from("test"))]),
+                ..Default::default()
+            },
+        ),
+        (
+            "tags",
+            pb::Subscription {
+                tags: HashMap::from([(String::from("env"), String::from("test"))]),
+                ..Default::default()
+            },
+        ),
+        (
+            "topic_message_retention_duration",
+            pb::Subscription {
+                topic_message_retention_duration: Some(prost_types::Duration {
+                    seconds: 600,
+                    nanos: 0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "push_config.authentication_method",
+            pb::Subscription {
+                push_config: Some(pb::PushConfig {
+                    push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+                    authentication_method: Some(pb::push_config::AuthenticationMethod::OidcToken(
+                        pb::push_config::OidcToken {
+                            service_account_email: "push@example.com".to_owned(),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "push_config.attributes",
+            pb::Subscription {
+                push_config: Some(pb::PushConfig {
+                    push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+                    attributes: HashMap::from([(
+                        String::from("x-goog-version"),
+                        String::from("v1"),
+                    )]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "push_config.wrapper",
+            pb::Subscription {
+                push_config: Some(pb::PushConfig {
+                    push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+                    wrapper: Some(pb::push_config::Wrapper::NoWrapper(
+                        pb::push_config::NoWrapper {
+                            write_metadata: true,
+                        },
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ),
+    ];
+
+    for (index, (field, mut subscription)) in options.into_iter().enumerate() {
+        let name = format!("projects/demo-app/subscriptions/unsupported-{index}");
+        subscription.name = name.clone();
+        subscription.topic = topic.to_owned();
+        let error = subc.create_subscription(subscription).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{field}");
+        assert!(error.message().contains(field), "{field}: {error}");
+        let get_error = subc
+            .get_subscription(pb::GetSubscriptionRequest { subscription: name })
+            .await
+            .unwrap_err();
+        assert_eq!(get_error.code(), tonic::Code::NotFound, "{field}");
+    }
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn filter_drops_non_matching_messages() {
     let h = start().await;
     let mut pubc = h.publisher().await;

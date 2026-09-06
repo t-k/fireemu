@@ -107,8 +107,59 @@ fn duration_to_proto(d: LogicalDuration) -> prost_types::Duration {
     }
 }
 
+/// Rejects subscription fields that have no representation in the core state machine.
+pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSubError> {
+    let unsupported = if sub.bigquery_config.is_some() {
+        Some("bigquery_config")
+    } else if sub.cloud_storage_config.is_some() {
+        Some("cloud_storage_config")
+    } else if sub.bigtable_config.is_some() {
+        Some("bigtable_config")
+    } else if sub.retain_acked_messages {
+        Some("retain_acked_messages")
+    } else if sub.message_retention_duration.is_some() {
+        Some("message_retention_duration")
+    } else if !sub.labels.is_empty() {
+        Some("labels")
+    } else if sub.expiration_policy.is_some() {
+        Some("expiration_policy")
+    } else if sub.detached {
+        Some("detached")
+    } else if sub.enable_exactly_once_delivery {
+        Some("enable_exactly_once_delivery")
+    } else if sub.topic_message_retention_duration.is_some() {
+        Some("topic_message_retention_duration")
+    } else if sub.state != 0 {
+        Some("state")
+    } else if sub.analytics_hub_subscription_info.is_some() {
+        Some("analytics_hub_subscription_info")
+    } else if !sub.message_transforms.is_empty() {
+        Some("message_transforms")
+    } else if !sub.tags.is_empty() {
+        Some("tags")
+    } else {
+        sub.push_config.as_ref().and_then(|push| {
+            if !push.attributes.is_empty() {
+                Some("push_config.attributes")
+            } else if push.authentication_method.is_some() {
+                Some("push_config.authentication_method")
+            } else if push.wrapper.is_some() {
+                Some("push_config.wrapper")
+            } else {
+                None
+            }
+        })
+    };
+    unsupported.map_or(Ok(()), |field| {
+        Err(PubSubError::unimplemented(format!(
+            "subscription.{field} is not supported by the Pub/Sub emulator"
+        )))
+    })
+}
+
 /// Builds a validated [`SubscriptionConfig`] from a wire `Subscription`.
 pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionConfig, PubSubError> {
+    validate_subscription_options(sub)?;
     let name = SubscriptionName::parse(&sub.name)?;
     let topic = TopicName::parse(&sub.topic)?;
     let ack_deadline_seconds = if sub.ack_deadline_seconds == 0 {

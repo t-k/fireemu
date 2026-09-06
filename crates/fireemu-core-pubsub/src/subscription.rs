@@ -131,9 +131,26 @@ impl SubscriptionConfig {
         LogicalDuration::from_seconds(i64::from(self.ack_deadline_seconds))
     }
 
-    fn redelivery_backoff(&self) -> LogicalDuration {
-        self.retry_policy
-            .map_or(LogicalDuration::ZERO, |rp| rp.minimum_backoff)
+    fn redelivery_backoff(&self, delivery_attempt: u32) -> LogicalDuration {
+        let Some(policy) = self.retry_policy else {
+            return LogicalDuration::ZERO;
+        };
+        if policy.minimum_backoff == LogicalDuration::ZERO
+            || policy.maximum_backoff == LogicalDuration::ZERO
+        {
+            return LogicalDuration::ZERO;
+        }
+
+        let mut backoff = policy.minimum_backoff;
+        let steps = delivery_attempt.saturating_sub(1).min(127);
+        for _ in 0..steps {
+            if backoff >= policy.maximum_backoff {
+                break;
+            }
+            let doubled = backoff.as_nanos().saturating_mul(2);
+            backoff = LogicalDuration::from_nanos(doubled.min(policy.maximum_backoff.as_nanos()));
+        }
+        backoff
     }
 }
 
@@ -405,8 +422,6 @@ impl SubscriptionState {
     /// Moves every outstanding message whose ack deadline has passed back to available, so the
     /// next pull redelivers it. Call this on every clock advance.
     pub fn expire_deadlines(&mut self, now: LogicalInstant) {
-        let backoff = self.config.redelivery_backoff();
-        let available_at = now.checked_add(backoff).unwrap_or(now);
         let expired: Vec<String> = self
             .outstanding
             .iter()
@@ -418,6 +433,10 @@ impl SubscriptionState {
             .collect();
         for ack_id in expired {
             if let Some(index) = self.outstanding.remove(&ack_id) {
+                let backoff = self
+                    .config
+                    .redelivery_backoff(self.entries[index].delivery_attempt);
+                let available_at = now.checked_add(backoff).unwrap_or(now);
                 self.entries[index].state = Delivery::Available { available_at };
             }
         }
@@ -508,11 +527,13 @@ impl SubscriptionState {
     /// the message: it becomes available for immediate redelivery (after the retry backoff).
     /// Unknown ack ids are ignored.
     pub fn modify_ack_deadline(&mut self, ack_id: &str, seconds: u32, now: LogicalInstant) {
-        let backoff = self.config.redelivery_backoff();
         let Some(index) = self.outstanding.get(ack_id).copied() else {
             return;
         };
         if seconds == 0 {
+            let backoff = self
+                .config
+                .redelivery_backoff(self.entries[index].delivery_attempt);
             self.outstanding.remove(ack_id);
             self.entries[index].state = Delivery::Available {
                 available_at: now.checked_add(backoff).unwrap_or(now),
@@ -892,6 +913,94 @@ mod tests {
         let again = s.pull(10, now, &mut ids);
         assert_eq!(again.received.len(), 1);
         assert_eq!(again.received[0].delivery_attempt, 2);
+    }
+
+    #[test]
+    fn retry_backoff_increases_after_each_nack_and_clamps_to_maximum() {
+        let mut c = cfg();
+        c.retry_policy = Some(RetryPolicy {
+            minimum_backoff: LogicalDuration::from_seconds(2),
+            maximum_backoff: LogicalDuration::from_seconds(5),
+        });
+        let mut s = SubscriptionState::new(c);
+        let t0 = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), t0).unwrap();
+        let mut ids = counter();
+
+        let first = s.pull(1, t0, &mut ids);
+        s.modify_ack_deadline(&first.received[0].ack_id, 0, t0);
+        assert!(s.pull(1, t0, &mut ids).received.is_empty());
+        let t_first_retry = t0.checked_add(LogicalDuration::from_seconds(2)).unwrap();
+        let second = s.pull(1, t_first_retry, &mut ids);
+        assert_eq!(second.received[0].delivery_attempt, 2);
+
+        s.modify_ack_deadline(&second.received[0].ack_id, 0, t_first_retry);
+        let before_second_retry = t_first_retry
+            .checked_add(LogicalDuration::from_seconds(3))
+            .unwrap();
+        assert!(s.pull(1, before_second_retry, &mut ids).received.is_empty());
+        let t_second_retry = t_first_retry
+            .checked_add(LogicalDuration::from_seconds(4))
+            .unwrap();
+        let third = s.pull(1, t_second_retry, &mut ids);
+        assert_eq!(third.received[0].delivery_attempt, 3);
+
+        s.modify_ack_deadline(&third.received[0].ack_id, 0, t_second_retry);
+        let before_clamp = t_second_retry
+            .checked_add(LogicalDuration::from_seconds(4))
+            .unwrap();
+        assert!(s.pull(1, before_clamp, &mut ids).received.is_empty());
+        let at_clamp = t_second_retry
+            .checked_add(LogicalDuration::from_seconds(5))
+            .unwrap();
+        assert_eq!(s.pull(1, at_clamp, &mut ids).received.len(), 1);
+    }
+
+    #[test]
+    fn retry_backoff_is_attempt_dependent_for_expired_deadlines() {
+        let mut c = cfg();
+        c.retry_policy = Some(RetryPolicy {
+            minimum_backoff: LogicalDuration::from_seconds(2),
+            maximum_backoff: LogicalDuration::from_seconds(5),
+        });
+        let mut s = SubscriptionState::new(c);
+        let t0 = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), t0).unwrap();
+        let mut ids = counter();
+
+        let _first = s.pull(1, t0, &mut ids);
+        let t_deadline = t0.checked_add(LogicalDuration::from_seconds(10)).unwrap();
+        s.expire_deadlines(t_deadline);
+        assert!(s.pull(1, t_deadline, &mut ids).received.is_empty());
+        let t_first_retry = t_deadline
+            .checked_add(LogicalDuration::from_seconds(2))
+            .unwrap();
+        let second = s.pull(1, t_first_retry, &mut ids);
+        assert_eq!(second.received[0].delivery_attempt, 2);
+
+        let t_second_deadline = t_first_retry
+            .checked_add(LogicalDuration::from_seconds(10))
+            .unwrap();
+        s.expire_deadlines(t_second_deadline);
+        let before_second_retry = t_second_deadline
+            .checked_add(LogicalDuration::from_seconds(3))
+            .unwrap();
+        assert!(s.pull(1, before_second_retry, &mut ids).received.is_empty());
+        let t_second_retry = t_second_deadline
+            .checked_add(LogicalDuration::from_seconds(4))
+            .unwrap();
+        let third = s.pull(1, t_second_retry, &mut ids);
+        assert_eq!(third.received[0].delivery_attempt, 3);
+
+        s.modify_ack_deadline(&third.received[0].ack_id, 0, t_second_retry);
+        let before_clamp = t_second_retry
+            .checked_add(LogicalDuration::from_seconds(4))
+            .unwrap();
+        assert!(s.pull(1, before_clamp, &mut ids).received.is_empty());
+        let at_clamp = t_second_retry
+            .checked_add(LogicalDuration::from_seconds(5))
+            .unwrap();
+        assert_eq!(s.pull(1, at_clamp, &mut ids).received.len(), 1);
     }
 
     #[test]

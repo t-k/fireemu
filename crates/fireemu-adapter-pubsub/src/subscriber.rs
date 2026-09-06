@@ -116,7 +116,27 @@ impl Subscriber for SubscriberService {
         for path in &paths {
             match path.as_str() {
                 "ack_deadline_seconds" | "push_config" => {}
-                "dead_letter_policy" | "retry_policy" | "filter" | "enable_message_ordering" => {
+                "dead_letter_policy"
+                | "retry_policy"
+                | "filter"
+                | "enable_message_ordering"
+                | "bigquery_config"
+                | "cloud_storage_config"
+                | "bigtable_config"
+                | "retain_acked_messages"
+                | "message_retention_duration"
+                | "expiration_policy"
+                | "detached"
+                | "enable_exactly_once_delivery"
+                | "topic_message_retention_duration"
+                | "analytics_hub_subscription_info"
+                | "message_transforms"
+                | "tags" => {
+                    return Err(Status::unimplemented(format!(
+                        "updating {path} is not supported by the Pub/Sub emulator"
+                    )))
+                }
+                path if path.starts_with("push_config.") => {
                     return Err(Status::unimplemented(format!(
                         "updating {path} is not supported by the Pub/Sub emulator"
                     )))
@@ -145,6 +165,23 @@ impl Subscriber for SubscriberService {
             .iter()
             .any(|path| path == "push_config")
             .then(|| {
+                if let Some(push) = sub.push_config.as_ref() {
+                    if !push.attributes.is_empty() {
+                        return Err(Status::unimplemented(
+                            "subscription.push_config.attributes is not supported by the Pub/Sub emulator",
+                        ));
+                    }
+                    if push.authentication_method.is_some() {
+                        return Err(Status::unimplemented(
+                            "subscription.push_config.authentication_method is not supported by the Pub/Sub emulator",
+                        ));
+                    }
+                    if push.wrapper.is_some() {
+                        return Err(Status::unimplemented(
+                            "subscription.push_config.wrapper is not supported by the Pub/Sub emulator",
+                        ));
+                    }
+                }
                 let endpoint = sub
                     .push_config
                     .as_ref()

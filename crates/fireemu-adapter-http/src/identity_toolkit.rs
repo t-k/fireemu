@@ -4600,6 +4600,9 @@ fn mfa_enrollment_start(
     if !totp_extension_enabled {
         return error(400, "INVALID_ARGUMENT : ((Missing phoneEnrollmentInfo.))");
     }
+    if let Some(refusal) = phone_enrollment_refusal(store, &session, None, true) {
+        return refusal;
+    }
     match store.start_totp_enrollment(&uid, at) {
         Ok(material) => {
             let policy = *store.policy();

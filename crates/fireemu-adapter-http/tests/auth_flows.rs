@@ -849,6 +849,102 @@ fn phone_enrollment_needs_a_verified_eligible_first_factor_and_refuses_without_s
 }
 
 #[test]
+fn totp_enrollment_checks_first_factor_and_email_before_allocating_state() {
+    let mut s = state();
+    s.totp_extension_enabled = true;
+
+    let assert_refused_without_pending = |state: &AuthState, token: &str, message: &str| {
+        let (status, body) = post(
+            state,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["message"], message);
+        let claims = claims(token);
+        let uid = claims["user_id"].as_str().expect("the token names its user");
+        assert_eq!(
+            state
+                .store
+                .lock()
+                .unwrap()
+                .user_by_id(uid)
+                .expect("the user remains present")
+                .mfa
+                .pending_count(),
+            0,
+            "TOTP refusal must not allocate a pending enrollment"
+        );
+    };
+
+    let unverified = sign_up(&s, "totp-unverified@example.com");
+    assert_refused_without_pending(
+        &s,
+        unverified["idToken"].as_str().unwrap(),
+        "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors.",
+    );
+
+    let (_, anonymous) = post(&s, &format!("{V1}/accounts:signUp"), &json!({}));
+    assert_refused_without_pending(
+        &s,
+        anonymous["idToken"].as_str().unwrap(),
+        "UNSUPPORTED_FIRST_FACTOR : MFA is not available for the given first factor.",
+    );
+
+    let (_, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+15550007771"}),
+    );
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let phone_code = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["sessionInfo"] == sent["sessionInfo"])
+        .and_then(|entry| entry["code"].as_str())
+        .unwrap()
+        .to_owned();
+    let (_, phone) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": phone_code}),
+    );
+    assert_refused_without_pending(
+        &s,
+        phone["idToken"].as_str().unwrap(),
+        "UNSUPPORTED_FIRST_FACTOR : MFA is not available for the given first factor.",
+    );
+
+    let (_, custom) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": "{\"uid\":\"totp-custom\"}"}),
+    );
+    assert_refused_without_pending(
+        &s,
+        custom["idToken"].as_str().unwrap(),
+        "UNSUPPORTED_FIRST_FACTOR : MFA is not available for the given first factor.",
+    );
+
+    let game = json!({
+        "sub": "totp-game-center",
+        "email": "totp-game-center@example.com",
+        "email_verified": true
+    });
+    let (_, game) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=gc.apple.com&id_token={}", idp_jwt(&game)), "requestUri": DUMMY_URI}),
+    );
+    assert_refused_without_pending(
+        &s,
+        game["idToken"].as_str().unwrap(),
+        "UNSUPPORTED_FIRST_FACTOR : MFA is not available for the given first factor.",
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn phone_second_factor_enrollment_and_sign_in() {
     let contexts = Arc::new(Mutex::new(Vec::new()));

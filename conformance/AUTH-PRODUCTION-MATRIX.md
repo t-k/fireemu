@@ -4,9 +4,9 @@ Identity Toolkit REST programs (`src/auth-probe/programs.mjs`) run against produ
 
 ## Evidence
 
-Fireemu observation: live artifact fireemu (sha256-04aa18e44b1da5ea56f41cce3038bae542e2f222e95e8d4c5e63782d26ae5da8), source de959661964236ce60bb6d0e97105c4dbbc36f3a, profile firebase.
+Fireemu observation: live artifact fireemu (sha256-8861e36d7ce77769fde04c62a885d81adc9999b76385799a98e7ec019a882b99), source a5ec2cf8243ee628bcaedb7b048b3c6a5b2329a0, profile firebase.
 Inputs: corpus sha256-91b279e3be6b07f85859b3ce9e402382d9b0935907acd59b8a44d8d4c0ec6281, SDK lock sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432.
-Official emulator values: stored expectation from auth-matrix.json (sha256-010b4def91971a75416cbf558accdd87994818e2fd9521cdfb336aff9dfc9ed7).
+Official emulator values: stored expectation from auth-matrix.json (sha256-0bc921cb2cdc6ec865a2f089856135e1d26ad0469f254d06cd8a6fda778c5470).
 Evidence status: verified.
 
 | status | rows | meaning |

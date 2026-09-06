@@ -50,12 +50,14 @@ end
 release.dig("jobs", "build", "steps").select { |step| step["uses"]&.start_with?("dtolnay/rust-toolchain@") }.each do |step|
   assert(step.dig("with", "toolchain") == toolchain_channel, "release build must install targets for #{toolchain_channel}")
 end
-release_build_runs = release.dig("jobs", "build", "steps").map { |step| step["run"] }.compact.join("\n")
+release_build = release.dig("jobs", "build")
+release_build_runs = release_build.fetch("steps").map { |step| step["run"] }.compact.join("\n")
+assert(!release_build_runs.include?("cargo nextest"), "release platform builds must not duplicate the workspace test suite")
+assert(release_build.fetch("needs").include?("test"), "release platform builds must depend on the dedicated test job")
+release_test_runs = release.dig("jobs", "test", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(
-  release_build_runs.include?(
-    "cargo nextest run --workspace --exclude fireemu-verification-quint --exclude traceability-check --lib --profile pr"
-  ),
-  "release Windows tests must exclude the Unix-only Quint verification dependency closure"
+  release_test_runs.include?("cargo nextest run --workspace --profile pr"),
+  "release test job must run the canonical workspace suite"
 )
 assert(release.dig("jobs", "publish", "environment") == "npm-release", "release publish must use the protected npm-release environment")
 assert(release.dig("concurrency", "cancel-in-progress") == false, "release publication must never be cancelled in progress")

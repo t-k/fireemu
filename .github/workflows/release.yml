@@ -94,8 +94,28 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  test:
+    needs: [ui]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ui-dist
+          path: ui/dist
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.94.0
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
+        with:
+          tool: cargo-nextest
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          key: release-test
+      - run: cargo nextest run --workspace --profile pr
+
   build:
-    needs: [plan, ui]
+    needs: [plan, ui, test]
     strategy:
       fail-fast: true
       matrix:
@@ -118,9 +138,6 @@ jobs:
         with:
           toolchain: 1.94.0
           targets: ${{ matrix.platform.target }}
-      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
-        with:
-          tool: cargo-nextest
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
         with:
           key: ${{ matrix.platform.target }}
@@ -129,20 +146,6 @@ jobs:
       - name: musl toolchain
         if: contains(matrix.platform.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      # Tests run for the host, not for the release target: a musl or cross-compiled artifact
-      # cannot execute on the runner that produced it, and the source under test is the same.
-      # The process-census integration suites shell out to `ps` and `kill`, so on Windows only
-      # the in-crate unit tests run.
-      - name: tests
-        if: ${{ !matrix.platform.cross }}
-        shell: bash
-        run: |
-          if [ "${{ matrix.platform.os }}" = "win32" ]; then
-            cargo nextest run --workspace --exclude fireemu-verification-quint --exclude traceability-check --lib --profile pr
-          else
-            cargo nextest run --workspace --profile pr
-          fi
 
       - name: build the daemon
         run: cargo build --release --locked -p fireemu --target ${{ matrix.platform.target }}

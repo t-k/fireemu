@@ -249,6 +249,9 @@ pub struct LocalBackend {
     /// bound to it, so a project reset invalidates that project's tokens only).
     generations: Mutex<BTreeMap<(String, String), u64>>,
     ids: Mutex<SplitMix64>,
+    /// Draws the starting transaction id of each database; separate from `ids` so that the
+    /// generated document ids stay what they were for a given seed.
+    transaction_ids: Mutex<SplitMix64>,
     commits: tokio::sync::broadcast::Sender<CommitNotification>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
     epoch: std::sync::atomic::AtomicU64,
@@ -1003,6 +1006,7 @@ impl LocalBackend {
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
+            transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
             commits: tokio::sync::broadcast::channel(COMMIT_NOTIFICATION_CAPACITY).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
             change_sink: Mutex::new(None),
@@ -2126,9 +2130,17 @@ impl LocalBackend {
         Ok(DatabaseHandle(
             dbs.entry(database_key(parent))
                 .or_insert_with(|| {
+                    // Transaction ids start at a seeded offset: a token names one transaction
+                    // and cannot be guessed from how many the database has begun.
+                    let offset = self
+                        .transaction_ids
+                        .lock()
+                        .map(|mut ids| ids.next_u64() >> 2)
+                        .unwrap_or(0);
                     Arc::new(DatabaseEntry::restored(
                         FirestoreState::with_limit_scope(scope)
-                            .with_retained_version_limit(self.history_version_limit),
+                            .with_retained_version_limit(self.history_version_limit)
+                            .with_transaction_id_offset(offset),
                     ))
                 })
                 .clone(),

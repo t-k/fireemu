@@ -157,7 +157,25 @@ type PreparedDatabases = BTreeMap<(String, String), Vec<ImportedDocument>>;
 struct PreparedAuth {
     users: Vec<ImportedUser>,
     config: ProjectAuthConfig,
+    /// Whether the artifact declared `emailPrivacyConfig.enableImprovedEmailPrivacy`. When it
+    /// did not (the official emulator's export without the key, or no config.json at all),
+    /// the running store's setting is kept: an import must not switch the protection off.
+    email_privacy_declared: bool,
     tenants: BTreeMap<String, Vec<ImportedUser>>,
+}
+
+impl PreparedAuth {
+    /// The configuration to install over `current`.
+    fn config_over(&self, current: ProjectAuthConfig) -> ProjectAuthConfig {
+        ProjectAuthConfig {
+            enable_improved_email_privacy: if self.email_privacy_declared {
+                self.config.enable_improved_email_privacy
+            } else {
+                current.enable_improved_email_privacy
+            },
+            ..self.config
+        }
+    }
 }
 
 /// The objects with their bytes, and the buckets the Storage section listed.
@@ -389,7 +407,7 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
     Ok(())
 }
 
-fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
+fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
     let store = endpoints.auth.default_store();
     let mut store = store.lock().map_err(|_| {
         ArtifactError::new(
@@ -399,8 +417,10 @@ fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactE
         )
     })?;
     store.clear();
-    store.set_config(auth.config);
-    for user in auth.users {
+    let current = store.config();
+    store.set_config(auth.config_over(current));
+    let users = std::mem::take(&mut auth.users);
+    for user in users {
         let id = user.local_id.clone();
         store.import_user(user).map_err(|e| {
             ArtifactError::new(
@@ -417,7 +437,8 @@ fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactE
     for tenant in endpoints.auth.tenants(endpoints.project) {
         endpoints.auth.delete_tenant(endpoints.project, &tenant);
     }
-    for (tenant, users) in auth.tenants {
+    let tenants = std::mem::take(&mut auth.tenants);
+    for (tenant, users) in tenants {
         let tenant_store = endpoints
             .auth
             .ensure_tenant(endpoints.project, &tenant)
@@ -436,7 +457,8 @@ fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactE
             )
         })?;
         tenant_store.clear();
-        tenant_store.set_config(auth.config);
+        let current = tenant_store.config();
+        tenant_store.set_config(auth.config_over(current));
         for user in users {
             let id = user.local_id.clone();
             tenant_store.import_user(user).map_err(|e| {
@@ -873,7 +895,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     )?;
     let mut remaining_bytes = IMPORT_AUTH_TOTAL_BYTES_LIMIT;
     let config_path = section_dir.join(CONFIG_FILE);
-    let config = match std::fs::symlink_metadata(&config_path) {
+    let (config, email_privacy_declared) = match std::fs::symlink_metadata(&config_path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
                 return Err(ArtifactError::new(
@@ -885,12 +907,17 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
             let text = read_auth_text(dir, &config_path, &mut remaining_bytes)?;
             let parsed = AuthConfig::parse(&text)
                 .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
-            ProjectAuthConfig {
-                allow_duplicate_emails: parsed.allow_duplicate_emails,
-                enable_improved_email_privacy: parsed.enable_improved_email_privacy,
-            }
+            (
+                ProjectAuthConfig {
+                    allow_duplicate_emails: parsed.allow_duplicate_emails,
+                    enable_improved_email_privacy: parsed
+                        .enable_improved_email_privacy
+                        .unwrap_or(false),
+                },
+                parsed.enable_improved_email_privacy.is_some(),
+            )
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProjectAuthConfig::default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (ProjectAuthConfig::default(), false),
         Err(e) => {
             return Err(ArtifactError::new(
                 "auth",
@@ -953,6 +980,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     Ok(PreparedAuth {
         users,
         config,
+        email_privacy_declared,
         tenants,
     })
 }
@@ -1576,7 +1604,7 @@ fn export_auth(
     let config_path = section_dir.join(CONFIG_FILE);
     let document = AuthConfig {
         allow_duplicate_emails: config.allow_duplicate_emails,
-        enable_improved_email_privacy: config.enable_improved_email_privacy,
+        enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
     };
     write_private_file(&config_path, document.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &config_path, e))?;

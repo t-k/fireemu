@@ -604,6 +604,101 @@ async fn a_transaction_blocking_writers_past_the_lock_lease_is_rolled_back() {
     handle.abort();
 }
 
+/// A transaction whose held-back commit was abandoned by its client keeps its locks, and its
+/// waiting mark makes every later transactional commit into those locks the deadlock victim.
+/// The lock lease ends that: after it, the next such commit rolls the holder back and goes
+/// through, even though the victim itself could not wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_abandoned_waiting_holder_does_not_abort_other_transactions_forever() {
+    let (mut client, handle) = start_with_contention_wait_and_lease(
+        std::time::Duration::ZERO,
+        std::time::Duration::from_millis(300),
+    )
+    .await;
+    let begin = |client: &mut FirestoreClient<tonic::transport::Channel>| {
+        let mut client = client.clone();
+        async move {
+            client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: DB.to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction
+        }
+    };
+    let read = |client: &mut FirestoreClient<tonic::transport::Channel>, txn: Vec<u8>| {
+        let mut client = client.clone();
+        async move {
+            let _ = client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/abandoned/doc"),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(txn),
+                    ),
+                    ..Default::default()
+                })
+                .await;
+        }
+    };
+    // The abandoned holder: it read the document and its commit was held back by another
+    // reader's lock; the client never returns.
+    let holder = begin(&mut client).await;
+    let other = begin(&mut client).await;
+    read(&mut client, holder.clone()).await;
+    read(&mut client, other.clone()).await;
+    let held = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("abandoned/doc", &[("v", i(1))])],
+            transaction: holder,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(held.code(), tonic::Code::Aborted);
+    client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction: other,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // Fresh transactions that read the document and commit are victims until the lease ends.
+    let started = std::time::Instant::now();
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let txn = begin(&mut client).await;
+        read(&mut client, txn.clone()).await;
+        let outcome = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("abandoned/doc", &[("v", i(2))])],
+                transaction: txn,
+                ..Default::default()
+            })
+            .await;
+        match outcome {
+            Ok(_) => break,
+            Err(status) if status.code() == tonic::Code::Aborted && attempts < 100 => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(status) => panic!("unexpected refusal: {status}"),
+        }
+    }
+    assert!(
+        attempts >= 2,
+        "the first attempts were the deadlock victims"
+    );
+    assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    handle.abort();
+}
+
 /// A contended commit that waits past the bound is refused with production's wording.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_contended_commit_is_refused_after_the_wait_bound() {
@@ -1512,6 +1607,7 @@ async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() 
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
     const CLIENTS: usize = 20;
     // A held-back commit waits for the holders to finish, as the daemon does; the deadlock
@@ -1532,7 +1628,10 @@ async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
             let first_reads = first_reads.clone();
             tokio::spawn(async move {
                 let mut retry_transaction = Vec::new();
-                for attempt in 0..CLIENTS {
+                // Every round commits the held-back transaction and aborts the others as
+                // deadlock victims, so a client may lose many rounds in a row before its turn.
+                const ATTEMPTS: usize = CLIENTS * 4;
+                for attempt in 0..ATTEMPTS {
                     let transaction = client
                         .begin_transaction(pb::BeginTransactionRequest {
                             database: DB.to_owned(),
@@ -1593,7 +1692,7 @@ async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
                         Err(status) => panic!("unexpected transaction failure: {status}"),
                     }
                 }
-                panic!("transaction did not make progress after {CLIENTS} attempts");
+                panic!("transaction did not make progress after {ATTEMPTS} attempts");
             })
         })
         .collect();

@@ -1218,6 +1218,15 @@ impl FirestoreState {
         self
     }
 
+    /// Starts transaction ids at `offset` instead of zero, so a token is not guessable from
+    /// the count of transactions a database has begun (the adapter draws the offset from the
+    /// session seed). Ids stay monotonic; only the first one moves.
+    #[must_use]
+    pub const fn with_transaction_id_offset(mut self, offset: u64) -> Self {
+        self.next_transaction = offset;
+        self
+    }
+
     /// Which limits commits refuse.
     #[must_use]
     pub const fn limit_scope(&self) -> LimitScope {

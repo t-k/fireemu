@@ -94,7 +94,10 @@ function run(cmd, cmdArgs, opts = {}) {
 const base = mkdtempSync(join(tmpdir(), "fireemu-verify-"));
 const project = join(base, "fireemu try ✓");
 mkdirSync(project);
-writeFileSync(join(project, "package.json"), JSON.stringify({ name: "try", private: true }));
+writeFileSync(
+  join(project, "package.json"),
+  JSON.stringify({ name: "fireemu-package-verification", version: "0.0.0", private: true }),
+);
 const exe = process.platform === "win32" ? "fireemu.cmd" : "fireemu";
 const bin = join(project, "node_modules", ".bin", exe);
 const launcher = join(project, "node_modules", "fireemu", "bin", "fireemu.mjs");

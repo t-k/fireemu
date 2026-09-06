@@ -173,7 +173,7 @@ own answer (marked below).
 | replace-without-mask | 200 | OK | commit(1 results) |
 | read-after-replace | 200 | OK | document |
 | update-time-precondition-matches | 200 | OK | commit(1 results) |
-| update-time-precondition-is-stale | 400 | FAILED_PRECONDITION | `the stored version (1788660244359867) does not match the required base version (1788660244357086)` |
+| update-time-precondition-is-stale | 400 | FAILED_PRECONDITION | `the stored version (1788715019238785) does not match the required base version (1788715019235916)` |
 | update-time-precondition-on-a-missing-document | 400 | FAILED_PRECONDITION | `the stored version (0) does not match the required base version (1577836800000000)` |
 | delete-missing-is-ok | 200 | OK | commit(1 results) |
 | delete-missing-with-exists-true | 404 | NOT_FOUND | `no entity to update: app: "dev~demo-firestore-probe" path <   Element {     type: "wr"     name: "none"   } > ` |

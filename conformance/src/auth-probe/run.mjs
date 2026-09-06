@@ -7,15 +7,27 @@
 //
 // `record` needs Java and the pinned firebase-tools; `check` needs a built fireemu;
 // `record-production` needs FIREEMU_PRODUCTION_PROJECT and FIREEMU_PRODUCTION_API_KEY (the
-// project's web API key; `firebase apps:sdkconfig web` prints it). Every account a program
-// creates is deleted by the program; no production identifier is written to the matrices.
+// project's web API key; `firebase apps:sdkconfig web` prints it). Set FIREEMU_BIN to the
+// artifact under test and FIREEMU_PACKAGE_INTEGRITY (or FIREEMU_PACKAGE_TARBALL) for a verified
+// release claim. Every account a program creates is deleted by the program; no production
+// identifier is written to the matrices.
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
+import { CONFORMANCE_DIR } from "../config.mjs";
+import {
+  classifyProductionCase,
+  collectEvidence,
+  digestFile,
+  evidenceIdentity,
+  resolveFireemuBinary,
+  validateEvidenceJoin,
+  validateLiveEvidence,
+  validateRecordedExpectation,
+} from "../evidence.mjs";
 import { PROGRAMS } from "./programs.mjs";
 
 const PROJECT = "demo-auth-probe";
@@ -116,12 +128,7 @@ async function probeOracle(inPath, outPath) {
  * protection); `record-production` runs fireemu as shipped (`auth-probe.fireemu.production.json`).
  */
 async function probeFireemu(inPath, outPath, config = "auth-probe.fireemu.json") {
-  const binary =
-    process.env.FIREEMU_BIN ??
-    ["target/release/fireemu", "target/debug/fireemu"]
-      .map((p) => join(REPO_ROOT, p))
-      .find((p) => existsSync(p));
-  if (!binary) throw new Error("fireemu is not built: run `cargo build -p fireemu`");
+  const binary = resolveFireemuBinary();
   await runSupervisor({
     name: "fireemu",
     command: binary,
@@ -188,9 +195,21 @@ async function record() {
   const provenance = JSON.parse(
     await readFile(join(CONFORMANCE_DIR, "package.json"), "utf8"),
   ).dependencies;
+  const oracleEvidence = await collectEvidence({
+    side: "official-emulator",
+    mode: "live",
+    profile: "official-emulator",
+    configPath: join(CONFORMANCE_DIR, "auth-probe.firebase.json"),
+    corpusPath: inPath,
+    database: { target: "official Auth emulator" },
+  });
   const matrix = {
     version: 1,
-    recordedAgainst: { firebaseTools: provenance["firebase-tools"] },
+    recordedAgainst: {
+      firebaseTools: provenance["firebase-tools"],
+      evidenceSchema: 1,
+      evidence: { identity: evidenceIdentity(oracleEvidence) },
+    },
     programs: PROGRAMS.map((p) => ({
       id: p.id,
       area: p.area,
@@ -267,6 +286,7 @@ async function recordProduction() {
   const inPath = await writePrograms();
   const productionOut = join(RUN_DIR, "production.json");
   const fireemuOut = join(RUN_DIR, "fireemu-for-production.json");
+  const productionStartedAt = new Date().toISOString();
   await runSupervisor({
     name: "production",
     command: "node",
@@ -282,8 +302,53 @@ async function recordProduction() {
     timeoutMs: 600_000,
   });
   const production = JSON.parse(await readFile(productionOut, "utf8"));
+  const productionEvidence = await collectEvidence({
+    side: "production",
+    mode: "live",
+    profile: "production",
+    corpusPath: inPath,
+    database: { target: "production Identity Toolkit" },
+    startedAt: productionStartedAt,
+    finishedAt: new Date().toISOString(),
+  });
+  const artifact = resolveFireemuBinary();
+  const fireemuStartedAt = new Date().toISOString();
   const fireemu = await probeFireemu(inPath, fireemuOut, "auth-probe.fireemu.production.json");
+  const fireemuEvidence = await collectEvidence({
+    side: "fireemu",
+    mode: "live",
+    profile: "firebase",
+    configPath: join(CONFORMANCE_DIR, "auth-probe.fireemu.production.json"),
+    corpusPath: inPath,
+    database: { target: "fireemu local Auth" },
+    startedAt: fireemuStartedAt,
+    finishedAt: new Date().toISOString(),
+    artifactPath: artifact,
+  });
+  const fireemuValidation = validateLiveEvidence(fireemuEvidence);
   const matrix = JSON.parse(await readFile(MATRIX_JSON, "utf8"));
+  const officialMatrixDigest = await digestFile(MATRIX_JSON);
+  const recordedValidation = validateRecordedExpectation(
+    matrix.recordedAgainst.evidence,
+    fireemuEvidence,
+  );
+  const sharedValidation = validateEvidenceJoin(productionEvidence, fireemuEvidence, [
+    "sourceSha",
+    "packageVersion",
+    "packageIntegrity",
+    "sdkLockDigest",
+    "corpusDigest",
+  ]);
+  const evidenceErrors = [
+    ...fireemuValidation.errors,
+    ...recordedValidation.mismatches,
+    ...sharedValidation.mismatches,
+  ];
+  const evidenceVerified =
+    fireemuValidation.verified &&
+    recordedValidation.verified &&
+    sharedValidation.verified &&
+    productionEvidence.observation.mode === "live";
   const counts = {};
   const dropSecrets = (value) =>
     JSON.parse(
@@ -301,13 +366,12 @@ async function recordProduction() {
         };
         const mine = fireemu[p.id]?.steps?.[s.id] ?? { missing: true };
         const prod = dropSecrets(production[p.id]?.steps?.[s.id] ?? { missing: true });
-        const same = (a, b) => canonical(decision(a)) === canonical(decision(b));
-        let status;
-        if (same(prod, emulator) && same(prod, mine)) status = "parity";
-        else if (same(prod, mine)) status = "fireemu-matches-production";
-        else if (same(prod, emulator)) status = "fireemu-divergence";
-        else if (same(emulator, mine)) status = "emulators-diverge-from-production";
-        else status = "three-way-difference";
+        const status = classifyProductionCase({
+          production: decision(prod),
+          emulator: decision(emulator),
+          fireemu: decision(mine),
+          evidenceValid: evidenceVerified,
+        });
         counts[status] = (counts[status] ?? 0) + 1;
         return [s.id, { production: prod, emulator, fireemu: mine, status }];
       }),
@@ -318,7 +382,23 @@ async function recordProduction() {
     recordedAgainst: {
       target: "production Identity Toolkit (v1 and v2 REST) with the project's web API key",
       officialEmulatorMatrix: matrix.recordedAgainst,
+      evidenceSchema: 1,
       note: "The production project id and API key are never recorded. Rows compare HTTP status, the Identity Toolkit error code and the normalized success body; tokens, ids, expiry and timestamps are placeholders and the human sentence production appends to some error codes is not compared.",
+    },
+    evidence: {
+      schemaVersion: 1,
+      verified: evidenceVerified,
+      validation: evidenceErrors,
+      observations: {
+        production: productionEvidence,
+        fireemu: fireemuEvidence,
+        officialEmulator: {
+          side: "official-emulator",
+          mode: "stored",
+          matrixDigest: officialMatrixDigest,
+          source: "auth-matrix.json",
+        },
+      },
     },
     summary: counts,
     programs,
@@ -329,6 +409,28 @@ async function recordProduction() {
     "# Authentication production matrix",
     "",
     "Identity Toolkit REST programs (`src/auth-probe/programs.mjs`) run against production Authentication, the official Auth emulator (`auth-matrix.json`) and fireemu. Regenerate with `pnpm -C conformance auth-probe:production` (needs `FIREEMU_PRODUCTION_PROJECT` and `FIREEMU_PRODUCTION_API_KEY`).",
+    "",
+    "## Evidence",
+    "",
+    "Fireemu observation: live artifact " +
+      fireemuEvidence.artifact.file +
+      " (" +
+      fireemuEvidence.artifact.sha256 +
+      "), source " +
+      fireemuEvidence.source.gitSha +
+      ", profile " +
+      fireemuEvidence.runtime.profile +
+      ".",
+    "Inputs: corpus " +
+      fireemuEvidence.inputs.corpusDigest +
+      ", SDK lock " +
+      fireemuEvidence.inputs.sdkLockDigest +
+      ".",
+    "Official emulator values: stored expectation from auth-matrix.json (" +
+      officialMatrixDigest +
+      ").",
+    "Evidence status: " + (evidenceVerified ? "verified" : "unverified") + ".",
+    ...(evidenceErrors.length > 0 ? ["Evidence validation: " + evidenceErrors.join("; ")] : []),
     "",
     "| status | rows | meaning |",
     "| --- | --- | --- |",

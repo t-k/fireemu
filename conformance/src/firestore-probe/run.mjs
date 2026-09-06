@@ -9,11 +9,20 @@
 // API, so a difference is a difference in the runtime and nowhere else.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
+import { CONFORMANCE_DIR } from "../config.mjs";
+import {
+  classifyProductionCase,
+  collectEvidence,
+  digestFile,
+  evidenceIdentity,
+  resolveFireemuBinary,
+  validateEvidenceJoin,
+  validateLiveEvidence,
+  validateRecordedExpectation,
+} from "../evidence.mjs";
 import { PROGRAMS } from "./programs.mjs";
 import { DIVERGENCES } from "./divergences.mjs";
 
@@ -105,12 +114,7 @@ async function probeOracle(inPath, outPath) {
 
 /** Runs the programs against fireemu. */
 async function probeFireemu(inPath, outPath) {
-  const binary =
-    process.env.FIREEMU_BIN ??
-    ["target/release/fireemu", "target/debug/fireemu"]
-      .map((p) => join(REPO_ROOT, p))
-      .find((p) => existsSync(p));
-  if (!binary) throw new Error("fireemu is not built: run `cargo build -p fireemu`");
+  const binary = resolveFireemuBinary();
   await runSupervisor({
     name: "fireemu",
     command: binary,
@@ -216,6 +220,16 @@ async function record() {
   const provenance = JSON.parse(
     await readFile(join(CONFORMANCE_DIR, "package.json"), "utf8"),
   ).dependencies;
+  const oracleEvidence = await collectEvidence({
+    side: "official-emulator",
+    mode: "live",
+    profile: "official-emulator",
+    configPath: join(CONFORMANCE_DIR, "firestore-probe.firebase.json"),
+    rulesPath: join(CONFORMANCE_DIR, "firestore-probe.rules"),
+    corpusPath: inPath,
+    indexPaths: [join(CONFORMANCE_DIR, "firestore.indexes.json")],
+    database: { target: "official Firestore emulator" },
+  });
   const programs = PROGRAMS.map((p) => {
     const recorded = oracle[p.id] ?? { missing: true };
     return {
@@ -242,6 +256,8 @@ async function record() {
     recordedAgainst: {
       firebaseTools: provenance["firebase-tools"],
       note: "the Firestore emulator jar that firebase-tools pins; see ORACLE.md",
+      evidenceSchema: 1,
+      evidence: { identity: evidenceIdentity(oracleEvidence) },
     },
     programs,
   };
@@ -397,8 +413,10 @@ async function check() {
  * Runs the programs against production Firestore and compares every row with the recorded
  * official-emulator answer and with what fireemu is held to (the pinned divergence or the
  * oracle). Needs `FIREEMU_PRODUCTION_PROJECT` and an OAuth token (`FIREEMU_PRODUCTION_TOKEN`
- * or `gcloud auth application-default print-access-token`). The production project id is
- * normalized out of every recorded value and never written to the matrix.
+ * or `gcloud auth application-default print-access-token`). Set FIREEMU_BIN to the artifact
+ * under test and FIREEMU_PACKAGE_INTEGRITY (or FIREEMU_PACKAGE_TARBALL) for a verified release
+ * claim. The production project id is normalized out of every recorded value and never written
+ * to the matrix.
  */
 async function recordProduction() {
   const project = process.env.FIREEMU_PRODUCTION_PROJECT;
@@ -421,8 +439,27 @@ async function recordProduction() {
   ).json();
   const inPath = await writePrograms();
   const outPath = join(RUN_DIR, "production.json");
-  // `FIREEMU_PRODUCTION_REUSE=1` re-classifies the last production run without new requests.
-  if (process.env.FIREEMU_PRODUCTION_REUSE !== "1")
+  const productionDatabase = {
+    type: metadata.type,
+    concurrencyMode: metadata.concurrencyMode,
+    databaseEdition: metadata.databaseEdition,
+    locationId: metadata.locationId,
+    versionRetentionPeriod: metadata.versionRetentionPeriod,
+  };
+  const reuse = process.env.FIREEMU_PRODUCTION_REUSE === "1";
+  let productionEvidence;
+  // Reuse is allowed only when the previous matrix already carries a live production
+  // observation. A raw result file alone cannot be promoted to verified evidence.
+  if (reuse) {
+    const previous = JSON.parse(await readFile(PRODUCTION_JSON, "utf8"));
+    productionEvidence = previous.evidence?.observations?.production;
+    if (!productionEvidence || productionEvidence.observation?.mode !== "live") {
+      throw new Error(
+        "FIREEMU_PRODUCTION_REUSE=1 requires a previous matrix with live production evidence",
+      );
+    }
+  } else {
+    const productionStartedAt = new Date().toISOString();
     await runSupervisor({
       name: "production",
       command: "node",
@@ -440,8 +477,60 @@ async function recordProduction() {
       },
       timeoutMs: 1_800_000,
     });
+    productionEvidence = await collectEvidence({
+      side: "production",
+      mode: "live",
+      profile: "production",
+      corpusPath: inPath,
+      indexPaths: [join(CONFORMANCE_DIR, "firestore.indexes.json")],
+      database: productionDatabase,
+      startedAt: productionStartedAt,
+      finishedAt: new Date().toISOString(),
+    });
+  }
   const production = JSON.parse(await readFile(outPath, "utf8"));
+  const artifact = resolveFireemuBinary();
+  const fireemuStartedAt = new Date().toISOString();
+  await probeFireemu(inPath, join(RUN_DIR, "fireemu-for-production.json"));
+  const fireemuEvidence = await collectEvidence({
+    side: "fireemu",
+    mode: "live",
+    profile: "firebase",
+    configPath: join(CONFORMANCE_DIR, "firestore-probe.fireemu.json"),
+    rulesPath: join(CONFORMANCE_DIR, "firestore-probe.rules"),
+    corpusPath: inPath,
+    indexPaths: [join(CONFORMANCE_DIR, "firestore.indexes.json")],
+    database: { target: "fireemu local Firestore" },
+    startedAt: fireemuStartedAt,
+    finishedAt: new Date().toISOString(),
+    artifactPath: artifact,
+  });
+  const fireemuValidation = validateLiveEvidence(fireemuEvidence, { requireIndex: true });
   const matrix = JSON.parse(await readFile(MATRIX_JSON, "utf8"));
+  const officialMatrixDigest = await digestFile(MATRIX_JSON);
+  const recordedValidation = validateRecordedExpectation(
+    matrix.recordedAgainst.evidence,
+    fireemuEvidence,
+    { requireIndex: true },
+  );
+  const sharedValidation = validateEvidenceJoin(productionEvidence, fireemuEvidence, [
+    "sourceSha",
+    "packageVersion",
+    "packageIntegrity",
+    "sdkLockDigest",
+    "corpusDigest",
+    "indexDigest",
+  ]);
+  const evidenceErrors = [
+    ...fireemuValidation.errors,
+    ...recordedValidation.mismatches,
+    ...sharedValidation.mismatches,
+  ];
+  const evidenceVerified =
+    fireemuValidation.verified &&
+    recordedValidation.verified &&
+    sharedValidation.verified &&
+    productionEvidence.observation.mode === "live";
   const recordedRows = new Map(
     matrix.programs.flatMap((p) =>
       Object.entries(p.steps).map(([id, row]) => [rowKey(p.id, id), row]),
@@ -460,17 +549,17 @@ async function recordProduction() {
           const emulator = recorded?.oracle ?? { missing: true };
           const fireemu = recorded?.divergence?.fireemu ?? emulator;
           const prod = result.steps?.[s.id] ?? { missing: true };
-          const same = (a, b) => canonical(decision(a)) === canonical(decision(b));
-          let status;
           const needsIndex =
             prod.code === "FAILED_PRECONDITION" &&
             /requires an? (\S+ )?index/.test(prod.message ?? "");
-          if (same(prod, emulator) && same(prod, fireemu)) status = "parity";
-          else if (needsIndex && !same(prod, fireemu)) status = "production-needs-index";
-          else if (same(prod, fireemu)) status = "fireemu-matches-production";
-          else if (same(prod, emulator)) status = "fireemu-divergence";
-          else if (same(emulator, fireemu)) status = "emulators-diverge-from-production";
-          else status = "three-way-difference";
+          const status = classifyProductionCase({
+            production: decision(prod),
+            emulator: decision(emulator),
+            fireemu: decision(fireemu),
+            evidenceValid: evidenceVerified,
+            localOnly: p.area === "emulator",
+            needsIndex,
+          });
           counts[status] = (counts[status] ?? 0) + 1;
           return [s.id, { production: prod, emulator, fireemu, status }];
         }),
@@ -491,7 +580,23 @@ async function recordProduction() {
         versionRetentionPeriod: metadata.versionRetentionPeriod,
       }),
       officialEmulatorMatrix: matrix.recordedAgainst,
+      evidenceSchema: 1,
       note: "The production project id is normalized to the recording project id in every value; the project itself is not recorded. Rows compare status, canonical error code and normalized body; error message text is not compared.",
+    },
+    evidence: {
+      schemaVersion: 1,
+      verified: evidenceVerified,
+      validation: evidenceErrors,
+      observations: {
+        production: productionEvidence,
+        fireemu: fireemuEvidence,
+        officialEmulator: {
+          side: "official-emulator",
+          mode: "stored",
+          matrixDigest: officialMatrixDigest,
+          source: "firestore-matrix.json",
+        },
+      },
     },
     summary: counts,
     programs,
@@ -501,6 +606,30 @@ async function recordProduction() {
     "# Firestore production matrix",
     "",
     "Every row of `firestore-matrix.json` run against production Firestore (Native mode, the concurrency mode and edition recorded in `firestore-production-matrix.json`), compared with the official emulator's recorded answer and with what fireemu is held to. Regenerate with `pnpm -C conformance firestore:production` (needs `FIREEMU_PRODUCTION_PROJECT` and Application Default Credentials).",
+    "",
+    "## Evidence",
+    "",
+    "Fireemu observation: live artifact " +
+      fireemuEvidence.artifact.file +
+      " (" +
+      fireemuEvidence.artifact.sha256 +
+      "), source " +
+      fireemuEvidence.source.gitSha +
+      ", profile " +
+      fireemuEvidence.runtime.profile +
+      ".",
+    "Inputs: corpus " +
+      fireemuEvidence.inputs.corpusDigest +
+      ", SDK lock " +
+      fireemuEvidence.inputs.sdkLockDigest +
+      ", indexes " +
+      fireemuEvidence.inputs.indexDigest +
+      ".",
+    "Official emulator values: stored expectation from firestore-matrix.json (" +
+      officialMatrixDigest +
+      ").",
+    "Evidence status: " + (evidenceVerified ? "verified" : "unverified") + ".",
+    ...(evidenceErrors.length > 0 ? ["Evidence validation: " + evidenceErrors.join("; ")] : []),
     "",
     "| status | rows | meaning |",
     "| --- | --- | --- |",

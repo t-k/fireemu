@@ -13,6 +13,19 @@ import { join } from "node:path";
 
 import { CONFORMANCE_DIR } from "./config.mjs";
 
+export {
+  classifyProductionCase,
+  collectEvidence,
+  digestFile,
+  digestJson,
+  evidenceIdentity,
+  resolveFireemuBinary,
+  summarizeStatuses,
+  validateRecordedExpectation,
+  validateEvidenceJoin,
+  validateLiveEvidence,
+} from "./evidence.mjs";
+
 const require = createRequire(join(CONFORMANCE_DIR, "package.json"));
 
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));

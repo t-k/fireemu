@@ -782,3 +782,143 @@ fn rest_listing_and_batch_get_follow_production() {
         .collect();
     assert_eq!(order, ["1", "3", "none"], "{batch}");
 }
+
+/// Validation answers where production and the official emulator disagree: fireemu follows
+/// production (conformance/firestore-production-matrix.json, `errors/rest-shapes`,
+/// `transactions`, `read-time`).
+#[test]
+fn rest_validation_codes_follow_production() {
+    let s = state(None);
+    let (status, _) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/q/1"),
+        json!({"fields": {"tags": {"arrayValue": {"values": [{"stringValue": "a"}]}}}}),
+    );
+    assert_eq!(status, 200);
+
+    // Two array-contains clauses: INVALID_ARGUMENT in production's words, not the official
+    // emulator's FAILED_PRECONDITION.
+    let contains = |v: &str| json!({"fieldFilter": {"field": {"fieldPath": "tags"}, "op": "ARRAY_CONTAINS", "value": {"stringValue": v}}});
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "q"}], "where": {"compositeFilter": {"op": "AND", "filters": [contains("a"), contains("b")]}}}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction.",
+        "{body}"
+    );
+
+    // A read_time before the database was created is INVALID_ARGUMENT.
+    let (status, body) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/q/1?readTime=2020-01-01T00:00:00Z"),
+        Value::Null,
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "The requested 'read_time' cannot be before database creation time.",
+        "{body}"
+    );
+
+    // A database id production never creates is a database that does not exist.
+    let (status, body) = call(
+        &s,
+        "GET",
+        "/v1/projects/demo-app/databases/Upper/documents/q/1",
+        Value::Null,
+    );
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(body["error"]["status"], "NOT_FOUND", "{body}");
+    assert_eq!(
+        body["error"]["message"], "The database Upper does not exist for project demo-app",
+        "{body}"
+    );
+
+    // A read-only transaction cannot be committed, even without writes.
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readOnly": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"transaction": begun["transaction"], "writes": []}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no longer valid"),
+        "{body}"
+    );
+}
+
+/// A query without a collection selector, or with an empty collection id, scans every document
+/// under the parent, as production and the official emulator both do; more field transforms
+/// than production accepts on one document are refused in every profile.
+#[test]
+fn rest_kindless_queries_and_transform_budget_follow_production() {
+    let s = state(None);
+    for (collection, id) in [("a", "1"), ("b", "2")] {
+        let (status, _) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/{collection}/{id}"),
+            json!({"fields": {"v": {"stringValue": id}}}),
+        );
+        assert_eq!(status, 200);
+    }
+    for query in [
+        json!({"structuredQuery": {}}),
+        json!({"structuredQuery": {"from": [{"collectionId": ""}]}}),
+        json!({"structuredQuery": {"from": [{"collectionId": "", "allDescendants": true}]}}),
+    ] {
+        let (status, rows) = call(&s, "POST", &format!("{DOCS}:runQuery"), query.clone());
+        assert_eq!(status, 200, "{query}: {rows}");
+        let names: Vec<&str> = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|row| row["document"]["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "projects/demo-app/databases/(default)/documents/a/1",
+                "projects/demo-app/databases/(default)/documents/b/2",
+            ],
+            "{query}: {rows}"
+        );
+    }
+
+    let transforms = |n: usize| {
+        (0..n)
+            .map(|i| json!({"fieldPath": format!("f{i}"), "increment": {"integerValue": "1"}}))
+            .collect::<Vec<_>>()
+    };
+    let write = |n: usize| json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/t/1", "fields": {}}, "updateTransforms": transforms(n)}]});
+    let (status, body) = call(&s, "POST", &format!("{DOCS}:commit"), write(500));
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call(&s, "POST", &format!("{DOCS}:commit"), write(501));
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    assert_eq!(
+        body["error"]["message"], "cannot have more than 500 field transforms on a single document",
+        "{body}"
+    );
+}

@@ -2518,7 +2518,7 @@ impl FirestoreState {
         // The transform budget is production's alone: the official emulator applies any
         // number of transforms (measured by `conformance/src/firestore-probe`), so only the
         // production scope refuses the commit.
-        self.check_transform_budget(writes)?;
+        Self::check_transform_budget(writes)?;
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
         // by one microsecond when the clock did not move between commits.
@@ -2645,10 +2645,10 @@ impl FirestoreState {
         Ok((result, reservation))
     }
 
-    fn check_transform_budget(&self, writes: &[Write]) -> Result<(), FirestoreError> {
-        if self.limit_scope != LimitScope::Production {
-            return Ok(());
-        }
+    /// Production refuses more than the catalogued number of field transforms on one document
+    /// in a commit with `INVALID_ARGUMENT`, in every profile: the official emulator's leniency
+    /// here accepts a write production would reject.
+    fn check_transform_budget(writes: &[Write]) -> Result<(), FirestoreError> {
         let mut transforms_per_document: BTreeMap<&DocumentPath, u64> = BTreeMap::new();
         for write in writes {
             let count = transforms_per_document.entry(write.op.path()).or_default();
@@ -2684,7 +2684,14 @@ impl FirestoreState {
         let transaction = self.transaction(id)?;
         if transaction.read_only && !writes.is_empty() {
             return Err(FirestoreError::InvalidArgument(
-                "read-only transaction cannot write".into(),
+                "Cannot modify entities in a read-only transaction.".into(),
+            ));
+        }
+        if transaction.read_only {
+            // Production refuses committing a read-only transaction at all, even with no
+            // writes, and calls the transaction no longer valid.
+            return Err(FirestoreError::InvalidArgument(
+                TRANSACTION_NO_LONGER_VALID.into(),
             ));
         }
         if self.transaction_conflicted(id)? {

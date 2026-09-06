@@ -152,6 +152,9 @@ pub struct LocalBackend {
     /// Reloadable index catalog used for every new query plan.
     indexes: RwLock<BTreeMap<(Option<String>, String), fireemu_core_firestore::index::IndexSet>>,
     clock: Arc<Mutex<VirtualClock>>,
+    /// When this backend's databases came into being: a `read_time` before it is refused as
+    /// production refuses one before the database's creation time.
+    created_at: fireemu_core_types::time::LogicalInstant,
     /// Unpinned compatibility runs sample wall time for each Firestore write while every
     /// other product and explicitly pinned run continues to use the virtual clock.
     wall_clock_write_time: bool,
@@ -891,7 +894,12 @@ impl LocalBackend {
             (None, DatabaseId::DEFAULT.to_owned()),
             gateway.indexes.clone(),
         )]));
+        let created_at = clock
+            .lock()
+            .map(|clock| clock.now())
+            .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH);
         Self {
+            created_at,
             gateway,
             indexes,
             clock,
@@ -2108,6 +2116,7 @@ impl LocalBackend {
     /// is not in the future and lies within the retention window
     /// ([`READ_TIME_RETENTION_SECONDS`]).
     fn read_time_selector(
+        &self,
         ts: &prost_types::Timestamp,
         now: fireemu_core_types::time::LogicalInstant,
     ) -> Result<fireemu_core_types::time::LogicalInstant, Status> {
@@ -2125,12 +2134,19 @@ impl LocalBackend {
                 "read_time must not be in the future",
             ));
         }
+        // Production answers a read_time before the database existed with INVALID_ARGUMENT and
+        // one inside the database's life but outside the retention window with
+        // FAILED_PRECONDITION, in these words (conformance/firestore-production-matrix.json).
+        if at < self.created_at {
+            return Err(Status::invalid_argument(
+                "The requested 'read_time' cannot be before database creation time.",
+            ));
+        }
         let oldest = now.as_nanos() - i128::from(READ_TIME_RETENTION_SECONDS) * 1_000_000_000;
         if at.as_nanos() < oldest {
-            // FAILED_PRECONDITION, as the backend and the official emulator answer it.
-            return Err(Status::failed_precondition(format!(
-                "The requested 'read_time' is too old (it must be within the past {READ_TIME_RETENTION_SECONDS} seconds)."
-            )));
+            return Err(Status::failed_precondition(
+                "The requested 'read_time' is too old.",
+            ));
         }
         Ok(at)
     }
@@ -2150,6 +2166,7 @@ impl LocalBackend {
     /// read-write mode is given (Firestore's default for `new_transaction`), at the
     /// `read_time` snapshot when one is requested.
     fn new_transaction(
+        &self,
         parent: &Parent,
         db: &mut FirestoreState,
         opts: &pb::TransactionOptions,
@@ -2166,7 +2183,7 @@ impl LocalBackend {
             }
             Some(pb::transaction_options::Mode::ReadOnly(ro)) => match &ro.consistency_selector {
                 Some(pb::transaction_options::read_only::ConsistencySelector::ReadTime(ts)) => {
-                    let at = Self::read_time_selector(ts, now)?;
+                    let at = self.read_time_selector(ts, now)?;
                     db.begin_transaction_at(at, now)
                 }
                 None => db.begin_transaction(true, now),
@@ -2177,6 +2194,7 @@ impl LocalBackend {
     }
 
     fn select_snapshot(
+        &self,
         parent: &Parent,
         db: &mut FirestoreState,
         selector: SnapshotSelector<'_>,
@@ -2194,7 +2212,7 @@ impl LocalBackend {
                 })
             }
             SnapshotSelector::NewTransaction(options) => {
-                let transaction = Self::new_transaction(parent, db, options, now)?;
+                let transaction = self.new_transaction(parent, db, options, now)?;
                 let report = Self::token(parent, &transaction);
                 Ok(SelectedSnapshot {
                     transaction: Some(transaction),
@@ -2247,7 +2265,7 @@ impl LocalBackend {
             }),
             SnapshotSelector::Transaction(_) | SnapshotSelector::NewTransaction(_) => {
                 self.with_db(parent, |db| {
-                    let selected = Self::select_snapshot(parent, db, selector, now)?;
+                    let selected = self.select_snapshot(parent, db, selector, now)?;
                     let mut access = SnapshotAccess {
                         state: SnapshotState::Exclusive(db),
                         selected,
@@ -2282,7 +2300,7 @@ impl LocalBackend {
                 (Some(Self::required_txn(&parent, t)?), None)
             }
             Some(pb::get_document_request::ConsistencySelector::ReadTime(ts)) => {
-                (None, Some(Self::read_time_selector(ts, now)?))
+                (None, Some(self.read_time_selector(ts, now)?))
             }
             None => (None, None),
         };
@@ -2367,7 +2385,7 @@ impl LocalBackend {
                 SnapshotSelector::NewTransaction(options)
             }
             Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(Self::read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(self.read_time_selector(ts, now)?)
             }
             None => SnapshotSelector::Latest,
         };
@@ -2683,7 +2701,7 @@ impl LocalBackend {
                         Some(
                             pb::transaction_options::read_only::ConsistencySelector::ReadTime(ts),
                         ) => {
-                            let at = Self::read_time_selector(ts, now)?;
+                            let at = self.read_time_selector(ts, now)?;
                             db.begin_transaction_at(at, now)
                         }
                         None => db.begin_transaction(true, now),
@@ -2790,7 +2808,7 @@ impl LocalBackend {
                 SnapshotSelector::NewTransaction(options)
             }
             Some(pb::run_query_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(Self::read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(self.read_time_selector(ts, now)?)
             }
             None => SnapshotSelector::Latest,
         };
@@ -2850,7 +2868,7 @@ impl LocalBackend {
                 options,
             )) => SnapshotSelector::NewTransaction(options),
             Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(Self::read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(self.read_time_selector(ts, now)?)
             }
             None => SnapshotSelector::Latest,
         };
@@ -2899,7 +2917,7 @@ impl LocalBackend {
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => {
-                (None, Some(Self::read_time_selector(ts, now)?))
+                (None, Some(self.read_time_selector(ts, now)?))
             }
             Some(pb::list_documents_request::ConsistencySelector::Transaction(t)) => {
                 (Some(Self::required_txn(&parent, t)?), None)

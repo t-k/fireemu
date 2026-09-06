@@ -39,10 +39,14 @@ impl Rejection {
             Self::QueryLimits(v) => {
                 let lines: Vec<String> = v.iter().map(|x| format!("{}: {} ({} > {})", x.limit_id, x.detail, x.current, x.maximum)).collect();
                 let message = format!("query limit violation: {}", lines.join("; "));
-                // A second array-contains clause is FAILED_PRECONDITION on the backend and
-                // the official emulator; every other limit is INVALID_ARGUMENT.
+                // A second array-contains clause is INVALID_ARGUMENT with production's own
+                // wording (conformance/firestore-production-matrix.json,
+                // errors/rest-shapes#two-array-contains); the official emulator answers
+                // FAILED_PRECONDITION. Every other limit is INVALID_ARGUMENT.
                 if v.iter().all(|x| x.limit_id == "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION") {
-                    tonic::Status::failed_precondition(message)
+                    tonic::Status::invalid_argument(
+                        "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction.",
+                    )
                 } else {
                     tonic::Status::invalid_argument(message)
                 }

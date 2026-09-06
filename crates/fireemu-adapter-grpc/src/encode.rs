@@ -281,7 +281,17 @@ pub fn status_from_error(e: &FirestoreError) -> tonic::Status {
             tonic::Status::not_found(format!("No document to update: {}", p.resource_name()))
         }
         FirestoreError::Aborted(m) => tonic::Status::aborted(m.clone()),
-        // The official backend reports size / depth violations as INVALID_ARGUMENT.
+        // The official backend reports size / depth violations as INVALID_ARGUMENT; the
+        // transform budget carries production's own wording (conformance/
+        // firestore-production-matrix.json, errors/rest-shapes#too-many-transforms).
+        FirestoreError::ResourceExhausted(v)
+            if v.limit_id == fireemu_core_firestore::limits::FIELD_TRANSFORMS_PER_DOCUMENT =>
+        {
+            tonic::Status::invalid_argument(format!(
+                "cannot have more than {} field transforms on a single document",
+                v.maximum.value()
+            ))
+        }
         FirestoreError::ResourceExhausted(v) => tonic::Status::invalid_argument(format!(
             "{}: {} exceeds {} ({:?})",
             v.limit_id,

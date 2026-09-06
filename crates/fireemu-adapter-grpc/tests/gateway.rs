@@ -364,7 +364,8 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
 
     // Two `array-contains` in one disjunction is a limit the official emulator refuses too
     // (conformance/src/firestore-probe, errors/rest-shapes#two-array-contains), so the
-    // switch leaves it refused, with the FAILED_PRECONDITION the official emulator answers.
+    // switch leaves it refused, with the INVALID_ARGUMENT production answers (the official
+    // emulator says FAILED_PRECONDITION).
     let contains = |path: &str, v: &str| FilterExpr::Field {
         field: FieldPath::parse(path).unwrap(),
         op: FieldOp::ArrayContains,
@@ -379,12 +380,9 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
         contains("labels", "b"),
     ]));
     let rejection = firebase.validate_query(&two_contains).unwrap_err();
+    assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
     assert_eq!(
-        rejection.to_status().code(),
-        tonic::Code::FailedPrecondition
-    );
-    assert!(
-        rejection.to_string().contains("ARRAY-CONTAINS"),
-        "{rejection}"
+        rejection.to_status().message(),
+        "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction."
     );
 }

@@ -770,8 +770,11 @@ async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
         .iter()
         .all(|document| document.fields.is_empty()));
 
-    let err = client
-        .run_query(pb::RunQueryRequest {
+    // An empty collection id without `allDescendants` is the same scan of everything under
+    // the parent: production and the official emulator both serve it.
+    let everything = collect_docs(
+        &mut client,
+        pb::RunQueryRequest {
             parent: DOCS.to_owned(),
             query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
                 pb::StructuredQuery {
@@ -783,10 +786,10 @@ async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
                 },
             )),
             ..Default::default()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        },
+    )
+    .await;
+    assert_eq!(everything.len(), 4, "{everything:?}");
     handle.abort();
 }
 
@@ -2235,6 +2238,13 @@ async fn verify_writes_check_preconditions_without_changing_anything() {
 #[tokio::test]
 async fn read_time_selectors_serve_historical_snapshots() {
     let (mut client, clock, handle) = start().await;
+    // The database exists for a second before the document does, so a read_time just before
+    // the first write is a read of an existing database in which the document is missing.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(1))
+        .unwrap();
     let t0 = clock.lock().unwrap().now();
     client
         .commit(pb::CommitRequest {
@@ -2588,7 +2598,7 @@ async fn read_time_selectors_are_validated_and_read_only_transactions_can_start_
                 seconds: first.seconds - 7200,
                 nanos: 0,
             },
-            "older than the retention window",
+            "before the database was created",
         ),
         (
             prost_types::Timestamp {
@@ -2599,14 +2609,9 @@ async fn read_time_selectors_are_validated_and_read_only_transactions_can_start_
         ),
     ] {
         let err = client.get_document(get_at(ts)).await.unwrap_err();
-        // A read_time below the retained history is FAILED_PRECONDITION (the backend's and
-        // the official emulator's code for "too old"); a malformed one is INVALID_ARGUMENT.
-        let expected = if what == "older than the retention window" {
-            tonic::Code::FailedPrecondition
-        } else {
-            tonic::Code::InvalidArgument
-        };
-        assert_eq!(err.code(), expected, "{what}");
+        // A read_time before the database existed is INVALID_ARGUMENT like a malformed one
+        // (production: "cannot be before database creation time").
+        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{what}");
     }
     // An empty transaction token is not "no transaction".
     let err = client
@@ -2668,6 +2673,16 @@ async fn read_time_selectors_are_validated_and_read_only_transactions_can_start_
     ));
     let docs = collect_docs(&mut client, q).await;
     assert_eq!(docs[0].fields.get("v"), Some(&i(1)));
+    // Inside the database's life but older than the retention window is FAILED_PRECONDITION
+    // with production's wording.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(7200))
+        .unwrap();
+    let too_old = client.get_document(get_at(first)).await.unwrap_err();
+    assert_eq!(too_old.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(too_old.message(), "The requested 'read_time' is too old.");
     handle.abort();
 }
 

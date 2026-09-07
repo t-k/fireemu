@@ -2805,7 +2805,10 @@ async fn large_transaction_queries_keep_one_observation_across_all_pages() {
                     .map(|index| {
                         update_write(
                             &format!("{collection}/{index:05}"),
-                            &[("v", i(index as i64))],
+                            &[(
+                                "v",
+                                i(i64::try_from(index).expect("test document index fits in i64")),
+                            )],
                         )
                     })
                     .collect(),
@@ -2850,7 +2853,10 @@ async fn large_transaction_queries_keep_one_observation_across_all_pages() {
 
         let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
         let bookkeeping = backend
-            .read_unadmitted(&parent, |state| state.transaction_bookkeeping_stats())
+            .read_unadmitted(
+                &parent,
+                fireemu_core_firestore::store::FirestoreState::transaction_bookkeeping_stats,
+            )
             .unwrap();
         assert_eq!(bookkeeping.active, 0);
         assert_eq!(bookkeeping.deadlines, 0);

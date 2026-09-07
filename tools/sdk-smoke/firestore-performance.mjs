@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { initializeApp, deleteApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { FieldPath, getFirestore } from "firebase-admin/firestore";
 
 assert.ok(process.env.FIRESTORE_EMULATOR_HOST, "Performance runs require a local emulator");
 assert.match(process.env.FIRESTORE_EMULATOR_HOST, /^(127\.0\.0\.1|localhost|\[::1\]):\d+$/);
@@ -145,12 +145,20 @@ try {
     if (operation === "update")
       after.forEach((doc, i) => assert.equal(doc.data().value, touched[i]));
     if (operation === "create") {
-      const snapshot = await writes.get();
-      assert.deepEqual(
-        snapshot.docs.map((doc) => doc.id),
-        written.map((ref) => ref.id),
-      );
-      assert.ok(snapshot.docs.every((doc) => doc.data().value === 1));
+      for (let start = 0; start < written.length; start += 200) {
+        const expected = written.slice(start, start + 200);
+        const snapshot = await writes
+          .orderBy(FieldPath.documentId())
+          .startAt(expected[0])
+          .endAt(expected.at(-1))
+          .get();
+        assert.deepEqual(
+          snapshot.docs.map((doc) => doc.id),
+          expected.map((ref) => ref.id),
+        );
+        for (const doc of snapshot.docs)
+          assert.deepEqual(doc.data(), { value: 1, payload: "x".repeat(256) });
+      }
     }
     assert.equal(errors.length, 0, JSON.stringify(errors.slice(0, 3)));
     measurement.validation = "passed";

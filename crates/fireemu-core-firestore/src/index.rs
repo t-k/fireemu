@@ -468,8 +468,9 @@ fn automatic_index_for(
             req.order
                 .iter()
                 .find(|o| o.field == *f)
-                .map(|o| mode_for_direction(o.direction))
-                .unwrap_or(IndexFieldMode::Ascending)
+                .map_or(IndexFieldMode::Ascending, |o| {
+                    mode_for_direction(o.direction)
+                })
         };
         let supported = set
             .single_field_modes(collection, f)
@@ -578,7 +579,7 @@ fn composite_serves(
 fn decide_with_requirements(
     query: &Query,
     indexes: &IndexSet,
-    ctx: &PlanningContext,
+    ctx: PlanningContext,
     mut requirement_for_query: impl FnMut(&[FilterExpr], &[OrderClause]) -> Requirement,
 ) -> IndexDecision {
     let Some(collection) = query.scope.collection_id() else {
@@ -638,7 +639,7 @@ fn decide_with_requirements(
 /// Decides how a canonical query is served.
 #[must_use]
 pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> IndexDecision {
-    decide_with_requirements(query, indexes, ctx, requirement_for)
+    decide_with_requirements(query, indexes, *ctx, requirement_for)
 }
 
 /// Decides how a canonical aggregation query is served. `sum` and `avg` fields are added to the
@@ -650,7 +651,7 @@ pub fn validate_aggregation_query(
     indexes: &IndexSet,
     ctx: &PlanningContext,
 ) -> IndexDecision {
-    decide_with_requirements(query, indexes, ctx, |disjunction, effective_order| {
+    decide_with_requirements(query, indexes, *ctx, |disjunction, effective_order| {
         requirement_for_aggregation(disjunction, effective_order, aggregations)
     })
 }

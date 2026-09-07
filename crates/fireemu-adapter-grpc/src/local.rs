@@ -874,6 +874,12 @@ struct SelectedSnapshot {
     read_at: Option<fireemu_core_types::time::LogicalInstant>,
 }
 
+#[derive(Clone, Copy)]
+struct QueryExecutionContext {
+    id: QueryExecutionId,
+    complete: bool,
+}
+
 enum SnapshotState<'a> {
     Shared(&'a FirestoreState),
     Exclusive(&'a mut FirestoreState),
@@ -3407,8 +3413,10 @@ impl LocalBackend {
             guard,
             None,
             false,
-            self.next_query_execution_id(),
-            true,
+            QueryExecutionContext {
+                id: self.next_query_execution_id(),
+                complete: true,
+            },
         )
     }
 
@@ -3426,8 +3434,10 @@ impl LocalBackend {
             guard,
             None,
             false,
-            execution_id,
-            false,
+            QueryExecutionContext {
+                id: execution_id,
+                complete: false,
+            },
         )
     }
 
@@ -3447,8 +3457,10 @@ impl LocalBackend {
             guard,
             after_document,
             true,
-            self.next_query_execution_id(),
-            true,
+            QueryExecutionContext {
+                id: self.next_query_execution_id(),
+                complete: true,
+            },
         )
     }
 
@@ -3467,8 +3479,10 @@ impl LocalBackend {
             guard,
             after_document,
             true,
-            execution_id,
-            false,
+            QueryExecutionContext {
+                id: execution_id,
+                complete: false,
+            },
         )
     }
 
@@ -3479,8 +3493,7 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
         after_document: Option<&DocumentPath>,
         continuation: bool,
-        query_execution_id: QueryExecutionId,
-        complete_query_execution: bool,
+        execution: QueryExecutionContext,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
@@ -3525,7 +3538,7 @@ impl LocalBackend {
             None => SnapshotSelector::Latest,
         };
         self.with_selected_snapshot(&parent, selector, now, |access| {
-            access.set_query_execution(query_execution_id, complete_query_execution);
+            access.set_query_execution(execution.id, execution.complete);
             let version = access.version()?;
             // Authorized from the query constraints before any data is touched.
             guard(

@@ -221,11 +221,18 @@ fn composite_index_matching_checks_modes_and_name_direction() {
             ("priority", IndexFieldMode::Contains)
         ])
     ));
-    assert!(served(
+    assert!(!served(
         &by_priority,
         &composite(&[
             ("owner", IndexFieldMode::Ascending),
             ("priority", IndexFieldMode::Descending)
+        ])
+    ));
+    assert!(served(
+        &by_priority,
+        &composite(&[
+            ("owner", IndexFieldMode::Ascending),
+            ("priority", IndexFieldMode::Ascending)
         ])
     ));
     // An explicit __name__ in the index must agree with the scan direction.
@@ -242,10 +249,7 @@ fn composite_index_matching_checks_modes_and_name_direction() {
         .with_filter(field("owner", FieldOp::Equal, Value::String("u".into())))
         .with_order(order("priority", Direction::Descending))
         .with_order(order("__name__", Direction::Ascending));
-    assert!(
-        served(&reversed, &name_desc),
-        "reversed scan reads __name__ ascending"
-    );
+    assert!(!served(&reversed, &name_desc));
     let reversed_wrong_name = tasks()
         .with_filter(field("owner", FieldOp::Equal, Value::String("u".into())))
         .with_order(order("priority", Direction::Descending))

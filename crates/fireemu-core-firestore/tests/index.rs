@@ -296,8 +296,8 @@ fn order_direction_and_position_matter() {
         decide(&q, &right, standard()),
         IndexDecision::UseIndex { .. }
     ));
-    // The fully reversed index also serves the query (Firestore scans it backwards); the
-    // direction of the equality-constrained field is irrelevant.
+    // Equality-prefix direction is flexible, but ordered fields must not be served by a fully
+    // reversed index.
     let mut reversed = IndexSet::default();
     reversed.add_composite(composite(&[
         ("owner", IndexFieldMode::Descending),
@@ -306,7 +306,7 @@ fn order_direction_and_position_matter() {
     ]));
     assert!(matches!(
         decide(&q, &reversed, standard()),
-        IndexDecision::UseIndex { .. }
+        IndexDecision::MissingRequired { .. }
     ));
     // Order fields before the equality field do not serve the query.
     let mut swapped = IndexSet::default();
@@ -317,6 +317,60 @@ fn order_direction_and_position_matter() {
     ]));
     assert!(matches!(
         decide(&q, &swapped, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+}
+
+#[test]
+fn automatic_single_field_indexes_require_the_requested_direction() {
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let mut indexes = IndexSet::default();
+    indexes.set_single_field_indexes(
+        &collection,
+        &fp("priority"),
+        vec![(IndexQueryScope::Collection, IndexFieldMode::Ascending)],
+    );
+
+    let ascending = tasks().with_order(OrderClause {
+        field: fp("priority"),
+        direction: Direction::Ascending,
+    });
+    assert!(matches!(
+        decide(&ascending, &indexes, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+
+    let descending = tasks().with_order(OrderClause {
+        field: fp("priority"),
+        direction: Direction::Descending,
+    });
+    match decide(&descending, &indexes, standard()) {
+        IndexDecision::MissingRequired { requirement } => {
+            assert_eq!(requirement.fields[0].path, fp("priority"));
+            assert_eq!(requirement.fields[0].mode, IndexFieldMode::Descending);
+        }
+        other => panic!("{other:?}"),
+    }
+
+    let inequality_ascending = tasks()
+        .with_filter(field("priority", FieldOp::GreaterThan, Value::Integer(1)))
+        .with_order(OrderClause {
+            field: fp("priority"),
+            direction: Direction::Ascending,
+        });
+    assert!(matches!(
+        decide(&inequality_ascending, &indexes, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+
+    let inequality_descending = tasks()
+        .with_filter(field("priority", FieldOp::GreaterThan, Value::Integer(1)))
+        .with_order(OrderClause {
+            field: fp("priority"),
+            direction: Direction::Descending,
+        });
+    assert!(matches!(
+        decide(&inequality_descending, &indexes, standard()),
         IndexDecision::MissingRequired { .. }
     ));
 }

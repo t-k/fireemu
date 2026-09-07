@@ -385,6 +385,13 @@ fn required_index(req: &Requirement, collection: &CollectionId, group: bool) -> 
     }
 }
 
+fn mode_for_direction(direction: Direction) -> IndexFieldMode {
+    match direction {
+        Direction::Ascending => IndexFieldMode::Ascending,
+        Direction::Descending => IndexFieldMode::Descending,
+    }
+}
+
 /// Whether the automatic single-field indexes serve `req`: at most one non-`__name__` field
 /// is touched (by equality, array-contains, or ordering), and it is not exempt.
 fn automatic_index_for(
@@ -415,17 +422,19 @@ fn automatic_index_for(
         } else {
             IndexQueryScope::Collection
         };
-        let supported =
-            set.single_field_modes(collection, f)
+        let required_mode = if req.contains.is_some() {
+            IndexFieldMode::Contains
+        } else {
+            req.order
                 .iter()
-                .any(|(candidate_scope, mode)| {
-                    *candidate_scope == scope
-                        && if req.contains.is_some() {
-                            *mode == IndexFieldMode::Contains
-                        } else {
-                            *mode != IndexFieldMode::Contains
-                        }
-                });
+                .find(|o| o.field == *f)
+                .map(|o| mode_for_direction(o.direction))
+                .unwrap_or(IndexFieldMode::Ascending)
+        };
+        let supported = set
+            .single_field_modes(collection, f)
+            .iter()
+            .any(|(candidate_scope, mode)| *candidate_scope == scope && *mode == required_mode);
         if !supported {
             return None;
         }
@@ -441,8 +450,7 @@ fn automatic_index_for(
 }
 
 /// Whether composite `index` serves `req`: equality fields (any order) as a prefix, then the
-/// array field, then the ordered fields with all directions equal or all reversed, then
-/// `__name__` implicitly.
+/// array field, then the ordered fields with exactly matching directions, then `__name__`.
 fn composite_serves(
     index: &IndexDefinition,
     req: &Requirement,
@@ -493,44 +501,38 @@ fn composite_serves(
     if rest.len() != order.len() {
         return false;
     }
-    let mut same = true;
-    let mut reversed = true;
     for (f, o) in rest.iter().zip(order.iter()) {
         if f.path != o.field || f.mode == IndexFieldMode::Contains {
             return false;
         }
-        let dir = if f.mode == IndexFieldMode::Ascending {
-            Direction::Ascending
-        } else {
-            Direction::Descending
-        };
-        if dir != o.direction {
-            same = false;
-        }
-        if dir != o.direction.reversed() {
-            reversed = false;
+        if mode_for_direction(o.direction) != f.mode {
+            return false;
         }
     }
-    // Explicit __name__ direction in the index must agree with the chosen scan direction.
+
+    // An explicit `__name__` uses its own direction. Without one, Firestore derives the implicit
+    // name direction from the last ordered field, or ASCENDING when this index has no ordered
+    // field after its equality/contains prefix.
     if let Some(name_field) = fields[pos..].iter().find(|f| f.path.is_document_name()) {
-        let dir = if name_field.mode == IndexFieldMode::Ascending {
-            Direction::Ascending
-        } else {
-            Direction::Descending
-        };
         let wanted = req
             .order
             .iter()
             .find(|o| o.field.is_document_name())
             .map_or(Direction::Ascending, |o| o.direction);
-        if same && dir != wanted {
-            same = false;
+        if name_field.mode != mode_for_direction(wanted) {
+            return false;
         }
-        if reversed && dir != wanted.reversed() {
-            reversed = false;
+    } else if let Some(last_ordered) = rest.last() {
+        let wanted = req
+            .order
+            .iter()
+            .find(|o| o.field.is_document_name())
+            .map_or(Direction::Ascending, |o| o.direction);
+        if last_ordered.mode != mode_for_direction(wanted) {
+            return false;
         }
     }
-    same || reversed
+    true
 }
 
 /// Decides how a canonical query is served.

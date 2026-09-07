@@ -3401,6 +3401,8 @@ impl LocalBackend {
     /// Executes a bounded page while authorizing the caller's original query shape.
     /// Synthetic pagination limits and offsets are an adapter implementation detail and must
     /// not change `request.query` as observed by Security Rules.
+    /// This public page helper uses the legacy query-shaped transaction observation so callers
+    /// can pair it with [`Self::run_query_authorized_as_after`].
     pub fn run_query_authorized_as(
         &self,
         req: &pb::RunQueryRequest,
@@ -3413,10 +3415,7 @@ impl LocalBackend {
             guard,
             None,
             false,
-            QueryExecutionContext {
-                id: self.next_query_execution_id(),
-                complete: true,
-            },
+            None,
         )
     }
 
@@ -3434,16 +3433,19 @@ impl LocalBackend {
             guard,
             None,
             false,
-            QueryExecutionContext {
+            Some(QueryExecutionContext {
                 id: execution_id,
                 complete: false,
-            },
+            }),
         )
     }
 
     /// Executes a bounded page after an exclusive document path while authorizing the caller's
     /// original query shape. The continuation is valid only for the canonical ascending
-    /// `__name__` order selected by the caller.
+    /// `__name__` order selected by the caller. This public compatibility helper pairs with
+    /// [`Self::run_query_authorized_as`] and resolves its transaction observation by query shape.
+    /// The gRPC streaming path uses the execution-scoped helper below when identical queries can
+    /// be active concurrently.
     pub fn run_query_authorized_as_after(
         &self,
         req: &pb::RunQueryRequest,
@@ -3457,10 +3459,7 @@ impl LocalBackend {
             guard,
             after_document,
             true,
-            QueryExecutionContext {
-                id: self.next_query_execution_id(),
-                complete: true,
-            },
+            None,
         )
     }
 
@@ -3479,10 +3478,10 @@ impl LocalBackend {
             guard,
             after_document,
             true,
-            QueryExecutionContext {
+            Some(QueryExecutionContext {
                 id: execution_id,
                 complete: false,
-            },
+            }),
         )
     }
 
@@ -3493,7 +3492,7 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
         after_document: Option<&DocumentPath>,
         continuation: bool,
-        execution: QueryExecutionContext,
+        execution: Option<QueryExecutionContext>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
@@ -3538,7 +3537,9 @@ impl LocalBackend {
             None => SnapshotSelector::Latest,
         };
         self.with_selected_snapshot(&parent, selector, now, |access| {
-            access.set_query_execution(execution.id, execution.complete);
+            if let Some(execution) = execution {
+                access.set_query_execution(execution.id, execution.complete);
+            }
             let version = access.version()?;
             // Authorized from the query constraints before any data is touched.
             guard(

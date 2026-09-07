@@ -2845,6 +2845,90 @@ async fn repeated_transaction_queries_keep_observations_separate() {
 }
 
 #[tokio::test]
+async fn direct_authorized_query_continuation_reuses_public_transaction_execution() {
+    let (_client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    backend
+        .commit(&pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..33)
+                .map(|index| update_write(&format!("direct/{index:03}"), &[("v", i(index))]))
+                .collect(),
+            ..Default::default()
+        })
+        .unwrap();
+    let transaction = backend
+        .begin_transaction(&pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite::default(),
+                )),
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut original = query("direct", None);
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        original.query_type.as_mut()
+    {
+        query.limit = Some(33);
+    }
+    original.consistency_selector = Some(pb::run_query_request::ConsistencySelector::Transaction(
+        transaction.clone(),
+    ));
+    let mut first_request = original.clone();
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        first_request.query_type.as_mut()
+    {
+        query.limit = Some(32);
+    }
+    let (first, _) = backend
+        .run_query_authorized_as(
+            &first_request,
+            &original,
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        )
+        .unwrap();
+    let last_document = first
+        .iter()
+        .rev()
+        .find_map(|response| response.document.as_ref())
+        .expect("the first bounded page returns a document");
+    let after = fireemu_adapter_grpc::encode::decode_document_name(&last_document.name).unwrap();
+    let mut continuation_request = original.clone();
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        continuation_request.query_type.as_mut()
+    {
+        query.limit = Some(1);
+    }
+    let (second, _) = backend
+        .run_query_authorized_as_after(
+            &continuation_request,
+            &original,
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+            Some(&after),
+        )
+        .unwrap();
+    assert_eq!(
+        second
+            .iter()
+            .filter(|response| response.document.is_some())
+            .count(),
+        1
+    );
+    backend
+        .commit(&pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("direct/commit", &[("v", i(1))])],
+            transaction,
+            ..Default::default()
+        })
+        .unwrap();
+    handle.abort();
+}
+
+#[tokio::test]
 async fn interleaved_identical_transaction_queries_keep_observations_separate() {
     let (mut client, _clock, handle) = start().await;
     let writes = (0..33)

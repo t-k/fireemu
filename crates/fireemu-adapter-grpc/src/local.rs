@@ -3798,6 +3798,15 @@ impl LocalBackend {
         req: &pb::RunAggregationQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<pb::RunAggregationQueryResponse, Status> {
+        self.run_aggregation_query_with_stats(req, guard)
+            .map(|(response, _)| response)
+    }
+
+    fn run_aggregation_query_with_stats(
+        &self,
+        req: &pb::RunAggregationQueryRequest,
+        guard: ReadGuard<'_>,
+    ) -> Result<(pb::RunAggregationQueryResponse, QueryStats), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(saq)) =
@@ -3847,18 +3856,21 @@ impl LocalBackend {
             // Inside a transaction the aggregation and its conflict observation share one
             // borrowed selection pass, so matching document bodies are never materialized just
             // to record the query.
-            let (values, _) = access.run_aggregation(&accepted.query, &aggregations)?;
+            let (values, stats) = access.run_aggregation(&accepted.query, &aggregations)?;
             let read_time = access.read_time(now)?;
             let aggregate_fields: HashMap<String, pb::Value> = aliases
                 .into_iter()
                 .zip(values.iter().map(encode_value))
                 .collect();
-            Ok(pb::RunAggregationQueryResponse {
-                result: Some(pb::AggregationResult { aggregate_fields }),
-                transaction: access.report().to_vec(),
-                read_time: Some(encode_instant(read_time)),
-                explain_metrics: None,
-            })
+            Ok((
+                pb::RunAggregationQueryResponse {
+                    result: Some(pb::AggregationResult { aggregate_fields }),
+                    transaction: access.report().to_vec(),
+                    read_time: Some(encode_instant(read_time)),
+                    explain_metrics: None,
+                },
+                stats,
+            ))
         })
     }
 
@@ -4623,6 +4635,157 @@ mod lock_tests {
                 .load(std::sync::atomic::Ordering::Acquire),
             0
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn transactional_aggregation_at_the_adapter_keeps_clone_stats_zero() {
+        use crate::rules::allow_all_reads;
+
+        let backend = backend();
+        let database = "projects/demo-app/databases/(default)";
+        let documents = format!("{database}/documents");
+        let payload = "x".repeat(4 * 1024);
+        let writes = (0..500)
+            .map(|index| pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: format!("{documents}/items/{index:04}"),
+                    fields: [
+                        (
+                            "n".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::IntegerValue(index)),
+                            },
+                        ),
+                        (
+                            "payload".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::StringValue(
+                                    payload.clone(),
+                                )),
+                            },
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })
+            .collect();
+        backend
+            .commit_with(
+                &pb::CommitRequest {
+                    database: database.to_owned(),
+                    writes,
+                    ..Default::default()
+                },
+                &allow_all,
+            )
+            .unwrap();
+
+        let aggregation =
+            |alias: &str, operator: pb::structured_aggregation_query::aggregation::Operator| {
+                pb::structured_aggregation_query::Aggregation {
+                    alias: alias.to_owned(),
+                    operator: Some(operator),
+                }
+            };
+        let field = || {
+            Some(pb::structured_query::FieldReference {
+                field_path: "n".to_owned(),
+            })
+        };
+        let request = pb::RunAggregationQueryRequest {
+            parent: documents,
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    pb::StructuredAggregationQuery {
+                        query_type: Some(
+                            pb::structured_aggregation_query::QueryType::StructuredQuery(
+                                pb::StructuredQuery {
+                                    from: vec![pb::structured_query::CollectionSelector {
+                                        collection_id: "items".to_owned(),
+                                        all_descendants: false,
+                                    }],
+                                    ..Default::default()
+                                },
+                            ),
+                        ),
+                        aggregations: vec![
+                            aggregation(
+                                "count",
+                                pb::structured_aggregation_query::aggregation::Operator::Count(
+                                    pb::structured_aggregation_query::aggregation::Count {
+                                        up_to: None,
+                                    },
+                                ),
+                            ),
+                            aggregation(
+                                "sum",
+                                pb::structured_aggregation_query::aggregation::Operator::Sum(
+                                    pb::structured_aggregation_query::aggregation::Sum {
+                                        field: field(),
+                                    },
+                                ),
+                            ),
+                            aggregation(
+                                "avg",
+                                pb::structured_aggregation_query::aggregation::Operator::Avg(
+                                    pb::structured_aggregation_query::aggregation::Avg {
+                                        field: field(),
+                                    },
+                                ),
+                            ),
+                        ],
+                    },
+                ),
+            ),
+            consistency_selector: Some(
+                pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                    pb::TransactionOptions {
+                        mode: Some(pb::transaction_options::Mode::ReadWrite(
+                            pb::transaction_options::ReadWrite::default(),
+                        )),
+                    },
+                ),
+            ),
+            ..Default::default()
+        };
+        let (response, stats) = backend
+            .run_aggregation_query_with_stats(&request, &allow_all_reads)
+            .unwrap();
+        assert_eq!(stats.matched, 500);
+        assert_eq!(stats.cloned_documents, 0);
+        assert_eq!(stats.cloned_field_bytes, 0);
+        assert_eq!(stats.peak_candidates, 0);
+        let result = response.result.unwrap().aggregate_fields;
+        assert_eq!(
+            result.get("count"),
+            Some(&pb::Value {
+                value_type: Some(pb::value::ValueType::IntegerValue(500)),
+            })
+        );
+        assert_eq!(
+            result.get("sum"),
+            Some(&pb::Value {
+                value_type: Some(pb::value::ValueType::IntegerValue(124_750)),
+            })
+        );
+        assert_eq!(
+            result.get("avg"),
+            Some(&pb::Value {
+                value_type: Some(pb::value::ValueType::DoubleValue(249.5)),
+            })
+        );
+
+        backend
+            .rollback(&pb::RollbackRequest {
+                database: database.to_owned(),
+                transaction: response.transaction,
+                ..Default::default()
+            })
+            .unwrap();
     }
 
     fn history_usage(versions: u64) -> HistoryUsage {

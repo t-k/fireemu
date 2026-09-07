@@ -15,7 +15,7 @@
       "evidenceSchema": 1,
       "evidence": {
         "identity": {
-          "sourceSha": "sha256-8cc0766245a671f8bd90c873b7902b2032d443a9cf86e764f715b0465c3a44e5",
+          "sourceSha": "sha256-6ae18ce5aba60d35135a5452288ab8c5c41319e2aa426b7da8dea17ace89e8e9",
           "packageVersion": "0.0.0-dev",
           "packageManifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
           "packageIntegrity": null,
@@ -44,8 +44,8 @@
         "observation": {
           "side": "production",
           "mode": "live",
-          "startedAt": "2026-09-07T02:15:05.413Z",
-          "finishedAt": "2026-09-07T02:19:06.635Z",
+          "startedAt": "2026-09-07T02:38:04.020Z",
+          "finishedAt": "2026-09-07T02:42:01.386Z",
           "database": {
             "type": "FIRESTORE_NATIVE",
             "concurrencyMode": "PESSIMISTIC",
@@ -55,8 +55,8 @@
           }
         },
         "source": {
-          "gitSha": "3002af5def1c90d0831ecf6a5855951e4c82a06d",
-          "sourceTreeDigest": "sha256-8cc0766245a671f8bd90c873b7902b2032d443a9cf86e764f715b0465c3a44e5",
+          "gitSha": "326e8f69f7e6817bef4ce7852a3e6c23777192c8",
+          "sourceTreeDigest": "sha256-6ae18ce5aba60d35135a5452288ab8c5c41319e2aa426b7da8dea17ace89e8e9",
           "trackedTreeClean": true
         },
         "package": {
@@ -94,15 +94,15 @@
         "observation": {
           "side": "fireemu",
           "mode": "live",
-          "startedAt": "2026-09-07T02:19:06.648Z",
-          "finishedAt": "2026-09-07T02:19:36.801Z",
+          "startedAt": "2026-09-07T02:42:01.403Z",
+          "finishedAt": "2026-09-07T02:42:31.578Z",
           "database": {
             "target": "fireemu local Firestore"
           }
         },
         "source": {
-          "gitSha": "3002af5def1c90d0831ecf6a5855951e4c82a06d",
-          "sourceTreeDigest": "sha256-8cc0766245a671f8bd90c873b7902b2032d443a9cf86e764f715b0465c3a44e5",
+          "gitSha": "326e8f69f7e6817bef4ce7852a3e6c23777192c8",
+          "sourceTreeDigest": "sha256-6ae18ce5aba60d35135a5452288ab8c5c41319e2aa426b7da8dea17ace89e8e9",
           "trackedTreeClean": true
         },
         "package": {
@@ -144,7 +144,7 @@
       "officialEmulator": {
         "side": "official-emulator",
         "mode": "stored",
-        "matrixDigest": "sha256-585878d8352b8a3055401bf27f147f0a0cd507d45f4f3086fb72e7bc29ba8f97",
+        "matrixDigest": "sha256-3f3fddf8022f9025dd707e78f8fbf2e726db03da0a05f1f5a2a42bf6e277ba82",
         "source": "firestore-matrix.json"
       }
     }
@@ -6707,8 +6707,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -6722,8 +6722,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -6735,12 +6735,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -6749,6 +6743,12 @@
                           }
                         }
                       }
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "3"
@@ -6763,9 +6763,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -6780,6 +6777,9 @@
                           }
                         }
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -7039,9 +7039,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/d",
                   "fields": {
-                    "s": {
-                      "nullValue": null
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -7053,6 +7050,9 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "nullValue": null
                     },
                     "n": {
                       "doubleValue": 2.5
@@ -7154,8 +7154,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -7169,8 +7169,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -7182,12 +7182,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -7196,6 +7190,12 @@
                           }
                         }
                       }
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "3"
@@ -7210,9 +7210,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -7228,6 +7225,9 @@
                         }
                       }
                     },
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "n": {
                       "integerValue": "1"
                     }
@@ -7241,15 +7241,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -7257,6 +7248,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -7275,6 +7275,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
                     "s": {
                       "stringValue": "z"
                     },
@@ -7298,9 +7301,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "doubleValue": "NaN"
                     }
                   },
                   "createTime": "<now>",
@@ -7668,15 +7668,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -7684,6 +7675,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -7702,6 +7702,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
                     "s": {
                       "stringValue": "z"
                     },
@@ -7725,9 +7728,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "doubleValue": "NaN"
                     }
                   },
                   "createTime": "<now>",
@@ -7934,15 +7934,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -7950,6 +7941,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -7968,9 +7968,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/d",
                   "fields": {
-                    "s": {
-                      "nullValue": null
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -7982,6 +7979,9 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "nullValue": null
                     },
                     "n": {
                       "doubleValue": 2.5
@@ -7996,12 +7996,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -8010,6 +8004,12 @@
                           }
                         }
                       }
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "3"
@@ -8323,8 +8323,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -8338,8 +8338,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -8351,6 +8351,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
                     "s": {
                       "stringValue": "z"
                     },
@@ -8374,9 +8377,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "doubleValue": "NaN"
                     }
                   },
                   "createTime": "<now>",
@@ -8660,8 +8660,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -8675,8 +8675,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -8688,15 +8688,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -8704,6 +8695,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -8722,6 +8722,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
                     "s": {
                       "stringValue": "z"
                     },
@@ -8745,9 +8748,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "doubleValue": "NaN"
                     }
                   },
                   "createTime": "<now>",
@@ -8997,15 +8997,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -9013,6 +9004,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -9031,6 +9031,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
                     "s": {
                       "stringValue": "z"
                     },
@@ -9054,9 +9057,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "doubleValue": "NaN"
                     }
                   },
                   "createTime": "<now>",
@@ -9241,8 +9241,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -9256,8 +9256,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -9285,9 +9285,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -9302,6 +9299,9 @@
                           }
                         }
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -9506,15 +9506,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -9522,6 +9513,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -9540,6 +9540,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
                     "s": {
                       "stringValue": "z"
                     },
@@ -9563,9 +9566,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "doubleValue": "NaN"
                     }
                   },
                   "createTime": "<now>",
@@ -9772,15 +9772,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -9788,6 +9779,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -9896,15 +9896,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -9912,6 +9903,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -10020,9 +10020,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -10037,6 +10034,9 @@
                           }
                         }
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -10144,8 +10144,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -10159,8 +10159,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -10268,15 +10268,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -10284,6 +10275,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -10302,12 +10302,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -10316,6 +10310,12 @@
                           }
                         }
                       }
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "3"
@@ -10485,8 +10485,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -10500,8 +10500,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -10513,9 +10513,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -10531,6 +10528,9 @@
                         }
                       }
                     },
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "n": {
                       "integerValue": "1"
                     }
@@ -10544,15 +10544,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -10560,6 +10551,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -10813,8 +10813,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -10828,8 +10828,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -10841,9 +10841,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -10858,6 +10855,9 @@
                           }
                         }
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -11039,8 +11039,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -11054,8 +11054,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -11067,9 +11067,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -11085,6 +11082,9 @@
                         }
                       }
                     },
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "n": {
                       "integerValue": "1"
                     }
@@ -11098,15 +11098,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -11114,6 +11105,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -11358,9 +11358,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/d",
                   "fields": {
-                    "s": {
-                      "nullValue": null
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -11372,6 +11369,9 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "nullValue": null
                     },
                     "n": {
                       "doubleValue": 2.5
@@ -11395,8 +11395,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -11410,8 +11410,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -11423,9 +11423,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -11441,6 +11438,9 @@
                         }
                       }
                     },
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "n": {
                       "integerValue": "1"
                     }
@@ -11454,12 +11454,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -11468,6 +11462,12 @@
                           }
                         }
                       }
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "3"
@@ -11482,15 +11482,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -11498,6 +11489,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -11854,9 +11854,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/d",
                   "fields": {
-                    "s": {
-                      "nullValue": null
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -11868,6 +11865,9 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "nullValue": null
                     },
                     "n": {
                       "doubleValue": 2.5
@@ -11891,8 +11891,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -11906,8 +11906,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -11919,9 +11919,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -11937,6 +11934,9 @@
                         }
                       }
                     },
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "n": {
                       "integerValue": "1"
                     }
@@ -11950,12 +11950,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -11964,6 +11958,12 @@
                           }
                         }
                       }
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "3"
@@ -11978,15 +11978,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -11994,6 +11985,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -12350,12 +12350,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -12364,6 +12358,12 @@
                           }
                         }
                       }
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "3"
@@ -12387,8 +12387,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -12402,8 +12402,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -12415,15 +12415,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -12431,6 +12422,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -12669,9 +12669,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/d",
                   "fields": {
-                    "s": {
-                      "nullValue": null
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -12683,6 +12680,9 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "nullValue": null
                     },
                     "n": {
                       "doubleValue": 2.5
@@ -12697,12 +12697,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -12711,6 +12705,12 @@
                           }
                         }
                       }
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "3"
@@ -12725,9 +12725,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -12742,6 +12739,9 @@
                           }
                         }
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -12765,8 +12765,8 @@
                         }
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
+                    "s": {
+                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -12780,8 +12780,8 @@
                         ]
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -12793,15 +12793,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/b",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "stringValue": "blue"
-                          }
-                        ]
-                      }
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -12809,6 +12800,15 @@
                             "integerValue": "2"
                           }
                         }
+                      }
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "blue"
+                          }
+                        ]
                       }
                     },
                     "n": {
@@ -12827,6 +12827,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
                     "s": {
                       "stringValue": "z"
                     },
@@ -12850,9 +12853,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "doubleValue": "NaN"
                     }
                   },
                   "createTime": "<now>",
@@ -13282,11 +13282,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -13298,11 +13298,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "g": {
-                      "stringValue": "q"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "q"
                     }
                   },
                   "createTime": "<now>",
@@ -13330,11 +13330,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/e",
                   "fields": {
-                    "n": {
-                      "integerValue": "4"
-                    },
                     "g": {
                       "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "4"
                     }
                   },
                   "createTime": "<now>",
@@ -13512,11 +13512,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/e",
                   "fields": {
-                    "n": {
-                      "integerValue": "4"
-                    },
                     "g": {
                       "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "4"
                     }
                   },
                   "createTime": "<now>",
@@ -13630,11 +13630,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -13646,11 +13646,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "g": {
-                      "stringValue": "q"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "q"
                     }
                   },
                   "createTime": "<now>",
@@ -13796,11 +13796,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -13812,11 +13812,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "g": {
-                      "stringValue": "q"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "q"
                     }
                   },
                   "createTime": "<now>",
@@ -13994,11 +13994,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "g": {
-                      "stringValue": "q"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "q"
                     }
                   },
                   "createTime": "<now>",
@@ -14026,11 +14026,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/e",
                   "fields": {
-                    "n": {
-                      "integerValue": "4"
-                    },
                     "g": {
                       "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "4"
                     }
                   },
                   "createTime": "<now>",
@@ -14160,11 +14160,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "g": {
-                      "stringValue": "q"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "q"
                     }
                   },
                   "createTime": "<now>",
@@ -14278,11 +14278,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "g": {
-                      "stringValue": "q"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "q"
                     }
                   },
                   "createTime": "<now>",
@@ -14294,11 +14294,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -14491,11 +14491,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/e",
                   "fields": {
-                    "n": {
-                      "integerValue": "4"
-                    },
                     "g": {
                       "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "4"
                     }
                   },
                   "createTime": "<now>",
@@ -14654,11 +14654,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "g": {
-                      "stringValue": "q"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "q"
                     }
                   },
                   "createTime": "<now>",
@@ -14841,11 +14841,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/e",
                   "fields": {
-                    "n": {
-                      "integerValue": "4"
-                    },
                     "g": {
                       "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "4"
                     }
                   },
                   "createTime": "<now>",
@@ -14975,11 +14975,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -14991,11 +14991,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "g": {
-                      "stringValue": "q"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "q"
                     }
                   },
                   "createTime": "<now>",
@@ -15023,11 +15023,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/e",
                   "fields": {
-                    "n": {
-                      "integerValue": "4"
-                    },
                     "g": {
                       "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "4"
                     }
                   },
                   "createTime": "<now>",
@@ -15291,11 +15291,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/items/root",
                   "fields": {
-                    "t": {
-                      "stringValue": "root"
-                    },
                     "n": {
                       "integerValue": "0"
+                    },
+                    "t": {
+                      "stringValue": "root"
                     }
                   },
                   "createTime": "<now>",
@@ -15489,11 +15489,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/items/root",
                   "fields": {
-                    "t": {
-                      "stringValue": "root"
-                    },
                     "n": {
                       "integerValue": "0"
+                    },
+                    "t": {
+                      "stringValue": "root"
                     }
                   },
                   "createTime": "<now>",
@@ -16019,11 +16019,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/items/root",
                   "fields": {
-                    "t": {
-                      "stringValue": "root"
-                    },
                     "n": {
                       "integerValue": "0"
+                    },
+                    "t": {
+                      "stringValue": "root"
                     }
                   },
                   "createTime": "<now>",
@@ -16357,11 +16357,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/items/root",
                   "fields": {
-                    "t": {
-                      "stringValue": "root"
-                    },
                     "n": {
                       "integerValue": "0"
+                    },
+                    "t": {
+                      "stringValue": "root"
                     }
                   },
                   "createTime": "<now>",
@@ -18095,14 +18095,8 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
-                    "e": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "integerValue": "1"
-                          }
-                        ]
-                      }
+                    "a": {
+                      "integerValue": "1"
                     },
                     "b": {
                       "mapValue": {
@@ -18116,8 +18110,14 @@
                         }
                       }
                     },
-                    "a": {
-                      "integerValue": "1"
+                    "e": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
                     }
                   },
                   "createTime": "<now>",
@@ -18373,6 +18373,9 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
+                    "a": {
+                      "integerValue": "1"
+                    },
                     "b": {
                       "mapValue": {
                         "fields": {
@@ -18393,9 +18396,6 @@
                           }
                         ]
                       }
-                    },
-                    "a": {
-                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -18672,9 +18672,6 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
-                    "a": {
-                      "integerValue": "1"
-                    },
                     "b": {
                       "mapValue": {
                         "fields": {
@@ -18686,6 +18683,9 @@
                           }
                         }
                       }
+                    },
+                    "a": {
+                      "integerValue": "1"
                     },
                     "e": {
                       "arrayValue": {
@@ -18995,15 +18995,6 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
               "fields": {
-                "e": {
-                  "arrayValue": {
-                    "values": [
-                      {
-                        "integerValue": "1"
-                      }
-                    ]
-                  }
-                },
                 "b": {
                   "mapValue": {
                     "fields": {
@@ -19011,6 +19002,15 @@
                         "integerValue": "3"
                       }
                     }
+                  }
+                },
+                "e": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
                   }
                 }
               },
@@ -19730,12 +19730,12 @@
           "production": {
             "status": 400,
             "code": "FAILED_PRECONDITION",
-            "message": "the stored version (1788747386755804) does not match the required base version (1788747386381729)"
+            "message": "the stored version (1788748768333209) does not match the required base version (1788748767969982)"
           },
           "emulator": {
             "status": 400,
             "code": "FAILED_PRECONDITION",
-            "message": "the stored version (1788747235212765) does not match the required base version (1788747235209483)"
+            "message": "the stored version (1788748607932346) does not match the required base version (1788748607929761)"
           },
           "fireemu": {
             "status": 400,
@@ -20501,15 +20501,6 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "fields": {
-                "d": {
-                  "doubleValue": 2.5
-                },
-                "s": {
-                  "integerValue": "1"
-                },
-                "missing": {
-                  "doubleValue": 0.5
-                },
                 "tags": {
                   "arrayValue": {
                     "values": [
@@ -20522,11 +20513,11 @@
                     ]
                   }
                 },
-                "at": {
-                  "timestampValue": "<now>"
-                },
                 "n": {
                   "integerValue": "3"
+                },
+                "d": {
+                  "doubleValue": 2.5
                 },
                 "m": {
                   "mapValue": {
@@ -20536,6 +20527,15 @@
                       }
                     }
                   }
+                },
+                "s": {
+                  "integerValue": "1"
+                },
+                "at": {
+                  "timestampValue": "<now>"
+                },
+                "missing": {
+                  "doubleValue": 0.5
                 }
               },
               "createTime": "<now>",
@@ -20663,8 +20663,17 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "fields": {
+                "at": {
+                  "timestampValue": "<now>"
+                },
                 "s": {
                   "integerValue": "1"
+                },
+                "missing": {
+                  "doubleValue": 0.5
+                },
+                "n": {
+                  "integerValue": "3"
                 },
                 "tags": {
                   "arrayValue": {
@@ -20678,14 +20687,8 @@
                     ]
                   }
                 },
-                "missing": {
-                  "doubleValue": 0.5
-                },
                 "d": {
                   "doubleValue": 2.5
-                },
-                "at": {
-                  "timestampValue": "<now>"
                 },
                 "m": {
                   "mapValue": {
@@ -20695,9 +20698,6 @@
                       }
                     }
                   }
-                },
-                "n": {
-                  "integerValue": "3"
                 }
               },
               "createTime": "<now>",
@@ -20882,14 +20882,8 @@
                 "missing": {
                   "doubleValue": 0.5
                 },
-                "m": {
-                  "mapValue": {
-                    "fields": {
-                      "inner": {
-                        "integerValue": "-5"
-                      }
-                    }
-                  }
+                "at": {
+                  "timestampValue": "<now>"
                 },
                 "s": {
                   "arrayValue": {
@@ -20900,14 +20894,17 @@
                     ]
                   }
                 },
-                "at": {
-                  "timestampValue": "<now>"
+                "m": {
+                  "mapValue": {
+                    "fields": {
+                      "inner": {
+                        "integerValue": "-5"
+                      }
+                    }
+                  }
                 },
                 "n": {
                   "integerValue": "3"
-                },
-                "d": {
-                  "doubleValue": 2.5
                 },
                 "tags": {
                   "arrayValue": {
@@ -20920,6 +20917,9 @@
                       }
                     ]
                   }
+                },
+                "d": {
+                  "doubleValue": 2.5
                 }
               },
               "createTime": "<now>",
@@ -21104,11 +21104,11 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/created",
               "fields": {
-                "count": {
-                  "integerValue": "1"
-                },
                 "at": {
                   "timestampValue": "<now>"
+                },
+                "count": {
+                  "integerValue": "1"
                 }
               },
               "createTime": "<now>",
@@ -21266,12 +21266,6 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "fields": {
-                "n": {
-                  "integerValue": "1001"
-                },
-                "d": {
-                  "doubleValue": 2.5
-                },
                 "m": {
                   "mapValue": {
                     "fields": {
@@ -21279,15 +21273,6 @@
                         "integerValue": "-5"
                       }
                     }
-                  }
-                },
-                "s": {
-                  "arrayValue": {
-                    "values": [
-                      {
-                        "stringValue": "x"
-                      }
-                    ]
                   }
                 },
                 "tags": {
@@ -21302,11 +21287,26 @@
                     ]
                   }
                 },
+                "d": {
+                  "doubleValue": 2.5
+                },
                 "missing": {
                   "doubleValue": 0.5
                 },
+                "n": {
+                  "integerValue": "1001"
+                },
                 "at": {
                   "timestampValue": "<now>"
+                },
+                "s": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "stringValue": "x"
+                      }
+                    ]
+                  }
                 }
               },
               "createTime": "<now>",
@@ -24509,9 +24509,6 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/err/x",
               "fields": {
-                "a": {
-                  "referenceValue": "projects/other/databases/(default)/documents/x/y"
-                },
                 "a.b": {
                   "mapValue": {
                     "fields": {
@@ -24520,6 +24517,9 @@
                       }
                     }
                   }
+                },
+                "a": {
+                  "referenceValue": "projects/other/databases/(default)/documents/x/y"
                 }
               },
               "createTime": "<now>",
@@ -31587,7 +31587,7 @@
                   "freeTier": true,
                   "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
                   "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                  "etag": "IPXboO6z25YDMODt3eb7z5YD"
+                  "etag": "IN/K4P2425YDMODt3eb7z5YD"
                 }
               ]
             }
@@ -31625,7 +31625,7 @@
               "freeTier": true,
               "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
               "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-              "etag": "IKPr5u6z25YDMODt3eb7z5YD"
+              "etag": "IKO3p/6425YDMODt3eb7z5YD"
             }
           },
           "emulator": {

@@ -220,6 +220,7 @@ pub struct PubSubHandle {
     push_dispatcher: Arc<Mutex<PushDispatcherLifecycle>>,
     push_ready_notify: Arc<Notify>,
     push_cancel_notify: Arc<Notify>,
+    push_clock_notify: Arc<Notify>,
 }
 
 impl PubSubHandle {
@@ -240,6 +241,7 @@ impl PubSubHandle {
             push_dispatcher: Arc::new(Mutex::new(PushDispatcherLifecycle::default())),
             push_ready_notify: Arc::new(Notify::new()),
             push_cancel_notify: Arc::new(Notify::new()),
+            push_clock_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -265,6 +267,13 @@ impl PubSubHandle {
     #[must_use]
     pub fn publication_gate(&self) -> Arc<Mutex<()>> {
         self.publication_gate.clone()
+    }
+
+    /// Wakes push workers after the shared virtual clock advances. The core state must be expired
+    /// before this is called so a deadline-based redelivery is visible to the next pull.
+    pub fn on_clock_changed(&self) {
+        self.push_clock_notify.notify_waiters();
+        self.push_ready_notify.notify_one();
     }
 
     /// Serializes dead-letter snapshots with destination publication and source completion. The
@@ -455,6 +464,13 @@ impl PubSubHandle {
         self.push_ready_notify.notify_one();
     }
 
+    fn next_push_delivery_at(
+        &self,
+        subscription: &fireemu_core_pubsub::SubscriptionName,
+    ) -> Option<LogicalInstant> {
+        self.state().next_delivery_at(subscription).ok().flatten()
+    }
+
     fn start_push_dispatcher(&self) {
         let mut lifecycle = self.push_dispatcher.lock().expect("push dispatcher lock");
         if lifecycle.stopped || lifecycle.task.is_some() {
@@ -538,10 +554,43 @@ impl PubSubHandle {
         }
         let received = self.pull(&work.subscription, 100).unwrap_or_default();
         if received.is_empty() {
-            return false;
+            return self.wait_until_push_eligible(work).await;
         }
         self.deliver_push_messages(&work.subscription, &key, work.generation, received)
             .await
+    }
+
+    async fn wait_until_push_eligible(&self, work: &PushWork) -> bool {
+        let key = work.subscription.to_full();
+        loop {
+            if !self.is_current_push_generation(&key, work.generation) {
+                return false;
+            }
+            let now = self.now();
+            let Some(next) = self.next_push_delivery_at(&work.subscription) else {
+                return false;
+            };
+            if next <= now {
+                return true;
+            }
+
+            let notified = self.push_clock_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.is_current_push_generation(&key, work.generation) {
+                return false;
+            }
+            if self
+                .next_push_delivery_at(&work.subscription)
+                .is_none_or(|next| next <= self.now())
+            {
+                continue;
+            }
+            tokio::select! {
+                () = &mut notified => {},
+                () = self.push_cancel_notify.notified() => return false,
+            }
+        }
     }
 
     async fn wait_until_push_invalidated(&self, key: &str, generation: u64) {
@@ -657,10 +706,6 @@ impl PubSubHandle {
             }
             if !self.nack_push_if_current(subscription, key, generation, &received[index..]) {
                 return false;
-            }
-            tokio::select! {
-                () = tokio::time::sleep(PUSH_RETRY_DELAY) => {},
-                () = self.wait_until_push_invalidated(key, generation) => return false,
             }
             return true;
         }

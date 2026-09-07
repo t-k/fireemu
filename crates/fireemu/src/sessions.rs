@@ -186,6 +186,7 @@ impl ProjectHooks for Projects {
         if let Ok(mut pubsub) = self.pubsub.lock() {
             pubsub.expire_all(now);
         }
+        self.pubsub_handle.on_clock_changed();
     }
 }
 

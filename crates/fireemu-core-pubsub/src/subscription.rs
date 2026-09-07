@@ -415,6 +415,20 @@ impl SubscriptionState {
             })
     }
 
+    /// Returns the earliest logical instant at which an available message can be delivered.
+    /// Outstanding, acknowledged and dead-letter-forwarding entries do not make a push worker
+    /// eligible to run another pull quantum.
+    #[must_use]
+    pub fn next_available_at(&self) -> Option<LogicalInstant> {
+        self.entries[self.first_unacked..]
+            .iter()
+            .filter_map(|entry| match &entry.state {
+                Delivery::Available { available_at } => Some(*available_at),
+                Delivery::Outstanding { .. } | Delivery::Acked | Delivery::ForwardPending => None,
+            })
+            .min()
+    }
+
     /// The number of outstanding (delivered, unacked) messages.
     #[must_use]
     pub fn outstanding_count(&self) -> usize {
@@ -953,10 +967,15 @@ mod tests {
 
         let first = s.pull(1, t0, &mut ids);
         s.modify_ack_deadline(&first.received[0].ack_id, 0, t0);
+        assert_eq!(
+            s.next_available_at(),
+            Some(t0.checked_add(LogicalDuration::from_seconds(2)).unwrap())
+        );
         assert!(s.pull(1, t0, &mut ids).received.is_empty());
         let t_first_retry = t0.checked_add(LogicalDuration::from_seconds(2)).unwrap();
         let second = s.pull(1, t_first_retry, &mut ids);
         assert_eq!(second.received[0].delivery_attempt, 2);
+        assert_eq!(s.next_available_at(), None);
 
         s.modify_ack_deadline(&second.received[0].ack_id, 0, t_first_retry);
         let before_second_retry = t_first_retry

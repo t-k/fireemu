@@ -474,6 +474,16 @@ impl PubSubState {
             })
     }
 
+    /// Returns the earliest logical delivery time for an available message in a subscription.
+    pub fn next_delivery_at(&self, name: &SubscriptionName) -> Result<Option<LogicalInstant>> {
+        self.subscriptions
+            .get(&name.to_full())
+            .map(|subscription| subscription.next_available_at())
+            .ok_or_else(|| {
+                PubSubError::not_found(format!("subscription {} not found", name.to_full()))
+            })
+    }
+
     /// Lists the subscriptions of a project, sorted by name.
     #[must_use]
     pub fn list_subscriptions(&self, project: &str) -> Vec<SubscriptionConfig> {

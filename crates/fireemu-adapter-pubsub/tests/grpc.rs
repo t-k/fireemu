@@ -1465,6 +1465,79 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
 }
 
 #[tokio::test]
+async fn push_retry_waits_for_virtual_backoff_and_resumes_after_clock_advance() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![500, 500, 500, 204]);
+    let topic = "projects/demo-app/topics/push-logical-backoff";
+    let subscription = "projects/demo-app/subscriptions/push-logical-backoff";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        retry_policy: Some(pb::RetryPolicy {
+            minimum_backoff: Some(prost_types::Duration {
+                seconds: 5,
+                nanos: 0,
+            }),
+            maximum_backoff: Some(prost_types::Duration {
+                seconds: 5,
+                nanos: 0,
+            }),
+        }),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"logical-backoff")],
+    })
+    .await
+    .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while bodies.lock().unwrap().len() < 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the worker must exhaust its immediate HTTP attempts");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(bodies.lock().unwrap().len(), 3);
+
+    h.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5))
+        .unwrap();
+    h.handle.on_clock_changed();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while bodies.lock().unwrap().len() < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("clock advancement must wake the logically eligible retry");
+    assert_eq!(bodies.lock().unwrap().len(), 4);
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+#[tokio::test]
 async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     const SATURATED_WORKERS: usize = 256;
 

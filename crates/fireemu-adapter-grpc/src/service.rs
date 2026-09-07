@@ -1108,6 +1108,8 @@ mod tests {
     use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
     use fireemu_core_types::ids::CollectionId;
     use fireemu_core_types::time::LogicalInstant;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreServer;
+    use tokio_stream::wrappers::TcpListenerStream;
 
     use super::*;
 
@@ -1158,7 +1160,31 @@ mod tests {
             },
             indexes,
         };
-        let service = GatewayService::new(gateway, None);
+        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream_listener.local_addr().unwrap();
+        let upstream_gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: fireemu_core_firestore::index::IndexValidationPolicy::Conservative,
+            },
+            indexes: IndexSet::default(),
+        };
+        let upstream_service = FirestoreServer::new(GatewayService::new(upstream_gateway, None));
+        let upstream_handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(upstream_service)
+                .serve_with_incoming(TcpListenerStream::new(upstream_listener))
+                .await
+                .unwrap();
+        });
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://{upstream_address}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let service = GatewayService::new(gateway, Some(channel));
         let request = pb::RunAggregationQueryRequest {
             parent: "projects/demo-app/databases/(default)/documents".to_owned(),
             query_type: Some(
@@ -1199,6 +1225,7 @@ mod tests {
         };
         assert_eq!(error.code(), tonic::Code::FailedPrecondition);
         assert!(error.message().contains("amount Ascending"), "{error}");
+        upstream_handle.abort();
     }
 
     #[test]

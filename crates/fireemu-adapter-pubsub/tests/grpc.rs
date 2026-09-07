@@ -133,6 +133,7 @@ struct ToggleTopicDelivery {
     destination: String,
     accept_destination: Arc<AtomicBool>,
     committed: Arc<Mutex<Vec<String>>>,
+    recovery_notify: Arc<tokio::sync::Notify>,
 }
 
 impl TopicDelivery for ToggleTopicDelivery {
@@ -148,6 +149,10 @@ impl TopicDelivery for ToggleTopicDelivery {
             topics: self.committed.clone(),
             topic: topic.to_owned(),
         }))
+    }
+
+    fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+        Some(self.recovery_notify.clone())
     }
 }
 
@@ -236,10 +241,12 @@ async fn dead_letter_transfer_retries_after_destination_admission_recovers() {
     let destination = "projects/demo-app/topics/retry-dead".to_owned();
     let accept_destination = Arc::new(AtomicBool::new(false));
     let committed = Arc::new(Mutex::new(Vec::new()));
+    let recovery_notify = Arc::new(tokio::sync::Notify::new());
     let delivery = Arc::new(ToggleTopicDelivery {
         destination: destination.clone(),
         accept_destination: accept_destination.clone(),
         committed: committed.clone(),
+        recovery_notify: recovery_notify.clone(),
     });
     let harness = start_with_bridge(Some(delivery)).await;
     let mut publisher = harness.publisher().await;
@@ -335,26 +342,28 @@ async fn dead_letter_transfer_retries_after_destination_admission_recovers() {
     );
 
     accept_destination.store(true, Ordering::Release);
-    // The acknowledgement request is empty on purpose: it models any destination capacity
-    // recovery event and proves that a second source pull is unnecessary.
-    subscriber
-        .acknowledge(pb::AcknowledgeRequest {
-            subscription: destination_subscription.to_owned(),
-            ack_ids: Vec::new(),
-        })
-        .await
-        .unwrap();
+    recovery_notify.notify_waiters();
 
-    let forwarded = subscriber
-        .pull(pb::PullRequest {
-            subscription: destination_subscription.to_owned(),
-            max_messages: 1,
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .into_inner()
-        .received_messages;
+    let forwarded = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let received = subscriber
+                .pull(pb::PullRequest {
+                    subscription: destination_subscription.to_owned(),
+                    max_messages: 1,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .received_messages;
+            if !received.is_empty() {
+                break received;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("capacity recovery must retry without another Pub/Sub mutation");
     assert_eq!(forwarded.len(), 1);
     assert_eq!(forwarded[0].message.as_ref().unwrap().data, b"retry me");
     assert_eq!(

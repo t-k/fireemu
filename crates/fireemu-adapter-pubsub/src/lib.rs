@@ -79,6 +79,12 @@ struct PushDispatcherLifecycle {
     stopped: bool,
 }
 
+#[derive(Debug, Default)]
+struct DeadLetterDispatcherLifecycle {
+    task: Option<tokio::task::JoinHandle<()>>,
+    stopped: bool,
+}
+
 impl PushDispatchState {
     fn generation_for(&mut self, key: &str) -> u64 {
         if let Some(generation) = self.generations.get(key) {
@@ -205,6 +211,13 @@ pub trait TopicDelivery: Send + Sync {
         topic: &str,
         messages: &[BridgeMessage],
     ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError>;
+
+    /// Returns a notification raised when a failed capacity admission may succeed again.
+    /// Implementations should notify it after releasing a reservation; adapters without a
+    /// recoverable capacity signal leave the retry driver disabled.
+    fn recovery_notify(&self) -> Option<Arc<Notify>> {
+        None
+    }
 }
 
 /// The shared state a Pub/Sub adapter serves: the core registry, the virtual clock and the
@@ -218,9 +231,11 @@ pub struct PubSubHandle {
     dead_letter_gate: Arc<Mutex<()>>,
     push_dispatch: Arc<Mutex<PushDispatchState>>,
     push_dispatcher: Arc<Mutex<PushDispatcherLifecycle>>,
+    dead_letter_dispatcher: Arc<Mutex<DeadLetterDispatcherLifecycle>>,
     push_ready_notify: Arc<Notify>,
     push_cancel_notify: Arc<Notify>,
     push_clock_notify: Arc<Notify>,
+    dead_letter_cancel_notify: Arc<Notify>,
 }
 
 impl PubSubHandle {
@@ -239,9 +254,11 @@ impl PubSubHandle {
             dead_letter_gate: Arc::new(Mutex::new(())),
             push_dispatch: Arc::new(Mutex::new(PushDispatchState::default())),
             push_dispatcher: Arc::new(Mutex::new(PushDispatcherLifecycle::default())),
+            dead_letter_dispatcher: Arc::new(Mutex::new(DeadLetterDispatcherLifecycle::default())),
             push_ready_notify: Arc::new(Notify::new()),
             push_cancel_notify: Arc::new(Notify::new()),
             push_clock_notify: Arc::new(Notify::new()),
+            dead_letter_cancel_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -274,6 +291,27 @@ impl PubSubHandle {
     pub fn on_clock_changed(&self) {
         self.push_clock_notify.notify_waiters();
         self.push_ready_notify.notify_one();
+    }
+
+    fn start_dead_letter_dispatcher(&self) {
+        let Some(recovery_notify) = self
+            .bridge
+            .as_ref()
+            .and_then(|bridge| bridge.recovery_notify())
+        else {
+            return;
+        };
+        let mut lifecycle = self
+            .dead_letter_dispatcher
+            .lock()
+            .expect("dead-letter dispatcher lock");
+        if lifecycle.stopped || lifecycle.task.is_some() {
+            return;
+        }
+        let handle = self.clone();
+        lifecycle.task = Some(tokio::spawn(async move {
+            handle.run_dead_letter_dispatcher(recovery_notify).await;
+        }));
     }
 
     /// Serializes dead-letter snapshots with destination publication and source completion. The
@@ -348,7 +386,7 @@ impl PubSubHandle {
     /// Pulls from the broker and routes exhausted messages through the same publication
     /// coordinator used by ordinary publishes. A destination admission failure leaves the source
     /// message pending for a later retry, while the source pull response remains successful.
-    pub(crate) fn pull(
+    pub fn pull(
         &self,
         subscription: &SubscriptionName,
         max: usize,
@@ -379,6 +417,38 @@ impl PubSubHandle {
     fn commit_dead_letters_locked(&self, forwards: &[DeadLetterForward]) {
         for forward in forwards {
             self.commit_dead_letter(forward);
+        }
+    }
+
+    fn dead_letter_dispatcher_stopped(&self) -> bool {
+        self.dead_letter_dispatcher
+            .lock()
+            .expect("dead-letter dispatcher lock")
+            .stopped
+    }
+
+    fn has_pending_dead_letters(&self) -> bool {
+        !self.state().pending_dead_letters().is_empty()
+    }
+
+    async fn run_dead_letter_dispatcher(&self, recovery_notify: Arc<Notify>) {
+        loop {
+            let notified = recovery_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let cancelled = self.dead_letter_cancel_notify.notified();
+            tokio::pin!(cancelled);
+            cancelled.as_mut().enable();
+            if self.dead_letter_dispatcher_stopped() {
+                return;
+            }
+            if self.has_pending_dead_letters() {
+                self.retry_pending_dead_letters();
+            }
+            tokio::select! {
+                () = &mut notified => {},
+                () = &mut cancelled => return,
+            }
         }
     }
 
@@ -715,11 +785,21 @@ impl PubSubHandle {
     /// Cancels all dispatcher-owned push I/O and waits for every worker to finish.
     pub async fn shutdown_push_dispatcher(&self) {
         self.cancel_push_dispatcher();
-        let task = {
+        let push_task = {
             let mut lifecycle = self.push_dispatcher.lock().expect("push dispatcher lock");
             lifecycle.task.take()
         };
-        if let Some(task) = task {
+        let dead_letter_task = {
+            let mut lifecycle = self
+                .dead_letter_dispatcher
+                .lock()
+                .expect("dead-letter dispatcher lock");
+            lifecycle.task.take()
+        };
+        if let Some(task) = push_task {
+            let _ = task.await;
+        }
+        if let Some(task) = dead_letter_task {
             let _ = task.await;
         }
     }
@@ -736,8 +816,13 @@ impl PubSubHandle {
             dispatch.shutting_down = true;
             dispatch.invalidate_all();
         }
+        self.dead_letter_dispatcher
+            .lock()
+            .expect("dead-letter dispatcher lock")
+            .stopped = true;
         self.push_cancel_notify.notify_waiters();
         self.push_ready_notify.notify_one();
+        self.dead_letter_cancel_notify.notify_waiters();
     }
 }
 
@@ -749,6 +834,7 @@ pub async fn serve_pubsub(
     handle: PubSubHandle,
 ) -> Result<(), tonic::transport::Error> {
     handle.start_push_dispatcher();
+    handle.start_dead_letter_dispatcher();
     let _dispatcher_cancellation = PushDispatcherCancellationGuard(handle.clone());
     let publisher = PublisherServer::new(PublisherService::new(handle.clone()))
         .max_decoding_message_size(MAX_MESSAGE_BYTES)

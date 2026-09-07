@@ -3137,6 +3137,10 @@ impl fireemu_adapter_pubsub::TopicDeliveryReservation for FunctionsPubSubReserva
 }
 
 impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
+    fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+        Some(self.0.idle_notify())
+    }
+
     fn reserve(
         &self,
         topic: &str,
@@ -4479,6 +4483,166 @@ mod tests {
 
         drop(reservations);
         runtime.runner().shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pubsub_dead_letter_retry_is_woken_by_functions_capacity_recovery() {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_adapter_pubsub::{serve_pubsub, PubSubHandle};
+        use fireemu_core_pubsub::subscription::{DeadLetterPolicy, MIN_DEAD_LETTER_ATTEMPTS};
+        use fireemu_core_pubsub::{PubsubMessage, SubscriptionConfig};
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::LogicalInstant;
+        use std::time::Duration;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spawn = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(20),
+        };
+        let runner = Runner::spawn_spec(&spawn).await.unwrap();
+        let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let clock = Arc::new(Mutex::new(VirtualClock::new(now)));
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 4,
+                max_catch_up_runs: 1000,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+            },
+            clock.clone(),
+            Arc::new(runner),
+            Some(spawn),
+        );
+        let source_topic = TopicName::new("demo-app", "source").unwrap();
+        let destination_topic = TopicName::new("demo-app", "jobs").unwrap();
+        let source_subscription = SubscriptionName::new("demo-app", "source-sub").unwrap();
+        let destination_subscription =
+            SubscriptionName::new("demo-app", "destination-sub").unwrap();
+        let state = Arc::new(Mutex::new(PubSubState::new(42)));
+        {
+            let mut state = state.lock().unwrap();
+            state
+                .create_topic(source_topic.clone(), BTreeMap::new())
+                .unwrap();
+            state
+                .create_topic(destination_topic.clone(), BTreeMap::new())
+                .unwrap();
+            state
+                .create_subscription(SubscriptionConfig {
+                    name: source_subscription.clone(),
+                    topic: source_topic.clone(),
+                    ack_deadline_seconds: 10,
+                    enable_message_ordering: false,
+                    filter: Filter::always(),
+                    dead_letter_policy: Some(DeadLetterPolicy {
+                        dead_letter_topic: destination_topic.clone(),
+                        max_delivery_attempts: MIN_DEAD_LETTER_ATTEMPTS,
+                    }),
+                    retry_policy: None,
+                    push_config: PushConfig::default(),
+                })
+                .unwrap();
+            state
+                .create_subscription(SubscriptionConfig {
+                    name: destination_subscription.clone(),
+                    topic: destination_topic.clone(),
+                    ack_deadline_seconds: 10,
+                    enable_message_ordering: false,
+                    filter: Filter::always(),
+                    dead_letter_policy: None,
+                    retry_policy: None,
+                    push_config: PushConfig::default(),
+                })
+                .unwrap();
+        }
+        let bridge = Arc::new(PubSubBridge::new(runtime.clone()));
+        let handle = PubSubHandle::new(state.clone(), clock, Some(bridge));
+        let mut reservations = Vec::new();
+        for index in 0..fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS {
+            reservations.push(
+                runtime
+                    .reserve_pubsub_events(
+                        "jobs",
+                        &[json!({
+                            "messageId": format!("held-{index}"),
+                            "data": "aA=="
+                        })],
+                    )
+                    .unwrap(),
+            );
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_handle = handle.clone();
+        let server = tokio::spawn(async move {
+            let _ = serve_pubsub(listener, server_handle).await;
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        handle
+            .publish(
+                &source_topic,
+                vec![PubsubMessage {
+                    data: b"retry after capacity".to_vec(),
+                    ..PubsubMessage::default()
+                }],
+            )
+            .unwrap();
+        for _ in 0..MIN_DEAD_LETTER_ATTEMPTS {
+            let received = handle.pull(&source_subscription, 1).unwrap();
+            assert_eq!(received.len(), 1);
+            state
+                .lock()
+                .unwrap()
+                .modify_ack_deadline(
+                    &source_subscription,
+                    std::slice::from_ref(&received[0].ack_id),
+                    0,
+                    now,
+                )
+                .unwrap();
+        }
+        assert!(handle.pull(&source_subscription, 1).unwrap().is_empty());
+        assert_eq!(state.lock().unwrap().pending_dead_letters().len(), 1);
+        assert!(handle
+            .pull(&destination_subscription, 1)
+            .unwrap()
+            .is_empty());
+
+        drop(reservations);
+        let forwarded = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let received = handle.pull(&destination_subscription, 1).unwrap();
+                if !received.is_empty() {
+                    break received;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Functions capacity recovery must wake the DLQ retry driver");
+        assert_eq!(forwarded[0].message.message.data, b"retry after capacity");
+        assert!(state.lock().unwrap().pending_dead_letters().is_empty());
+
+        handle.shutdown_push_dispatcher().await;
+        server.abort();
+        let _ = server.await;
+        runtime.shutdown().await;
     }
 
     #[test]

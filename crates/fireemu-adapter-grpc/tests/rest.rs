@@ -1122,10 +1122,12 @@ async fn a_rest_request_does_not_wait_for_locks_on_the_blocking_pool_thread() {
         );
         assert_eq!(status, 200);
     });
-    let woke = local
-        .await_any_release(seen, std::time::Instant::now() + Duration::from_secs(10))
-        .await;
+    let wait_started = std::time::Instant::now();
+    let wait_deadline = wait_started + Duration::from_secs(10);
+    let woke = local.await_any_release(seen, wait_deadline).await;
     assert!(woke);
+    assert!(wait_started.elapsed() >= Duration::from_millis(100));
+    assert!(wait_started.elapsed() < Duration::from_secs(10));
     assert!(started.elapsed() < Duration::from_secs(5));
     release.await.unwrap();
     let (status, body) = call(
@@ -1135,4 +1137,14 @@ async fn a_rest_request_does_not_wait_for_locks_on_the_blocking_pool_thread() {
         json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/pool/doc", "fields": {"v": {"integerValue": "1"}}}}]}),
     );
     assert_eq!(status, 200, "{body}");
+
+    let no_release_started = std::time::Instant::now();
+    let no_release = local
+        .await_any_release(
+            local.release_count(),
+            std::time::Instant::now() + Duration::from_millis(100),
+        )
+        .await;
+    assert!(!no_release);
+    assert!(no_release_started.elapsed() >= Duration::from_millis(80));
 }

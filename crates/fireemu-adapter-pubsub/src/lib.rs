@@ -901,10 +901,12 @@ pub async fn serve_pubsub(
 mod dispatch_tests {
     use super::*;
     use fireemu_core_pubsub::{
-        subscription::{DeadLetterPolicy, DEFAULT_ACK_DEADLINE_SECONDS, MIN_DEAD_LETTER_ATTEMPTS},
+        subscription::{
+            DeadLetterPolicy, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS, MIN_DEAD_LETTER_ATTEMPTS,
+        },
         Filter, PubsubMessage, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
     };
-    use fireemu_core_types::time::LogicalInstant;
+    use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};
 
@@ -1131,6 +1133,86 @@ mod dispatch_tests {
         })
         .await
         .expect("a new publication restarts delivery");
+
+        handle.shutdown_push_dispatcher().await;
+    }
+
+    #[tokio::test]
+    async fn ordered_backoff_enters_one_deferred_quantum_until_the_predecessor_is_ready() {
+        let topic = TopicName::new("demo-project", "ordered-backoff").unwrap();
+        let subscription =
+            SubscriptionName::new("demo-project", "ordered-backoff-subscription").unwrap();
+        let now = LogicalInstant::UNIX_EPOCH;
+        let state = Arc::new(Mutex::new(PubSubState::new(42)));
+        {
+            let mut state = state.lock().unwrap();
+            state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+            state
+                .create_subscription(SubscriptionConfig {
+                    name: subscription.clone(),
+                    topic: topic.clone(),
+                    ack_deadline_seconds: 10,
+                    enable_message_ordering: true,
+                    filter: Filter::always(),
+                    dead_letter_policy: None,
+                    retry_policy: Some(RetryPolicy {
+                        minimum_backoff: LogicalDuration::from_seconds(10),
+                        maximum_backoff: LogicalDuration::from_seconds(10),
+                    }),
+                    push_config: PushConfig {
+                        push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+                    },
+                })
+                .unwrap();
+            state
+                .publish(
+                    &topic,
+                    vec![
+                        PubsubMessage {
+                            data: b"first".to_vec(),
+                            ordering_key: "key".to_owned(),
+                            ..PubsubMessage::default()
+                        },
+                        PubsubMessage {
+                            data: b"second".to_vec(),
+                            ordering_key: "key".to_owned(),
+                            ..PubsubMessage::default()
+                        },
+                    ],
+                    now,
+                )
+                .unwrap();
+            let first = state.pull(&subscription, 1, now).unwrap();
+            state
+                .modify_ack_deadline(&subscription, &[first[0].ack_id.clone()], 0, now)
+                .unwrap();
+        }
+        let clock = Arc::new(Mutex::new(VirtualClock::new(now)));
+        let handle = PubSubHandle::new(state, clock, None);
+        handle.start_push_dispatcher();
+        handle.schedule_push(&topic);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let deferred = {
+                    let dispatch = handle.push_dispatch.lock().unwrap();
+                    dispatch.deferred.contains_key(&subscription.to_full())
+                };
+                if deferred {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("ordered predecessor backoff must be deferred");
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        {
+            let dispatch = handle.push_dispatch.lock().unwrap();
+            assert_eq!(dispatch.spawned, 1);
+            assert!(dispatch.active.is_empty());
+            assert!(dispatch.ready.is_empty());
+        }
 
         handle.shutdown_push_dispatcher().await;
     }

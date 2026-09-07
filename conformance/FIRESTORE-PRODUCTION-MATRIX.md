@@ -1,14 +1,12 @@
 # Firestore production matrix
 
-Focused follow-up observations and fixes are documented in [the 2026-09-07 follow-up](PRODUCTION-GAP-FOLLOWUP-2026-09-07.md). The evidence and rows below retain their original recorded identity.
-
 Every row of `firestore-matrix.json` run against production Firestore (Native mode, the concurrency mode and edition recorded in `firestore-production-matrix.json`), compared with the official emulator's recorded answer and with what fireemu is held to. Regenerate with `pnpm -C conformance firestore:production` (needs `FIREEMU_PRODUCTION_PROJECT` and Application Default Credentials).
 
 ## Evidence
 
-Fireemu observation: live artifact fireemu (sha256-67c0d986129c62cebf3f8624b5c9186caa2ddc8f85fcfc5a0e743c1a95a85362), source f2596a1cc38d9e59bbfa1da3571c1552faf95487, profile firebase.
+Fireemu observation: live artifact fireemu (sha256-d22dc4e7c483c6c1cad05bb9c3412ef8df60cca883dce677182c796aff879430), source 2526c61eda5fc53ac91250307786127ae3c601be, profile firebase.
 Inputs: corpus sha256-d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b, SDK lock sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432, indexes sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a.
-Official emulator values: stored expectation from firestore-matrix.json (sha256-289bb354897bf6dc32f7ea3b7309f23fe8e24091ba811ac3e821668fcd7296f5).
+Official emulator values: stored expectation from firestore-matrix.json (sha256-f1045c6c827c7ead8a2d7bc32b93157a1d2452e69ea469226189f58ca617be90).
 Evidence status: verified.
 
 | status | rows | meaning |
@@ -16,7 +14,7 @@ Evidence status: verified.
 | parity | 185 | production, the official emulator and fireemu agree |
 | fireemu-matches-production | 115 | fireemu follows production where the official emulator differs |
 | fireemu-divergence | 0 | production and the official emulator agree; fireemu differs |
-| emulators-diverge-from-production | 2 | the official emulator and fireemu agree with each other but not with production |
+| emulators-diverge-from-production | 1 | the official emulator and fireemu agree with each other but not with production |
 | three-way-difference | 1 | production, the official emulator and fireemu all differ |
 | production-needs-index | 0 | production refused the query for want of a composite index in the oracle project; not a semantic comparison until the index exists |
 
@@ -121,7 +119,7 @@ Evidence status: verified.
 | queries/projection-and-listing#batch-get-mixed | fireemu-matches-production | {"status":200,"code":"OK","body":[{"found":{"name":"projects/demo-firestore-probe/database | {"status":200,"code":"OK","body":[{"found":{"name":"projects/demo-firestore-probe/database | {"status":200,"code":"OK","body":[{"found":{"createTime":"<now>","fields":{"a":{"integerVa |
 | transactions/lifecycle#get-with-transaction-query-parameter | fireemu-matches-production | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default | {"status":0,"code":"no-response"} | {"status":200,"code":"OK","body":{"createTime":"<now>","fields":{"value":{"integerValue":" |
 | transactions/lifecycle#query-in-transaction | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","fields":{"value":{"in |
-| transactions/lifecycle#phantom-write | emulators-diverge-from-production | {"status":0,"code":"no-response"} | {"status":409,"code":"ABORTED"} | {"status":409,"code":"ABORTED"} |
+| transactions/lifecycle#phantom-write | unverified | {"status":0,"code":"no-response"} | {"status":409,"code":"ABORTED"} | {"status":409,"code":"ABORTED"} |
 | transactions/lifecycle#read-only-commit-without-writes | fireemu-matches-production | {"status":400,"code":"INVALID_ARGUMENT"} | {"status":200,"code":"OK","body":{}} | {"status":400,"code":"INVALID_ARGUMENT"} |
 | transactions/lifecycle#run-query-with-new-transaction | fireemu-matches-production | {"status":200,"code":"OK","body":[{"transaction":"<txn>"},{"document":{"name":"projects/de | {"status":200,"code":"OK","body":[{"transaction":"<txn>"},{"document":{"name":"projects/de | {"status":200,"code":"OK","body":[{"transaction":"<txn>"},{"document":{"createTime":"<now> |
 | transactions/lifecycle#begin-with-read-time-in-the-past | fireemu-matches-production | {"status":400,"code":"INVALID_ARGUMENT"} | {"status":400,"code":"FAILED_PRECONDITION"} | {"status":400,"code":"INVALID_ARGUMENT"} |

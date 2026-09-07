@@ -2789,6 +2789,78 @@ async fn a_batched_transaction_query_commits_after_its_continuation_page() {
 }
 
 #[tokio::test]
+async fn large_transaction_queries_keep_one_observation_across_all_pages() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+
+    for (collection, count) in [
+        ("large-8191", 8_191),
+        ("large-8192", 8_192),
+        ("large-8193", 8_193),
+    ] {
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: (0..count)
+                    .map(|index| {
+                        update_write(
+                            &format!("{collection}/{index:05}"),
+                            &[("v", i(index as i64))],
+                        )
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                options: Some(pb::TransactionOptions {
+                    mode: Some(pb::transaction_options::Mode::ReadWrite(
+                        pb::transaction_options::ReadWrite::default(),
+                    )),
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let mut request = query(collection, None);
+        request.consistency_selector = Some(
+            pb::run_query_request::ConsistencySelector::Transaction(transaction.clone()),
+        );
+        let documents = collect_docs(&mut client, request).await;
+        assert_eq!(documents.len(), count);
+
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    &format!("{collection}/committed"),
+                    &[("v", i(1))],
+                )],
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+        let bookkeeping = backend
+            .read_unadmitted(&parent, |state| state.transaction_bookkeeping_stats())
+            .unwrap();
+        assert_eq!(bookkeeping.active, 0);
+        assert_eq!(bookkeeping.deadlines, 0);
+        assert_eq!(bookkeeping.conflict_ledger_bytes, 0);
+    }
+
+    handle.abort();
+}
+
+#[tokio::test]
 async fn list_document_tokens_bind_result_shape_and_session() {
     let (mut client, _clock, backend, handle) =
         start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;

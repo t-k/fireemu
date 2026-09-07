@@ -539,10 +539,19 @@ struct Transaction {
     waiting_to_commit: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct QueryObservation {
     rows: u64,
-    digest: [u8; 32],
+    digest: Sha256,
+}
+
+impl Default for QueryObservation {
+    fn default() -> Self {
+        Self {
+            rows: 0,
+            digest: Sha256::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -943,20 +952,14 @@ fn observed_document_bytes(path: &DocumentPath, document: Option<&Document>) -> 
 }
 
 fn query_observation(documents: &[Document]) -> QueryObservation {
-    let mut observer = QueryObserver::default();
+    let mut observation = QueryObservation::default();
     for document in documents {
-        observer.push(document);
+        observation.push(document);
     }
-    observer.finish()
+    observation
 }
 
-#[derive(Default)]
-struct QueryObserver {
-    rows: u64,
-    digest: Sha256,
-}
-
-impl QueryObserver {
+impl QueryObservation {
     fn push(&mut self, document: &Document) {
         self.rows = self.rows.saturating_add(1);
         for segment in document.path.resource_name_segments() {
@@ -968,16 +971,6 @@ impl QueryObserver {
             self.digest.update(segment.as_bytes());
         }
         self.digest.update(&document.version.value().to_be_bytes());
-    }
-
-    fn finish(self) -> QueryObservation {
-        let mut framed = Sha256::new();
-        framed.update(&self.rows.to_be_bytes());
-        framed.update(&self.digest.finalize());
-        QueryObservation {
-            rows: self.rows,
-            digest: framed.finalize(),
-        }
     }
 }
 
@@ -2531,9 +2524,32 @@ impl FirestoreState {
         id: &TransactionId,
         query: &Query,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        self.run_query_in_transaction_with_stats_as(id, query, query)
+    }
+
+    /// Runs a transaction query while recording the logical query shape supplied by the adapter.
+    pub fn run_query_in_transaction_with_stats_as(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        observed_query: &Query,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let read_version = self.transaction(id)?.read_version;
         let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
-        self.record_transaction_query(id, query, &docs)?;
+        self.record_transaction_query(id, observed_query, &docs)?;
+        Ok((docs, stats))
+    }
+
+    /// Runs a continuation page while appending its rows to the logical query observation.
+    pub fn run_query_in_transaction_continuation_with_stats_as(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        observed_query: &Query,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        let read_version = self.transaction(id)?.read_version;
+        let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
+        self.record_transaction_query_continuation(id, observed_query, &docs)?;
         Ok((docs, stats))
     }
 
@@ -2558,17 +2574,54 @@ impl FirestoreState {
         Ok((docs, stats))
     }
 
+    /// Runs a name-ascending continuation while appending it to a logical query observation.
+    pub fn run_query_in_transaction_after_document_with_stats_as(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        observed_query: &Query,
+        after: &DocumentPath,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        let read_version = self.transaction(id)?.read_version;
+        let (docs, stats) =
+            self.run_query_after_document_with_stats(query, Some(read_version), after)?;
+        self.record_transaction_query_continuation(id, observed_query, &docs)?;
+        Ok((docs, stats))
+    }
+
     fn record_transaction_query(
         &mut self,
         id: &TransactionId,
         query: &Query,
         docs: &[Document],
     ) -> Result<(), FirestoreError> {
-        let already_recorded = self
-            .transactions
-            .get(id)
-            .is_some_and(|transaction| transaction.queries.iter().any(|(seen, _)| seen == query));
-        if !already_recorded
+        self.record_transaction_query_observation(id, query, docs, false)
+    }
+
+    fn record_transaction_query_continuation(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        docs: &[Document],
+    ) -> Result<(), FirestoreError> {
+        self.record_transaction_query_observation(id, query, docs, true)
+    }
+
+    fn record_transaction_query_observation(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        docs: &[Document],
+        append_observation: bool,
+    ) -> Result<(), FirestoreError> {
+        let query_index = self.transactions.get(id).and_then(|transaction| {
+            transaction
+                .queries
+                .iter()
+                .position(|(seen, _)| seen == query)
+        });
+        let is_new_query = query_index.is_none();
+        if is_new_query
             && self.transactions.get(id).is_some_and(|transaction| {
                 transaction.queries.len() >= MAX_TRANSACTION_QUERY_RECORDS
             })
@@ -2584,10 +2637,10 @@ impl FirestoreState {
                 .map(|document| observed_document_bytes(&document.path, Some(document)))
                 .fold(0u64, u64::saturating_add)
         });
-        let query_bytes = if already_recorded {
-            0
-        } else {
+        let query_bytes = if is_new_query {
             query_retained_bytes(query)
+        } else {
+            0
         };
         let additional = document_bytes.saturating_add(query_bytes);
         let observation_overflow = self.transactions.get(id).is_some_and(|transaction| {
@@ -2604,7 +2657,7 @@ impl FirestoreState {
                 "transaction observed data exceeds the retained conflict-detection budget".into(),
             ));
         }
-        let observation = (!already_recorded).then(|| query_observation(docs));
+        let observation = is_new_query.then(|| query_observation(docs));
         if let Some(t) = self.transactions.get_mut(id) {
             for d in docs {
                 t.read_set.insert(d.path.clone(), Some(d.version));
@@ -2613,7 +2666,15 @@ impl FirestoreState {
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
                 .saturating_add(additional);
-            if let Some(observation) = observation {
+            if append_observation {
+                if let Some(index) = query_index {
+                    for document in docs {
+                        t.queries[index].1.push(document);
+                    }
+                } else if let Some(observation) = observation {
+                    t.queries.push((query.clone(), observation));
+                }
+            } else if let Some(observation) = observation {
                 t.queries.push((query.clone(), observation));
             }
         }
@@ -2980,11 +3041,11 @@ impl FirestoreState {
             }
         }
         for (query, observed) in &transaction.queries {
-            let mut current = QueryObserver::default();
+            let mut current = QueryObservation::default();
             self.select(query, None, &[], Consumption::Ordered, |document| {
                 current.push(document);
             })?;
-            if current.finish() != *observed {
+            if current != *observed {
                 return Ok(true);
             }
         }

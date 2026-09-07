@@ -925,12 +925,23 @@ impl SnapshotAccess<'_> {
     fn run_query_with_stats(
         &mut self,
         query: &Query,
+        observed_query: &Query,
+        continuation: bool,
     ) -> Result<(Vec<Document>, QueryStats), Status> {
         let version = self.version()?;
         match (&mut self.state, &self.selected.transaction) {
-            (SnapshotState::Exclusive(db), Some(transaction)) => db
-                .run_query_in_transaction_with_stats(transaction, query)
-                .map_err(|error| status_from_error(&error)),
+            (SnapshotState::Exclusive(db), Some(transaction)) => {
+                let result = if continuation {
+                    db.run_query_in_transaction_continuation_with_stats_as(
+                        transaction,
+                        query,
+                        observed_query,
+                    )
+                } else {
+                    db.run_query_in_transaction_with_stats_as(transaction, query, observed_query)
+                };
+                result.map_err(|error| status_from_error(&error))
+            }
             (SnapshotState::Shared(db), None) => db
                 .run_query_with_stats(query, version)
                 .map_err(|error| status_from_error(&error)),
@@ -941,12 +952,18 @@ impl SnapshotAccess<'_> {
     fn run_query_with_stats_after_document(
         &mut self,
         query: &Query,
+        observed_query: &Query,
         after: &DocumentPath,
     ) -> Result<(Vec<Document>, QueryStats), Status> {
         let version = self.version()?;
         match (&mut self.state, &self.selected.transaction) {
             (SnapshotState::Exclusive(db), Some(transaction)) => db
-                .run_query_in_transaction_after_document_with_stats(transaction, query, after)
+                .run_query_in_transaction_after_document_with_stats_as(
+                    transaction,
+                    query,
+                    observed_query,
+                    after,
+                )
                 .map_err(|error| status_from_error(&error)),
             (SnapshotState::Shared(db), None) => db
                 .run_query_after_document_with_stats(query, version, after)
@@ -3287,7 +3304,7 @@ impl LocalBackend {
         req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        self.run_query_authorized_as_after(req, req, guard, None)
+        self.run_query_authorized_as(req, req, guard)
     }
 
     /// Executes a bounded page while authorizing the caller's original query shape.
@@ -3299,7 +3316,7 @@ impl LocalBackend {
         authorization_req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        self.run_query_authorized_as_after(req, authorization_req, guard, None)
+        self.run_query_authorized_as_after_internal(req, authorization_req, guard, None, false)
     }
 
     /// Executes a bounded page after an exclusive document path while authorizing the caller's
@@ -3311,6 +3328,23 @@ impl LocalBackend {
         authorization_req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
         after_document: Option<&DocumentPath>,
+    ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
+        self.run_query_authorized_as_after_internal(
+            req,
+            authorization_req,
+            guard,
+            after_document,
+            true,
+        )
+    }
+
+    fn run_query_authorized_as_after_internal(
+        &self,
+        req: &pb::RunQueryRequest,
+        authorization_req: &pb::RunQueryRequest,
+        guard: ReadGuard<'_>,
+        after_document: Option<&DocumentPath>,
+        continuation: bool,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
@@ -3365,11 +3399,21 @@ impl LocalBackend {
                     query: &authorization.query,
                 },
             )?;
-            let (docs, stats) = match after_document {
-                Some(after) => {
-                    access.run_query_with_stats_after_document(&accepted.query, after)?
+            let (docs, stats) = match (continuation, after_document) {
+                (true, Some(after)) => access.run_query_with_stats_after_document(
+                    &accepted.query,
+                    &authorization.query,
+                    after,
+                )?,
+                (true, None) => {
+                    access.run_query_with_stats(&accepted.query, &authorization.query, true)?
                 }
-                None => access.run_query_with_stats(&accepted.query)?,
+                (false, None) => {
+                    access.run_query_with_stats(&accepted.query, &authorization.query, false)?
+                }
+                (false, Some(_)) => {
+                    return Err(Status::internal("invalid first RunQuery continuation"));
+                }
             };
             let read_time = Some(encode_instant(access.read_time(now)?));
             // The rows the offset skipped, reported on the first result as the backend does.
@@ -3655,7 +3699,11 @@ impl LocalBackend {
                 documents
             } else {
                 let mut docs = match (&txn, ordered) {
-                    (Some(_), _) => access.run_query_with_stats(&accepted.query)?.0,
+                    (Some(_), _) => {
+                        access
+                            .run_query_with_stats(&accepted.query, &accepted.query, false)?
+                            .0
+                    }
                     (None, true) => access
                         .db()
                         .run_query(&accepted.query, version)

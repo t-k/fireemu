@@ -2481,6 +2481,131 @@ async fn paged_query_preserves_offset_and_read_time_metadata() {
     handle.abort();
 }
 
+async fn seed_large_query_documents(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    collection: &str,
+    count: usize,
+    payload: &str,
+) {
+    for start in (0..count).step_by(8) {
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: (start..(start + 8).min(count))
+                    .map(|index| {
+                        update_write(
+                            &format!("{collection}/{index:03}"),
+                            &[("payload", s(payload))],
+                        )
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn large_read_only_query_pages_preserve_snapshot_completion_and_cleanup() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    let payload = "x".repeat(192 * 1024);
+    let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+    for count in [64, 65] {
+        let collection = format!("large-snapshot-{count}");
+        seed_large_query_documents(&mut client, &collection, count, &payload).await;
+        let mut stream = client
+            .run_query(query(&collection, None))
+            .await
+            .unwrap()
+            .into_inner();
+        let first = stream.next().await.unwrap().unwrap();
+        assert!(first.document.is_some());
+        let read_time = first.read_time;
+        assert!(read_time.is_some());
+        let bookkeeping = backend
+            .read_unadmitted(
+                &parent,
+                fireemu_core_firestore::store::FirestoreState::transaction_bookkeeping_stats,
+            )
+            .unwrap();
+        assert_eq!(bookkeeping.active, 1);
+        assert!(
+            bookkeeping.conflict_ledger_bytes < 4096,
+            "only the bounded query descriptor is retained"
+        );
+        // Write while the stream still owns its snapshot; later responses must retain it.
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    &format!("{collection}/{:03}", count - 1),
+                    &[("payload", s("changed"))],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut response = Some(first);
+        let mut names = Vec::new();
+        let mut done = false;
+        while let Some(item) = response {
+            assert!(!done, "completion must be terminal");
+            assert_eq!(item.read_time, read_time);
+            assert!(item.transaction.is_empty());
+            if let Some(document) = item.document {
+                assert_eq!(document.fields.get("payload"), Some(&s(&payload)));
+                names.push(document.name);
+            }
+            done = matches!(
+                item.continuation_selector,
+                Some(pb::run_query_response::ContinuationSelector::Done(true))
+            );
+            response = stream.next().await.transpose().unwrap();
+        }
+        assert!(done);
+        assert_eq!(
+            names,
+            (0..count)
+                .map(|index| format!("{DOCS}/{collection}/{index:03}"))
+                .collect::<Vec<_>>()
+        );
+        let bookkeeping = backend
+            .read_unadmitted(
+                &parent,
+                fireemu_core_firestore::store::FirestoreState::transaction_bookkeeping_stats,
+            )
+            .unwrap();
+        assert_eq!(bookkeeping.active, 0);
+        assert_eq!(bookkeeping.conflict_ledger_bytes, 0);
+
+        let mut cancelled = client
+            .run_query(query(&collection, None))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(cancelled.next().await.unwrap().unwrap().document.is_some());
+        drop(cancelled);
+        for _ in 0..1000 {
+            if backend.read_unadmitted(&parent, |state| {
+                state.transaction_bookkeeping_stats().active
+            }) == Some(0)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            backend.read_unadmitted(&parent, |state| state
+                .transaction_bookkeeping_stats()
+                .active),
+            Some(0)
+        );
+    }
+    handle.abort();
+}
+
 #[tokio::test]
 async fn later_query_page_failure_never_announces_success_and_releases_pin() {
     use fireemu_core_session::fault::{
@@ -2488,16 +2613,7 @@ async fn later_query_page_failure_never_announces_success_and_releases_pin() {
     };
     let (mut client, _clock, backend, handle) =
         start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
-    client
-        .commit(pb::CommitRequest {
-            database: DB.to_owned(),
-            writes: (0..65)
-                .map(|index| update_write(&format!("failed-page/{index:03}"), &[("v", i(index))]))
-                .collect(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    seed_large_query_documents(&mut client, "failed-page", 65, &"x".repeat(192 * 1024)).await;
     let registry = Arc::new(FaultRegistry::new());
     registry.default_state().lock().unwrap().install(FaultPlan {
         seed: 1,

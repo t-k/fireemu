@@ -146,6 +146,8 @@ Install the locked dependencies with `npm ci` in this directory before comparing
 fireemu exec --config tools/sdk-smoke/fireemu.smoke.json --only firestore --project demo-app -- npm --prefix tools/sdk-smoke run smoke:query-completion
 ```
 
+`npm run smoke:large-query` seeds 65 documents with 192-KiB payloads and verifies exact full results above the 10-MiB transaction conflict-ledger boundary. It covers full and partial internal pages, repeated queries and batch reads in an explicit read-only transaction, and isolated fixture cleanup. Run it through the same `fireemu exec` lifecycle, replacing the script name with `smoke:large-query`. Read-only results must not acquire document conflict bookkeeping; execution-descriptor admission and snapshot retention remain bounded.
+
 `npm run bench:firestore` requires a loopback `FIRESTORE_EMULATOR_HOST` and measures create, get, update, query, and uncontended transactions against a fresh local emulator. It uses 20 warmups per operation, 256-byte payload strings, reused SDK connections, and unique fixture collections. Each worker updates its own document. Seed writes, result assertions, and cleanup are outside the measured interval. Throughput includes the drain of all issued operations; transaction retries are counted separately from completed logical operations. Results contain every latency sample, p50/p95/p99, errors, and a semantic validation status. Accept a measurement only when the process exits successfully and every operation has `validation: "passed"`.
 
 | Environment variable | Default | Purpose |

@@ -2039,6 +2039,9 @@ impl FirestoreState {
         observed: Option<&Document>,
     ) -> Result<(), FirestoreError> {
         let transaction = self.transaction(id)?;
+        if transaction.read_only {
+            return Ok(());
+        }
         let additional = if transaction.read_set.contains_key(path) {
             0
         } else {
@@ -2758,6 +2761,14 @@ impl FirestoreState {
         append_observation: bool,
         complete: bool,
     ) -> Result<(), FirestoreError> {
+        // Read-only snapshots never validate a commit or acquire document/range locks.
+        // Retain bounded execution descriptors for continuation and completion validation,
+        // but do not charge or retain result documents for conflict detection.
+        let docs = if self.transaction(id)?.read_only {
+            &[]
+        } else {
+            docs
+        };
         let execution_index = self.transactions.get(id).and_then(|transaction| {
             transaction
                 .queries

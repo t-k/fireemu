@@ -1055,8 +1055,8 @@ fn aggregate_active_transaction_ledgers_have_a_database_wide_budget() {
     });
     let mut active = Vec::new();
     let mut refused = false;
-    for _ in 0..128 {
-        let transaction = state.begin_transaction(false, t(0)).unwrap();
+    for attempt in 0..128 {
+        let transaction = state.begin_transaction(attempt % 2 == 0, t(0)).unwrap();
         match state.run_query_in_transaction(&transaction, &query) {
             Ok(_) => active.push(transaction),
             Err(FirestoreError::Aborted(_)) => {
@@ -1078,6 +1078,239 @@ fn aggregate_active_transaction_ledgers_have_a_database_wide_budget() {
         state.transaction_bookkeeping_stats().conflict_ledger_bytes,
         0
     );
+}
+
+fn seed_exactly_charged_documents(state: &mut FirestoreState, target: u64) {
+    use fireemu_core_firestore::size::document_size;
+    let mut remaining = target;
+    for index in 0..64 {
+        let name = format!("byte-boundary/{index:03}");
+        let empty = fields(&[("payload", Value::String(String::new()))]);
+        let overhead = document_size(&path(&name), &empty).unwrap().total;
+        let charge = if index == 63 { remaining } else { target / 64 };
+        let payload = "x".repeat(usize::try_from(charge - overhead).unwrap());
+        state
+            .commit(
+                &[set(&name, &[("payload", Value::String(payload))])],
+                None,
+                t(0),
+            )
+            .unwrap();
+        remaining -= charge;
+    }
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn read_only_document_reads_do_not_consume_the_read_write_byte_budget() {
+    for delta in [-1_i64, 0, 1] {
+        let target = MAX_TRANSACTION_CONFLICT_LEDGER_BYTES
+            .checked_add_signed(delta)
+            .unwrap();
+        let mut state = FirestoreState::new();
+        seed_exactly_charged_documents(&mut state, target);
+        for read_only in [true, false] {
+            let transaction = state.begin_transaction(read_only, t(0)).unwrap();
+            for index in 0..64 {
+                let result = state
+                    .get_in_transaction(&transaction, &path(&format!("byte-boundary/{index:03}")));
+                if !read_only && delta == 1 && index == 63 {
+                    assert!(matches!(result, Err(FirestoreError::Aborted(_))));
+                } else {
+                    assert!(result.unwrap().is_some());
+                }
+            }
+            let expected = if read_only || delta == 1 { 0 } else { target };
+            assert_eq!(
+                state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+                expected
+            );
+            state.abandon_transaction(&transaction);
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    }
+}
+
+#[test]
+fn large_read_only_queries_retain_descriptors_but_not_document_conflicts() {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("large-ro").unwrap(),
+    ));
+    let empty = state.begin_transaction(true, t(0)).unwrap();
+    assert!(state
+        .run_query_in_transaction(&empty, &query)
+        .unwrap()
+        .is_empty());
+    let descriptor_bytes = state.transaction_bookkeeping_stats().conflict_ledger_bytes;
+    assert!(descriptor_bytes > 0);
+    state.rollback(&empty).unwrap();
+    let payload = "x".repeat(192 * 1024);
+    for index in 0..65 {
+        state
+            .commit(
+                &[set(
+                    &format!("large-ro/{index:03}"),
+                    &[("payload", Value::String(payload.clone()))],
+                )],
+                None,
+                t(0),
+            )
+            .unwrap();
+    }
+    let transaction = state.begin_transaction(true, t(0)).unwrap();
+    let first = state
+        .run_query_in_transaction(&transaction, &query)
+        .unwrap();
+    assert_eq!(first.len(), 65);
+    assert_eq!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+        descriptor_bytes
+    );
+    state
+        .commit(
+            &[set(
+                "large-ro/064",
+                &[("payload", Value::String("new".into()))],
+            )],
+            None,
+            t(1),
+        )
+        .unwrap();
+    let second = state
+        .run_query_in_transaction(&transaction, &query)
+        .unwrap();
+    assert_eq!(
+        first, second,
+        "the read-only snapshot remains pinned across writes"
+    );
+    assert_eq!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+        descriptor_bytes * 2
+    );
+    for document in &first {
+        assert_eq!(
+            state
+                .get_in_transaction(&transaction, &document.path)
+                .unwrap()
+                .as_ref(),
+            Some(document)
+        );
+    }
+    assert_eq!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+        descriptor_bytes * 2
+    );
+    assert_eq!(
+        state
+            .transaction_recorded_query_count(&transaction)
+            .unwrap(),
+        2
+    );
+    state.rollback(&transaction).unwrap();
+    assert!(state
+        .run_query_in_transaction(&transaction, &query)
+        .is_err());
+    assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    assert_eq!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+        0
+    );
+}
+
+#[test]
+fn read_only_queries_do_not_consume_document_bytes_at_the_exact_query_budget_boundary() {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    for delta in [-1_i64, 0, 1] {
+        let mut state = FirestoreState::new();
+        let query = Query::new(QueryScope::collection(
+            None,
+            CollectionId::try_new("byte-boundary").unwrap(),
+        ));
+        let empty = state.begin_transaction(false, t(0)).unwrap();
+        assert!(state
+            .run_query_in_transaction(&empty, &query)
+            .unwrap()
+            .is_empty());
+        let descriptor_bytes = state.transaction_bookkeeping_stats().conflict_ledger_bytes;
+        assert!(descriptor_bytes > 0);
+        state.abandon_transaction(&empty);
+        let target = MAX_TRANSACTION_CONFLICT_LEDGER_BYTES
+            .checked_add_signed(delta)
+            .unwrap();
+        seed_exactly_charged_documents(&mut state, target - descriptor_bytes);
+        let expected_documents = state.run_query(&query, None).unwrap();
+        for read_only in [true, false] {
+            let transaction = state.begin_transaction(read_only, t(0)).unwrap();
+            let result = state.run_query_in_transaction(&transaction, &query);
+            if !read_only && delta == 1 {
+                assert!(matches!(result, Err(FirestoreError::Aborted(_))));
+            } else {
+                assert_eq!(result.unwrap(), expected_documents);
+            }
+            let expected_charge = if read_only {
+                descriptor_bytes
+            } else if delta == 1 {
+                0
+            } else {
+                target
+            };
+            assert_eq!(
+                state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+                expected_charge
+            );
+            state.abandon_transaction(&transaction);
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+        assert_eq!(
+            state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+            0
+        );
+    }
+}
+
+#[test]
+fn read_only_query_descriptors_still_have_count_and_byte_limits() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    for oversized in [false, true] {
+        let mut state = FirestoreState::new();
+        let transaction = state.begin_transaction(true, t(0)).unwrap();
+        let mut query = Query::new(QueryScope::collection(
+            None,
+            CollectionId::try_new("empty").unwrap(),
+        ));
+        if oversized {
+            query.filter = Some(FilterExpr::Field {
+                field: FieldPath::parse("payload").unwrap(),
+                op: FieldOp::Equal,
+                value: Value::String("q".repeat(11 * 1024 * 1024)),
+            });
+        } else {
+            for _ in 0..MAX_TRANSACTION_QUERY_RECORDS {
+                assert!(state
+                    .run_query_in_transaction(&transaction, &query)
+                    .unwrap()
+                    .is_empty());
+            }
+        }
+        assert!(matches!(
+            state.run_query_in_transaction(&transaction, &query),
+            Err(FirestoreError::Aborted(_))
+        ));
+        assert_eq!(
+            state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+            0
+        );
+        state.abandon_transaction(&transaction);
+    }
 }
 
 #[test]

@@ -25,7 +25,7 @@ use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
     Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreError,
     FirestoreState, HistoryCapacityError, HistoryProjection, HistoryUsage, ListedDocument,
-    Precondition, QueryStats, TransactionId, Write, WriteOp,
+    Precondition, QueryExecutionId, QueryStats, TransactionId, Write, WriteOp,
 };
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
@@ -252,6 +252,8 @@ pub struct LocalBackend {
     /// Draws the starting transaction id of each database; separate from `ids` so that the
     /// generated document ids stay what they were for a given seed.
     transaction_ids: Mutex<SplitMix64>,
+    /// Identity source for logical query streams whose response is split into bounded pages.
+    query_execution_ids: std::sync::atomic::AtomicU64,
     /// Keys the authenticator appended to every transaction token, so a client cannot name a
     /// transaction it was never handed (production tokens are opaque).
     token_key: [u8; 32],
@@ -880,6 +882,8 @@ enum SnapshotState<'a> {
 struct SnapshotAccess<'a> {
     state: SnapshotState<'a>,
     selected: SelectedSnapshot,
+    query_execution_id: Option<QueryExecutionId>,
+    complete_query_execution: bool,
 }
 
 impl SnapshotAccess<'_> {
@@ -903,6 +907,11 @@ impl SnapshotAccess<'_> {
 
     fn report(&self) -> &[u8] {
         &self.selected.report
+    }
+
+    fn set_query_execution(&mut self, execution_id: QueryExecutionId, complete: bool) {
+        self.query_execution_id = Some(execution_id);
+        self.complete_query_execution = complete;
     }
 
     fn record_document_reads(
@@ -929,16 +938,42 @@ impl SnapshotAccess<'_> {
         continuation: bool,
     ) -> Result<(Vec<Document>, QueryStats), Status> {
         let version = self.version()?;
+        let execution_id = self.query_execution_id;
+        let complete = self.complete_query_execution;
         match (&mut self.state, &self.selected.transaction) {
             (SnapshotState::Exclusive(db), Some(transaction)) => {
                 let result = if continuation {
-                    db.run_query_in_transaction_continuation_with_stats_as(
-                        transaction,
-                        query,
-                        observed_query,
-                    )
+                    if let Some(execution_id) = execution_id {
+                        db.run_query_in_transaction_continuation_with_stats_as_with_execution(
+                            transaction,
+                            query,
+                            observed_query,
+                            execution_id,
+                            complete,
+                        )
+                    } else {
+                        db.run_query_in_transaction_continuation_with_stats_as(
+                            transaction,
+                            query,
+                            observed_query,
+                        )
+                    }
                 } else {
-                    db.run_query_in_transaction_with_stats_as(transaction, query, observed_query)
+                    if let Some(execution_id) = execution_id {
+                        db.run_query_in_transaction_with_stats_as_with_execution(
+                            transaction,
+                            query,
+                            observed_query,
+                            execution_id,
+                            complete,
+                        )
+                    } else {
+                        db.run_query_in_transaction_with_stats_as(
+                            transaction,
+                            query,
+                            observed_query,
+                        )
+                    }
                 };
                 result.map_err(|error| status_from_error(&error))
             }
@@ -956,15 +991,29 @@ impl SnapshotAccess<'_> {
         after: &DocumentPath,
     ) -> Result<(Vec<Document>, QueryStats), Status> {
         let version = self.version()?;
+        let execution_id = self.query_execution_id;
+        let complete = self.complete_query_execution;
         match (&mut self.state, &self.selected.transaction) {
-            (SnapshotState::Exclusive(db), Some(transaction)) => db
-                .run_query_in_transaction_after_document_with_stats_as(
-                    transaction,
-                    query,
-                    observed_query,
-                    after,
-                )
-                .map_err(|error| status_from_error(&error)),
+            (SnapshotState::Exclusive(db), Some(transaction)) => {
+                let result = if let Some(execution_id) = execution_id {
+                    db.run_query_in_transaction_after_document_with_stats_as_with_execution(
+                        transaction,
+                        query,
+                        observed_query,
+                        after,
+                        execution_id,
+                        complete,
+                    )
+                } else {
+                    db.run_query_in_transaction_after_document_with_stats_as(
+                        transaction,
+                        query,
+                        observed_query,
+                        after,
+                    )
+                };
+                result.map_err(|error| status_from_error(&error))
+            }
             (SnapshotState::Shared(db), None) => db
                 .run_query_after_document_with_stats(query, version, after)
                 .map_err(|error| status_from_error(&error)),
@@ -1056,6 +1105,7 @@ impl LocalBackend {
             generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
             transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
+            query_execution_ids: std::sync::atomic::AtomicU64::new(0),
             token_key: {
                 let mut key_source = SplitMix64::new(seed ^ 0x544f_4b45_4e4b_4559);
                 let mut key = [0_u8; 32];
@@ -2491,6 +2541,8 @@ impl LocalBackend {
                         report: Vec::new(),
                         read_at: Some(read_at),
                     },
+                    query_execution_id: None,
+                    complete_query_execution: false,
                 })
             }),
             SnapshotSelector::Latest => self.read_db(parent, |db| {
@@ -2501,6 +2553,8 @@ impl LocalBackend {
                         report: Vec::new(),
                         read_at: None,
                     },
+                    query_execution_id: None,
+                    complete_query_execution: false,
                 })
             }),
             SnapshotSelector::Transaction(_) | SnapshotSelector::NewTransaction(_) => {
@@ -2509,6 +2563,8 @@ impl LocalBackend {
                     let mut access = SnapshotAccess {
                         state: SnapshotState::Exclusive(db),
                         selected,
+                        query_execution_id: None,
+                        complete_query_execution: false,
                     };
                     let outcome = run(&mut access);
                     if outcome.is_err() && !access.selected.report.is_empty() {
@@ -3298,6 +3354,35 @@ impl LocalBackend {
         })
     }
 
+    pub(crate) fn next_query_execution_id(&self) -> QueryExecutionId {
+        const ADAPTER_QUERY_EXECUTION_PREFIX: u64 = 1 << 63;
+        let sequence = self
+            .query_execution_ids
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .wrapping_add(1);
+        QueryExecutionId::from_value(sequence | ADAPTER_QUERY_EXECUTION_PREFIX)
+    }
+
+    /// Marks one streamed transaction query complete after its final response was accepted by
+    /// the gRPC response channel.
+    pub(crate) fn finish_query_execution(
+        &self,
+        database: &str,
+        transaction: &[u8],
+        execution_id: QueryExecutionId,
+    ) -> Result<(), Status> {
+        let parent = parse_parent(&format!("{database}/documents")).map_err(status)?;
+        let transaction = self.required_txn(&parent, transaction)?;
+        let now = self.write_time();
+        self.with_db(&parent, |db| {
+            db.finish_transaction_query_execution(&transaction, execution_id)
+                .map_err(|error| status_from_error(&error))?;
+            db.compact(now);
+            self.reconcile_history(&parent, db.history_usage());
+            Ok(())
+        })
+    }
+
     /// `RunQuery`: validates through the strict gateway, then executes locally.
     pub fn run_query(
         &self,
@@ -3316,7 +3401,34 @@ impl LocalBackend {
         authorization_req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        self.run_query_authorized_as_after_internal(req, authorization_req, guard, None, false)
+        self.run_query_authorized_as_after_internal(
+            req,
+            authorization_req,
+            guard,
+            None,
+            false,
+            self.next_query_execution_id(),
+            true,
+        )
+    }
+
+    /// Executes the first bounded page of one streamed query execution.
+    pub(crate) fn run_query_authorized_as_for_execution(
+        &self,
+        req: &pb::RunQueryRequest,
+        authorization_req: &pb::RunQueryRequest,
+        guard: ReadGuard<'_>,
+        execution_id: QueryExecutionId,
+    ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
+        self.run_query_authorized_as_after_internal(
+            req,
+            authorization_req,
+            guard,
+            None,
+            false,
+            execution_id,
+            false,
+        )
     }
 
     /// Executes a bounded page after an exclusive document path while authorizing the caller's
@@ -3335,6 +3447,28 @@ impl LocalBackend {
             guard,
             after_document,
             true,
+            self.next_query_execution_id(),
+            true,
+        )
+    }
+
+    /// Executes a continuation page of one streamed query execution.
+    pub(crate) fn run_query_authorized_as_after_for_execution(
+        &self,
+        req: &pb::RunQueryRequest,
+        authorization_req: &pb::RunQueryRequest,
+        guard: ReadGuard<'_>,
+        after_document: Option<&DocumentPath>,
+        execution_id: QueryExecutionId,
+    ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
+        self.run_query_authorized_as_after_internal(
+            req,
+            authorization_req,
+            guard,
+            after_document,
+            true,
+            execution_id,
+            false,
         )
     }
 
@@ -3345,6 +3479,8 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
         after_document: Option<&DocumentPath>,
         continuation: bool,
+        query_execution_id: QueryExecutionId,
+        complete_query_execution: bool,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
@@ -3389,6 +3525,7 @@ impl LocalBackend {
             None => SnapshotSelector::Latest,
         };
         self.with_selected_snapshot(&parent, selector, now, |access| {
+            access.set_query_execution(query_execution_id, complete_query_execution);
             let version = access.version()?;
             // Authorized from the query constraints before any data is touched.
             guard(

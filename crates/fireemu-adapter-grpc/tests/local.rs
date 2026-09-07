@@ -2789,6 +2789,182 @@ async fn a_batched_transaction_query_commits_after_its_continuation_page() {
 }
 
 #[tokio::test]
+async fn repeated_transaction_queries_keep_observations_separate() {
+    let (mut client, _clock, handle) = start().await;
+    let writes = (0..33)
+        .map(|index| update_write(&format!("repeated/{index:03}"), &[("v", i(index))]))
+        .collect();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            request_options: None,
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite::default(),
+                )),
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let mut request = query("repeated", None);
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        request.query_type.as_mut()
+    {
+        query.limit = Some(33);
+    }
+    request.consistency_selector = Some(pb::run_query_request::ConsistencySelector::Transaction(
+        transaction.clone(),
+    ));
+
+    let first = collect_docs(&mut client, request.clone()).await;
+    let second = collect_docs(&mut client, request).await;
+    assert_eq!(first.len(), 33);
+    assert_eq!(second.len(), 33);
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("repeated/commit", &[("v", i(1))])],
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    handle.abort();
+}
+
+#[tokio::test]
+async fn interleaved_identical_transaction_queries_keep_observations_separate() {
+    let (mut client, _clock, handle) = start().await;
+    let writes = (0..33)
+        .map(|index| update_write(&format!("interleaved/{index:03}"), &[("v", i(index))]))
+        .collect();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite::default(),
+                )),
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let mut request = query("interleaved", None);
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        request.query_type.as_mut()
+    {
+        query.limit = Some(33);
+    }
+    request.consistency_selector = Some(pb::run_query_request::ConsistencySelector::Transaction(
+        transaction.clone(),
+    ));
+
+    let mut second_client = client.clone();
+    let (first, second) = tokio::join!(
+        collect_docs(&mut client, request.clone()),
+        collect_docs(&mut second_client, request),
+    );
+    assert_eq!(first.len(), 33);
+    assert_eq!(second.len(), 33);
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("interleaved/commit", &[("v", i(1))])],
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    handle.abort();
+}
+
+#[tokio::test]
+async fn cancelled_transaction_query_can_be_retried_before_commit() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..64)
+                .map(|index| update_write(&format!("cancelled/{index:03}"), &[("v", i(index))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite::default(),
+                )),
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let mut request = query("cancelled", None);
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        request.query_type.as_mut()
+    {
+        query.limit = Some(64);
+    }
+    request.consistency_selector = Some(pb::run_query_request::ConsistencySelector::Transaction(
+        transaction.clone(),
+    ));
+
+    let mut partial = client
+        .run_query(request.clone())
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(partial.next().await.unwrap().unwrap().document.is_some());
+    drop(partial);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    let retried = collect_docs(&mut client, request).await;
+    assert_eq!(retried.len(), 64);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("cancelled/commit", &[("v", i(1))])],
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    handle.abort();
+}
+
+#[tokio::test]
 async fn large_transaction_queries_keep_one_observation_across_all_pages() {
     let (mut client, _clock, backend, handle) =
         start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;

@@ -834,7 +834,7 @@ fn a_query_in_a_transaction_locks_its_range() {
 }
 
 #[test]
-fn transaction_query_records_are_deduplicated_and_overflow_is_retryable() {
+fn transaction_query_records_are_execution_scoped_and_overflow_is_retryable() {
     use fireemu_core_firestore::query::{Query, QueryScope};
     use fireemu_core_types::ids::CollectionId;
 
@@ -864,15 +864,17 @@ fn transaction_query_records_are_deduplicated_and_overflow_is_retryable() {
         state
             .transaction_recorded_query_count(&transaction)
             .unwrap(),
-        1,
-        "identical query snapshots share one conflict record"
+        2,
+        "identical query executions keep separate conflict records"
     );
-    assert_eq!(
-        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
-        conflict_ledger_bytes,
-        "overlapping results retain each observed path only once"
+    assert!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes > conflict_ledger_bytes,
+        "a repeated execution retains its own query descriptor while sharing read paths"
     );
 
+    state.rollback(&transaction).unwrap();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state.run_query_in_transaction(&transaction, &base).unwrap();
     for offset in 1..MAX_TRANSACTION_QUERY_RECORDS {
         let mut query = base.clone();
         query.offset = u32::try_from(offset).unwrap();

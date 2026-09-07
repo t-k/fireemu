@@ -613,12 +613,18 @@ impl Firestore for GatewayService {
                     ));
             }
             let first_authorization = req.clone();
+            let query_execution_id = local.next_query_execution_id();
             let (mut first, warnings) = blocking_read(
                 local.clone(),
                 self.rules.clone(),
                 caller.clone(),
                 move |local, guard| {
-                    local.run_query_authorized_as(&first_request, &first_authorization, guard)
+                    local.run_query_authorized_as_for_execution(
+                        &first_request,
+                        &first_authorization,
+                        guard,
+                        query_execution_id,
+                    )
                 },
             )
             .await?;
@@ -706,11 +712,12 @@ impl Firestore for GatewayService {
                         rules.clone(),
                         caller.clone(),
                         move |local, guard| {
-                            local.run_query_authorized_as_after(
+                            local.run_query_authorized_as_after_for_execution(
                                 &page,
                                 &authorization,
                                 guard,
                                 continuation.as_ref(),
+                                query_execution_id,
                             )
                         },
                     )
@@ -755,6 +762,16 @@ impl Firestore for GatewayService {
                         }
                     }
                     delivered = delivered.saturating_add(batch_documents);
+                }
+                if let Some(transaction) = transaction.as_deref() {
+                    if let Err(error) = local.finish_query_execution(
+                        &database_name_from_query_parent(&req.parent),
+                        transaction,
+                        query_execution_id,
+                    ) {
+                        let _ = sender.send(Err(error)).await;
+                        return;
+                    }
                 }
                 drop(rollback);
             });

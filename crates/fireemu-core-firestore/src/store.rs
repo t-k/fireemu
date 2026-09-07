@@ -127,6 +127,27 @@ impl TransactionId {
     }
 }
 
+/// Identity of one logical query execution inside a transaction.
+///
+/// A repeated query shape has a different execution identity so a continuation page can only
+/// append to the stream that requested it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct QueryExecutionId(u64);
+
+impl QueryExecutionId {
+    /// Raw value used by an adapter to carry the identity across pages.
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+
+    /// Rebuilds an identity from its raw value.
+    #[must_use]
+    pub const fn from_value(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 /// Write precondition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Precondition {
@@ -522,10 +543,10 @@ struct Transaction {
     started_at: LogicalInstant,
     /// Observed version per read path (`None` = absent at read time).
     read_set: BTreeMap<DocumentPath, Option<CommitVersion>>,
-    /// Queries executed inside the transaction and a collision-resistant digest of each
-    /// snapshot result. A changed result at commit time is a phantom conflict.
-    queries: Vec<(Query, QueryObservation)>,
-    /// Estimated bytes retained by the distinct read-set documents and query descriptors.
+    /// Query executions inside the transaction and a collision-resistant digest of each
+    /// completed snapshot result. A changed result at commit time is a phantom conflict.
+    queries: Vec<TransactionQueryObservation>,
+    /// Estimated bytes retained by the read-set documents and query execution descriptors.
     conflict_ledger_bytes: u64,
     last_activity: LogicalInstant,
     state: TransactionState,
@@ -537,6 +558,15 @@ struct Transaction {
     /// this one's locks is the deadlock production resolves by aborting one side: that other
     /// side is aborted, so this one can proceed.
     waiting_to_commit: bool,
+}
+
+#[derive(Debug, Clone)]
+struct TransactionQueryObservation {
+    execution_id: QueryExecutionId,
+    query: Query,
+    observation: QueryObservation,
+    /// Only a completed stream has enough rows to compare with a fresh execution at commit.
+    complete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -795,6 +825,7 @@ pub struct FirestoreState {
     limit_scope: LimitScope,
     version: CommitVersion,
     next_transaction: u64,
+    next_query_execution: u64,
     transactions: BTreeMap<TransactionId, Transaction>,
     active_transaction_count: usize,
     /// How many transactions have left the active state (commit, abort, rollback, expiry):
@@ -845,6 +876,7 @@ impl Default for FirestoreState {
             limit_scope: LimitScope::default(),
             version: CommitVersion::default(),
             next_transaction: 0,
+            next_query_execution: 0,
             transactions: BTreeMap::new(),
             active_transaction_count: 0,
             transaction_releases: 0,
@@ -1626,6 +1658,7 @@ impl FirestoreState {
             limit_scope: self.limit_scope,
             version: self.version,
             next_transaction: self.next_transaction,
+            next_query_execution: self.next_query_execution,
             transactions: BTreeMap::new(),
             active_transaction_count: 0,
             transaction_releases: 0,
@@ -2509,6 +2542,11 @@ impl FirestoreState {
         Ok(doc)
     }
 
+    fn allocate_query_execution_id(&mut self) -> QueryExecutionId {
+        self.next_query_execution = self.next_query_execution.wrapping_add(1);
+        QueryExecutionId::from_value(self.next_query_execution)
+    }
+
     /// Runs a query inside a transaction, recording every returned document in the read set.
     pub fn run_query_in_transaction(
         &mut self,
@@ -2524,7 +2562,14 @@ impl FirestoreState {
         id: &TransactionId,
         query: &Query,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        self.run_query_in_transaction_with_stats_as(id, query, query)
+        let execution_id = self.allocate_query_execution_id();
+        self.run_query_in_transaction_with_stats_as_with_execution(
+            id,
+            query,
+            query,
+            execution_id,
+            true,
+        )
     }
 
     /// Runs a transaction query while recording the logical query shape supplied by the adapter.
@@ -2534,9 +2579,36 @@ impl FirestoreState {
         query: &Query,
         observed_query: &Query,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        let execution_id = self.allocate_query_execution_id();
+        self.run_query_in_transaction_with_stats_as_with_execution(
+            id,
+            query,
+            observed_query,
+            execution_id,
+            true,
+        )
+    }
+
+    /// Runs the first page of a transaction query for one logical execution. The adapter keeps
+    /// the observation incomplete until every page of the stream has been sent to the client.
+    pub fn run_query_in_transaction_with_stats_as_with_execution(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        observed_query: &Query,
+        execution_id: QueryExecutionId,
+        complete: bool,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let read_version = self.transaction(id)?.read_version;
         let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
-        self.record_transaction_query(id, observed_query, &docs)?;
+        self.record_transaction_query_observation(
+            id,
+            execution_id,
+            observed_query,
+            &docs,
+            false,
+            complete,
+        )?;
         Ok((docs, stats))
     }
 
@@ -2547,9 +2619,35 @@ impl FirestoreState {
         query: &Query,
         observed_query: &Query,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        let execution_id = self.legacy_query_execution_id(id, observed_query)?;
+        self.run_query_in_transaction_continuation_with_stats_as_with_execution(
+            id,
+            query,
+            observed_query,
+            execution_id,
+            true,
+        )
+    }
+
+    /// Runs a continuation page for the specified logical query execution.
+    pub fn run_query_in_transaction_continuation_with_stats_as_with_execution(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        observed_query: &Query,
+        execution_id: QueryExecutionId,
+        complete: bool,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let read_version = self.transaction(id)?.read_version;
         let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
-        self.record_transaction_query_continuation(id, observed_query, &docs)?;
+        self.record_transaction_query_observation(
+            id,
+            execution_id,
+            observed_query,
+            &docs,
+            true,
+            complete,
+        )?;
         Ok((docs, stats))
     }
 
@@ -2582,10 +2680,38 @@ impl FirestoreState {
         observed_query: &Query,
         after: &DocumentPath,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        let execution_id = self.legacy_query_execution_id(id, observed_query)?;
+        self.run_query_in_transaction_after_document_with_stats_as_with_execution(
+            id,
+            query,
+            observed_query,
+            after,
+            execution_id,
+            true,
+        )
+    }
+
+    /// Runs a name-ascending continuation for the specified logical query execution.
+    pub fn run_query_in_transaction_after_document_with_stats_as_with_execution(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+        observed_query: &Query,
+        after: &DocumentPath,
+        execution_id: QueryExecutionId,
+        complete: bool,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let read_version = self.transaction(id)?.read_version;
         let (docs, stats) =
             self.run_query_after_document_with_stats(query, Some(read_version), after)?;
-        self.record_transaction_query_continuation(id, observed_query, &docs)?;
+        self.record_transaction_query_observation(
+            id,
+            execution_id,
+            observed_query,
+            &docs,
+            true,
+            complete,
+        )?;
         Ok((docs, stats))
     }
 
@@ -2595,33 +2721,61 @@ impl FirestoreState {
         query: &Query,
         docs: &[Document],
     ) -> Result<(), FirestoreError> {
-        self.record_transaction_query_observation(id, query, docs, false)
+        let execution_id = self.allocate_query_execution_id();
+        self.record_transaction_query_observation(id, execution_id, query, docs, false, true)
     }
 
-    fn record_transaction_query_continuation(
-        &mut self,
+    fn legacy_query_execution_id(
+        &self,
         id: &TransactionId,
         query: &Query,
-        docs: &[Document],
-    ) -> Result<(), FirestoreError> {
-        self.record_transaction_query_observation(id, query, docs, true)
+    ) -> Result<QueryExecutionId, FirestoreError> {
+        let transaction = self.transaction(id)?;
+        let mut matches = transaction
+            .queries
+            .iter()
+            .filter(|entry| entry.query == *query)
+            .map(|entry| entry.execution_id);
+        let Some(execution_id) = matches.next() else {
+            return Err(FirestoreError::InvalidArgument(
+                "No matching transaction query execution.".into(),
+            ));
+        };
+        if matches.next().is_some() {
+            return Err(FirestoreError::InvalidArgument(
+                "Transaction query continuation is ambiguous.".into(),
+            ));
+        }
+        Ok(execution_id)
     }
 
     fn record_transaction_query_observation(
         &mut self,
         id: &TransactionId,
+        execution_id: QueryExecutionId,
         query: &Query,
         docs: &[Document],
         append_observation: bool,
+        complete: bool,
     ) -> Result<(), FirestoreError> {
-        let query_index = self.transactions.get(id).and_then(|transaction| {
+        let execution_index = self.transactions.get(id).and_then(|transaction| {
             transaction
                 .queries
                 .iter()
-                .position(|(seen, _)| seen == query)
+                .position(|entry| entry.execution_id == execution_id)
         });
-        let is_new_query = query_index.is_none();
-        if is_new_query
+        if append_observation && execution_index.is_none() {
+            return Err(FirestoreError::InvalidArgument(
+                "No matching transaction query execution.".into(),
+            ));
+        }
+        if !append_observation && execution_index.is_some() {
+            return Err(FirestoreError::InvalidArgument(
+                "Transaction query execution already started.".into(),
+            ));
+        }
+        let is_new_execution = execution_index.is_none();
+        if is_new_execution
             && self.transactions.get(id).is_some_and(|transaction| {
                 transaction.queries.len() >= MAX_TRANSACTION_QUERY_RECORDS
             })
@@ -2637,7 +2791,7 @@ impl FirestoreState {
                 .map(|document| observed_document_bytes(&document.path, Some(document)))
                 .fold(0u64, u64::saturating_add)
         });
-        let query_bytes = if is_new_query {
+        let query_bytes = if is_new_execution {
             query_retained_bytes(query)
         } else {
             0
@@ -2657,7 +2811,7 @@ impl FirestoreState {
                 "transaction observed data exceeds the retained conflict-detection budget".into(),
             ));
         }
-        let observation = is_new_query.then(|| query_observation(docs));
+        let observation = is_new_execution.then(|| query_observation(docs));
         if let Some(t) = self.transactions.get_mut(id) {
             for d in docs {
                 t.read_set.insert(d.path.clone(), Some(d.version));
@@ -2666,22 +2820,48 @@ impl FirestoreState {
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
                 .saturating_add(additional);
-            if append_observation {
-                if let Some(index) = query_index {
-                    for document in docs {
-                        t.queries[index].1.push(document);
-                    }
-                } else if let Some(observation) = observation {
-                    t.queries.push((query.clone(), observation));
+            if let Some(index) = execution_index {
+                for document in docs {
+                    t.queries[index].observation.push(document);
+                }
+                if complete {
+                    t.queries[index].complete = true;
                 }
             } else if let Some(observation) = observation {
-                t.queries.push((query.clone(), observation));
+                t.queries.push(TransactionQueryObservation {
+                    execution_id,
+                    query: query.clone(),
+                    observation,
+                    complete,
+                });
             }
         }
         Ok(())
     }
 
-    /// Number of distinct query snapshots retained by an active transaction.
+    /// Marks all pages of one transaction query execution as delivered.
+    pub fn finish_transaction_query_execution(
+        &mut self,
+        id: &TransactionId,
+        execution_id: QueryExecutionId,
+    ) -> Result<(), FirestoreError> {
+        let transaction = self.transaction(id)?;
+        let Some(index) = transaction
+            .queries
+            .iter()
+            .position(|entry| entry.execution_id == execution_id)
+        else {
+            return Err(FirestoreError::InvalidArgument(
+                "No matching transaction query execution.".into(),
+            ));
+        };
+        if let Some(transaction) = self.transactions.get_mut(id) {
+            transaction.queries[index].complete = true;
+        }
+        Ok(())
+    }
+
+    /// Number of query executions retained by an active transaction.
     pub fn transaction_recorded_query_count(
         &self,
         id: &TransactionId,
@@ -2972,7 +3152,7 @@ impl FirestoreState {
                             || holder
                                 .queries
                                 .iter()
-                                .any(|(query, _)| path_in_scope(path, &query.scope))
+                                .any(|entry| path_in_scope(path, &entry.query.scope))
                     })
             })
             .map(|(_, holder)| holder.waiting_to_commit)
@@ -3011,7 +3191,7 @@ impl FirestoreState {
                             || holder
                                 .queries
                                 .iter()
-                                .any(|(query, _)| path_in_scope(path, &query.scope))
+                                .any(|entry| path_in_scope(path, &entry.query.scope))
                     })
             })
             .map(|(id, _)| id.clone())
@@ -3040,12 +3220,12 @@ impl FirestoreState {
                 return Ok(true);
             }
         }
-        for (query, observed) in &transaction.queries {
+        for entry in transaction.queries.iter().filter(|entry| entry.complete) {
             let mut current = QueryObservation::default();
-            self.select(query, None, &[], Consumption::Ordered, |document| {
+            self.select(&entry.query, None, &[], Consumption::Ordered, |document| {
                 current.push(document);
             })?;
-            if current != *observed {
+            if current != entry.observation {
                 return Ok(true);
             }
         }

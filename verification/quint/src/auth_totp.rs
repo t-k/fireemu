@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::base32;
 use fireemu_core_auth::mfa::{MfaError, TotpPolicy};
-use fireemu_core_auth::store::{AuthStore, LocalId, NewUser, SecondFactorAssertion};
+use fireemu_core_auth::store::{
+    AuthStore, LocalId, NewUser, PendingSignInId, SecondFactorAssertion,
+};
 use fireemu_core_auth::totp::{time_step, totp_at};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -80,6 +82,7 @@ pub struct AuthTotpDriver {
     uid: LocalId,
     now: LogicalInstant,
     enrollment: Option<fireemu_core_auth::mfa::TotpEnrollmentMaterial>,
+    pending: Option<PendingSignInId>,
     assertion: Option<SecondFactorAssertion>,
     last_result: String,
     projection_fault: Option<ProjectionFault>,
@@ -102,6 +105,7 @@ impl AuthTotpDriver {
             uid,
             now: LogicalInstant::UNIX_EPOCH,
             enrollment: None,
+            pending: None,
             assertion: None,
             last_result: "Initial".to_owned(),
             projection_fault: None,
@@ -135,6 +139,7 @@ impl AuthTotpDriver {
         self.uid = uid;
         self.now = LogicalInstant::UNIX_EPOCH;
         self.enrollment = None;
+        self.pending = None;
         self.assertion = None;
         "Initial".clone_into(&mut self.last_result);
         Ok(())
@@ -226,13 +231,20 @@ impl AuthTotpDriver {
     /// Attempts a real MFA sign-in using a code from the chosen bounded TOTP step.
     pub fn verify(&mut self, code_step: i64) -> Result {
         self.assertion = None;
-        let pending = match self.store.start_mfa_sign_in(&self.uid, self.now) {
-            Ok(pending) => pending,
-            Err(MfaError::NoEnrolledFactor) => {
-                "NoEnrolledFactor".clone_into(&mut self.last_result);
-                return self.record_action("Verify");
+        let pending = if let Some(pending) = self.pending.clone() {
+            pending
+        } else {
+            match self.store.start_mfa_sign_in(&self.uid, self.now) {
+                Ok(pending) => {
+                    self.pending = Some(pending.clone());
+                    pending
+                }
+                Err(MfaError::NoEnrolledFactor) => {
+                    "NoEnrolledFactor".clone_into(&mut self.last_result);
+                    return self.record_action("Verify");
+                }
+                Err(error) => return Err(classified_mfa_error(&error)),
             }
-            Err(error) => return Err(classified_mfa_error(&error)),
         };
         let (enrollment_id, secret) = self
             .store
@@ -254,6 +266,7 @@ impl AuthTotpDriver {
             self.now,
         ) {
             Ok(assertion) => {
+                self.pending = None;
                 self.assertion = Some(assertion);
                 "VerificationAccepted".clone_into(&mut self.last_result);
             }

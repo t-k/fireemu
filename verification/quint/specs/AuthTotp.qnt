@@ -172,7 +172,13 @@ module AuthTotp {
       codeStep.in(STEPS),
       record("Verify", codeStep, {
         factorCount: observable.factorCount,
-        pendingCount: observable.pendingCount,
+        pendingCount: if (not(hasFactor)) {
+          observable.pendingCount
+        } else if (acceptedCode) {
+          0
+        } else {
+          1
+        },
         lastAcceptedStep: if (acceptedCode) codeStep else observable.lastAcceptedStep,
         lastResult: result,
         secondFactorClaim: if (acceptedCode) "ValidTotp" else "None",

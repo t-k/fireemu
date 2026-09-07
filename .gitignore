@@ -22,6 +22,9 @@ ui/test-results/
 ui/playwright-report/
 ui/.runs/
 .claude/worktrees/
+# Codex and superpowers intermediate artifacts
+.codex/
+docs/superpowers/
 # npm distribution build outputs (npm/scripts/pack-local.mjs, .github/workflows/release.yml)
 npm/dist/
 npm/platforms/build/

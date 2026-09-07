@@ -27,6 +27,7 @@ use fireemu_core_firestore::store::{
     FirestoreState, HistoryCapacityError, HistoryProjection, HistoryUsage, ListedDocument,
     Precondition, QueryExecutionId, QueryStats, TransactionId, Write, WriteOp,
 };
+use fireemu_core_firestore::value::Value;
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{Clock, DeterministicRng, SplitMix64};
@@ -254,6 +255,8 @@ pub struct LocalBackend {
     transaction_ids: Mutex<SplitMix64>,
     /// Identity source for logical query streams whose response is split into bounded pages.
     query_execution_ids: std::sync::atomic::AtomicU64,
+    /// Estimated bytes retained by execution-scoped value-order selections.
+    query_selection_bytes: Arc<std::sync::atomic::AtomicU64>,
     /// Keys the authenticator appended to every transaction token, so a client cannot name a
     /// transaction it was never handed (production tokens are opaque).
     token_key: [u8; 32],
@@ -880,6 +883,65 @@ struct QueryExecutionContext {
     complete: bool,
 }
 
+/// Ordered document paths retained for one streamed query execution. Keeping only paths makes
+/// the continuation cursor independent of document body size while avoiding a candidate rescan
+/// on every page.
+#[derive(Debug, Clone)]
+pub(crate) struct QuerySelection {
+    inner: Arc<QuerySelectionInner>,
+}
+
+type AuthorizedQueryPage = (
+    Vec<pb::RunQueryResponse>,
+    Vec<String>,
+    Option<Arc<QuerySelection>>,
+);
+
+#[derive(Debug)]
+struct QuerySelectionInner {
+    paths: Arc<[DocumentPath]>,
+    retained_bytes: u64,
+    retained_total: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl QuerySelection {
+    fn from_paths(
+        paths: Vec<DocumentPath>,
+        retained_total: Arc<std::sync::atomic::AtomicU64>,
+    ) -> Self {
+        let retained_bytes = paths
+            .iter()
+            .map(|path| {
+                u64::try_from(std::mem::size_of::<DocumentPath>())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(u64::try_from(path.resource_name().len()).unwrap_or(u64::MAX))
+            })
+            .fold(0u64, u64::saturating_add);
+        let _ = retained_total.fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |current| Some(current.saturating_add(retained_bytes)),
+        );
+        Self {
+            inner: Arc::new(QuerySelectionInner {
+                paths: Arc::from(paths),
+                retained_bytes,
+                retained_total,
+            }),
+        }
+    }
+}
+
+impl Drop for QuerySelectionInner {
+    fn drop(&mut self) {
+        let _ = self.retained_total.fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |current| Some(current.saturating_sub(self.retained_bytes)),
+        );
+    }
+}
+
 enum SnapshotState<'a> {
     Shared(&'a FirestoreState),
     Exclusive(&'a mut FirestoreState),
@@ -1027,12 +1089,55 @@ impl SnapshotAccess<'_> {
         }
     }
 
-    fn record_query(&mut self, query: &Query) -> Result<(), Status> {
+    fn run_query_from_paths(
+        &mut self,
+        query: &Query,
+        observed_query: &Query,
+        selection: &QuerySelection,
+        continuation: bool,
+    ) -> Result<(Vec<Document>, QueryStats), Status> {
+        let version = self.version()?;
+        let execution_id = self
+            .query_execution_id
+            .ok_or_else(|| Status::internal("ordered query selection has no execution id"))?;
+        let complete = self.complete_query_execution;
         match (&mut self.state, &self.selected.transaction) {
-            (SnapshotState::Shared(_), None) => Ok(()),
             (SnapshotState::Exclusive(db), Some(transaction)) => db
-                .run_query_in_transaction(transaction, query)
-                .map(|_| ())
+                .run_query_in_transaction_from_paths_with_stats_as_with_execution(
+                    transaction,
+                    query,
+                    observed_query,
+                    &selection.inner.paths,
+                    execution_id,
+                    continuation,
+                    complete,
+                )
+                .map_err(|error| status_from_error(&error)),
+            (SnapshotState::Shared(db), None) => {
+                let docs = db.documents_at_query_paths(query, &selection.inner.paths, version);
+                let stats = QueryStats {
+                    matched: u64::try_from(selection.inner.paths.len()).unwrap_or(u64::MAX),
+                    cloned_documents: u64::try_from(docs.len()).unwrap_or(u64::MAX),
+                    ..QueryStats::default()
+                };
+                Ok((docs, stats))
+            }
+            _ => Err(Status::internal("invalid Firestore snapshot access mode")),
+        }
+    }
+
+    fn run_aggregation(
+        &mut self,
+        query: &Query,
+        aggregations: &[Aggregation],
+    ) -> Result<(Vec<Value>, QueryStats), Status> {
+        let version = self.version()?;
+        match (&mut self.state, &self.selected.transaction) {
+            (SnapshotState::Exclusive(db), Some(transaction)) => db
+                .run_aggregation_in_transaction_with_stats(transaction, query, aggregations)
+                .map_err(|error| status_from_error(&error)),
+            (SnapshotState::Shared(db), None) => db
+                .run_aggregation_with_stats(query, aggregations, version)
                 .map_err(|error| status_from_error(&error)),
             _ => Err(Status::internal("invalid Firestore snapshot access mode")),
         }
@@ -1112,6 +1217,7 @@ impl LocalBackend {
             ids: Mutex::new(SplitMix64::new(seed)),
             transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
             query_execution_ids: std::sync::atomic::AtomicU64::new(0),
+            query_selection_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             token_key: {
                 let mut key_source = SplitMix64::new(seed ^ 0x544f_4b45_4e4b_4559);
                 let mut key = [0_u8; 32];
@@ -1442,6 +1548,15 @@ impl LocalBackend {
             ));
         }
         gauges.extend(database_gauges);
+        if scope.is_default() {
+            gauges.push(Gauge::logical(
+                "queries.ordered_selection_bytes",
+                Unit::Bytes,
+                self.query_selection_bytes
+                    .load(std::sync::atomic::Ordering::Acquire),
+                None,
+            ));
+        }
         Ok(ServiceResources {
             service: "firestore".to_owned(),
             gauges,
@@ -3465,14 +3580,16 @@ impl LocalBackend {
         authorization_req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        self.run_query_authorized_as_after_internal(
+        let (responses, warnings, _) = self.run_query_authorized_as_after_internal(
             req,
             authorization_req,
             guard,
             None,
             false,
             None,
-        )
+            None,
+        )?;
+        Ok((responses, warnings))
     }
 
     /// Executes the first bounded page of one streamed query execution.
@@ -3482,7 +3599,7 @@ impl LocalBackend {
         authorization_req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
         execution_id: QueryExecutionId,
-    ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
+    ) -> Result<AuthorizedQueryPage, Status> {
         self.run_query_authorized_as_after_internal(
             req,
             authorization_req,
@@ -3493,15 +3610,15 @@ impl LocalBackend {
                 id: execution_id,
                 complete: false,
             }),
+            None,
         )
     }
 
     /// Executes a bounded page after an exclusive document path while authorizing the caller's
-    /// original query shape. The continuation is valid only for the canonical ascending
-    /// `__name__` order selected by the caller. This public compatibility helper pairs with
-    /// [`Self::run_query_authorized_as`] and resolves its transaction observation by query shape.
-    /// The gRPC streaming path uses the execution-scoped helper below when identical queries can
-    /// be active concurrently.
+    /// original query shape. The document-path continuation supports either `__name__` direction
+    /// and pairs with [`Self::run_query_authorized_as`] by resolving its transaction observation
+    /// from the query shape. The gRPC streaming path uses the execution-scoped helper below when
+    /// identical queries can be active concurrently.
     pub fn run_query_authorized_as_after(
         &self,
         req: &pb::RunQueryRequest,
@@ -3509,14 +3626,16 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
         after_document: Option<&DocumentPath>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        self.run_query_authorized_as_after_internal(
+        let (responses, warnings, _) = self.run_query_authorized_as_after_internal(
             req,
             authorization_req,
             guard,
             after_document,
             true,
             None,
-        )
+            None,
+        )?;
+        Ok((responses, warnings))
     }
 
     /// Executes a continuation page of one streamed query execution.
@@ -3527,8 +3646,9 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
         after_document: Option<&DocumentPath>,
         execution_id: QueryExecutionId,
+        selection: Option<Arc<QuerySelection>>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        self.run_query_authorized_as_after_internal(
+        let (responses, warnings, _) = self.run_query_authorized_as_after_internal(
             req,
             authorization_req,
             guard,
@@ -3538,9 +3658,12 @@ impl LocalBackend {
                 id: execution_id,
                 complete: false,
             }),
-        )
+            selection,
+        )?;
+        Ok((responses, warnings))
     }
 
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn run_query_authorized_as_after_internal(
         &self,
         req: &pb::RunQueryRequest,
@@ -3549,7 +3672,8 @@ impl LocalBackend {
         after_document: Option<&DocumentPath>,
         continuation: bool,
         execution: Option<QueryExecutionContext>,
-    ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
+        selection: Option<Arc<QuerySelection>>,
+    ) -> Result<AuthorizedQueryPage, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
@@ -3593,6 +3717,7 @@ impl LocalBackend {
             None => SnapshotSelector::Latest,
         };
         self.with_selected_snapshot(&parent, selector, now, |access| {
+            let execution_present = execution.is_some();
             if let Some(execution) = execution {
                 access.set_query_execution(execution.id, execution.complete);
             }
@@ -3606,20 +3731,49 @@ impl LocalBackend {
                     query: &authorization.query,
                 },
             )?;
-            let (docs, stats) = match (continuation, after_document) {
-                (true, Some(after)) => access.run_query_with_stats_after_document(
+            let selection = match selection {
+                Some(selection) => Some(selection),
+                None if execution_present && accepted.query.effective_order_by().len() != 1 => {
+                    let mut selection_query = authorization.query.clone();
+                    let original_offset = selection_query.offset;
+                    selection_query.offset = 0;
+                    selection_query.limit = selection_query
+                        .limit
+                        .map(|limit| limit.saturating_add(original_offset));
+                    let (paths, _) = access
+                        .db()
+                        .run_query_paths_with_stats(&selection_query, version)
+                        .map_err(|error| status_from_error(&error))?;
+                    Some(Arc::new(QuerySelection::from_paths(
+                        paths,
+                        Arc::clone(&self.query_selection_bytes),
+                    )))
+                }
+                None => None,
+            };
+            let (docs, stats) = if let Some(selection) = selection.as_deref() {
+                access.run_query_from_paths(
                     &accepted.query,
                     &authorization.query,
-                    after,
-                )?,
-                (true, None) => {
-                    access.run_query_with_stats(&accepted.query, &authorization.query, true)?
-                }
-                (false, None) => {
-                    access.run_query_with_stats(&accepted.query, &authorization.query, false)?
-                }
-                (false, Some(_)) => {
-                    return Err(Status::internal("invalid first RunQuery continuation"));
+                    selection,
+                    continuation,
+                )?
+            } else {
+                match (continuation, after_document) {
+                    (true, Some(after)) => access.run_query_with_stats_after_document(
+                        &accepted.query,
+                        &authorization.query,
+                        after,
+                    )?,
+                    (true, None) => {
+                        access.run_query_with_stats(&accepted.query, &authorization.query, true)?
+                    }
+                    (false, None) => {
+                        access.run_query_with_stats(&accepted.query, &authorization.query, false)?
+                    }
+                    (false, Some(_)) => {
+                        return Err(Status::internal("invalid first RunQuery continuation"));
+                    }
                 }
             };
             let read_time = Some(encode_instant(access.read_time(now)?));
@@ -3633,6 +3787,7 @@ impl LocalBackend {
             Ok((
                 query_responses(&docs, read_time, access.report(), skipped),
                 authorization.warnings.clone(),
+                selection,
             ))
         })
     }
@@ -3689,14 +3844,11 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
-            // Inside a transaction the aggregation is computed at the snapshot and the query
-            // is recorded so that later changes abort the commit.
-            access.record_query(&accepted.query)?;
+            // Inside a transaction the aggregation and its conflict observation share one
+            // borrowed selection pass, so matching document bodies are never materialized just
+            // to record the query.
+            let (values, _) = access.run_aggregation(&accepted.query, &aggregations)?;
             let read_time = access.read_time(now)?;
-            let values = access
-                .db()
-                .run_aggregation(&accepted.query, &aggregations, version)
-                .map_err(|e| status_from_error(&e))?;
             let aggregate_fields: HashMap<String, pb::Value> = aliases
                 .into_iter()
                 .zip(values.iter().map(encode_value))
@@ -4439,6 +4591,38 @@ mod lock_tests {
             ))),
             7,
         ))
+    }
+
+    #[test]
+    fn ordered_selection_resource_charge_follows_last_reference() {
+        let backend = backend();
+        let path = DocumentPath::parse(
+            &fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap(),
+            &fireemu_core_types::ids::DatabaseId::default_database(),
+            "items/a",
+        )
+        .unwrap();
+        let selection =
+            QuerySelection::from_paths(vec![path], Arc::clone(&backend.query_selection_bytes));
+        let retained = backend
+            .query_selection_bytes
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert!(retained > 0);
+        let clone = selection.clone();
+        drop(selection);
+        assert_eq!(
+            backend
+                .query_selection_bytes
+                .load(std::sync::atomic::Ordering::Acquire),
+            retained
+        );
+        drop(clone);
+        assert_eq!(
+            backend
+                .query_selection_bytes
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
     }
 
     fn history_usage(versions: u64) -> HistoryUsage {

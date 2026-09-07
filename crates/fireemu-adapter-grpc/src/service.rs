@@ -584,12 +584,12 @@ impl Firestore for GatewayService {
         let req = request.into_inner();
         if let Some(local) = self.local_backend() {
             let local = Arc::clone(local);
-            let name_ascending_continuation = match req.query_type.as_ref() {
+            let name_order_continuation = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
                     let parent = parse_parent(&req.parent)
                         .map_err(|error| Rejection::Decode(error).to_status())?;
                     let accepted = local.accepted_query(&parent, query)?;
-                    is_name_ascending_query(&accepted.query)
+                    is_name_ordered_query(&accepted.query)
                 }
                 None => false,
             };
@@ -614,7 +614,7 @@ impl Firestore for GatewayService {
             }
             let first_authorization = req.clone();
             let query_execution_id = local.next_query_execution_id();
-            let (mut first, warnings) = blocking_read(
+            let (mut first, warnings, selection) = blocking_read(
                 local.clone(),
                 self.rules.clone(),
                 caller.clone(),
@@ -647,7 +647,7 @@ impl Firestore for GatewayService {
                 .iter()
                 .filter(|response| response.document.is_some())
                 .count();
-            let first_after_document = if name_ascending_continuation {
+            let first_after_document = if name_order_continuation {
                 last_query_document_path(&first)?
             } else {
                 None
@@ -694,7 +694,7 @@ impl Firestore for GatewayService {
                         return;
                     }
                     let continuation = after_document.clone();
-                    if name_ascending_continuation {
+                    if name_order_continuation {
                         set_run_query_page(
                             &mut page,
                             0,
@@ -708,6 +708,7 @@ impl Firestore for GatewayService {
                         );
                     }
                     let authorization = req.clone();
+                    let selection = selection.clone();
                     let batch = blocking_read(
                         local.clone(),
                         rules.clone(),
@@ -719,6 +720,7 @@ impl Firestore for GatewayService {
                                 guard,
                                 continuation.as_ref(),
                                 query_execution_id,
+                                selection,
                             )
                         },
                     )
@@ -740,7 +742,7 @@ impl Firestore for GatewayService {
                             .count(),
                     )
                     .unwrap_or(i32::MAX);
-                    if name_ascending_continuation && batch_documents > 0 {
+                    if name_order_continuation && batch_documents > 0 {
                         after_document = match last_query_document_path(&responses) {
                             Ok(Some(path)) => Some(path),
                             Ok(None) => {
@@ -1045,10 +1047,12 @@ fn set_run_query_page(req: &mut pb::RunQueryRequest, offset: i32, remaining: Opt
     }));
 }
 
-fn is_name_ascending_query(query: &Query) -> bool {
+fn is_name_ordered_query(query: &Query) -> bool {
     matches!(
         query.effective_order_by().as_slice(),
-        [order] if order.field.is_document_name() && order.direction == Direction::Ascending
+        [order]
+            if order.field.is_document_name()
+                && matches!(order.direction, Direction::Ascending | Direction::Descending)
     )
 }
 

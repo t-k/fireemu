@@ -2468,6 +2468,123 @@ async fn run_query_streams_bounded_batches_and_releases_its_snapshot_pin() {
 }
 
 #[tokio::test]
+async fn run_query_pages_seek_value_and_descending_name_orders() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| update_write(&format!("ordered/{index:03}"), &[("v", i(index))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    for order in ["v", "__name__"] {
+        let mut request = query("ordered", None);
+        let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+            request.query_type.as_mut()
+        else {
+            unreachable!();
+        };
+        query.order_by = vec![sq::Order {
+            field: Some(sq::FieldReference {
+                field_path: order.to_owned(),
+            }),
+            direction: sq::Direction::Descending as i32,
+        }];
+        query.offset = 3;
+        query.limit = Some(65);
+
+        let documents = collect_docs(&mut client, request).await;
+        let expected = (0..65)
+            .rev()
+            .skip(3)
+            .map(|index| format!("{DOCS}/ordered/{index:03}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            documents
+                .iter()
+                .map(|document| document.name.clone())
+                .collect::<Vec<_>>(),
+            expected,
+            "order {order}"
+        );
+    }
+    handle.abort();
+}
+
+#[tokio::test]
+async fn value_ordered_transaction_query_commits_after_all_pages() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| {
+                    update_write(
+                        &format!("transaction-ordered/{index:03}"),
+                        &[("v", i(index))],
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite::default(),
+                )),
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let mut request = query("transaction-ordered", None);
+    let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        request.query_type.as_mut()
+    else {
+        unreachable!();
+    };
+    query.order_by = vec![sq::Order {
+        field: Some(sq::FieldReference {
+            field_path: "v".to_owned(),
+        }),
+        direction: sq::Direction::Descending as i32,
+    }];
+    query.limit = Some(65);
+    request.consistency_selector = Some(pb::run_query_request::ConsistencySelector::Transaction(
+        transaction.clone(),
+    ));
+
+    let documents = collect_docs(&mut client, request).await;
+    assert_eq!(documents.len(), 65);
+    assert_eq!(documents[0].name, format!("{DOCS}/transaction-ordered/064"));
+    assert_eq!(
+        documents[64].name,
+        format!("{DOCS}/transaction-ordered/000")
+    );
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("transaction-ordered/commit", &[("v", i(100))])],
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    handle.abort();
+}
+
+#[tokio::test]
 async fn run_query_logical_completion_covers_every_page_and_limit() {
     let (mut client, _clock, backend, handle) =
         start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;

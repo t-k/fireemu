@@ -681,6 +681,118 @@ fn name_continuation_seeks_the_ordered_scope_index() {
 }
 
 #[test]
+fn descending_name_continuation_seeks_backwards_through_the_scope_index() {
+    let db = large_collection(500);
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.order_by.push(OrderClause {
+        field: FieldPath::document_name(),
+        direction: Direction::Descending,
+    });
+    query.limit = Some(32);
+
+    let (first, first_stats) = db.run_query_with_stats(&query, None).unwrap();
+    assert_eq!(first.len(), 32);
+    assert_eq!(first[0].fields.get("n"), Some(&Value::Integer(499)));
+    assert_eq!(first[31].fields.get("n"), Some(&Value::Integer(468)));
+    assert_eq!(first_stats.scanned, 32);
+    assert_eq!(first_stats.peak_candidates, 32);
+
+    let (second, second_stats) = db
+        .run_query_after_document_with_stats(&query, None, &first[31].path)
+        .unwrap();
+    assert_eq!(second.len(), 32);
+    assert_eq!(second[0].fields.get("n"), Some(&Value::Integer(467)));
+    assert_eq!(second[31].fields.get("n"), Some(&Value::Integer(436)));
+    assert_eq!(second_stats.scanned, 32);
+    assert_eq!(second_stats.peak_candidates, 32);
+}
+
+#[test]
+fn ordered_path_selection_scans_candidates_once_for_repeated_pages() {
+    let db = large_collection(500);
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.order_by.push(OrderClause {
+        field: fp("n"),
+        direction: Direction::Descending,
+    });
+    query.limit = Some(32);
+    let mut selection_query = query.clone();
+    selection_query.offset = 0;
+    selection_query.limit = None;
+
+    let (paths, stats) = db
+        .run_query_paths_with_stats(&selection_query, None)
+        .unwrap();
+    assert_eq!(paths.len(), 500);
+    assert_eq!(stats.scanned, 500);
+    assert_eq!(stats.matched, 500);
+    assert_eq!(stats.cloned_documents, 0);
+
+    let first = db.documents_at_query_paths(&query, &paths, None);
+    assert_eq!(first.len(), 32);
+    assert_eq!(first[0].fields.get("n"), Some(&Value::Integer(499)));
+
+    let mut second_query = query;
+    second_query.offset = 32;
+    let second = db.documents_at_query_paths(&second_query, &paths, None);
+    assert_eq!(second.len(), 32);
+    assert_eq!(second[0].fields.get("n"), Some(&Value::Integer(467)));
+}
+
+#[test]
+fn ordered_path_selection_uses_document_name_to_break_value_ties() {
+    let mut db = FirestoreState::new();
+    for index in 0..6 {
+        db.commit(
+            &[set(
+                &format!("items/d{index:02}"),
+                BTreeMap::from([("v".to_owned(), Value::Integer(i64::from(index % 2)))]),
+            )],
+            None,
+            LogicalInstant::from_unix_seconds(1_788_000_000 + i64::from(index)),
+        )
+        .unwrap();
+    }
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.order_by.push(OrderClause {
+        field: fp("v"),
+        direction: Direction::Descending,
+    });
+    query.limit = Some(2);
+    let mut selection_query = query.clone();
+    selection_query.offset = 0;
+    selection_query.limit = None;
+
+    let (paths, _) = db
+        .run_query_paths_with_stats(&selection_query, None)
+        .unwrap();
+    let names = paths
+        .iter()
+        .map(DocumentPath::resource_name)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            path("items/d05").resource_name(),
+            path("items/d03").resource_name(),
+            path("items/d01").resource_name(),
+            path("items/d04").resource_name(),
+            path("items/d02").resource_name(),
+            path("items/d00").resource_name(),
+        ]
+    );
+
+    let first = db.documents_at_query_paths(&query, &paths, None);
+    assert_eq!(first.len(), 2);
+    let mut second_query = query;
+    second_query.offset = 2;
+    let second = db.documents_at_query_paths(&second_query, &paths, None);
+    assert_eq!(second.len(), 2);
+    assert_eq!(second[0].path, path("items/d01"));
+    assert_eq!(second[1].path, path("items/d04"));
+}
+
+#[test]
 fn collection_scope_and_name_limit_visit_only_the_requested_rows() {
     let mut db = FirestoreState::new();
     let now = LogicalInstant::from_unix_seconds(1_788_000_000);
@@ -1588,4 +1700,45 @@ fn scalar_aggregations_retain_no_document_payload() {
     let (docs, stats) = db.run_query_with_stats(&base, None).unwrap();
     assert_eq!(docs.len(), 500);
     assert_eq!(stats.cloned_documents, 500);
+}
+
+#[test]
+fn transactional_aggregation_records_conflicts_without_materializing_documents() {
+    let mut db = large_collection(500);
+    let transaction = db
+        .begin_transaction(false, LogicalInstant::from_unix_seconds(1_788_000_001))
+        .unwrap();
+    let query = Query::new(QueryScope::collection(None, collection("items")));
+    let aggregations = [
+        Aggregation::Count { up_to: None },
+        Aggregation::Sum(fp("n")),
+        Aggregation::Avg(fp("n")),
+    ];
+
+    let (values, stats) = db
+        .run_aggregation_in_transaction_with_stats(&transaction, &query, &aggregations)
+        .unwrap();
+    assert_eq!(values[0], Value::Integer(500));
+    assert_eq!(values[1], Value::Integer((0..500).sum()));
+    assert_eq!(values[2], Value::Double(249.5));
+    assert_eq!(stats.scanned, 500);
+    assert_eq!(stats.matched, 500);
+    assert_eq!(stats.cloned_documents, 0);
+    assert_eq!(stats.peak_candidates, 0);
+
+    let error = db
+        .commit(
+            &[set(
+                "items/d0001",
+                BTreeMap::from([("n".to_owned(), Value::Integer(999))]),
+            )],
+            None,
+            LogicalInstant::from_unix_seconds(1_788_000_002),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        fireemu_core_firestore::store::FirestoreError::Aborted(_)
+    ));
+    db.rollback(&transaction).unwrap();
 }

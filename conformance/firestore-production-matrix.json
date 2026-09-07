@@ -36,18 +36,16 @@
   },
   "evidence": {
     "schemaVersion": 1,
-    "verified": false,
-    "validation": [
-      "source: tracked working tree is dirty"
-    ],
+    "verified": true,
+    "validation": [],
     "observations": {
       "production": {
         "schemaVersion": 1,
         "observation": {
           "side": "production",
           "mode": "live",
-          "startedAt": "2026-09-07T02:00:52.641Z",
-          "finishedAt": "2026-09-07T02:04:46.419Z",
+          "startedAt": "2026-09-07T02:06:03.133Z",
+          "finishedAt": "2026-09-07T02:09:55.144Z",
           "database": {
             "type": "FIRESTORE_NATIVE",
             "concurrencyMode": "PESSIMISTIC",
@@ -57,9 +55,9 @@
           }
         },
         "source": {
-          "gitSha": "64019ae4a3f88683a2e8ccd8e8664d81547b62f4",
+          "gitSha": "4c7f23732a3ab5dc79073390ab7552772bdbfe3f",
           "sourceTreeDigest": "sha256-97834928b1565e416486c6b98d3886b0a29237dc795142cd077c6a6b47ed91a9",
-          "trackedTreeClean": false
+          "trackedTreeClean": true
         },
         "package": {
           "name": "fireemu",
@@ -96,16 +94,16 @@
         "observation": {
           "side": "fireemu",
           "mode": "live",
-          "startedAt": "2026-09-07T02:04:46.481Z",
-          "finishedAt": "2026-09-07T02:05:16.657Z",
+          "startedAt": "2026-09-07T02:09:55.173Z",
+          "finishedAt": "2026-09-07T02:10:25.348Z",
           "database": {
             "target": "fireemu local Firestore"
           }
         },
         "source": {
-          "gitSha": "64019ae4a3f88683a2e8ccd8e8664d81547b62f4",
+          "gitSha": "4c7f23732a3ab5dc79073390ab7552772bdbfe3f",
           "sourceTreeDigest": "sha256-97834928b1565e416486c6b98d3886b0a29237dc795142cd077c6a6b47ed91a9",
-          "trackedTreeClean": false
+          "trackedTreeClean": true
         },
         "package": {
           "name": "fireemu",
@@ -152,7 +150,10 @@
     }
   },
   "summary": {
-    "unverified": 303,
+    "fireemu-matches-production": 115,
+    "parity": 185,
+    "three-way-difference": 1,
+    "emulators-diverge-from-production": 2,
     "excluded-local-only": 21
   },
   "programs": [
@@ -2007,7 +2008,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "descending": {
           "production": {
@@ -3856,7 +3857,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "ascending-name-only": {
           "production": {
@@ -4154,7 +4155,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "descending-name-only": {
           "production": {
@@ -4304,7 +4305,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "no-order-is-name-order": {
           "production": {
@@ -4641,7 +4642,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "select-name-only": {
           "production": {
@@ -4759,7 +4760,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         }
       }
     },
@@ -5177,7 +5178,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "equal-int-matches-double": {
           "production": {
@@ -5277,7 +5278,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "equal-double-matches-int": {
           "production": {
@@ -5377,7 +5378,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "zero-equals-negative-zero": {
           "production": {
@@ -5516,7 +5517,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "nan-equals-nothing": {
           "production": {
@@ -5547,7 +5548,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "is-nan": {
           "production": {
@@ -5608,7 +5609,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "is-not-nan": {
           "production": {
@@ -5981,7 +5982,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "greater-than-negative-infinity": {
           "production": {
@@ -6315,7 +6316,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "less-than-nan": {
           "production": {
@@ -6346,7 +6347,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "not-equal-one": {
           "production": {
@@ -6680,7 +6681,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         }
       }
     },
@@ -6718,11 +6719,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -6734,6 +6735,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -6743,14 +6747,11 @@
                         }
                       }
                     },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "n": {
                       "integerValue": "3"
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "tags": {
+                      "arrayValue": {}
                     }
                   },
                   "createTime": "<now>",
@@ -6764,6 +6765,9 @@
                   "fields": {
                     "n": {
                       "integerValue": "1"
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "nested": {
                       "mapValue": {
@@ -6779,9 +6783,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -6996,7 +6997,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "equal-null": {
           "production": {
@@ -7027,7 +7028,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "is-null": {
           "production": {
@@ -7133,7 +7134,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "is-not-null": {
           "production": {
@@ -7165,11 +7166,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -7181,6 +7182,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -7190,14 +7194,11 @@
                         }
                       }
                     },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "n": {
                       "integerValue": "3"
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "tags": {
+                      "arrayValue": {}
                     }
                   },
                   "createTime": "<now>",
@@ -7211,6 +7212,9 @@
                   "fields": {
                     "n": {
                       "integerValue": "1"
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "nested": {
                       "mapValue": {
@@ -7226,9 +7230,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -7242,6 +7243,9 @@
                   "fields": {
                     "s": {
                       "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     },
                     "m": {
                       "mapValue": {
@@ -7260,9 +7264,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -7274,9 +7275,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -7297,6 +7295,9 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
                     },
                     "s": {
                       "stringValue": "z"
@@ -7656,7 +7657,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "not-equal-excludes-null-and-missing": {
           "production": {
@@ -7670,6 +7671,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -7687,9 +7691,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -7701,9 +7702,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -7724,6 +7722,9 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
                     },
                     "s": {
                       "stringValue": "z"
@@ -7891,7 +7892,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "not-equal-null": {
           "production": {
@@ -7922,7 +7923,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "range-is-type-restricted": {
           "production": {
@@ -7935,6 +7936,9 @@
                   "fields": {
                     "s": {
                       "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     },
                     "m": {
                       "mapValue": {
@@ -7953,9 +7957,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -7995,6 +7996,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -8004,14 +8008,11 @@
                         }
                       }
                     },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "n": {
                       "integerValue": "3"
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "tags": {
+                      "arrayValue": {}
                     }
                   },
                   "createTime": "<now>",
@@ -8214,7 +8215,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "range-on-string": {
           "production": {
@@ -8284,7 +8285,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "range-implies-order": {
           "production": {
@@ -8302,7 +8303,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "order by clause cannot contain more fields after the key"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "array-contains": {
           "production": {
@@ -8334,11 +8335,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -8350,9 +8351,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -8373,6 +8371,9 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
                     },
                     "s": {
                       "stringValue": "z"
@@ -8546,7 +8547,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "array-contains-null": {
           "production": {
@@ -8577,7 +8578,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "array-contains-nan": {
           "production": {
@@ -8608,7 +8609,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "array-contains-array": {
           "production": {
@@ -8639,7 +8640,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "array-contains-any": {
           "production": {
@@ -8671,11 +8672,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -8689,6 +8690,9 @@
                   "fields": {
                     "s": {
                       "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     },
                     "m": {
                       "mapValue": {
@@ -8707,9 +8711,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -8721,9 +8722,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -8744,6 +8742,9 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
                     },
                     "s": {
                       "stringValue": "z"
@@ -8985,7 +8986,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "in": {
           "production": {
@@ -8999,6 +9000,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -9016,9 +9020,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -9030,9 +9031,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -9053,6 +9051,9 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
                     },
                     "s": {
                       "stringValue": "z"
@@ -9220,7 +9221,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "in-with-double-for-int": {
           "production": {
@@ -9252,11 +9253,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -9287,6 +9288,9 @@
                     "n": {
                       "integerValue": "1"
                     },
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -9301,9 +9305,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -9494,7 +9495,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "not-in": {
           "production": {
@@ -9508,6 +9509,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -9525,9 +9529,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -9539,9 +9540,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -9562,6 +9560,9 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
                     },
                     "s": {
                       "stringValue": "z"
@@ -9729,7 +9730,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "not-in-with-null-candidate": {
           "production": {
@@ -9760,7 +9761,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "equal-on-array-value": {
           "production": {
@@ -9774,6 +9775,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -9791,9 +9795,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -9884,7 +9885,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "equal-on-map-value": {
           "production": {
@@ -9898,6 +9899,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -9915,9 +9919,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -10008,7 +10009,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "nested-field-path": {
           "production": {
@@ -10022,6 +10023,9 @@
                     "n": {
                       "integerValue": "1"
                     },
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -10036,9 +10040,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -10123,7 +10124,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "nested-field-path-on-map": {
           "production": {
@@ -10155,11 +10156,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -10256,7 +10257,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "or-filter": {
           "production": {
@@ -10270,6 +10271,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -10287,9 +10291,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -10301,6 +10302,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -10310,14 +10314,11 @@
                         }
                       }
                     },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "n": {
                       "integerValue": "3"
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "tags": {
+                      "arrayValue": {}
                     }
                   },
                   "createTime": "<now>",
@@ -10464,7 +10465,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "and-of-or": {
           "production": {
@@ -10496,11 +10497,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -10514,6 +10515,9 @@
                   "fields": {
                     "n": {
                       "integerValue": "1"
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "nested": {
                       "mapValue": {
@@ -10529,9 +10533,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -10545,6 +10546,9 @@
                   "fields": {
                     "s": {
                       "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     },
                     "m": {
                       "mapValue": {
@@ -10563,9 +10567,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -10792,7 +10793,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "two-equalities": {
           "production": {
@@ -10824,11 +10825,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -10842,6 +10843,9 @@
                   "fields": {
                     "n": {
                       "integerValue": "1"
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "nested": {
                       "mapValue": {
@@ -10857,9 +10861,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -11018,7 +11019,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "two-inequalities-on-different-fields": {
           "production": {
@@ -11050,11 +11051,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -11068,6 +11069,9 @@
                   "fields": {
                     "n": {
                       "integerValue": "1"
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "nested": {
                       "mapValue": {
@@ -11083,9 +11087,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -11099,6 +11100,9 @@
                   "fields": {
                     "s": {
                       "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     },
                     "m": {
                       "mapValue": {
@@ -11117,9 +11121,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -11346,7 +11347,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "inequality-and-order-on-another-field": {
           "production": {
@@ -11406,11 +11407,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -11424,6 +11425,9 @@
                   "fields": {
                     "n": {
                       "integerValue": "1"
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "nested": {
                       "mapValue": {
@@ -11439,9 +11443,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -11453,6 +11454,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -11462,14 +11466,11 @@
                         }
                       }
                     },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "n": {
                       "integerValue": "3"
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "tags": {
+                      "arrayValue": {}
                     }
                   },
                   "createTime": "<now>",
@@ -11483,6 +11484,9 @@
                   "fields": {
                     "s": {
                       "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     },
                     "m": {
                       "mapValue": {
@@ -11501,9 +11505,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -11842,7 +11843,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "inequality-then-order-on-it-explicitly-second": {
           "production": {
@@ -11902,11 +11903,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -11920,6 +11921,9 @@
                   "fields": {
                     "n": {
                       "integerValue": "1"
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "nested": {
                       "mapValue": {
@@ -11935,9 +11939,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -11949,6 +11950,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -11958,14 +11962,11 @@
                         }
                       }
                     },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "n": {
                       "integerValue": "3"
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "tags": {
+                      "arrayValue": {}
                     }
                   },
                   "createTime": "<now>",
@@ -11979,6 +11980,9 @@
                   "fields": {
                     "s": {
                       "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     },
                     "m": {
                       "mapValue": {
@@ -11997,9 +12001,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -12338,7 +12339,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "order-by-missing-field-excludes": {
           "production": {
@@ -12349,6 +12350,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -12358,14 +12362,11 @@
                         }
                       }
                     },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "n": {
                       "integerValue": "3"
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "tags": {
+                      "arrayValue": {}
                     }
                   },
                   "createTime": "<now>",
@@ -12398,11 +12399,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -12416,6 +12417,9 @@
                   "fields": {
                     "s": {
                       "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     },
                     "m": {
                       "mapValue": {
@@ -12434,9 +12438,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -12657,7 +12658,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "order-by-two-fields": {
           "production": {
@@ -12696,6 +12697,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -12705,14 +12709,11 @@
                         }
                       }
                     },
-                    "tags": {
-                      "arrayValue": {}
-                    },
                     "n": {
                       "integerValue": "3"
                     },
-                    "s": {
-                      "stringValue": "x"
+                    "tags": {
+                      "arrayValue": {}
                     }
                   },
                   "createTime": "<now>",
@@ -12726,6 +12727,9 @@
                   "fields": {
                     "n": {
                       "integerValue": "1"
+                    },
+                    "s": {
+                      "stringValue": "x"
                     },
                     "nested": {
                       "mapValue": {
@@ -12741,9 +12745,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -12776,11 +12777,11 @@
                         ]
                       }
                     },
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "s": {
                       "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -12794,6 +12795,9 @@
                   "fields": {
                     "s": {
                       "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     },
                     "m": {
                       "mapValue": {
@@ -12812,9 +12816,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -12826,9 +12827,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -12849,6 +12847,9 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
                     },
                     "s": {
                       "stringValue": "z"
@@ -13264,7 +13265,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         }
       }
     },
@@ -13297,11 +13298,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "n": {
-                      "integerValue": "2"
-                    },
                     "g": {
                       "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -13484,7 +13485,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "start-after": {
           "production": {
@@ -13602,7 +13603,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "end-before": {
           "production": {
@@ -13645,11 +13646,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "n": {
-                      "integerValue": "2"
-                    },
                     "g": {
                       "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -13768,7 +13769,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "end-at-inclusive": {
           "production": {
@@ -13811,11 +13812,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "n": {
-                      "integerValue": "2"
-                    },
                     "g": {
                       "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -13982,7 +13983,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "start-at-with-name-tiebreak": {
           "production": {
@@ -13993,11 +13994,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "n": {
-                      "integerValue": "2"
-                    },
                     "g": {
                       "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -14148,7 +14149,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "start-at-prefix-of-order": {
           "production": {
@@ -14159,11 +14160,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "n": {
-                      "integerValue": "2"
-                    },
                     "g": {
                       "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -14266,7 +14267,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "descending-start-after": {
           "production": {
@@ -14277,11 +14278,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "n": {
-                      "integerValue": "2"
-                    },
                     "g": {
                       "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -14432,7 +14433,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "cursor-of-another-type": {
           "production": {
@@ -14463,7 +14464,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "cursor-on-name-only": {
           "production": {
@@ -14620,7 +14621,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "cursor-with-too-many-values": {
           "production": {
@@ -14638,7 +14639,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "cursor has 3 values but the order-by has 2 fields"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "offset-and-limit": {
           "production": {
@@ -14653,11 +14654,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "n": {
-                      "integerValue": "2"
-                    },
                     "g": {
                       "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -14765,7 +14766,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "offset-past-the-end": {
           "production": {
@@ -14798,7 +14799,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "limit-zero": {
           "production": {
@@ -14829,7 +14830,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "limit-to-last-shape": {
           "production": {
@@ -14947,7 +14948,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "start-at-with-empty-values": {
           "production": {
@@ -14990,11 +14991,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
                   "fields": {
-                    "n": {
-                      "integerValue": "2"
-                    },
                     "g": {
                       "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -15209,7 +15210,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         }
       }
     },
@@ -15258,11 +15259,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cg/b/items/1",
                   "fields": {
-                    "t": {
-                      "stringValue": "b1"
-                    },
                     "n": {
                       "integerValue": "3"
+                    },
+                    "t": {
+                      "stringValue": "b1"
                     }
                   },
                   "createTime": "<now>",
@@ -15477,7 +15478,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "all-descendants-by-field": {
           "production": {
@@ -15536,11 +15537,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cg/b/items/1",
                   "fields": {
-                    "t": {
-                      "stringValue": "b1"
-                    },
                     "n": {
                       "integerValue": "3"
+                    },
+                    "t": {
+                      "stringValue": "b1"
                     }
                   },
                   "createTime": "<now>",
@@ -15739,7 +15740,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "all-descendants-under-a-parent": {
           "production": {
@@ -15750,11 +15751,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cg/b/items/1",
                   "fields": {
-                    "t": {
-                      "stringValue": "b1"
-                    },
                     "n": {
                       "integerValue": "3"
+                    },
+                    "t": {
+                      "stringValue": "b1"
                     }
                   },
                   "createTime": "<now>",
@@ -15857,7 +15858,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "subcollection-query": {
           "production": {
@@ -15975,7 +15976,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "group-start-at-a-full-reference": {
           "production": {
@@ -15986,11 +15987,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cg/b/items/1",
                   "fields": {
-                    "t": {
-                      "stringValue": "b1"
-                    },
                     "n": {
                       "integerValue": "3"
+                    },
+                    "t": {
+                      "stringValue": "b1"
                     }
                   },
                   "createTime": "<now>",
@@ -16141,7 +16142,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "group-with-name-range": {
           "production": {
@@ -16152,11 +16153,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cg/b/items/1",
                   "fields": {
-                    "t": {
-                      "stringValue": "b1"
-                    },
                     "n": {
                       "integerValue": "3"
+                    },
+                    "t": {
+                      "stringValue": "b1"
                     }
                   },
                   "createTime": "<now>",
@@ -16259,7 +16260,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "name-equality": {
           "production": {
@@ -16329,7 +16330,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "name-in": {
           "production": {
@@ -16447,7 +16448,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "missing-collection": {
           "production": {
@@ -16478,7 +16479,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "partition-query": {
           "production": {
@@ -16515,7 +16516,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "three-way-difference"
         }
       }
     },
@@ -16573,7 +16574,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-up-to": {
           "production": {
@@ -16625,7 +16626,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-with-filter": {
           "production": {
@@ -16677,7 +16678,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-with-limit": {
           "production": {
@@ -16729,7 +16730,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-with-offset": {
           "production": {
@@ -16781,7 +16782,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-empty": {
           "production": {
@@ -16833,7 +16834,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "sum-integers": {
           "production": {
@@ -16885,7 +16886,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "sum-mixed-numbers": {
           "production": {
@@ -16937,7 +16938,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "sum-doubles-only": {
           "production": {
@@ -16989,7 +16990,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "sum-empty": {
           "production": {
@@ -17041,7 +17042,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "sum-missing-field": {
           "production": {
@@ -17093,7 +17094,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "sum-overflow-saturates-or-promotes": {
           "production": {
@@ -17145,7 +17146,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "avg-integers": {
           "production": {
@@ -17197,7 +17198,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "avg-with-nan": {
           "production": {
@@ -17249,7 +17250,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "avg-empty": {
           "production": {
@@ -17301,7 +17302,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "several-aggregations": {
           "production": {
@@ -17380,7 +17381,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-collection-group": {
           "production": {
@@ -17432,7 +17433,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-with-cursor": {
           "production": {
@@ -17484,7 +17485,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-beside-a-sum-over-a-missing-field": {
           "production": {
@@ -17545,7 +17546,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-beside-an-avg-over-a-missing-field": {
           "production": {
@@ -17606,7 +17607,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "duplicate-alias": {
           "production": {
@@ -17624,7 +17625,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "duplicate aggregation alias \"x\""
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "no-aggregations": {
           "production": {
@@ -17642,7 +17643,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "an aggregation query needs 1..=5 aggregations"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "sum-on-name": {
           "production": {
@@ -17660,7 +17661,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Aggregations are not supported for the property: __key__"
           },
-          "status": "unverified"
+          "status": "parity"
         }
       }
     },
@@ -17793,7 +17794,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "select-missing-field": {
           "production": {
@@ -17863,7 +17864,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "select-with-empty-list": {
           "production": {
@@ -17933,7 +17934,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "list-documents": {
           "production": {
@@ -17944,18 +17945,6 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
-                    "b": {
-                      "mapValue": {
-                        "fields": {
-                          "c": {
-                            "integerValue": "2"
-                          },
-                          "d": {
-                            "integerValue": "3"
-                          }
-                        }
-                      }
-                    },
                     "e": {
                       "arrayValue": {
                         "values": [
@@ -17967,6 +17956,18 @@
                     },
                     "a": {
                       "integerValue": "1"
+                    },
+                    "b": {
+                      "mapValue": {
+                        "fields": {
+                          "c": {
+                            "integerValue": "2"
+                          },
+                          "d": {
+                            "integerValue": "3"
+                          }
+                        }
+                      }
                     }
                   },
                   "createTime": "<now>",
@@ -18083,7 +18084,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-documents-page-size-one": {
           "production": {
@@ -18094,14 +18095,8 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
-                    "e": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "integerValue": "1"
-                          }
-                        ]
-                      }
+                    "a": {
+                      "integerValue": "1"
                     },
                     "b": {
                       "mapValue": {
@@ -18115,8 +18110,14 @@
                         }
                       }
                     },
-                    "a": {
-                      "integerValue": "1"
+                    "e": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
                     }
                   },
                   "createTime": "<now>",
@@ -18206,7 +18207,7 @@
               "nextPageToken": "<token>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-documents-next-page": {
           "production": {
@@ -18264,7 +18265,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "list-documents-with-mask": {
           "production": {
@@ -18351,7 +18352,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-documents-descending": {
           "production": {
@@ -18372,6 +18373,18 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
+                    "e": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
+                    },
+                    "a": {
+                      "integerValue": "1"
+                    },
                     "b": {
                       "mapValue": {
                         "fields": {
@@ -18382,18 +18395,6 @@
                             "integerValue": "3"
                           }
                         }
-                      }
-                    },
-                    "a": {
-                      "integerValue": "1"
-                    },
-                    "e": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "integerValue": "1"
-                          }
-                        ]
                       }
                     }
                   },
@@ -18501,7 +18502,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-documents-show-missing": {
           "production": {
@@ -18512,18 +18513,6 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
-                    "a": {
-                      "integerValue": "1"
-                    },
-                    "e": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "integerValue": "1"
-                          }
-                        ]
-                      }
-                    },
                     "b": {
                       "mapValue": {
                         "fields": {
@@ -18534,6 +18523,18 @@
                             "integerValue": "3"
                           }
                         }
+                      }
+                    },
+                    "a": {
+                      "integerValue": "1"
+                    },
+                    "e": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
                       }
                     }
                   },
@@ -18660,7 +18661,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-missing-parents": {
           "production": {
@@ -18819,7 +18820,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-subcollection-of-missing-parent": {
           "production": {
@@ -18876,7 +18877,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-empty-collection": {
           "production": {
@@ -18894,7 +18895,7 @@
             "code": "OK",
             "body": {}
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-collection-ids-root": {
           "production": {
@@ -18924,7 +18925,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-collection-ids-of-a-missing-document": {
           "production": {
@@ -18954,7 +18955,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-collection-ids-paged": {
           "production": {
@@ -18985,7 +18986,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "get-with-mask": {
           "production": {
@@ -19075,7 +19076,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "get-missing-parent-document": {
           "production": {
@@ -19093,7 +19094,7 @@
             "code": "NOT_FOUND",
             "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/prj/missing-parent"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "batch-get-mixed": {
           "production": {
@@ -19204,7 +19205,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         }
       }
     },
@@ -19249,7 +19250,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "create-again-is-already-exists": {
           "production": {
@@ -19267,7 +19268,7 @@
             "code": "ALREADY_EXISTS",
             "message": "Document already exists: projects/demo-firestore-probe/databases/(default)/documents/wr/new"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "update-missing-with-exists-true": {
           "production": {
@@ -19285,7 +19286,7 @@
             "code": "NOT_FOUND",
             "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "mask-sets-and-deletes": {
           "production": {
@@ -19324,7 +19325,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-after-mask": {
           "production": {
@@ -19333,11 +19334,11 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/existing",
               "fields": {
-                "a": {
-                  "integerValue": "1"
-                },
                 "b": {
                   "integerValue": "2"
+                },
+                "a": {
+                  "integerValue": "1"
                 },
                 "nested": {
                   "mapValue": {
@@ -19405,7 +19406,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "mask-on-missing-document-creates-it": {
           "production": {
@@ -19444,7 +19445,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-masked-new": {
           "production": {
@@ -19489,7 +19490,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "mask-naming-an-absent-field-deletes-it": {
           "production": {
@@ -19528,7 +19529,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-after-delete-by-mask": {
           "production": {
@@ -19600,7 +19601,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "replace-without-mask": {
           "production": {
@@ -19639,7 +19640,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-after-replace": {
           "production": {
@@ -19684,7 +19685,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "update-time-precondition-matches": {
           "production": {
@@ -19723,13 +19724,13 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "update-time-precondition-is-stale": {
           "production": {
             "status": 400,
             "code": "FAILED_PRECONDITION",
-            "message": "the stored version (1788746533021563) does not match the required base version (1788746532648633)"
+            "message": "the stored version (1788746841999124) does not match the required base version (1788746841635007)"
           },
           "emulator": {
             "status": 400,
@@ -19741,7 +19742,7 @@
             "code": "FAILED_PRECONDITION",
             "message": "update time precondition failed for projects/demo-firestore-probe/databases/(default)/documents/wr/existing"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "update-time-precondition-on-a-missing-document": {
           "production": {
@@ -19759,7 +19760,7 @@
             "code": "FAILED_PRECONDITION",
             "message": "update time precondition failed for projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "delete-missing-is-ok": {
           "production": {
@@ -19792,7 +19793,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "delete-missing-with-exists-true": {
           "production": {
@@ -19810,7 +19811,7 @@
             "code": "NOT_FOUND",
             "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "atomic-failure-writes-nothing": {
           "production": {
@@ -19828,7 +19829,7 @@
             "code": "NOT_FOUND",
             "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "atomic-1-is-absent": {
           "production": {
@@ -19846,7 +19847,7 @@
             "code": "NOT_FOUND",
             "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/wr/atomic-1"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "same-document-twice-in-one-commit": {
           "production": {
@@ -19894,7 +19895,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-twice": {
           "production": {
@@ -19948,7 +19949,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "empty-commit": {
           "production": {
@@ -19966,7 +19967,7 @@
             "code": "OK",
             "body": {}
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "verify-write": {
           "production": {
@@ -20005,7 +20006,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "verify-missing": {
           "production": {
@@ -20023,7 +20024,7 @@
             "code": "NOT_FOUND",
             "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "no-op-set-keeps-update-time": {
           "production": {
@@ -20062,7 +20063,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-after-no-op": {
           "production": {
@@ -20116,7 +20117,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "patch-with-mask-and-exists-precondition-on-missing": {
           "production": {
@@ -20134,7 +20135,7 @@
             "code": "NOT_FOUND",
             "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/patched"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "patch-creates": {
           "production": {
@@ -20179,7 +20180,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-patched": {
           "production": {
@@ -20224,7 +20225,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "create-document": {
           "production": {
@@ -20269,7 +20270,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "create-document-again": {
           "production": {
@@ -20287,7 +20288,7 @@
             "code": "ALREADY_EXISTS",
             "message": "Document already exists: projects/demo-firestore-probe/databases/(default)/documents/wr/created"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "create-document-with-generated-id": {
           "production": {
@@ -20332,7 +20333,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "delete-document": {
           "production": {
@@ -20350,7 +20351,7 @@
             "code": "OK",
             "body": {}
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "delete-document-again": {
           "production": {
@@ -20368,7 +20369,7 @@
             "code": "OK",
             "body": {}
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "delete-with-exists-precondition": {
           "production": {
@@ -20386,7 +20387,7 @@
             "code": "NOT_FOUND",
             "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/created"
           },
-          "status": "unverified"
+          "status": "parity"
         }
       }
     },
@@ -20491,7 +20492,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-after-increments": {
           "production": {
@@ -20500,6 +20501,21 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "fields": {
+                "tags": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "stringValue": "a"
+                      },
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                "n": {
+                  "integerValue": "3"
+                },
                 "missing": {
                   "doubleValue": 0.5
                 },
@@ -20515,26 +20531,11 @@
                     }
                   }
                 },
-                "tags": {
-                  "arrayValue": {
-                    "values": [
-                      {
-                        "stringValue": "a"
-                      },
-                      {
-                        "integerValue": "1"
-                      }
-                    ]
-                  }
-                },
-                "at": {
-                  "timestampValue": "<now>"
-                },
                 "d": {
                   "doubleValue": 2.5
                 },
-                "n": {
-                  "integerValue": "3"
+                "at": {
+                  "timestampValue": "<now>"
                 }
               },
               "createTime": "<now>",
@@ -20635,7 +20636,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "maximum-and-minimum": {
           "production": {
@@ -20653,7 +20654,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid field path: character at byte 3 must be backtick-quoted"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-after-max-min": {
           "production": {
@@ -20662,15 +20663,6 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "fields": {
-                "at": {
-                  "timestampValue": "<now>"
-                },
-                "d": {
-                  "doubleValue": 2.5
-                },
-                "missing": {
-                  "doubleValue": 0.5
-                },
                 "tags": {
                   "arrayValue": {
                     "values": [
@@ -20683,8 +20675,8 @@
                     ]
                   }
                 },
-                "n": {
-                  "integerValue": "3"
+                "s": {
+                  "integerValue": "1"
                 },
                 "m": {
                   "mapValue": {
@@ -20695,8 +20687,17 @@
                     }
                   }
                 },
-                "s": {
-                  "integerValue": "1"
+                "missing": {
+                  "doubleValue": 0.5
+                },
+                "d": {
+                  "doubleValue": 2.5
+                },
+                "at": {
+                  "timestampValue": "<now>"
+                },
+                "n": {
+                  "integerValue": "3"
                 }
               },
               "createTime": "<now>",
@@ -20797,7 +20798,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "array-transforms": {
           "production": {
@@ -20869,7 +20870,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-after-array-transforms": {
           "production": {
@@ -20878,6 +20879,12 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "fields": {
+                "d": {
+                  "doubleValue": 2.5
+                },
+                "at": {
+                  "timestampValue": "<now>"
+                },
                 "m": {
                   "mapValue": {
                     "fields": {
@@ -20887,8 +20894,8 @@
                     }
                   }
                 },
-                "at": {
-                  "timestampValue": "<now>"
+                "missing": {
+                  "doubleValue": 0.5
                 },
                 "s": {
                   "arrayValue": {
@@ -20913,12 +20920,6 @@
                       }
                     ]
                   }
-                },
-                "missing": {
-                  "doubleValue": 0.5
-                },
-                "d": {
-                  "doubleValue": 2.5
                 }
               },
               "createTime": "<now>",
@@ -21031,7 +21032,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "transform-only-write-creates": {
           "production": {
@@ -21094,7 +21095,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-transform-created": {
           "production": {
@@ -21103,11 +21104,11 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/created",
               "fields": {
-                "count": {
-                  "integerValue": "1"
-                },
                 "at": {
                   "timestampValue": "<now>"
+                },
+                "count": {
+                  "integerValue": "1"
                 }
               },
               "createTime": "<now>",
@@ -21148,7 +21149,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "transform-write-with-exists-precondition": {
           "production": {
@@ -21166,7 +21167,7 @@
             "code": "NOT_FOUND",
             "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/tf/none"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "increment-with-non-numeric-operand": {
           "production": {
@@ -21184,7 +21185,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "increment operand must be numeric"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "server-timestamp-on-a-delete": {
           "production": {
@@ -21202,7 +21203,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "transforms on a delete"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "set-and-transform-same-field": {
           "production": {
@@ -21256,7 +21257,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-set-and-transform": {
           "production": {
@@ -21265,6 +21266,21 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "fields": {
+                "missing": {
+                  "doubleValue": 0.5
+                },
+                "s": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "stringValue": "x"
+                      }
+                    ]
+                  }
+                },
+                "at": {
+                  "timestampValue": "<now>"
+                },
                 "tags": {
                   "arrayValue": {
                     "values": [
@@ -21277,6 +21293,12 @@
                     ]
                   }
                 },
+                "n": {
+                  "integerValue": "1001"
+                },
+                "d": {
+                  "doubleValue": 2.5
+                },
                 "m": {
                   "mapValue": {
                     "fields": {
@@ -21285,27 +21307,6 @@
                       }
                     }
                   }
-                },
-                "n": {
-                  "integerValue": "1001"
-                },
-                "at": {
-                  "timestampValue": "<now>"
-                },
-                "s": {
-                  "arrayValue": {
-                    "values": [
-                      {
-                        "stringValue": "x"
-                      }
-                    ]
-                  }
-                },
-                "d": {
-                  "doubleValue": 2.5
-                },
-                "missing": {
-                  "doubleValue": 0.5
                 }
               },
               "createTime": "<now>",
@@ -21418,7 +21419,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "integer-increment-saturates": {
           "production": {
@@ -21472,7 +21473,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-saturated": {
           "production": {
@@ -21517,7 +21518,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "increment-on-nan": {
           "production": {
@@ -21571,7 +21572,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "two-transforms-on-one-field-in-one-write": {
           "production": {
@@ -21634,7 +21635,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-dup": {
           "production": {
@@ -21679,7 +21680,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         }
       }
     },
@@ -21703,7 +21704,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "BatchWrite contains multiple writes to projects/demo-firestore-probe/databases/(default)/documents/bw/existing"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "one-was-written": {
           "production": {
@@ -21721,7 +21722,7 @@
             "code": "NOT_FOUND",
             "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/bw/one"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "existing-was-deleted": {
           "production": {
@@ -21766,7 +21767,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "empty-batch": {
           "production": {
@@ -21784,7 +21785,7 @@
             "code": "OK",
             "body": {}
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "batch-with-transaction-is-refused": {
           "production": {
@@ -21802,7 +21803,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Payload isn't valid for request."
           },
-          "status": "unverified"
+          "status": "parity"
         }
       }
     },
@@ -21832,7 +21833,7 @@
               "transaction": "<txn>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-in-transaction": {
           "production": {
@@ -21892,7 +21893,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "get-with-transaction-query-parameter": {
           "production": {
@@ -21928,7 +21929,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "commit-in-transaction": {
           "production": {
@@ -21967,7 +21968,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "commit-finished-transaction-again": {
           "production": {
@@ -21985,7 +21986,7 @@
             "code": "ABORTED",
             "message": "The referenced transaction has expired or is no longer valid."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "begin-contended": {
           "production": {
@@ -22009,7 +22010,7 @@
               "transaction": "<txn>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-contended": {
           "production": {
@@ -22069,7 +22070,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "out-of-band-write": {
           "production": {
@@ -22087,7 +22088,7 @@
             "code": "ABORTED",
             "message": "Too much contention on these documents. Please try again."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "contended-commit-is-aborted": {
           "production": {
@@ -22126,7 +22127,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "counter-keeps-the-out-of-band-value": {
           "production": {
@@ -22171,7 +22172,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "begin-unread": {
           "production": {
@@ -22195,7 +22196,7 @@
               "transaction": "<txn>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "out-of-band-write-2": {
           "production": {
@@ -22234,7 +22235,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "blind-write-in-a-transaction-commits": {
           "production": {
@@ -22273,7 +22274,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "begin-query": {
           "production": {
@@ -22297,7 +22298,7 @@
               "transaction": "<txn>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "query-in-transaction": {
           "production": {
@@ -22436,7 +22437,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "phantom-write": {
           "production": {
@@ -22454,7 +22455,7 @@
             "code": "ABORTED",
             "message": "Too much contention on these documents. Please try again."
           },
-          "status": "unverified"
+          "status": "emulators-diverge-from-production"
         },
         "commit-after-a-phantom-row": {
           "production": {
@@ -22493,7 +22494,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "begin-read-only": {
           "production": {
@@ -22517,7 +22518,7 @@
               "transaction": "<txn>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-only-commit-with-writes": {
           "production": {
@@ -22535,7 +22536,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Cannot modify entities in a read-only transaction."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-only-commit-without-writes": {
           "production": {
@@ -22553,7 +22554,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "The referenced transaction has expired or is no longer valid."
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "begin-rolled-back": {
           "production": {
@@ -22577,7 +22578,7 @@
               "transaction": "<txn>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "rollback": {
           "production": {
@@ -22595,7 +22596,7 @@
             "code": "OK",
             "body": {}
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "commit-after-rollback": {
           "production": {
@@ -22613,7 +22614,7 @@
             "code": "ABORTED",
             "message": "The referenced transaction has expired or is no longer valid."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "rollback-unknown": {
           "production": {
@@ -22631,7 +22632,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Invalid transaction."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "commit-with-unknown-transaction": {
           "production": {
@@ -22649,7 +22650,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Invalid transaction."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "commit-with-malformed-transaction": {
           "production": {
@@ -22667,7 +22668,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid base64"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "batch-get-with-new-transaction": {
           "production": {
@@ -22736,7 +22737,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "commit-the-new-transaction": {
           "production": {
@@ -22754,7 +22755,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Cannot modify entities in a read-only transaction."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "run-query-with-new-transaction": {
           "production": {
@@ -22824,7 +22825,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "begin-with-read-time-in-the-past": {
           "production": {
@@ -22842,7 +22843,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "The requested 'read_time' cannot be before database creation time."
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "begin-read-write-with-retry-transaction": {
           "production": {
@@ -22866,7 +22867,7 @@
               "transaction": "<txn>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "batch-get-with-both-transaction-and-read-time": {
           "production": {
@@ -22884,7 +22885,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "transaction, readTime and newTransaction are mutually exclusive"
           },
-          "status": "unverified"
+          "status": "parity"
         }
       }
     },
@@ -22908,7 +22909,7 @@
             "code": "NOT_FOUND",
             "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/err/none"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "get-collection-path-as-document": {
           "production": {
@@ -22926,7 +22927,7 @@
             "code": "OK",
             "body": {}
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "get-odd-path": {
           "production": {
@@ -22944,7 +22945,7 @@
             "code": "OK",
             "body": {}
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "get-with-invalid-mask": {
           "production": {
@@ -22962,7 +22963,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid field path: field path segment 1 is empty"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "unknown-custom-method": {
           "production": {
@@ -22980,7 +22981,7 @@
             "code": "non-json",
             "message": "Not Found\n"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "wrong-database": {
           "production": {
@@ -22998,7 +22999,7 @@
             "code": "NOT_FOUND",
             "message": "Document not found: projects/demo-firestore-probe/databases/nope/documents/err/a"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "wrong-project": {
           "production": {
@@ -23016,7 +23017,7 @@
             "code": "NOT_FOUND",
             "message": "Document not found: projects/other-project/databases/(default)/documents/err/a"
           },
-          "status": "unverified"
+          "status": "emulators-diverge-from-production"
         },
         "not-json": {
           "production": {
@@ -23034,7 +23035,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid JSON body: key must be a string at line 1 column 2"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "run-query-without-from": {
           "production": {
@@ -23095,7 +23096,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "run-query-empty-body": {
           "production": {
@@ -23113,7 +23114,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "structuredQuery is required"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "unknown-operator": {
           "production": {
@@ -23131,7 +23132,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "unknown field filter operator \"NOT_AN_OP\""
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "unknown-unary-operator": {
           "production": {
@@ -23149,7 +23150,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "unknown unary filter operator \"IS_SOMETHING\""
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "operator-unspecified": {
           "production": {
@@ -23167,7 +23168,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "unknown field filter operator \"OPERATOR_UNSPECIFIED\""
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "in-with-empty-array": {
           "production": {
@@ -23185,7 +23186,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "IN requires a non-empty array value on a"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "in-with-non-array": {
           "production": {
@@ -23203,7 +23204,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "IN requires a non-empty array value on a"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "in-with-thirty-one-values": {
           "production": {
@@ -23221,7 +23222,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "query limit violation: FS-QUERY-LIMIT-DNF-DISJUNCTIONS: 31 disjunctions after DNF expansion (31 > 30)"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "in-with-thirty-values": {
           "production": {
@@ -23282,7 +23283,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "array-contains-with-array-operand-and-any": {
           "production": {
@@ -23313,7 +23314,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "two-not-in": {
           "production": {
@@ -23331,7 +23332,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "a query can have at most one not-in filter"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "not-in-with-in": {
           "production": {
@@ -23349,7 +23350,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "not-in cannot be combined with in, array-contains-any or or"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "two-array-contains": {
           "production": {
@@ -23367,7 +23368,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction."
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "not-equal-with-not-in": {
           "production": {
@@ -23385,7 +23386,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Only a single 'NOT_EQUAL', 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "empty-composite": {
           "production": {
@@ -23446,7 +23447,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "composite-without-op": {
           "production": {
@@ -23464,7 +23465,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "compositeFilter.op must be AND or OR"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "invalid-field-path": {
           "production": {
@@ -23482,7 +23483,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid field path: field path segment 1 is empty"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "empty-field-path": {
           "production": {
@@ -23500,7 +23501,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid field path: field path is empty"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "order-by-empty-field": {
           "production": {
@@ -23518,7 +23519,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid field path: field path is empty"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "order-by-without-direction": {
           "production": {
@@ -23579,7 +23580,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "cursor-arity-mismatch": {
           "production": {
@@ -23597,7 +23598,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "cursor has 3 values but the order-by has 2 fields"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "negative-limit": {
           "production": {
@@ -23615,7 +23616,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid query: negative limit"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "negative-offset": {
           "production": {
@@ -23633,7 +23634,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid query: negative offset"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "two-from-clauses": {
           "production": {
@@ -23651,7 +23652,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid query: StructuredQuery.from cannot have more than one collection selector."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "from-with-empty-collection-id": {
           "production": {
@@ -23712,7 +23713,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "from-with-slash-in-collection-id": {
           "production": {
@@ -23730,7 +23731,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid query: collection id: identifier contains '/'"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "inequality-on-name-with-non-reference": {
           "production": {
@@ -23748,7 +23749,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "__key__ filter value must be a Key"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "name-equality-with-a-string": {
           "production": {
@@ -23766,7 +23767,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "__key__ filter value must be a Key"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "reference-to-another-database": {
           "production": {
@@ -23784,7 +23785,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid query: The request was for database 'projects/demo-firestore-probe/databases/(default)' but was attempting to access database 'projects/demo-firestore-probe/databases/other'"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "unknown-value-kind": {
           "production": {
@@ -23802,7 +23803,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "unknown value key \"fooValue\""
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "integer-value-out-of-range": {
           "production": {
@@ -23820,7 +23821,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "integerValue \"99999999999999999999\" is not an int64"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "timestamp-out-of-range": {
           "production": {
@@ -23838,7 +23839,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid value: timestamp: SecondsOutOfRange"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-time-in-the-future": {
           "production": {
@@ -23856,7 +23857,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "read_time must not be in the future"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-time-in-the-distant-past": {
           "production": {
@@ -23874,7 +23875,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "The requested 'read_time' cannot be before database creation time."
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "write-with-invalid-document-name": {
           "production": {
@@ -23892,7 +23893,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid parent: document path has 1 segments; expected an even number"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-to-another-database": {
           "production": {
@@ -23917,7 +23918,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "document projects/demo-firestore-probe/databases/other/documents/err/x does not belong to database projects/demo-firestore-probe/databases/(default)"
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "write-with-empty-field-name": {
           "production": {
@@ -23935,7 +23936,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "field name \"\": field path segment 0 is empty"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-with-reserved-field-name": {
           "production": {
@@ -23953,7 +23954,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "field name \"__id__\": segment 0 matches the reserved pattern __.*__"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-with-dotted-field-name": {
           "production": {
@@ -23992,7 +23993,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-dotted-field-name": {
           "production": {
@@ -24037,7 +24038,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-nested-arrays": {
           "production": {
@@ -24055,7 +24056,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Nested arrays are not allowed"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-array-of-maps-with-arrays": {
           "production": {
@@ -24094,7 +24095,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-integer-out-of-range": {
           "production": {
@@ -24112,7 +24113,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "integerValue \"99999999999999999999\" is not an int64"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-integer-as-number": {
           "production": {
@@ -24151,7 +24152,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-double-as-string": {
           "production": {
@@ -24190,7 +24191,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-unknown-value-kind": {
           "production": {
@@ -24208,7 +24209,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "unknown value key \"fooValue\""
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-empty-value": {
           "production": {
@@ -24226,7 +24227,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "a value must have exactly one *Value key"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-bad-timestamp": {
           "production": {
@@ -24244,7 +24245,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid timestamp \"not a time\": invalid RFC 3339 timestamp at byte 0: expected four-digit year"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-bad-base64": {
           "production": {
@@ -24262,7 +24263,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid base64"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-geopoint-out-of-range": {
           "production": {
@@ -24280,7 +24281,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "geoPointValue.latitude out of range"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-reference-to-another-project": {
           "production": {
@@ -24319,7 +24320,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-reference-to-a-collection": {
           "production": {
@@ -24337,7 +24338,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/x\" is not a document path: projects/{project}/databases/{database}/documents/{collection}/{document}..."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-without-fields": {
           "production": {
@@ -24376,7 +24377,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-without-fields": {
           "production": {
@@ -24406,7 +24407,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-with-two-operations": {
           "production": {
@@ -24424,7 +24425,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Payload isn't valid for request."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-with-no-operation": {
           "production": {
@@ -24442,7 +24443,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid query: write without operation"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "mask-with-invalid-path": {
           "production": {
@@ -24460,7 +24461,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid field path: field path segment 1 is empty"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "mask-with-backticks": {
           "production": {
@@ -24499,7 +24500,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-mask-with-backticks": {
           "production": {
@@ -24508,6 +24509,9 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/err/x",
               "fields": {
+                "a": {
+                  "referenceValue": "projects/other/databases/(default)/documents/x/y"
+                },
                 "a.b": {
                   "mapValue": {
                     "fields": {
@@ -24516,9 +24520,6 @@
                       }
                     }
                   }
-                },
-                "a": {
-                  "referenceValue": "projects/other/databases/(default)/documents/x/y"
                 }
               },
               "createTime": "<now>",
@@ -24571,7 +24572,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "mask-on-a-delete": {
           "production": {
@@ -24589,7 +24590,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid query: update_mask is only valid with an update operation"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "precondition-with-both-fields": {
           "production": {
@@ -24607,7 +24608,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Payload isn't valid for request."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "document-over-one-mebibyte": {
           "production": {
@@ -24625,7 +24626,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "FS-LIMIT-DOCUMENT-BYTES: 1048662 exceeds 1048576 (BoundaryConformance)"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "document-just-under-one-mebibyte": {
           "production": {
@@ -24664,7 +24665,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "nesting-depth-twenty-one": {
           "production": {
@@ -24682,7 +24683,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH has maximum 20, got 21"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "nesting-depth-twenty": {
           "production": {
@@ -24721,7 +24722,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "field-name-of-1500-bytes": {
           "production": {
@@ -24760,7 +24761,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "field-name-of-1501-bytes": {
           "production": {
@@ -24778,7 +24779,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "field name \"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "document-id-of-1500-bytes": {
           "production": {
@@ -24817,7 +24818,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "document-id-of-1501-bytes": {
           "production": {
@@ -24835,7 +24836,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid parent: segment 1: identifier is 1501 UTF-8 bytes, maximum is 1500"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "document-id-double-dot": {
           "production": {
@@ -24853,7 +24854,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid parent: segment 1: identifier must not be '.' or '..'"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "document-id-single-dot": {
           "production": {
@@ -24871,7 +24872,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid parent: segment 1: identifier must not be '.' or '..'"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "document-id-with-slash-encoded": {
           "production": {
@@ -24910,7 +24911,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "document-id-with-double-underscore": {
           "production": {
@@ -24928,7 +24929,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid parent: segment 1: identifier matches reserved pattern __.*__"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "collection-id-with-double-underscore": {
           "production": {
@@ -24946,7 +24947,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid parent: segment 0: identifier matches reserved pattern __.*__"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "five-hundred-and-one-transforms": {
           "production": {
@@ -26476,7 +26477,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "cannot have more than 500 field transforms on a single document"
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "five-hundred-transforms": {
           "production": {
@@ -31021,7 +31022,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "batch-get-with-a-bad-name": {
           "production": {
@@ -31039,7 +31040,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid parent: not/a/valid/name/at/all/x"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "batch-get-with-a-collection-name": {
           "production": {
@@ -31057,7 +31058,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "invalid parent: document path has 1 segments; expected an even number"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "batch-get-with-no-documents": {
           "production": {
@@ -31075,7 +31076,7 @@
             "code": "OK",
             "body": []
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-with-negative-page-size": {
           "production": {
@@ -31093,7 +31094,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "page_size must not be negative"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-with-bad-page-token": {
           "production": {
@@ -31111,7 +31112,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "malformed page_token"
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "list-with-bad-order-by": {
           "production": {
@@ -31129,7 +31130,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Invalid order by clause \"a sideways\"."
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "method-not-allowed": {
           "production": {
@@ -31147,7 +31148,7 @@
             "code": "non-json",
             "message": "Not Found\n"
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "delete-collection-path": {
           "production": {
@@ -31165,7 +31166,7 @@
             "code": "INVALID_ARGUMENT",
             "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/err\" lacks \"/\" at index 63."
           },
-          "status": "unverified"
+          "status": "parity"
         }
       }
     },
@@ -31586,7 +31587,7 @@
                   "freeTier": true,
                   "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
                   "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                  "etag": "IN3ErtOw25YDMODt3eb7z5YD"
+                  "etag": "IJiHyuax25YDMODt3eb7z5YD"
                 }
               ]
             }
@@ -31624,7 +31625,7 @@
               "freeTier": true,
               "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
               "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-              "etag": "IN+t+tOw25YDMODt3eb7z5YD"
+              "etag": "IKjzkOex25YDMODt3eb7z5YD"
             }
           },
           "emulator": {
@@ -31706,7 +31707,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "write-v2": {
           "production": {
@@ -31745,7 +31746,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-at-the-first-update-time": {
           "production": {
@@ -31781,7 +31782,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "read-at-the-second-update-time": {
           "production": {
@@ -31817,7 +31818,7 @@
               "updateTime": "<now>"
             }
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "query-at-the-first-update-time": {
           "production": {
@@ -31878,7 +31879,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "batch-get-at-the-first-update-time": {
           "production": {
@@ -31938,7 +31939,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "list-at-the-first-update-time": {
           "production": {
@@ -31982,7 +31983,7 @@
               ]
             }
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "count-at-the-first-update-time": {
           "production": {
@@ -32034,7 +32035,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "fireemu-matches-production"
         },
         "begin-read-only-at-the-first-update-time": {
           "production": {
@@ -32058,7 +32059,7 @@
               "transaction": "<txn>"
             }
           },
-          "status": "unverified"
+          "status": "parity"
         },
         "read-in-the-read-only-transaction": {
           "production": {
@@ -32118,7 +32119,7 @@
               }
             ]
           },
-          "status": "unverified"
+          "status": "parity"
         }
       }
     }

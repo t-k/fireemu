@@ -10,7 +10,8 @@
 
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
 import {
@@ -213,6 +214,57 @@ function canonical(value) {
 }
 
 const rowKey = (programId, stepId) => `${programId}#${stepId}`;
+
+/**
+ * Joins the production observation with the official matrix and the live fireemu observation.
+ * A missing live step remains missing so an incomplete binary run cannot be promoted by a
+ * stored divergence or emulator value.
+ */
+export function buildProductionPrograms({
+  production,
+  fireemu,
+  matrix,
+  programDefinitions = PROGRAMS,
+  evidenceValid,
+}) {
+  const recordedRows = new Map(
+    matrix.programs.flatMap((p) =>
+      Object.entries(p.steps).map(([id, row]) => [rowKey(p.id, id), row]),
+    ),
+  );
+  const counts = {};
+  const programs = programDefinitions.map((p) => {
+    const result = production[p.id] ?? {};
+    const liveProgram = fireemu?.[p.id] ?? {};
+    return {
+      id: p.id,
+      area: p.area,
+      ...(result.seedError !== undefined ? { seedError: result.seedError } : {}),
+      steps: Object.fromEntries(
+        p.steps.map((s) => {
+          const recorded = recordedRows.get(rowKey(p.id, s.id));
+          const emulator = recorded?.oracle ?? { missing: true };
+          const actual = liveProgram.steps?.[s.id] ?? { missing: true };
+          const prod = result.steps?.[s.id] ?? { missing: true };
+          const needsIndex =
+            prod.code === "FAILED_PRECONDITION" &&
+            /requires an? (\S+ )?index/.test(prod.message ?? "");
+          const status = classifyProductionCase({
+            production: decision(prod),
+            emulator: decision(emulator),
+            fireemu: decision(actual),
+            evidenceValid,
+            localOnly: p.area === "emulator",
+            needsIndex,
+          });
+          counts[status] = (counts[status] ?? 0) + 1;
+          return [s.id, { production: prod, emulator, fireemu: actual, status }];
+        }),
+      ),
+    };
+  });
+  return { counts, programs };
+}
 
 async function record() {
   const inPath = await writePrograms();
@@ -491,7 +543,7 @@ async function recordProduction() {
   const production = JSON.parse(await readFile(outPath, "utf8"));
   const artifact = resolveFireemuBinary();
   const fireemuStartedAt = new Date().toISOString();
-  await probeFireemu(inPath, join(RUN_DIR, "fireemu-for-production.json"));
+  const fireemu = await probeFireemu(inPath, join(RUN_DIR, "fireemu-for-production.json"));
   const fireemuEvidence = await collectEvidence({
     side: "fireemu",
     mode: "live",
@@ -531,40 +583,11 @@ async function recordProduction() {
     recordedValidation.verified &&
     sharedValidation.verified &&
     productionEvidence.observation.mode === "live";
-  const recordedRows = new Map(
-    matrix.programs.flatMap((p) =>
-      Object.entries(p.steps).map(([id, row]) => [rowKey(p.id, id), row]),
-    ),
-  );
-  const counts = {};
-  const programs = PROGRAMS.map((p) => {
-    const result = production[p.id] ?? {};
-    return {
-      id: p.id,
-      area: p.area,
-      ...(result.seedError !== undefined ? { seedError: result.seedError } : {}),
-      steps: Object.fromEntries(
-        p.steps.map((s) => {
-          const recorded = recordedRows.get(rowKey(p.id, s.id));
-          const emulator = recorded?.oracle ?? { missing: true };
-          const fireemu = recorded?.divergence?.fireemu ?? emulator;
-          const prod = result.steps?.[s.id] ?? { missing: true };
-          const needsIndex =
-            prod.code === "FAILED_PRECONDITION" &&
-            /requires an? (\S+ )?index/.test(prod.message ?? "");
-          const status = classifyProductionCase({
-            production: decision(prod),
-            emulator: decision(emulator),
-            fireemu: decision(fireemu),
-            evidenceValid: evidenceVerified,
-            localOnly: p.area === "emulator",
-            needsIndex,
-          });
-          counts[status] = (counts[status] ?? 0) + 1;
-          return [s.id, { production: prod, emulator, fireemu, status }];
-        }),
-      ),
-    };
+  const { counts, programs } = buildProductionPrograms({
+    production,
+    fireemu,
+    matrix,
+    evidenceValid: evidenceVerified,
   });
   const dropId = (value) =>
     JSON.parse(JSON.stringify(value ?? null).replaceAll(project, "<production project>"));
@@ -658,17 +681,19 @@ async function recordProduction() {
   console.log(`recorded ${programs.length} programs against production: ${JSON.stringify(counts)}`);
 }
 
-const mode = process.argv[2] ?? "record";
-if (mode === "record-production") {
-  await recordProduction();
-} else if (mode === "record") {
-  await record();
-} else if (mode === "check") {
-  process.exitCode = await check();
-} else if (mode === "both") {
-  await record();
-  process.exitCode = await check();
-} else {
-  console.error(`unknown mode ${mode}; expected record, check or both`);
-  process.exitCode = 2;
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const mode = process.argv[2] ?? "record";
+  if (mode === "record-production") {
+    await recordProduction();
+  } else if (mode === "record") {
+    await record();
+  } else if (mode === "check") {
+    process.exitCode = await check();
+  } else if (mode === "both") {
+    await record();
+    process.exitCode = await check();
+  } else {
+    console.error(`unknown mode ${mode}; expected record, check or both`);
+    process.exitCode = 2;
+  }
 }

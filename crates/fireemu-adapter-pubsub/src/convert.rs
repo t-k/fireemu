@@ -195,7 +195,7 @@ pub fn validate_topic_options(topic: &pb::Topic) -> Result<(), PubSubError> {
     })
 }
 
-/// Rejects unsupported fields named by an UpdateTopic field mask before the endpoint's generic
+/// Rejects unsupported fields named by an `UpdateTopic` field mask before the endpoint's generic
 /// unsupported response. This keeps a future update implementation from silently dropping them.
 pub fn validate_topic_update_options(request: &pb::UpdateTopicRequest) -> Result<(), PubSubError> {
     if let Some(mask) = request.update_mask.as_ref() {
@@ -421,7 +421,7 @@ mod tests {
         for (field, topic) in cases {
             let error = validate_topic_options(&topic).unwrap_err();
             assert_eq!(error.code(), Code::Unimplemented);
-            assert!(error.message().contains(field), "{}: {error}", field);
+            assert!(error.message().contains(field), "{field}: {error}");
         }
     }
 

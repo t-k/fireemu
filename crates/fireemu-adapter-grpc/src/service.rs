@@ -1219,9 +1219,9 @@ mod tests {
             ..Default::default()
         };
 
-        let error = match Firestore::run_aggregation_query(&service, Request::new(request)).await {
-            Ok(_) => panic!("proxy aggregation unexpectedly reached the upstream client"),
-            Err(error) => error,
+        let Err(error) = Firestore::run_aggregation_query(&service, Request::new(request)).await
+        else {
+            panic!("proxy aggregation unexpectedly reached the upstream client")
         };
         assert_eq!(error.code(), tonic::Code::FailedPrecondition);
         assert!(error.message().contains("amount Ascending"), "{error}");

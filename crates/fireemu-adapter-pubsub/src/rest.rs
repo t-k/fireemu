@@ -191,7 +191,7 @@ fn dispatch_topic(
             handle.retry_pending_dead_letters();
             Ok((StatusCode::OK, topic_json(&topic, &labels)))
         }
-        (&Method::PATCH, None) => update_topic(topic, body),
+        (&Method::PATCH, None) => update_topic(&topic, body),
         (&Method::GET, None) => {
             let state = handle.state();
             let labels = state
@@ -213,9 +213,9 @@ fn dispatch_topic(
     }
 }
 
-fn update_topic(topic: TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
+fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
     let topic_body = body.get("topic").unwrap_or(body);
-    let topic_options = topic_from_json(&topic, topic_body)?;
+    let topic_options = topic_from_json(topic, topic_body)?;
     let update_mask = body
         .get("updateMask")
         .and_then(Value::as_str)
@@ -926,10 +926,10 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
     }
     if let Some(value) = object.get("kmsKeyName") {
         if !value.is_null() {
-            options.kms_key_name = value
+            value
                 .as_str()
                 .ok_or_else(|| RestError::invalid("topic.kmsKeyName must be a string"))?
-                .to_owned();
+                .clone_into(&mut options.kms_key_name);
         }
     }
     if object

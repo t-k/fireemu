@@ -75,6 +75,32 @@ describe("Firestore production recorder", () => {
 
     const row = result.programs[0].steps.read;
     assert.deepEqual(row.fireemu, { missing: true });
-    assert.equal(row.status, "three-way-difference");
+    assert.equal(row.status, "unverified");
+  });
+
+  it("marks missing production and live observations as unverified", () => {
+    const result = buildProductionPrograms({
+      production: {},
+      fireemu: {},
+      matrix: {
+        programs: [
+          {
+            id: "sample",
+            steps: {
+              read: {
+                oracle: { status: "OK", code: "OK", body: { value: "official" } },
+              },
+            },
+          },
+        ],
+      },
+      programDefinitions: [{ id: "sample", area: "production", steps: [{ id: "read" }] }],
+      evidenceValid: true,
+    });
+
+    const row = result.programs[0].steps.read;
+    assert.deepEqual(row.production, { missing: true });
+    assert.deepEqual(row.fireemu, { missing: true });
+    assert.equal(row.status, "unverified");
   });
 });

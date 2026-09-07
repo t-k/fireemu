@@ -167,7 +167,7 @@ async function probeFireemu(inPath, outPath, config = "auth-probe.fireemu.json")
 }
 
 function decision(step) {
-  if (!step) return { missing: true };
+  if (!step || step.missing === true) return { missing: true };
   if (step.code === "OK") return { status: step.status, code: step.code, body: step.body };
   return { status: step.status, code: step.code };
 }

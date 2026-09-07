@@ -249,6 +249,7 @@ export function classifyProductionCase({
   if (localOnly) return "excluded-local-only";
   if (needsIndex) return "production-needs-index";
   if (!evidenceValid) return "unverified";
+  if (production?.missing || fireemu?.missing) return "unverified";
   const same = (left, right) => JSON.stringify(stable(left)) === JSON.stringify(stable(right));
   if (same(production, emulator) && same(production, fireemu)) return "parity";
   if (same(production, fireemu)) return "fireemu-matches-production";

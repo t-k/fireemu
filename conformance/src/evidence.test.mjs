@@ -84,6 +84,26 @@ describe("production evidence identity", () => {
     assert.equal(classifyProductionCase({ ...values, needsIndex: true }), "production-needs-index");
   });
 
+  it("refuses to classify missing production or fireemu observations as compatibility", () => {
+    const missing = { missing: true };
+    assert.equal(
+      classifyProductionCase({ production: missing, emulator: "e", fireemu: missing }),
+      "unverified",
+    );
+    assert.equal(
+      classifyProductionCase({ production: missing, emulator: "e", fireemu: "f" }),
+      "unverified",
+    );
+    assert.equal(
+      classifyProductionCase({ production: "p", emulator: "e", fireemu: missing }),
+      "unverified",
+    );
+    assert.equal(
+      classifyProductionCase({ production: missing, emulator: missing, fireemu: missing }),
+      "unverified",
+    );
+  });
+
   it("summarizes statuses without producing a compatibility percentage", () => {
     const summary = summarizeStatuses(["parity", "parity", "unverified"]);
     assert.deepEqual(summary, { parity: 2, unverified: 1 });

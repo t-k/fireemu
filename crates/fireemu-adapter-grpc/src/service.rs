@@ -640,13 +640,8 @@ impl Firestore for GatewayService {
                     _ => None,
                 });
             if internal_transaction {
-                if first.iter().any(|response| response.document.is_some()) {
-                    first.retain(|response| response.document.is_some());
-                } else {
-                    for response in &mut first {
-                        response.transaction.clear();
-                    }
-                }
+                // Hide only the dedicated transaction announcement, preserving offset metadata.
+                first.retain(|response| response.transaction.is_empty());
             }
             let first_documents = first
                 .iter()
@@ -665,9 +660,15 @@ impl Firestore for GatewayService {
                     database: database_name_from_query_parent(&req.parent),
                     transaction: transaction.clone().unwrap_or_default(),
                 });
-                for response in first {
-                    if sender.send(Ok(response)).await.is_err() {
-                        return;
+                // Keep one response until exhaustion and execution finalization are known.
+                // Page-local completion must never terminate the public query stream.
+                let mut pending = None;
+                for mut response in first {
+                    response.continuation_selector = None;
+                    if let Some(previous) = pending.replace(response) {
+                        if sender.send(Ok(previous)).await.is_err() {
+                            return;
+                        }
                     }
                 }
                 let mut delivered = i32::try_from(first_documents).unwrap_or(i32::MAX);
@@ -756,9 +757,12 @@ impl Firestore for GatewayService {
                             }
                         };
                     }
-                    for response in responses {
-                        if sender.send(Ok(response)).await.is_err() {
-                            return;
+                    for mut response in responses {
+                        response.continuation_selector = None;
+                        if let Some(previous) = pending.replace(response) {
+                            if sender.send(Ok(previous)).await.is_err() {
+                                return;
+                            }
                         }
                     }
                     delivered = delivered.saturating_add(batch_documents);
@@ -774,6 +778,11 @@ impl Firestore for GatewayService {
                     }
                 }
                 drop(rollback);
+                if let Some(mut response) = pending {
+                    response.continuation_selector =
+                        Some(pb::run_query_response::ContinuationSelector::Done(true));
+                    let _ = sender.send(Ok(response)).await;
+                }
             });
             let boxed: Self::RunQueryStream =
                 Box::pin(tokio_stream::wrappers::ReceiverStream::new(receiver));

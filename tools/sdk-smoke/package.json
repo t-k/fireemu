@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "smoke": "node smoke.mjs",
+    "smoke:query-completion": "node query-completion.mjs",
     "smoke:client": "node client.mjs",
     "smoke:lite": "node lite.mjs",
     "smoke:storage": "node storage.mjs",

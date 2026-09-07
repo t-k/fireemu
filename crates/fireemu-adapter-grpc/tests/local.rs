@@ -2347,6 +2347,149 @@ async fn run_query_streams_bounded_batches_and_releases_its_snapshot_pin() {
 }
 
 #[tokio::test]
+async fn run_query_logical_completion_covers_every_page_and_limit() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    for count in [0, 1, 31, 32, 33, 63, 64, 65, 200] {
+        let collection = format!("completion-{count}");
+        if count > 0 {
+            client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    writes: (0..count)
+                        .map(|index| {
+                            update_write(&format!("{collection}/{index:03}"), &[("v", i(index))])
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        for limit in [
+            None,
+            Some(1),
+            Some(31),
+            Some(32),
+            Some(33),
+            Some(64),
+            Some(200),
+            Some(201),
+        ] {
+            let mut request = query(&collection, None);
+            let Some(pb::run_query_request::QueryType::StructuredQuery(ref mut query)) =
+                request.query_type
+            else {
+                unreachable!()
+            };
+            query.limit = limit;
+            let mut stream = client.run_query(request).await.unwrap().into_inner();
+            let mut names = Vec::new();
+            let mut done = false;
+            while let Some(response) = stream.next().await {
+                assert!(
+                    !done,
+                    "response after completion: count={count}, limit={limit:?}"
+                );
+                let response = response.unwrap();
+                assert!(response.transaction.is_empty());
+                if let Some(document) = response.document {
+                    names.push(document.name);
+                }
+                done = matches!(
+                    response.continuation_selector,
+                    Some(pb::run_query_response::ContinuationSelector::Done(true))
+                );
+                if done {
+                    let expected = limit.map_or(count, |limit| count.min(i64::from(limit)));
+                    assert_eq!(
+                        names,
+                        (0..expected)
+                            .map(|index| format!("{DOCS}/{collection}/{index:03}"))
+                            .collect::<Vec<_>>(),
+                        "logical completion: count={count}, limit={limit:?}"
+                    );
+                }
+            }
+            assert!(done, "missing completion: count={count}, limit={limit:?}");
+            let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+            assert_eq!(
+                backend.read_unadmitted(&parent, |state| state
+                    .transaction_bookkeeping_stats()
+                    .active),
+                Some(0)
+            );
+        }
+    }
+    handle.abort();
+}
+
+#[tokio::test]
+async fn later_query_page_failure_never_announces_success_and_releases_pin() {
+    use fireemu_core_session::fault::{
+        FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+    };
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| update_write(&format!("failed-page/{index:03}"), &[("v", i(index))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let registry = Arc::new(FaultRegistry::new());
+    registry.default_state().lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "firestore.read".into(),
+                nth: Some(2),
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::ReturnError {
+                code: "UNAVAILABLE".into(),
+            },
+        }],
+    });
+    backend.set_faults(registry);
+    let mut stream = client
+        .run_query(query("failed-page", None))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut failed = false;
+    let mut documents = 0;
+    while let Some(response) = stream.next().await {
+        match response {
+            Ok(response) => {
+                assert!(!failed);
+                assert!(response.continuation_selector.is_none());
+                documents += usize::from(response.document.is_some());
+            }
+            Err(error) => {
+                assert_eq!(error.code(), tonic::Code::Unavailable);
+                failed = true;
+            }
+        }
+    }
+    assert!(failed);
+    assert!(documents < 65);
+    let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+    assert_eq!(
+        backend.read_unadmitted(&parent, |state| state
+            .transaction_bookkeeping_stats()
+            .active),
+        Some(0)
+    );
+    handle.abort();
+}
+
+#[tokio::test]
 async fn dropping_a_slow_query_stream_releases_the_internal_snapshot_pin() {
     let (mut client, _clock, backend, handle) =
         start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;

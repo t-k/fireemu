@@ -104,6 +104,22 @@ describe("production evidence identity", () => {
     );
   });
 
+  it("keeps transport failures unverified even when both sides fail identically", () => {
+    for (const failed of [
+      { status: 0, code: "no-response" },
+      { status: 0, code: "probe-error" },
+    ]) {
+      const ok = { status: 200, code: "OK" };
+      for (const observations of [
+        { production: failed, emulator: ok, fireemu: ok },
+        { production: ok, emulator: ok, fireemu: failed },
+        { production: failed, emulator: failed, fireemu: failed },
+      ]) {
+        assert.equal(classifyProductionCase(observations), "unverified");
+      }
+    }
+  });
+
   it("summarizes statuses without producing a compatibility percentage", () => {
     const summary = summarizeStatuses(["parity", "parity", "unverified"]);
     assert.deepEqual(summary, { parity: 2, unverified: 1 });

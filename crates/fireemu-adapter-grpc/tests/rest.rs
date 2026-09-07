@@ -934,6 +934,15 @@ fn rest_kindless_queries_and_transform_budget_follow_production() {
 /// finishes, then goes through.
 #[test]
 fn a_contended_rest_commit_waits_for_the_transaction_to_finish() {
+    contended_rest_commit_waits(false);
+}
+
+#[test]
+fn a_phantom_rest_write_succeeds_after_the_query_transaction_finishes() {
+    contended_rest_commit_waits(true);
+}
+
+fn contended_rest_commit_waits(query_lock: bool) {
     let gateway = Gateway {
         enforce_limits: true,
         ctx: PlanningContext {
@@ -963,13 +972,22 @@ fn a_contended_rest_commit_waits_for_the_transaction_to_finish() {
     );
     assert_eq!(status, 200, "{begun}");
     let txn = begun["transaction"].clone();
-    let (status, _) = call(
-        &s,
-        "GET",
-        &format!("{DOCS}/blocked/doc?transaction={}", txn.as_str().unwrap()),
-        Value::Null,
-    );
-    assert_eq!(status, 404);
+    let (status, _) = if query_lock {
+        call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"transaction": txn, "structuredQuery": {"from": [{"collectionId": "blocked"}]}}),
+        )
+    } else {
+        call(
+            &s,
+            "GET",
+            &format!("{DOCS}/blocked/doc?transaction={}", txn.as_str().unwrap()),
+            Value::Null,
+        )
+    };
+    assert_eq!(status, if query_lock { 200 } else { 404 });
     let started = std::time::Instant::now();
     std::thread::scope(|scope| {
         scope.spawn(|| {

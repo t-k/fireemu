@@ -43,6 +43,68 @@ fn set(p: &str, f: &[(&str, Value)]) -> Write {
 }
 
 #[test]
+fn nested_map_field_names_are_validated_and_failure_is_atomic() {
+    for name in [
+        "x".repeat(1501),
+        "__reserved__".to_owned(),
+        "__name__".to_owned(),
+    ] {
+        for in_array in [false, true] {
+            let mut state = FirestoreState::new();
+            let map = Value::Map(BTreeMap::from([(name.clone(), Value::Integer(1))]));
+            let value = if in_array {
+                Value::Array(vec![map])
+            } else {
+                map
+            };
+            let result = state.commit(
+                &[
+                    set("a/first", &[("ok", Value::Integer(1))]),
+                    set("a/second", &[("nested", value)]),
+                ],
+                None,
+                t(0),
+            );
+            assert!(
+                matches!(result, Err(FirestoreError::InvalidArgument(_))),
+                "{result:?}"
+            );
+            assert!(state.get(&path("a/first")).is_none());
+            assert!(state.get(&path("a/second")).is_none());
+        }
+    }
+    let mut state = FirestoreState::new();
+    let value = Value::Map(BTreeMap::from([("é".repeat(750), Value::Integer(1))]));
+    state
+        .commit(&[set("a/valid", &[("nested", value)])], None, t(0))
+        .unwrap();
+}
+
+#[test]
+fn field_payload_size_accepts_the_production_boundary_and_rejects_one_more_byte() {
+    for bytes in [false, true] {
+        for size in [1_048_486, 1_048_487, 1_048_488] {
+            let mut state = FirestoreState::new();
+            let value = if bytes {
+                Value::Bytes(vec![0; size])
+            } else {
+                Value::String("x".repeat(size))
+            };
+            let result = state.commit(&[set("a/b", &[("v", value)])], None, t(0));
+            if size <= 1_048_487 {
+                assert!(result.is_ok(), "{result:?}");
+            } else {
+                assert!(
+                    matches!(result, Err(FirestoreError::InvalidArgument(_))),
+                    "oversized payload was not rejected as INVALID_ARGUMENT"
+                );
+                assert!(state.get(&path("a/b")).is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn create_read_update_delete_with_versions_and_times() {
     let mut s = FirestoreState::new();
     let r = s

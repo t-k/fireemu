@@ -9,8 +9,8 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 5,
-    "documented-divergence": 0,
+    "parity": 4,
+    "documented-divergence": 1,
     "debt": 0,
     "pending": 0
   },
@@ -97,8 +97,11 @@
     },
     {
       "id": "unknown-method",
-      "status": "parity",
-      "value": {
+      "status": "documented-divergence",
+      "documents": "conformance/PRODUCTION-GAP-FOLLOWUP-2026-09-07.md",
+      "reason": "Production returns a non-JSON 404 for an unknown method; fireemu follows that response class with static HTML.",
+      "testd": { "status": 404, "body": { "nonJsonBodyLength": 88 } },
+      "oracle": {
         "body": {
           "error": {
             "code": 404,

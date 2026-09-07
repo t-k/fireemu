@@ -52,9 +52,9 @@
       "maximum": 100,
       "precision": "exact",
       "enforcementStage": "request",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum depth of subcollections: 100",
-      "notes": ""
+      "notes": "Enforced by fireemu_core_firestore::path::DocumentPath constructors; boundary regression coverage in tests/mutants.rs."
     },
     {
       "id": "FS-LIMIT-DOCUMENT-ID",
@@ -76,9 +76,9 @@
       "maximum": 6144,
       "precision": "exact",
       "enforcementStage": "request",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum size of a document name: 6 KiB",
-      "notes": "Measured on the UTF-8 bytes of the protocol resource name."
+      "notes": "Measured on the UTF-8 bytes of the protocol resource name and enforced by fireemu_core_firestore::path::DocumentPath constructors."
     },
     {
       "id": "FS-LIMIT-DOCUMENT-BYTES",
@@ -100,9 +100,9 @@
       "maximum": 1500,
       "precision": "exact",
       "enforcementStage": "request",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Constraints on field names: valid UTF-8 characters, cannot match the regular expression __.*__, maximum size of a field name 1,500 bytes",
-      "notes": "Implemented together with the field path parser."
+      "notes": "Validated on every stored write, including nested maps and maps inside arrays. The query pseudo-field __name__ is rejected as a stored name. Local hardening also rejects control characters."
     },
     {
       "id": "FS-LIMIT-FIELD-PATH-BYTES",
@@ -126,7 +126,7 @@
       "enforcementStage": "commit",
       "implemented": "unsupported",
       "officialText": "Maximum size of a field value: 1 MiB - 89 bytes (1,048,487 bytes)",
-      "notes": ""
+      "notes": "String and bytes payloads are limited to 1,048,487 bytes on every stored write, including nested values. The string boundary was verified against production on 2026-09-07. Aggregate value accounting remains unverified, so this entry does not yet claim full implementation."
     },
     {
       "id": "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH",

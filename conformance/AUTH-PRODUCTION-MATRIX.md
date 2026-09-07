@@ -1,5 +1,7 @@
 # Authentication production matrix
 
+Focused follow-up observations and fixes are documented in [the 2026-09-07 follow-up](PRODUCTION-GAP-FOLLOWUP-2026-09-07.md). The evidence and rows below retain their original recorded identity.
+
 Identity Toolkit REST programs (`src/auth-probe/programs.mjs`) run against production Authentication, the official Auth emulator (`auth-matrix.json`) and fireemu. Regenerate with `pnpm -C conformance auth-probe:production` (needs `FIREEMU_PRODUCTION_PROJECT` and `FIREEMU_PRODUCTION_API_KEY`).
 
 ## Evidence

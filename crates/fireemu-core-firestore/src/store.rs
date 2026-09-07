@@ -4163,25 +4163,50 @@ where
     Ok(stats)
 }
 
+fn validate_stored_field_name(name: &str) -> Result<(), FirestoreError> {
+    // __name__ is a query pseudo-field, never a stored field name.
+    if name == "__name__" {
+        return Err(FirestoreError::InvalidArgument(format!(
+            "field name '{name}' is reserved."
+        )));
+    }
+    FieldPath::from_segments([name])
+        .map(|_| ())
+        .map_err(|e| FirestoreError::InvalidArgument(format!("field name {name:?}: {e}")))
+}
+
 fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
     for (name, value) in &doc.fields {
-        FieldPath::from_segments([name.as_str()])
-            .map_err(|e| FirestoreError::InvalidArgument(format!("field name {name:?}: {e}")))?;
+        validate_stored_field_name(name)?;
         check_limit(
             limits::NESTED_MAP_ARRAY_DEPTH,
             u64::from(value.nesting_depth()),
         )?;
-        validate_value(value, false)?;
     }
     let size = document_size(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
-    check_limit(limits::DOCUMENT_BYTES, size.total)
+    check_limit(limits::DOCUMENT_BYTES, size.total)?;
+    for value in doc.fields.values() {
+        validate_value(value, false)?;
+    }
+    Ok(())
 }
 
 /// The value rules every stored value obeys: an array never holds an array directly, and a
 /// reference names a document (`projects/{p}/databases/{d}/documents/` plus an even number
 /// of non-empty segments).
 fn validate_value(value: &Value, inside_array: bool) -> Result<(), FirestoreError> {
+    // Production counts the payload, not storage accounting's trailing string byte.
+    let payload_bytes = match value {
+        Value::String(value) => value.len(),
+        Value::Bytes(value) => value.len(),
+        _ => 0,
+    };
+    if payload_bytes > limits::MAX_FIELD_PAYLOAD_BYTES {
+        return Err(FirestoreError::InvalidArgument(
+            "The value of a property is longer than 1048487 bytes.".into(),
+        ));
+    }
     match value {
         Value::Array(items) => {
             if inside_array {
@@ -4191,7 +4216,10 @@ fn validate_value(value: &Value, inside_array: bool) -> Result<(), FirestoreErro
             }
             items.iter().try_for_each(|v| validate_value(v, true))
         }
-        Value::Map(fields) => fields.values().try_for_each(|v| validate_value(v, false)),
+        Value::Map(fields) => fields.iter().try_for_each(|(name, value)| {
+            validate_stored_field_name(name)?;
+            validate_value(value, false)
+        }),
         Value::Reference(name) => validate_reference(name),
         _ => Ok(()),
     }

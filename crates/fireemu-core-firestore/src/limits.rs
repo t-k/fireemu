@@ -34,6 +34,15 @@ pub const COLLECTION_ID: &str = "FS-LIMIT-COLLECTION-ID";
 /// `FS-LIMIT-DOCUMENT-ID`: enforced by `fireemu_core_types::ids::DocumentId`, likewise.
 pub const DOCUMENT_ID: &str = "FS-LIMIT-DOCUMENT-ID";
 
+/// Enforced by every `DocumentPath` constructor.
+pub const SUBCOLLECTION_DEPTH: &str = "FS-LIMIT-SUBCOLLECTION-DEPTH";
+/// Enforced on the UTF-8 resource name by every `DocumentPath` constructor.
+pub const DOCUMENT_NAME_BYTES: &str = "FS-LIMIT-DOCUMENT-NAME-BYTES";
+/// Stored field names are validated recursively, including maps inside arrays.
+pub const FIELD_NAME: &str = "FS-LIMIT-FIELD-NAME";
+/// Maximum string or bytes field payload, excluding storage accounting overhead.
+pub const MAX_FIELD_PAYLOAD_BYTES: usize = 1_048_487;
+
 /// Every catalog limit the local Firestore runtime enforces.
 pub const ENFORCED_LIMIT_IDS: &[&str] = &[
     DOCUMENT_BYTES,
@@ -43,6 +52,9 @@ pub const ENFORCED_LIMIT_IDS: &[&str] = &[
     TRANSACTION_IDLE_TIME,
     COLLECTION_ID,
     DOCUMENT_ID,
+    SUBCOLLECTION_DEPTH,
+    DOCUMENT_NAME_BYTES,
+    FIELD_NAME,
 ];
 
 /// Every Standard query limit `Query::check_standard_limits` evaluates

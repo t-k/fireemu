@@ -243,6 +243,16 @@ async fn respond(
             }
         }
     };
+    // Production Identity Toolkit uses an HTML 404 for unknown methods. Match only the
+    // route-miss envelope: missing tenants and other API errors must remain JSON.
+    if status == 404 && body == fireemu_adapter_support::api_error::identity_not_found() {
+        return Ok(with_cors(Response::builder().status(404), origin.as_deref())
+            .header("content-type", "text/html; charset=UTF-8")
+            .body(Full::new(Bytes::from_static(
+                b"<!DOCTYPE html><html lang=en><title>Error 404 (Not Found)</title><p>Not Found</p></html>",
+            )))
+            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+    }
     // Privileged App Check observations must never be cached (spec 15).
     Ok(finish(
         status,

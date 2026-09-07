@@ -1088,6 +1088,31 @@ async fn auth_root_is_a_bounded_readiness_route() {
     )
     .await;
     assert!(unknown.starts_with("HTTP/1.1 404"), "{unknown}");
+    let unknown_method = request(
+        addr,
+        "POST /identitytoolkit.googleapis.com/v1/accounts:definitelyNotAMethod HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    ).await;
+    assert!(
+        unknown_method.starts_with("HTTP/1.1 404"),
+        "{unknown_method}"
+    );
+    assert!(
+        unknown_method.contains("content-type: text/html"),
+        "{unknown_method}"
+    );
+    let (_, body) = unknown_method.split_once("\r\n\r\n").unwrap();
+    assert!(serde_json::from_str::<serde_json::Value>(body).is_err());
+    let api_missing = request(
+        addr,
+        "POST /v1/projects/demo-app/apps/missing:exchangeDebugToken HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    ).await;
+    assert!(api_missing.starts_with("HTTP/1.1 404"), "{api_missing}");
+    assert!(
+        api_missing.contains("content-type: application/json"),
+        "{api_missing}"
+    );
+    let (_, body) = api_missing.split_once("\r\n\r\n").unwrap();
+    assert!(serde_json::from_str::<serde_json::Value>(body).is_ok());
 
     let foreign = request(
         addr,

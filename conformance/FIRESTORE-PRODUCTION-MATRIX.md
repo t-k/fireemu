@@ -1,5 +1,7 @@
 # Firestore production matrix
 
+Focused follow-up observations and fixes are documented in [the 2026-09-07 follow-up](PRODUCTION-GAP-FOLLOWUP-2026-09-07.md). The evidence and rows below retain their original recorded identity.
+
 Every row of `firestore-matrix.json` run against production Firestore (Native mode, the concurrency mode and edition recorded in `firestore-production-matrix.json`), compared with the official emulator's recorded answer and with what fireemu is held to. Regenerate with `pnpm -C conformance firestore:production` (needs `FIREEMU_PRODUCTION_PROJECT` and Application Default Credentials).
 
 ## Evidence

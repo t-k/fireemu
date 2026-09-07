@@ -1474,6 +1474,71 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
 }
 
 #[tokio::test]
+async fn ordered_push_delivers_successor_after_dead_letter_forwarding() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let mut statuses = vec![500; 15];
+    statuses.push(204);
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(statuses);
+    let source_topic = "projects/demo-app/topics/ordered-dlq-source";
+    let dead_letter_topic = "projects/demo-app/topics/ordered-dlq-destination";
+    let subscription = "projects/demo-app/subscriptions/ordered-dlq";
+
+    for topic in [source_topic, dead_letter_topic] {
+        pubc.create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: source_topic.to_owned(),
+        enable_message_ordering: true,
+        dead_letter_policy: Some(pb::DeadLetterPolicy {
+            dead_letter_topic: dead_letter_topic.to_owned(),
+            max_delivery_attempts: 5,
+        }),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    let mut first = msg(b"ordered-first");
+    first.ordering_key = "same-key".to_owned();
+    let mut successor = msg(b"ordered-successor");
+    successor.ordering_key = "same-key".to_owned();
+    pubc.publish(pb::PublishRequest {
+        topic: source_topic.to_owned(),
+        messages: vec![first, successor],
+    })
+    .await
+    .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while bodies.lock().unwrap().len() < 16 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the ordered successor must be delivered after its predecessor reaches the DLQ");
+    let pushed = bodies.lock().unwrap().clone();
+    assert_eq!(pushed.len(), 16);
+    let last = String::from_utf8(pushed.last().unwrap().clone()).unwrap();
+    assert!(last.contains("b3JkZXJlZC1zdWNjZXNzb3I"));
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+#[tokio::test]
 async fn push_retry_waits_for_virtual_backoff_and_resumes_after_clock_advance() {
     let h = start().await;
     let mut pubc = h.publisher().await;

@@ -685,7 +685,8 @@ impl PubSubHandle {
         if received.is_empty() {
             return match self.next_push_delivery_at(&work.subscription) {
                 Some(next) if next > self.now() => PushQuantumResult::Defer(next),
-                _ => PushQuantumResult::Stop,
+                Some(_) => PushQuantumResult::Continue,
+                None => PushQuantumResult::Stop,
             };
         }
         if self

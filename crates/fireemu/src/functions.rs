@@ -4485,6 +4485,7 @@ mod tests {
         runtime.runner().shutdown().await;
     }
 
+    #[allow(clippy::too_many_lines)] // Keep the real capacity-recovery lifecycle in one scenario.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn pubsub_dead_letter_retry_is_woken_by_functions_capacity_recovery() {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};

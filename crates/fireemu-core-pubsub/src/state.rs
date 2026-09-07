@@ -478,7 +478,7 @@ impl PubSubState {
     pub fn next_delivery_at(&self, name: &SubscriptionName) -> Result<Option<LogicalInstant>> {
         self.subscriptions
             .get(&name.to_full())
-            .map(|subscription| subscription.next_available_at())
+            .map(SubscriptionState::next_available_at)
             .ok_or_else(|| {
                 PubSubError::not_found(format!("subscription {} not found", name.to_full()))
             })

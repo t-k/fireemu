@@ -29,7 +29,7 @@ use crate::path::DocumentPath;
 use crate::query::{
     Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
 };
-use crate::size::document_size;
+use crate::size::{document_size, document_size_bytes};
 use crate::value::{Timestamp, Value, ValueKind};
 
 /// How far back a snapshot selector may reach: the documented Firestore `read_time` window
@@ -468,7 +468,7 @@ fn history_path_usage(
             .version_metadata_bytes
             .saturating_add(HISTORY_VERSION_METADATA_BYTES);
         if let Some(document) = document {
-            let bytes = document_size(path, &document.fields).map_or(u64::MAX, |size| size.total);
+            let bytes = document_size_bytes(path, &document.fields).unwrap_or(u64::MAX);
             if index + 1 == versions.len() {
                 usage.live_document_bytes = usage.live_document_bytes.saturating_add(bytes);
             } else {

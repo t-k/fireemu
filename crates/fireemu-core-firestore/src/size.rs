@@ -132,11 +132,26 @@ fn fields_size(entries: &BTreeMap<String, Value>) -> Result<u64, SizeError> {
     Ok(total)
 }
 
+/// Exact document charge without constructing diagnostic contributors.
+pub(crate) fn document_size_bytes(
+    path: &DocumentPath,
+    fields: &BTreeMap<String, Value>,
+) -> Result<u64, SizeError> {
+    add(add(document_name_size(path)?, 32)?, fields_size(fields)?)
+}
+
+#[cfg(test)]
+thread_local! {
+    static DOCUMENT_BREAKDOWNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Size of a document: name + fields + 32, with a breakdown of the largest fields.
 pub fn document_size(
     path: &DocumentPath,
     fields: &BTreeMap<String, Value>,
 ) -> Result<SizeBreakdown, SizeError> {
+    #[cfg(test)]
+    DOCUMENT_BREAKDOWNS.with(|count| count.set(count.get().saturating_add(1)));
     let name_bytes = document_name_size(path)?;
     let mut total = add(name_bytes, 32)?;
     let mut contributors: Vec<SizeContributor> = Vec::new();
@@ -231,6 +246,61 @@ pub fn index_entry_size(
                 total = add(total, indexed_value_size(value)?)?;
             }
             add(total, 32)
+        }
+    }
+}
+
+#[cfg(test)]
+mod scalar_document_tests {
+    use super::*;
+    use crate::value::{GeoPoint, Timestamp};
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+
+    #[test]
+    fn scalar_document_charge_matches_diagnostics_without_building_contributors() {
+        let path = DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            "users/unicode-利用者/tasks/task",
+        )
+        .unwrap();
+        let values = vec![
+            Value::Null,
+            Value::Boolean(true),
+            Value::Integer(i64::MAX),
+            Value::Double(f64::NAN),
+            Value::Timestamp(Timestamp::new(1, 1).unwrap()),
+            Value::GeoPoint(GeoPoint::new(10.0, 20.0).unwrap()),
+            Value::String("文字列".repeat(10)),
+            Value::Bytes(vec![1; 256]),
+            Value::Reference(path.resource_name()),
+            Value::Vector(vec![1.0, 2.0]),
+            Value::Array(vec![Value::Null, Value::Integer(1)]),
+            Value::Map(
+                [(
+                    "nested".to_owned(),
+                    Value::Array(vec![Value::String("value".to_owned())]),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+        ];
+        let mut fields = BTreeMap::new();
+        for index in 0..=24 {
+            if index > 0 {
+                fields.insert(
+                    format!("field-{index}-名前"),
+                    values[(index - 1) % values.len()].clone(),
+                );
+            }
+            let expected = document_size(&path, &fields).unwrap().total;
+            DOCUMENT_BREAKDOWNS.with(|count| count.set(0));
+            assert_eq!(document_size_bytes(&path, &fields), Ok(expected));
+            assert_eq!(
+                DOCUMENT_BREAKDOWNS.with(std::cell::Cell::take),
+                0,
+                "history charges must not allocate diagnostic contributor lists"
+            );
         }
     }
 }

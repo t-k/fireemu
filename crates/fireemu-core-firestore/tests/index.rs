@@ -171,6 +171,13 @@ fn standard() -> PlanningContext {
         policy: IndexValidationPolicy::Conservative,
     }
 }
+fn firebase() -> PlanningContext {
+    PlanningContext {
+        edition: FirestoreEdition::Standard,
+        api_mode: FirestoreApiMode::Native,
+        policy: IndexValidationPolicy::Firebase,
+    }
+}
 fn enterprise() -> PlanningContext {
     PlanningContext {
         edition: FirestoreEdition::Enterprise,
@@ -373,6 +380,351 @@ fn automatic_single_field_indexes_require_the_requested_direction() {
     assert!(matches!(
         decide(&inequality_descending, &indexes, standard()),
         IndexDecision::MissingRequired { .. }
+    ));
+}
+
+fn name_order(direction: Direction) -> OrderClause {
+    OrderClause {
+        field: FieldPath::document_name(),
+        direction,
+    }
+}
+
+fn index_modes(index: &IndexDefinition) -> Vec<(String, IndexFieldMode)> {
+    index
+        .fields
+        .iter()
+        .map(|f| (f.path.canonical(), f.mode))
+        .collect()
+}
+
+#[test]
+fn automatic_index_name_direction_follows_the_ordered_field() {
+    let idx = IndexSet::default();
+    let priority = |direction| OrderClause {
+        field: fp("priority"),
+        direction,
+    };
+
+    // The implicit `__name__` of an automatic index shares the field's direction.
+    match decide(
+        &tasks().with_order(priority(Direction::Ascending)),
+        &idx,
+        standard(),
+    ) {
+        IndexDecision::UseIndex { index } => assert_eq!(
+            index_modes(&index),
+            vec![
+                ("priority".to_owned(), IndexFieldMode::Ascending),
+                ("__name__".to_owned(), IndexFieldMode::Ascending),
+            ]
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        decide(
+            &tasks()
+                .with_order(priority(Direction::Descending))
+                .with_order(name_order(Direction::Descending)),
+            &idx,
+            standard(),
+        ),
+        IndexDecision::UseIndex { .. }
+    ));
+
+    // A `__name__` direction opposite to the ordered field needs a composite index.
+    let reversed_name = tasks()
+        .with_order(priority(Direction::Ascending))
+        .with_order(name_order(Direction::Descending));
+    match decide(&reversed_name, &idx, standard()) {
+        IndexDecision::MissingRequired { requirement } => assert_eq!(
+            index_modes(&requirement),
+            vec![
+                ("priority".to_owned(), IndexFieldMode::Ascending),
+                ("__name__".to_owned(), IndexFieldMode::Descending),
+            ]
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        decide(
+            &tasks()
+                .with_order(priority(Direction::Descending))
+                .with_order(name_order(Direction::Ascending)),
+            &idx,
+            standard(),
+        ),
+        IndexDecision::MissingRequired { .. }
+    ));
+    // Production behaves the same way; this is not a Conservative-only rejection.
+    assert!(matches!(
+        decide(&reversed_name, &idx, firebase()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    // The matching explicit composite index serves the reversed direction, and the decision
+    // names that index rather than a synthesized one.
+    let mut explicit = IndexSet::default();
+    let composite_index = composite(&[
+        ("priority", IndexFieldMode::Ascending),
+        ("__name__", IndexFieldMode::Descending),
+    ]);
+    explicit.add_composite(composite_index.clone());
+    match decide(&reversed_name, &explicit, standard()) {
+        IndexDecision::UseIndex { index } => assert_eq!(index, composite_index),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn automatic_index_name_direction_for_equality_and_array_queries() {
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let equality = tasks().with_filter(field(
+        "owner",
+        FieldOp::Equal,
+        Value::String("u".to_owned()),
+    ));
+
+    // Equality plus `__name__ DESC` is served by the descending automatic index.
+    match decide(
+        &equality
+            .clone()
+            .with_order(name_order(Direction::Descending)),
+        &IndexSet::default(),
+        standard(),
+    ) {
+        IndexDecision::UseIndex { index } => assert_eq!(
+            index_modes(&index),
+            vec![
+                ("owner".to_owned(), IndexFieldMode::Descending),
+                ("__name__".to_owned(), IndexFieldMode::Descending),
+            ]
+        ),
+        other => panic!("{other:?}"),
+    }
+    // An equality prefix serves either direction, so the only enabled mode is used (see
+    // `equality_only_automatic_indexes_accept_either_enabled_order_direction`), but the
+    // decision names that index.
+    let mut ascending_only = IndexSet::default();
+    ascending_only.set_single_field_indexes(
+        &collection,
+        &fp("owner"),
+        vec![(IndexQueryScope::Collection, IndexFieldMode::Ascending)],
+    );
+    match decide(
+        &equality
+            .clone()
+            .with_order(name_order(Direction::Descending)),
+        &ascending_only,
+        standard(),
+    ) {
+        IndexDecision::UseIndex { index } => assert_eq!(
+            index_modes(&index),
+            vec![
+                ("owner".to_owned(), IndexFieldMode::Ascending),
+                ("__name__".to_owned(), IndexFieldMode::Descending),
+            ]
+        ),
+        other => panic!("{other:?}"),
+    }
+    let mut disabled = IndexSet::default();
+    disabled.set_single_field_indexes(&collection, &fp("owner"), vec![]);
+    assert!(matches!(
+        decide(&equality, &disabled, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    // The automatic array-contains index serves a bare name order in either direction, but
+    // not an ordering on a further field.
+    let contains = tasks().with_filter(field(
+        "tags",
+        FieldOp::ArrayContains,
+        Value::String("t".to_owned()),
+    ));
+    assert!(matches!(
+        decide(&contains, &IndexSet::default(), standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+    assert!(matches!(
+        decide(
+            &contains
+                .clone()
+                .with_order(name_order(Direction::Descending)),
+            &IndexSet::default(),
+            standard(),
+        ),
+        IndexDecision::UseIndex { .. }
+    ));
+    match decide(
+        &contains.with_order(OrderClause {
+            field: fp("priority"),
+            direction: Direction::Descending,
+        }),
+        &IndexSet::default(),
+        standard(),
+    ) {
+        IndexDecision::MissingRequired { requirement } => assert_eq!(
+            index_modes(&requirement),
+            vec![
+                ("tags".to_owned(), IndexFieldMode::Contains),
+                ("priority".to_owned(), IndexFieldMode::Descending),
+                ("__name__".to_owned(), IndexFieldMode::Descending),
+            ]
+        ),
+        other => panic!("{other:?}"),
+    }
+
+    // A bare name order in either direction needs no field index.
+    assert!(matches!(
+        decide(
+            &tasks().with_order(name_order(Direction::Descending)),
+            &IndexSet::default(),
+            standard(),
+        ),
+        IndexDecision::UseIndex { .. }
+    ));
+}
+
+#[test]
+fn firebase_policy_merges_single_field_indexes_for_scalar_equality_queries() {
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let q = tasks().with_filter(FilterExpr::And(vec![
+        field("state", FieldOp::Equal, Value::String("open".to_owned())),
+        field("owner", FieldOp::Equal, Value::String("u1".to_owned())),
+    ]));
+
+    // Conservative keeps demanding one composite index (see
+    // `equality_on_two_fields_needs_a_composite_index`); production merges the automatic
+    // single-field indexes.
+    assert!(matches!(
+        decide(&q, &IndexSet::default(), standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+    match decide(&q, &IndexSet::default(), firebase()) {
+        IndexDecision::MergeIndexes { indexes } => {
+            let merged: Vec<_> = indexes.iter().map(index_modes).collect();
+            assert_eq!(
+                merged,
+                vec![
+                    vec![
+                        ("owner".to_owned(), IndexFieldMode::Ascending),
+                        ("__name__".to_owned(), IndexFieldMode::Ascending),
+                    ],
+                    vec![
+                        ("state".to_owned(), IndexFieldMode::Ascending),
+                        ("__name__".to_owned(), IndexFieldMode::Ascending),
+                    ],
+                ]
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // A composite index that serves the query is still preferred over a merge.
+    let mut explicit = IndexSet::default();
+    let composite_index = composite(&[
+        ("owner", IndexFieldMode::Ascending),
+        ("state", IndexFieldMode::Ascending),
+    ]);
+    explicit.add_composite(composite_index.clone());
+    match decide(&q, &explicit, firebase()) {
+        IndexDecision::UseIndex { index } => assert_eq!(index, composite_index),
+        other => panic!("{other:?}"),
+    }
+
+    // Every merged field must have its automatic index enabled.
+    let mut exempt = IndexSet::default();
+    exempt.add_exemption(&SingleFieldExemption {
+        collection_group: collection.clone(),
+        field: fp("owner"),
+        query_scope: IndexQueryScope::Collection,
+    });
+    assert!(matches!(
+        decide(&q, &exempt, firebase()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    // A descending name order merges the descending automatic indexes only when enabled.
+    let descending_names = q.clone().with_order(name_order(Direction::Descending));
+    assert!(matches!(
+        decide(&descending_names, &IndexSet::default(), firebase()),
+        IndexDecision::MergeIndexes { .. }
+    ));
+    let mut ascending_only = IndexSet::default();
+    ascending_only.set_single_field_indexes(
+        &collection,
+        &fp("owner"),
+        vec![(IndexQueryScope::Collection, IndexFieldMode::Ascending)],
+    );
+    assert!(matches!(
+        decide(&descending_names, &ascending_only, firebase()),
+        IndexDecision::MissingRequired { .. }
+    ));
+}
+
+#[test]
+fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
+    let q = tasks().with_filter(FilterExpr::And(vec![
+        field("state", FieldOp::Equal, Value::String("open".to_owned())),
+        field("owner", FieldOp::Equal, Value::String("u1".to_owned())),
+    ]));
+    // Ordering by a further field, an array filter, or an inequality is outside the merge.
+    assert!(matches!(
+        decide(
+            &q.clone().with_order(OrderClause {
+                field: fp("createdAt"),
+                direction: Direction::Ascending,
+            }),
+            &IndexSet::default(),
+            firebase(),
+        ),
+        IndexDecision::MissingRequired { .. }
+    ));
+    assert!(matches!(
+        decide(
+            &tasks().with_filter(FilterExpr::And(vec![
+                field("state", FieldOp::Equal, Value::String("open".to_owned())),
+                field(
+                    "tags",
+                    FieldOp::ArrayContains,
+                    Value::String("t".to_owned())
+                ),
+            ])),
+            &IndexSet::default(),
+            firebase(),
+        ),
+        IndexDecision::MissingRequired { .. }
+    ));
+    assert!(matches!(
+        decide(
+            &tasks().with_filter(FilterExpr::And(vec![
+                field("state", FieldOp::Equal, Value::String("open".to_owned())),
+                field("priority", FieldOp::GreaterThan, Value::Integer(1)),
+            ])),
+            &IndexSet::default(),
+            firebase(),
+        ),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    // `in` expands to several equality disjunctions; each merges on its own.
+    assert!(matches!(
+        decide(
+            &tasks().with_filter(FilterExpr::And(vec![
+                field(
+                    "state",
+                    FieldOp::In,
+                    Value::Array(vec![
+                        Value::String("open".to_owned()),
+                        Value::String("done".to_owned()),
+                    ]),
+                ),
+                field("owner", FieldOp::Equal, Value::String("u1".to_owned())),
+            ])),
+            &IndexSet::default(),
+            firebase(),
+        ),
+        IndexDecision::MergeIndexes { .. }
     ));
 }
 

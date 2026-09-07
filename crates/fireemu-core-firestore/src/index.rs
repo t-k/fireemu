@@ -247,6 +247,12 @@ pub enum IndexDecision {
         /// Supporting index.
         index: IndexDefinition,
     },
+    /// `IndexValidationPolicy::Firebase`: no single index serves the query, but production
+    /// merges these automatic single-field indexes (scalar equality filters only).
+    MergeIndexes {
+        /// Automatic indexes merged, one per equality field.
+        indexes: Vec<IndexDefinition>,
+    },
     /// Enterprise: no index; scan the collection with a cost warning.
     FullScanAllowed {
         /// Plan.
@@ -276,6 +282,10 @@ impl fmt::Display for IndexDecision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UseIndex { index } => write!(f, "use index {}", describe(index)),
+            Self::MergeIndexes { indexes } => {
+                let parts: Vec<String> = indexes.iter().map(describe).collect();
+                write!(f, "merge indexes {}", parts.join(" + "))
+            }
             Self::FullScanAllowed { plan } => write!(f, "full scan of {}", plan.collection_scope),
             Self::MissingRequired { requirement } => {
                 write!(f, "missing index {}", describe(requirement))
@@ -432,8 +442,65 @@ fn mode_for_direction(direction: Direction) -> IndexFieldMode {
     }
 }
 
+/// The direction the query asks of `__name__`: explicit when ordered, ascending otherwise.
+fn requested_name_direction(req: &Requirement) -> Direction {
+    req.order
+        .iter()
+        .find(|o| o.field.is_document_name())
+        .map_or(Direction::Ascending, |o| o.direction)
+}
+
+fn scope_for(group: bool) -> IndexQueryScope {
+    if group {
+        IndexQueryScope::CollectionGroup
+    } else {
+        IndexQueryScope::Collection
+    }
+}
+
+fn has_single_field_mode(
+    set: &IndexSet,
+    collection: &CollectionId,
+    field: &FieldPath,
+    group: bool,
+    mode: IndexFieldMode,
+) -> bool {
+    let scope = scope_for(group);
+    set.single_field_modes(collection, field)
+        .iter()
+        .any(|(candidate_scope, candidate)| *candidate_scope == scope && *candidate == mode)
+}
+
+/// The automatic single-field index `(field mode, __name__ name_mode)`.
+fn single_field_index(
+    collection: &CollectionId,
+    group: bool,
+    field: &FieldPath,
+    mode: IndexFieldMode,
+    name_mode: IndexFieldMode,
+) -> IndexDefinition {
+    IndexDefinition {
+        collection_group: collection.clone(),
+        query_scope: scope_for(group),
+        fields: vec![
+            IndexField {
+                path: field.clone(),
+                mode,
+            },
+            IndexField {
+                path: FieldPath::document_name(),
+                mode: name_mode,
+            },
+        ],
+    }
+}
+
 /// Whether the automatic single-field indexes serve `req`: at most one non-`__name__` field
-/// is touched (by equality, array-contains, or ordering), and it is not exempt.
+/// is touched (by equality, array-contains, or ordering), it is not exempt, and the index's
+/// implicit `__name__` runs in the requested direction. Each automatic index is
+/// `(field ASC, __name__ ASC)`, `(field DESC, __name__ DESC)` or `(field CONTAINS, __name__
+/// ASC)`; a `__name__` direction none of them provides needs a composite index. Returns the
+/// concrete index that serves the query.
 fn automatic_index_for(
     req: &Requirement,
     set: &IndexSet,
@@ -452,49 +519,84 @@ fn automatic_index_for(
     if touched.len() > 1 {
         return None;
     }
-    let field = touched.into_iter().next();
-    if let Some(f) = &field {
-        if set.is_exempt(collection, f, group) {
-            return None;
-        }
-        let scope = if group {
-            IndexQueryScope::CollectionGroup
-        } else {
-            IndexQueryScope::Collection
-        };
-        let required_mode = if req.contains.is_some() {
-            Some(IndexFieldMode::Contains)
-        } else {
-            req.order
-                .iter()
-                .find(|o| o.field == *f)
-                .map(|o| mode_for_direction(o.direction))
-        };
-        let supported =
-            set.single_field_modes(collection, f)
-                .iter()
-                .any(|(candidate_scope, mode)| {
-                    *candidate_scope == scope
-                        && match required_mode {
-                            Some(required) => *mode == required,
-                            None => matches!(
-                                mode,
-                                IndexFieldMode::Ascending | IndexFieldMode::Descending
-                            ),
-                        }
-                });
-        if !supported {
-            return None;
-        }
-    }
-    // Ordering on the single field can be served ascending or descending; array-contains
-    // together with ordering on the same field is not (one automatic index per mode).
-    if req.contains.is_some() && req.order.iter().any(|o| !o.field.is_document_name()) {
+    let name_direction = requested_name_direction(req);
+    let name_mode = mode_for_direction(name_direction);
+    let Some(field) = touched.into_iter().next() else {
+        // Only `__name__`: the primary key serves either direction.
+        return Some(IndexDefinition {
+            collection_group: collection.clone(),
+            query_scope: scope_for(group),
+            fields: vec![IndexField {
+                path: FieldPath::document_name(),
+                mode: name_mode,
+            }],
+        });
+    };
+    if set.is_exempt(collection, &field, group) {
         return None;
     }
-    // Equality on f plus ordering on f is redundant, and ordering on another field is
-    // impossible here because touched.len() <= 1.
-    Some(required_index(req, collection, group))
+    let ordered = req.order.iter().find(|o| o.field == field);
+    let mode = if req.contains.is_some() {
+        // Array-contains together with ordering on the same field is not served (one
+        // automatic index per mode). With only a `__name__` order the contains index serves
+        // either name direction (no production evidence of a rejection; see the DIR-6 oracle
+        // follow-up).
+        if ordered.is_some() {
+            return None;
+        }
+        IndexFieldMode::Contains
+    } else if let Some(o) = ordered {
+        // The implicit `__name__` of `(field ASC)` is ASC and of `(field DESC)` is DESC; the
+        // opposite tie-break needs an explicit composite index.
+        if o.direction != name_direction {
+            return None;
+        }
+        mode_for_direction(o.direction)
+    } else {
+        // Equality only: an equality prefix serves either direction, so any enabled ordered
+        // mode does; prefer the one whose `__name__` runs in the requested direction.
+        [
+            name_mode,
+            IndexFieldMode::Ascending,
+            IndexFieldMode::Descending,
+        ]
+        .into_iter()
+        .find(|mode| has_single_field_mode(set, collection, &field, group, *mode))?
+    };
+    if !has_single_field_mode(set, collection, &field, group, mode) {
+        return None;
+    }
+    Some(single_field_index(
+        collection, group, &field, mode, name_mode,
+    ))
+}
+
+/// Production merges automatic single-field indexes for a conjunction of scalar equality
+/// filters (no array filter, no inequality, no ordering beyond `__name__`), provided each
+/// field's automatic index in the requested `__name__` direction is enabled.
+fn merged_indexes_for(
+    req: &Requirement,
+    set: &IndexSet,
+    collection: &CollectionId,
+    group: bool,
+) -> Option<Vec<IndexDefinition>> {
+    if req.equality.len() < 2
+        || req.contains.is_some()
+        || req.order.iter().any(|o| !o.field.is_document_name())
+    {
+        return None;
+    }
+    let name_mode = mode_for_direction(requested_name_direction(req));
+    let mut fields = req.equality.clone();
+    fields.sort();
+    fields
+        .iter()
+        .map(|field| {
+            (!set.is_exempt(collection, field, group)
+                && has_single_field_mode(set, collection, field, group, name_mode))
+            .then(|| single_field_index(collection, group, field, name_mode, name_mode))
+        })
+        .collect()
 }
 
 /// Whether composite `index` serves `req`: equality fields (any order) as a prefix, then the
@@ -595,6 +697,7 @@ fn decide_with_requirements(
     let group = query.scope.all_descendants();
     let effective_order = query.effective_order_by();
     let mut chosen: Option<IndexDefinition> = None;
+    let mut merged: Option<Vec<IndexDefinition>> = None;
     let mut assumed: Option<IndexDefinition> = None;
     for disjunction in query.dnf() {
         let req = requirement_for_query(&disjunction, &effective_order);
@@ -608,6 +711,11 @@ fn decide_with_requirements(
             .find(|i| composite_serves(i, &req, collection, group))
         {
             chosen.get_or_insert(i.clone());
+        } else if let Some(indexes) = (ctx.policy == IndexValidationPolicy::Firebase)
+            .then(|| merged_indexes_for(&req, indexes, collection, group))
+            .flatten()
+        {
+            merged.get_or_insert(indexes);
         } else {
             let requirement = required_index(&req, collection, group);
             if ctx.policy == IndexValidationPolicy::Emulator
@@ -634,6 +742,9 @@ fn decide_with_requirements(
     }
     if let Some(requirement) = assumed {
         return IndexDecision::AssumedIndex { requirement };
+    }
+    if let Some(indexes) = merged {
+        return IndexDecision::MergeIndexes { indexes };
     }
     match chosen {
         Some(index) => IndexDecision::UseIndex { index },

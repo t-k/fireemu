@@ -2549,7 +2549,12 @@ impl FirestoreState {
         let read_version = self.transaction(id)?.read_version;
         let (docs, stats) =
             self.run_query_after_document_with_stats(query, Some(read_version), after)?;
-        self.record_transaction_query(id, query, &docs)?;
+        let mut observed_query = query.clone();
+        observed_query.start_at = Some(Cursor {
+            values: vec![Value::Reference(after.resource_name())],
+            before: false,
+        });
+        self.record_transaction_query(id, &observed_query, &docs)?;
         Ok((docs, stats))
     }
 

@@ -2695,6 +2695,7 @@ async fn commit_notifications_are_compact_and_the_ring_is_bounded() {
             .await
             .unwrap();
     }
+
     for expected in [
         CommitChangeKind::Created,
         CommitChangeKind::Updated,
@@ -2722,6 +2723,68 @@ async fn commit_notifications_are_compact_and_the_ring_is_bounded() {
         notifications.recv().await,
         Err(tokio::sync::broadcast::error::RecvError::Lagged(_))
     ));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn a_batched_transaction_query_commits_after_its_continuation_page() {
+    let (mut client, _clock, handle) = start().await;
+    let writes = (0..33)
+        .map(|index| update_write(&format!("continued/{index:03}"), &[("v", i(index))]))
+        .collect();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            request_options: None,
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite::default(),
+                )),
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let mut request = query("continued", None);
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        request.query_type.as_mut()
+    {
+        query.limit = Some(33);
+    }
+    request.consistency_selector = Some(pb::run_query_request::ConsistencySelector::Transaction(
+        transaction.clone(),
+    ));
+    let documents = collect_docs(&mut client, request).await;
+
+    assert_eq!(documents.len(), 33);
+    assert_eq!(
+        documents.first().unwrap().name,
+        format!("{DOCS}/continued/000")
+    );
+    assert_eq!(
+        documents.last().unwrap().name,
+        format!("{DOCS}/continued/032")
+    );
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("continued/commit", &[("v", i(1))])],
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     handle.abort();
 }
 

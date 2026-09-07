@@ -2588,7 +2588,83 @@ impl AuthStore {
         code: u32,
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
+        self.finalize_mfa_sign_in_inner(uid, pending, None, code, now)
+    }
+
+    /// Completes a TOTP second-factor sign-in for the factor named by `enrollment_id`.
+    ///
+    /// The pending credential and replay state are changed only after the selected factor
+    /// accepts the code. This keeps a failed retry usable and prevents another enrolled factor
+    /// from satisfying a request intended for a different factor.
+    pub fn finalize_mfa_sign_in_for_factor(
+        &mut self,
+        uid: &LocalId,
+        pending: &PendingSignInId,
+        enrollment_id: &str,
+        code: u32,
+        now: LogicalInstant,
+    ) -> Result<SecondFactorAssertion, MfaError> {
+        self.finalize_mfa_sign_in_inner(uid, pending, Some(enrollment_id), code, now)
+    }
+
+    fn finalize_mfa_sign_in_inner(
+        &mut self,
+        uid: &LocalId,
+        pending: &PendingSignInId,
+        enrollment_id: Option<&str>,
+        code: u32,
+        now: LogicalInstant,
+    ) -> Result<SecondFactorAssertion, MfaError> {
         let policy = self.policy;
+        let (accepted_identifier, accepted_step) = {
+            let user = self
+                .users
+                .get(uid)
+                .map(Arc::as_ref)
+                .ok_or(MfaError::UserNotFound)?;
+            if user.mfa.pending_sign_in(&pending.0).is_none() {
+                return Err(MfaError::PendingSignInUnknown);
+            }
+
+            let mut replayed = false;
+            let mut accepted = None;
+            let factors = user.mfa.totp_factors();
+            let candidates = enrollment_id.map_or_else(
+                || factors.iter().collect::<Vec<_>>(),
+                |id| {
+                    factors
+                        .iter()
+                        .filter(|factor| factor.mfa_enrollment_id == id)
+                        .collect()
+                },
+            );
+            if candidates.is_empty() {
+                return Err(MfaError::NoEnrolledFactor);
+            }
+            for factor in candidates {
+                match match_code(
+                    &factor.secret,
+                    &policy.params(),
+                    policy.window_steps,
+                    factor.last_accepted_step,
+                    code,
+                    now,
+                ) {
+                    CodeMatch::Accepted { step } => {
+                        accepted = Some((factor.mfa_enrollment_id.clone(), step));
+                        break;
+                    }
+                    CodeMatch::Replayed => replayed = true,
+                    CodeMatch::NoMatch => {}
+                }
+            }
+            accepted.ok_or(if replayed {
+                MfaError::CodeAlreadyUsed
+            } else {
+                MfaError::InvalidCode
+            })?
+        };
+
         let user = self
             .users
             .get_mut(uid)
@@ -2601,39 +2677,19 @@ impl AuthStore {
         if user.mfa.pending_count() == 0 {
             self.pending_user_ids.remove(uid);
         }
-        let mut replayed = false;
-        let mut accepted_identifier = None;
-        for factor in user.mfa.totp_factors_mut() {
-            match match_code(
-                &factor.secret,
-                &policy.params(),
-                policy.window_steps,
-                factor.last_accepted_step,
-                code,
-                now,
-            ) {
-                CodeMatch::Accepted { step } => {
-                    factor.last_accepted_step = Some(step);
-                    user.last_sign_in_at = Some(now);
-                    accepted_identifier = Some(factor.mfa_enrollment_id.clone());
-                    break;
-                }
-                CodeMatch::Replayed => replayed = true,
-                CodeMatch::NoMatch => {}
-            }
-        }
-        if let Some(second_factor_identifier) = accepted_identifier {
-            self.activate_email_owner(uid);
-            return Ok(SecondFactorAssertion {
-                sign_in_second_factor: "totp".to_owned(),
-                second_factor_identifier,
-                verified_at: now,
-            });
-        }
-        Err(if replayed {
-            MfaError::CodeAlreadyUsed
-        } else {
-            MfaError::InvalidCode
+        let factor = user
+            .mfa
+            .totp_factors_mut()
+            .iter_mut()
+            .find(|factor| factor.mfa_enrollment_id == accepted_identifier)
+            .expect("accepted TOTP factor must remain enrolled");
+        factor.last_accepted_step = Some(accepted_step);
+        user.last_sign_in_at = Some(now);
+        self.activate_email_owner(uid);
+        Ok(SecondFactorAssertion {
+            sign_in_second_factor: "totp".to_owned(),
+            second_factor_identifier: accepted_identifier,
+            verified_at: now,
         })
     }
 

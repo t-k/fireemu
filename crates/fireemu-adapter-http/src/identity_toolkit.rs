@@ -4699,6 +4699,12 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
     if let Some(phone) = body.get("phoneVerificationInfo") {
         return finalize_phone_sign_in(store, pending, phone, at);
     }
+    let Some(enrollment_id) = str_field(body, "mfaEnrollmentId").filter(|id| !id.is_empty()) else {
+        return error(
+            400,
+            "MISSING_MFA_ENROLLMENT_ID : No second factor identifier is provided.",
+        );
+    };
     let code = parse_code(
         body.get("totpVerificationInfo")
             .and_then(|i| i.get("verificationCode")),
@@ -4713,7 +4719,7 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
     let pending_id = PendingSignInId::parse(pending)
         .unwrap_or_else(|| PendingSignInId::parse("").expect("empty id parses"));
     let first_factor = store.pending_sign_in_context(&pending_id).cloned();
-    match store.finalize_mfa_sign_in(&uid, &pending_id, code, at) {
+    match store.finalize_mfa_sign_in_for_factor(&uid, &pending_id, enrollment_id, code, at) {
         Ok(assertion) => match issue_tokens_with_sign_in_attributes(
             store,
             &uid,

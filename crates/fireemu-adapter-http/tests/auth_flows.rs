@@ -2868,6 +2868,11 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
         }),
     );
     assert_eq!(status, 200, "{enrolled}");
+    let enrollment_id = claims(enrolled["idToken"].as_str().unwrap())["firebase"]
+        ["second_factor_identifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     s.clock
         .lock()
         .unwrap()
@@ -2895,6 +2900,7 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
     let code = totp_at(&secret, &TotpPolicy::default().params(), second);
     let finalize = json!({
         "mfaPendingCredential": pending["mfaPendingCredential"],
+        "mfaEnrollmentId": enrollment_id,
         "totpVerificationInfo": {"verificationCode": code}
     });
     assert_mfa_finalize_refused(

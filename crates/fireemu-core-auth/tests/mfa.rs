@@ -2,7 +2,7 @@
 
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims, CustomClaimsError};
 use fireemu_core_auth::mfa::{
-    MfaError, PendingSignInContext, PendingSignInCredentials, TotpPolicy,
+    MfaError, PendingSignInContext, PendingSignInCredentials, TotpFactor, TotpPolicy, TotpSecret,
 };
 use fireemu_core_auth::store::{AuthStore, NewUser, SecondFactorAssertion};
 use fireemu_core_auth::totp::totp_at;
@@ -51,6 +51,104 @@ fn enrollment_then_sign_in_with_a_valid_code() {
         s.finalize_mfa_sign_in(&uid, &pending, code, later).unwrap();
     assert_eq!(assertion.sign_in_second_factor, "totp");
     assert_eq!(assertion.second_factor_identifier, factor.mfa_enrollment_id);
+}
+
+#[test]
+fn totp_finalize_keeps_pending_sign_in_after_a_wrong_code() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("retry@example.com"), t0())
+        .unwrap();
+    let material = s.start_totp_enrollment(&uid, t0()).unwrap();
+    let secret = material.secret_for_test().to_vec();
+    s.finalize_totp_enrollment(
+        &uid,
+        &material.session_id,
+        totp_at(&secret, &s.policy().params(), t0()),
+        t0(),
+    )
+    .unwrap();
+    let now = t0().checked_add(secs(90)).unwrap();
+    let pending = s.start_mfa_sign_in(&uid, now).unwrap();
+    let enrollment_id = s.user(&uid).unwrap().mfa.totp_factors()[0]
+        .mfa_enrollment_id
+        .clone();
+    let wrong = (totp_at(&secret, &s.policy().params(), now) + 1) % 1_000_000;
+    let last_accepted_before = s.user(&uid).unwrap().mfa.totp_factors()[0].last_accepted_step;
+
+    assert_eq!(
+        s.finalize_mfa_sign_in_for_factor(&uid, &pending, &enrollment_id, wrong, now),
+        Err(MfaError::InvalidCode)
+    );
+    assert_eq!(s.pending_sign_in_user(&pending), Some(uid.clone()));
+    assert_eq!(
+        s.user(&uid).unwrap().mfa.totp_factors()[0].last_accepted_step,
+        last_accepted_before
+    );
+
+    let assertion = s
+        .finalize_mfa_sign_in_for_factor(
+            &uid,
+            &pending,
+            &enrollment_id,
+            totp_at(&secret, &s.policy().params(), now),
+            now,
+        )
+        .unwrap();
+    assert_eq!(assertion.second_factor_identifier, enrollment_id);
+    assert!(s.pending_sign_in_user(&pending).is_none());
+}
+
+#[test]
+fn totp_finalize_verifies_only_the_selected_enrollment() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("selected@example.com"), t0())
+        .unwrap();
+    let first_secret = vec![
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    ];
+    let second_secret = vec![
+        21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+    ];
+    s.user_mut(&uid)
+        .unwrap()
+        .mfa
+        .import_factors(
+            vec![
+                TotpFactor {
+                    mfa_enrollment_id: "factor-one".to_owned(),
+                    display_name: None,
+                    secret: TotpSecret::new(first_secret.clone()),
+                    enrolled_at: t0(),
+                    last_accepted_step: None,
+                },
+                TotpFactor {
+                    mfa_enrollment_id: "factor-two".to_owned(),
+                    display_name: None,
+                    secret: TotpSecret::new(second_secret.clone()),
+                    enrolled_at: t0(),
+                    last_accepted_step: None,
+                },
+            ],
+            vec![],
+        )
+        .unwrap();
+    let pending = s.start_mfa_sign_in(&uid, t0()).unwrap();
+    let assertion = s
+        .finalize_mfa_sign_in_for_factor(
+            &uid,
+            &pending,
+            "factor-two",
+            totp_at(&second_secret, &s.policy().params(), t0()),
+            t0(),
+        )
+        .unwrap();
+
+    assert_eq!(assertion.second_factor_identifier, "factor-two");
+    let factors = s.user(&uid).unwrap().mfa.totp_factors();
+    assert_eq!(factors[0].last_accepted_step, None);
+    assert!(factors[1].last_accepted_step.is_some());
 }
 
 #[test]

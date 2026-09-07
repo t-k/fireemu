@@ -897,17 +897,33 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
         .as_str()
         .unwrap()
         .to_owned();
-    let (status, replay) = post(
+    let wrong = (code + 1) % 1_000_000;
+    let (status, missing_id) = post(
         &s,
         &format!("{V2}/accounts/mfaSignIn:finalize"),
-        &json!({"mfaPendingCredential": credential2, "totpVerificationInfo": {"verificationCode": format!("{code:06}")}}),
+        &json!({"mfaPendingCredential": credential2, "totpVerificationInfo": {"verificationCode": format!("{wrong:06}")}}),
     );
     assert_eq!(status, 400);
-    assert!(replay["error"]["message"]
+    assert!(missing_id["error"]["message"]
         .as_str()
         .unwrap()
-        .starts_with("INVALID_CODE"));
+        .starts_with("MISSING_MFA_ENROLLMENT_ID"));
+    let (status, bad) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": credential2, "mfaEnrollmentId": enrollment_id, "totpVerificationInfo": {"verificationCode": format!("{wrong:06}")}}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(bad["error"]["message"], "INVALID_CODE");
     let next = advance(&s, 30);
+    let next_code = totp_at(&secret, &params, next);
+    let (status, signed2) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": credential2, "mfaEnrollmentId": enrollment_id, "totpVerificationInfo": {"verificationCode": format!("{next_code:06}")}}),
+    );
+    assert_eq!(status, 200, "{signed2}");
+
     let (_, pending3) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -917,12 +933,23 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
         .as_str()
         .unwrap()
         .to_owned();
-    let (status, _) = post(
+    let (status, replay) = post(
         &s,
         &format!("{V2}/accounts/mfaSignIn:finalize"),
-        &json!({"mfaPendingCredential": credential3, "totpVerificationInfo": {"verificationCode": format!("{:06}", totp_at(&secret, &params, next))}}),
+        &json!({"mfaPendingCredential": credential3, "mfaEnrollmentId": enrollment_id, "totpVerificationInfo": {"verificationCode": format!("{next_code:06}")}}),
     );
-    assert_eq!(status, 200);
+    assert_eq!(status, 400);
+    assert!(replay["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("INVALID_CODE"));
+    let following = advance(&s, 30);
+    let (status, signed3) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": credential3, "mfaEnrollmentId": enrollment_id, "totpVerificationInfo": {"verificationCode": format!("{:06}", totp_at(&secret, &params, following))}}),
+    );
+    assert_eq!(status, 200, "{signed3}");
 
     // A second enrollment is refused.
     let (status, again) = post(

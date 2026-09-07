@@ -149,6 +149,17 @@ fn totp_finalize_verifies_only_the_selected_enrollment() {
     let factors = s.user(&uid).unwrap().mfa.totp_factors();
     assert_eq!(factors[0].last_accepted_step, None);
     assert!(factors[1].last_accepted_step.is_some());
+
+    let legacy_pending = s.start_mfa_sign_in(&uid, t0()).unwrap();
+    let legacy = s
+        .finalize_mfa_sign_in(
+            &uid,
+            &legacy_pending,
+            totp_at(&first_secret, &s.policy().params(), t0()),
+            t0(),
+        )
+        .unwrap();
+    assert_eq!(legacy.second_factor_identifier, "factor-one");
 }
 
 #[test]

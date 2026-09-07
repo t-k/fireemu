@@ -908,6 +908,13 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
         .as_str()
         .unwrap()
         .starts_with("MISSING_MFA_ENROLLMENT_ID"));
+    let (status, unknown_id) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": credential2, "mfaEnrollmentId": "not-enrolled", "totpVerificationInfo": {"verificationCode": format!("{code:06}")}}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(unknown_id["error"]["message"], "MFA_ENROLLMENT_NOT_FOUND");
     let (status, bad) = post(
         &s,
         &format!("{V2}/accounts/mfaSignIn:finalize"),

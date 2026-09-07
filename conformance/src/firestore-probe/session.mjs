@@ -13,6 +13,7 @@
 // as the side produced it.
 
 import { readFile, writeFile } from "node:fs/promises";
+import { credentialMetadata, selectCredential } from "./credentials.mjs";
 
 const HOST = process.env.FIRESTORE_PROBE_HOST;
 const PROJECT = process.env.FIRESTORE_PROBE_PROJECT ?? "demo-conformance";
@@ -25,6 +26,7 @@ const REQUEST_TIMEOUT_MS = Number(process.env.FIRESTORE_PROBE_TIMEOUT_MS ?? 20_0
 // row with the emulator matrices without ever recording the production identifier.
 const SCHEME = process.env.FIRESTORE_PROBE_SCHEME ?? "http";
 const TOKEN = process.env.FIRESTORE_PROBE_TOKEN ?? "owner";
+const USER_TOKEN = process.env.FIRESTORE_PROBE_USER_TOKEN;
 const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
 const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
 
@@ -213,6 +215,10 @@ function resolvePath(path, raw) {
 
 async function step(spec, raw) {
   const init = { method: spec.method, headers: { ...spec.headers } };
+  const credential = selectCredential(spec, { ownerToken: TOKEN, userToken: USER_TOKEN });
+  for (const name of spec.credential === undefined ? [] : Object.keys(init.headers)) {
+    if (name.toLowerCase() === "authorization") delete init.headers[name];
+  }
   if (spec.body !== undefined) {
     init.headers["content-type"] = "application/json";
     init.body =
@@ -220,7 +226,7 @@ async function step(spec, raw) {
         ? spec.body
         : JSON.stringify(resolve(substituteProject(spec.body), raw));
   }
-  if (spec.owner !== false) init.headers.authorization = `Bearer ${TOKEN}`;
+  if (credential.authorization !== null) init.headers.authorization = credential.authorization;
   // A request the side never answers is recorded as such rather than hanging the run: the
   // official emulator's REST adapter drops the connection on a bytes-typed query parameter
   // (`?transaction=`) without writing a response.
@@ -295,7 +301,12 @@ async function main() {
         };
       }
       raw.set(spec.id, outcome.raw);
-      steps[spec.id] = outcome.recorded;
+      steps[spec.id] = {
+        ...outcome.recorded,
+        ...(spec.credential === undefined
+          ? {}
+          : { credential: credentialMetadata({ kind: spec.credential }) }),
+      };
     }
     results[program.id] = { steps };
   }

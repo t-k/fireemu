@@ -1089,6 +1089,65 @@ fn routed_projects_can_use_isolated_index_catalogs() {
     assert_eq!(error.code(), tonic::Code::FailedPrecondition);
 }
 
+#[test]
+fn project_index_exemptions_apply_to_writes_and_import_catalog_snapshots_only_in_that_project() {
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let backend = LocalBackend::new(
+        gateway,
+        Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+        7,
+    );
+    let collection = CollectionId::try_new("items").unwrap();
+    let field = FieldPath::parse("v").unwrap();
+    let mut indexes = IndexSet::default();
+    indexes.set_single_field_indexes(&collection, &field, vec![]);
+    backend.replace_project_database_indexes("demo-a", "(default)", indexes);
+    assert!(backend
+        .indexes_for_project_database("demo-a", "(default)")
+        .single_field_modes(&collection, &field)
+        .is_empty());
+    assert_eq!(
+        backend
+            .indexes_for_project_database("demo-b", "(default)")
+            .single_field_modes(&collection, &field)
+            .len(),
+        3
+    );
+    let oversized = |project: &str| {
+        let mut request = history_budget_write(project, "(default)", "a");
+        let Some(pb::write::Operation::Update(document)) = &mut request.writes[0].operation else {
+            unreachable!()
+        };
+        document.fields.insert(
+            "v".into(),
+            pb::Value {
+                value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+                    values: (0..20_000).map(i).collect(),
+                })),
+            },
+        );
+        request
+    };
+    assert!(backend.commit(&oversized("demo-a")).is_ok());
+    assert_eq!(
+        backend.commit(&oversized("demo-b")).unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    backend.replace_project_database_indexes("demo-a", "(default)", IndexSet::default());
+    assert_eq!(
+        backend.commit(&oversized("demo-a")).unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+}
+
 async fn start_with_edition(
     edition: FirestoreEdition,
 ) -> (

@@ -6,7 +6,7 @@
 //! (Enterprise); the validator never guesses in favour of the query.
 
 use core::fmt;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::ids::CollectionId;
@@ -102,11 +102,14 @@ pub struct SingleFieldExemption {
     pub query_scope: IndexQueryScope,
 }
 
+type SingleFieldModes = Vec<(IndexQueryScope, IndexFieldMode)>;
+type SingleFieldOverrides = BTreeMap<(String, Vec<String>), SingleFieldModes>;
+
 /// The set of configured indexes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexSet {
     composites: Vec<IndexDefinition>,
-    exemptions: BTreeSet<(String, String, bool)>,
+    single_fields: SingleFieldOverrides,
 }
 
 impl IndexSet {
@@ -117,11 +120,67 @@ impl IndexSet {
 
     /// Adds a single-field exemption.
     pub fn add_exemption(&mut self, exemption: &SingleFieldExemption) {
-        self.exemptions.insert((
-            exemption.collection_group.as_str().to_owned(),
-            exemption.field.canonical(),
-            exemption.query_scope == IndexQueryScope::CollectionGroup,
-        ));
+        let mut modes = self.single_field_modes(&exemption.collection_group, &exemption.field);
+        modes.retain(|(scope, _)| *scope != exemption.query_scope);
+        self.set_single_field_indexes(&exemption.collection_group, &exemption.field, modes);
+    }
+
+    /// Overrides automatic modes for a literal field, inherited by map descendants.
+    pub fn set_single_field_indexes(
+        &mut self,
+        collection: &CollectionId,
+        field: &FieldPath,
+        modes: Vec<(IndexQueryScope, IndexFieldMode)>,
+    ) {
+        let mut unique = Vec::new();
+        for mode in modes {
+            if !unique.contains(&mode) {
+                unique.push(mode);
+            }
+        }
+        self.single_fields.insert(
+            (collection.as_str().to_owned(), field.segments().to_vec()),
+            unique,
+        );
+    }
+
+    /// Overrides defaults for every field in a collection group (the unquoted `*`).
+    pub fn set_default_single_field_indexes(
+        &mut self,
+        collection: &CollectionId,
+        modes: Vec<(IndexQueryScope, IndexFieldMode)>,
+    ) {
+        let mut unique = Vec::new();
+        for mode in modes {
+            if !unique.contains(&mode) {
+                unique.push(mode);
+            }
+        }
+        self.single_fields
+            .insert((collection.as_str().to_owned(), Vec::new()), unique);
+    }
+
+    /// Effective automatic modes, after the most specific field override.
+    #[must_use]
+    pub fn single_field_modes(
+        &self,
+        collection: &CollectionId,
+        field: &FieldPath,
+    ) -> Vec<(IndexQueryScope, IndexFieldMode)> {
+        self.single_fields
+            .iter()
+            .filter(|((c, path), _)| c == collection.as_str() && field.segments().starts_with(path))
+            .max_by_key(|((_, path), _)| path.len())
+            .map_or_else(
+                || {
+                    vec![
+                        (IndexQueryScope::Collection, IndexFieldMode::Ascending),
+                        (IndexQueryScope::Collection, IndexFieldMode::Descending),
+                        (IndexQueryScope::Collection, IndexFieldMode::Contains),
+                    ]
+                },
+                |(_, modes)| modes.clone(),
+            )
     }
 
     /// Composite indexes.
@@ -130,9 +189,16 @@ impl IndexSet {
         &self.composites
     }
 
-    fn is_exempt(&self, collection: &CollectionId, field: &FieldPath, group: bool) -> bool {
-        self.exemptions
-            .contains(&(collection.as_str().to_owned(), field.canonical(), group))
+    pub(crate) fn is_exempt(
+        &self,
+        collection: &CollectionId,
+        field: &FieldPath,
+        group: bool,
+    ) -> bool {
+        !self
+            .single_field_modes(collection, field)
+            .iter()
+            .any(|(scope, _)| (*scope == IndexQueryScope::CollectionGroup) == group)
     }
 }
 
@@ -342,6 +408,25 @@ fn automatic_index_for(
     let field = touched.into_iter().next();
     if let Some(f) = &field {
         if set.is_exempt(collection, f, group) {
+            return None;
+        }
+        let scope = if group {
+            IndexQueryScope::CollectionGroup
+        } else {
+            IndexQueryScope::Collection
+        };
+        let supported =
+            set.single_field_modes(collection, f)
+                .iter()
+                .any(|(candidate_scope, mode)| {
+                    *candidate_scope == scope
+                        && if req.contains.is_some() {
+                            *mode == IndexFieldMode::Contains
+                        } else {
+                            *mode != IndexFieldMode::Contains
+                        }
+                });
+        if !supported {
             return None;
         }
     }

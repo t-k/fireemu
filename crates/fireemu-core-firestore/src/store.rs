@@ -807,6 +807,7 @@ struct CompactionForecast {
 /// One Firestore database.
 #[derive(Debug, Clone)]
 pub struct FirestoreState {
+    index_catalog: Arc<crate::index::IndexSet>,
     /// Version history per path; `None` entries are tombstones.
     history: DocumentHistory,
     /// Retained paths grouped by their exact parent and innermost collection.
@@ -866,6 +867,7 @@ pub struct FirestoreState {
 impl Default for FirestoreState {
     fn default() -> Self {
         Self {
+            index_catalog: Arc::new(crate::index::IndexSet::default()),
             history: BTreeMap::new(),
             direct_collection_paths: BTreeMap::new(),
             live_direct_collection_paths: BTreeMap::new(),
@@ -1205,6 +1207,13 @@ impl FirestoreState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Installs the index generation used to validate subsequent writes and imports.
+    pub fn set_index_catalog(&mut self, indexes: crate::index::IndexSet) {
+        if *self.index_catalog != indexes {
+            self.index_catalog = Arc::new(indexes);
+        }
     }
 
     /// Empty database refusing the limits of `scope`.
@@ -1648,6 +1657,7 @@ impl FirestoreState {
             listing_trie,
         ) = Self::rebuild_scope_paths(&history);
         let mut snapshot = Self {
+            index_catalog: Arc::clone(&self.index_catalog),
             history,
             direct_collection_paths,
             live_direct_collection_paths,
@@ -1713,6 +1723,8 @@ impl FirestoreState {
                 version: next_version,
             };
             validate_document(&document)?;
+            self.index_catalog
+                .document_index_usage(&document.path, &document.fields)?;
             staged.insert(imported.path, document);
         }
         self.last_commit_time = Some(commit_time);
@@ -2974,6 +2986,8 @@ impl FirestoreState {
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(doc) = &next {
                 validate_document(doc)?;
+                self.index_catalog
+                    .document_index_usage(&doc.path, &doc.fields)?;
             }
             if matches!(write.op, WriteOp::Verify { .. }) {
                 // A verify changes nothing and reports the document's current update time,
@@ -3626,17 +3640,31 @@ impl FirestoreState {
             return Vec::new();
         };
         let scope = QueryScope::collection_group_under(parent.cloned(), collection_id);
-        let visible = paths
-            .iter()
-            .map(AsRef::as_ref)
-            .filter(|path| {
+        let visible = || {
+            paths.iter().map(AsRef::as_ref).filter(|path| {
                 self.get_at(path, version)
                     .is_some_and(|document| document_in_scope(document, &scope))
             })
-            .collect::<Vec<_>>();
-        let cuts = partition_count.min(visible.len().saturating_sub(1));
-        (1..=cuts)
-            .map(|index| visible[visible.len() * index / (cuts + 1)].clone())
+        };
+        let count = visible().count();
+        let cuts = partition_count.min(count.saturating_sub(1));
+        if cuts == 0 {
+            return Vec::new();
+        }
+        // Two passes retain only the requested cut paths, not every matching document.
+        // u128 avoids an overflow for a large collection/count product.
+        let mut next = 1usize;
+        visible()
+            .enumerate()
+            .filter_map(|(rank, path)| {
+                let target = (count as u128 * next as u128 / (cuts as u128 + 1)) as usize;
+                if next <= cuts && rank == target {
+                    next += 1;
+                    Some(path.clone())
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 

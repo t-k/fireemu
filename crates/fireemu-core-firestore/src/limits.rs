@@ -43,6 +43,13 @@ pub const FIELD_NAME: &str = "FS-LIMIT-FIELD-NAME";
 /// Maximum string or bytes field payload, excluding storage accounting overhead.
 pub const MAX_FIELD_PAYLOAD_BYTES: usize = 1_048_487;
 
+/// Per-document automatic and composite entry count, checked before publication.
+pub const INDEX_ENTRIES_PER_DOCUMENT: &str = "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT";
+/// Largest single index entry after indexed-value truncation.
+pub const INDEX_ENTRY_BYTES: &str = "FS-LIMIT-INDEX-ENTRY-BYTES";
+/// Sum of automatic and composite entry sizes.
+pub const INDEX_ENTRY_SUM_PER_DOCUMENT: &str = "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT";
+
 /// Every catalog limit the local Firestore runtime enforces.
 pub const ENFORCED_LIMIT_IDS: &[&str] = &[
     DOCUMENT_BYTES,
@@ -55,6 +62,10 @@ pub const ENFORCED_LIMIT_IDS: &[&str] = &[
     SUBCOLLECTION_DEPTH,
     DOCUMENT_NAME_BYTES,
     FIELD_NAME,
+    INDEX_ENTRIES_PER_DOCUMENT,
+    INDEX_ENTRY_BYTES,
+    INDEX_ENTRY_SUM_PER_DOCUMENT,
+    "FS-LIMIT-FIELDS-PER-COMPOSITE-INDEX",
 ];
 
 /// Every Standard query limit `Query::check_standard_limits` evaluates

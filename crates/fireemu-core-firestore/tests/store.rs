@@ -74,7 +74,7 @@ fn nested_map_field_names_are_validated_and_failure_is_atomic() {
         }
     }
     let mut state = FirestoreState::new();
-    let value = Value::Map(BTreeMap::from([("é".repeat(750), Value::Integer(1))]));
+    let value = Value::Map(BTreeMap::from([("é".repeat(746), Value::Integer(1))]));
     state
         .commit(&[set("a/valid", &[("nested", value)])], None, t(0))
         .unwrap();
@@ -102,6 +102,85 @@ fn field_payload_size_accepts_the_production_boundary_and_rejects_one_more_byte(
             }
         }
     }
+}
+
+#[test]
+fn import_index_rejection_does_not_publish_the_valid_prefix() {
+    let mut source = FirestoreState::new();
+    let mut indexes = fireemu_core_firestore::index::IndexSet::default();
+    indexes.set_default_single_field_indexes(
+        &fireemu_core_types::ids::CollectionId::try_new("a").unwrap(),
+        vec![],
+    );
+    source.set_index_catalog(indexes.clone());
+    source
+        .commit(
+            &[
+                set("a/first", &[("v", Value::Integer(1))]),
+                set(
+                    "a/second",
+                    &[("v", Value::Array((0..20_000).map(Value::Integer).collect()))],
+                ),
+            ],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let documents = vec![
+        source.get(&path("a/first")).unwrap().clone(),
+        source.get(&path("a/second")).unwrap().clone(),
+    ]
+    .into_iter()
+    .map(|document| fireemu_core_firestore::store::ImportedDocument {
+        path: document.path,
+        fields: document.fields,
+        create_time: Some(document.create_time),
+        update_time: Some(document.update_time),
+    })
+    .collect::<Vec<_>>();
+    let mut target = FirestoreState::new();
+    assert!(target.import_documents(documents.clone(), t(1)).is_err());
+    assert!(target.get(&path("a/first")).is_none());
+    assert!(target.get(&path("a/second")).is_none());
+    target.set_index_catalog(indexes);
+    target.import_documents(documents, t(1)).unwrap();
+    assert!(target.get(&path("a/second")).is_some());
+}
+
+#[test]
+fn index_entry_limit_rejects_an_entire_commit_and_exemption_allows_the_document() {
+    use fireemu_core_firestore::index::{IndexQueryScope, IndexSet, SingleFieldExemption};
+    use fireemu_core_types::ids::CollectionId;
+    let mut state = FirestoreState::new();
+    let at_limit = Value::Array((0..19_999).map(Value::Integer).collect());
+    state
+        .commit(&[set("a/accepted", &[("v", at_limit)])], None, t(0))
+        .unwrap();
+    let over = Value::Array((0..20_000).map(Value::Integer).collect());
+    let result = state.commit(
+        &[
+            set("a/first", &[("v", Value::Integer(1))]),
+            set("a/oversized", &[("v", over.clone())]),
+        ],
+        None,
+        t(1),
+    );
+    assert!(
+        matches!(result, Err(FirestoreError::InvalidArgument(_))),
+        "index entry overflow accepted"
+    );
+    assert!(state.get(&path("a/first")).is_none());
+    assert!(state.get(&path("a/oversized")).is_none());
+    let mut indexes = IndexSet::default();
+    indexes.add_exemption(&SingleFieldExemption {
+        collection_group: CollectionId::try_new("a").unwrap(),
+        field: FieldPath::parse("v").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+    });
+    state.set_index_catalog(indexes);
+    state
+        .commit(&[set("a/exempt", &[("v", over)])], None, t(2))
+        .unwrap();
 }
 
 #[test]

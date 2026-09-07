@@ -53,6 +53,15 @@ pub fn load_indexes(path: &str) -> Result<IndexSet, String> {
 /// Parses one `firestore.indexes.json` generation already read by a reload supervisor.
 pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
     let json: Value = serde_json::from_str(text).map_err(|e| format!("{path}: {e}"))?;
+    for key in ["indexes", "fieldOverrides"] {
+        if json
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.len() > 200)
+        {
+            return Err(format!("{path}: {key} exceeds the 200 configuration limit for the supported billing-disabled plan"));
+        }
+    }
     let mut set = IndexSet::default();
     for idx in json
         .get("indexes")
@@ -98,12 +107,32 @@ pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
                 mode,
             });
         }
+        if fields.len() > 100 {
+            return Err(format!(
+                "{path}: FS-LIMIT-FIELDS-PER-COMPOSITE-INDEX: maximum 100 fields"
+            ));
+        }
+        if fields
+            .iter()
+            .filter(|field| field.mode == IndexFieldMode::Contains)
+            .count()
+            > 1
+        {
+            return Err(format!(
+                "{path}: a composite index may contain only one array field"
+            ));
+        }
         set.add_composite(IndexDefinition {
             collection_group: CollectionId::try_new(collection).map_err(|e| e.to_string())?,
             query_scope: scope,
             fields,
         });
     }
+    parse_field_overrides(&json, &mut set)?;
+    Ok(set)
+}
+
+fn parse_field_overrides(json: &Value, set: &mut IndexSet) -> Result<(), String> {
     for ov in json
         .get("fieldOverrides")
         .and_then(Value::as_array)
@@ -118,25 +147,45 @@ pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
             .get("fieldPath")
             .and_then(Value::as_str)
             .ok_or("fieldOverride without fieldPath")?;
-        let disabled = ov
-            .get("indexes")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty);
-        if disabled {
-            for scope in [
-                IndexQueryScope::Collection,
-                IndexQueryScope::CollectionGroup,
-            ] {
-                set.add_exemption(&fireemu_core_firestore::index::SingleFieldExemption {
-                    collection_group: CollectionId::try_new(collection)
-                        .map_err(|e| e.to_string())?,
-                    field: FieldPath::parse(path).map_err(|e| e.to_string())?,
-                    query_scope: scope,
-                });
+        if let Some(indexes) = ov.get("indexes").and_then(Value::as_array) {
+            let mut modes = Vec::new();
+            for index in indexes {
+                let scope = match index
+                    .get("queryScope")
+                    .and_then(Value::as_str)
+                    .unwrap_or("COLLECTION")
+                {
+                    "COLLECTION" => IndexQueryScope::Collection,
+                    "COLLECTION_GROUP" => IndexQueryScope::CollectionGroup,
+                    scope => return Err(format!("unsupported queryScope {scope}")),
+                };
+                let mode = match (
+                    index.get("order").and_then(Value::as_str),
+                    index.get("arrayConfig").and_then(Value::as_str),
+                ) {
+                    (Some("ASCENDING"), None) => IndexFieldMode::Ascending,
+                    (Some("DESCENDING"), None) => IndexFieldMode::Descending,
+                    (None, Some("CONTAINS")) => IndexFieldMode::Contains,
+                    _ => {
+                        return Err(format!(
+                            "field override {path}: one order or arrayConfig required"
+                        ))
+                    }
+                };
+                if !modes.contains(&(scope, mode)) {
+                    modes.push((scope, mode));
+                }
             }
+            let collection = CollectionId::try_new(collection).map_err(|e| e.to_string())?;
+            if path == "*" {
+                set.set_default_single_field_indexes(&collection, modes);
+                continue;
+            }
+            let field = FieldPath::parse(path).map_err(|e| e.to_string())?;
+            set.set_single_field_indexes(&collection, &field, modes);
         }
     }
-    Ok(set)
+    Ok(())
 }
 
 /// The capability manifest data (spec 4). It is a data file rather than a `json!` literal so
@@ -182,4 +231,53 @@ pub fn capabilities_manifest(profile: crate::config::CompatibilityProfile) -> Va
         "profile": profile.as_str(),
         "capabilities": capability_entries(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_configuration_limits_are_inclusive() {
+        let index =
+            json!({"collectionGroup":"tasks", "fields":[{"fieldPath":"a", "order":"ASCENDING"}]});
+        for count in [200, 201] {
+            let config = json!({"indexes": vec![index.clone(); count]});
+            assert_eq!(
+                parse_indexes("test", &config.to_string()).is_ok(),
+                count == 200
+            );
+            let config = json!({"fieldOverrides": vec![json!({"collectionGroup":"tasks", "fieldPath":"a", "indexes":[]}); count]});
+            assert_eq!(
+                parse_indexes("test", &config.to_string()).is_ok(),
+                count == 200
+            );
+        }
+        for count in [100, 101] {
+            let fields = (0..count)
+                .map(|i| json!({"fieldPath":format!("f{i}"),"order":"ASCENDING"}))
+                .collect::<Vec<_>>();
+            let config = json!({"indexes":[{"collectionGroup":"tasks","fields":fields}]});
+            assert_eq!(
+                parse_indexes("test", &config.to_string()).is_ok(),
+                count == 100
+            );
+        }
+    }
+
+    #[test]
+    fn field_override_preserves_enabled_modes_and_rejects_conflicting_modes() {
+        let config = json!({"fieldOverrides":[{"collectionGroup":"tasks", "fieldPath":"*", "indexes":[]}, {"collectionGroup":"tasks", "fieldPath":"map.x", "indexes":[{"order":"DESCENDING", "queryScope":"COLLECTION_GROUP"}]}]});
+        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let collection = CollectionId::try_new("tasks").unwrap();
+        assert!(indexes
+            .single_field_modes(&collection, &FieldPath::parse("map.y").unwrap())
+            .is_empty());
+        assert_eq!(
+            indexes.single_field_modes(&collection, &FieldPath::parse("map.x").unwrap()),
+            vec![(IndexQueryScope::CollectionGroup, IndexFieldMode::Descending)]
+        );
+        let config = json!({"fieldOverrides":[{"collectionGroup":"tasks", "fieldPath":"a", "indexes":[{"order":"ASCENDING", "arrayConfig":"CONTAINS"}]}]});
+        assert!(parse_indexes("test", &config.to_string()).is_err());
+    }
 }

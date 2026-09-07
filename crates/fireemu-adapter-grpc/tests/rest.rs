@@ -173,6 +173,96 @@ fn document_crud_over_rest() {
 }
 
 #[test]
+fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() {
+    let s = state(None);
+    let mut read_time = String::new();
+    for index in 0..12 {
+        let (status, document) = call(
+            &s,
+            "PATCH",
+            &format!(
+                "{DOCS}/owners/{}/items/i{index:02}",
+                ["a", "a-", "b"][index % 3]
+            ),
+            json!({"fields": {"value": {"integerValue": index.to_string()}}}),
+        );
+        assert_eq!(status, 200, "{document}");
+        read_time = document["updateTime"].as_str().unwrap().to_owned();
+    }
+    let query = json!({"from": [{"collectionId": "items", "allDescendants": true}]});
+    let mut token = String::new();
+    let mut cuts = Vec::new();
+    loop {
+        let (status, page) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:partitionQuery"),
+            json!({"structuredQuery": query, "partitionCount": "4", "pageSize": 2, "pageToken": token, "readTime": read_time}),
+        );
+        assert_eq!(status, 200, "{page}");
+        let points = page["partitions"].as_array().unwrap();
+        assert!(points.len() <= 2);
+        cuts.extend(points.iter().cloned());
+        token = page["nextPageToken"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        if token.is_empty() {
+            break;
+        }
+        assert!(cuts.len() < 4);
+    }
+    assert_eq!(cuts.len(), 4);
+    cuts.sort_by(|left, right| {
+        left["values"][0]["referenceValue"]
+            .as_str()
+            .unwrap()
+            .split('/')
+            .cmp(
+                right["values"][0]["referenceValue"]
+                    .as_str()
+                    .unwrap()
+                    .split('/'),
+            )
+    });
+    let names = |rows: &Value| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|row| row["document"]["name"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    let (status, all) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": query, "readTime": read_time}),
+    );
+    assert_eq!(status, 200, "{all}");
+    let expected = names(&all);
+    assert_eq!(expected.len(), 12);
+    let mut actual = Vec::new();
+    for index in 0..=cuts.len() {
+        let mut range = query.clone();
+        if index > 0 {
+            range["startAt"] = cuts[index - 1].clone();
+        }
+        if index < cuts.len() {
+            range["endAt"] = cuts[index].clone();
+        }
+        let (status, rows) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": range, "readTime": read_time}),
+        );
+        assert_eq!(status, 200, "{rows}");
+        actual.extend(names(&rows));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn commit_query_aggregation_and_transactions_over_rest() {
     let s = state(None);

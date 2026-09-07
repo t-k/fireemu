@@ -1848,6 +1848,20 @@ impl LocalBackend {
         transaction: Option<&TransactionId>,
         now: fireemu_core_types::time::LogicalInstant,
     ) -> Result<CommitResult, Status> {
+        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
+        let key = (
+            Some(parent.project.as_str().to_owned()),
+            parent.database.as_str().to_owned(),
+        );
+        let shared = (None, parent.database.as_str().to_owned());
+        db.set_index_catalog(
+            indexes
+                .get(&key)
+                .or_else(|| indexes.get(&shared))
+                .cloned()
+                .unwrap_or_default(),
+        );
+        drop(indexes);
         let actor = Self::take_commit_actor();
         let sink = self
             .change_admission
@@ -2030,6 +2044,24 @@ impl LocalBackend {
                     .unwrap_or_default()
             },
         )
+    }
+
+    /// Returns the project-specific catalog, falling back to the shared database catalog.
+    #[must_use]
+    pub fn indexes_for_project_database(
+        &self,
+        project: &str,
+        database: &str,
+    ) -> fireemu_core_firestore::index::IndexSet {
+        let indexes = self
+            .indexes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        indexes
+            .get(&(Some(project.to_owned()), database.to_owned()))
+            .or_else(|| indexes.get(&(None, database.to_owned())))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Runs an accepted query at the latest version and returns core documents.

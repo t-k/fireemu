@@ -16,6 +16,140 @@ use fireemu_core_types::ids::CollectionId;
 fn fp(s: &str) -> FieldPath {
     FieldPath::parse(s).unwrap()
 }
+
+#[test]
+fn index_usage_counts_maps_arrays_and_distinct_array_elements() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+    let path = DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        "tasks/a",
+    )
+    .unwrap();
+    let fields = BTreeMap::from([
+        (
+            "tags".into(),
+            Value::Array(vec![
+                Value::Integer(1),
+                Value::Integer(1),
+                Value::Integer(2),
+            ]),
+        ),
+        (
+            "map".into(),
+            Value::Map(BTreeMap::from([("x".into(), Value::Integer(3))])),
+        ),
+    ]);
+    let mut indexes = IndexSet::default();
+    let usage = indexes.document_index_usage(&path, &fields).unwrap();
+    assert_eq!(usage.entries, 10); // Array: 2 ordered + 4 membership; map and subfield: 4.
+    assert!(usage.total_bytes > 0);
+    indexes.add_exemption(&SingleFieldExemption {
+        collection_group: CollectionId::try_new("tasks").unwrap(),
+        field: fp("map"),
+        query_scope: IndexQueryScope::Collection,
+    });
+    assert_eq!(
+        indexes
+            .document_index_usage(&path, &fields)
+            .unwrap()
+            .entries,
+        6
+    );
+    indexes.add_composite(composite(&[
+        ("tags", IndexFieldMode::Contains),
+        ("map.x", IndexFieldMode::Ascending),
+    ]));
+    assert_eq!(
+        indexes
+            .document_index_usage(&path, &fields)
+            .unwrap()
+            .entries,
+        8
+    );
+}
+
+#[test]
+fn index_entry_size_and_total_size_budgets_are_independent() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+    let path = DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        "tasks/a",
+    )
+    .unwrap();
+    let fields = (0..6)
+        .map(|n| (format!("v{n}"), Value::String("x".repeat(1600))))
+        .collect::<BTreeMap<_, _>>();
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(composite(&[
+        ("v0", IndexFieldMode::Ascending),
+        ("v1", IndexFieldMode::Ascending),
+        ("v2", IndexFieldMode::Ascending),
+        ("v3", IndexFieldMode::Ascending),
+        ("v4", IndexFieldMode::Ascending),
+    ]));
+    assert!(indexes.document_index_usage(&path, &fields).is_ok());
+    indexes.add_composite(composite(&[
+        ("v0", IndexFieldMode::Ascending),
+        ("v1", IndexFieldMode::Ascending),
+        ("v2", IndexFieldMode::Ascending),
+        ("v3", IndexFieldMode::Ascending),
+        ("v4", IndexFieldMode::Ascending),
+        ("v5", IndexFieldMode::Ascending),
+    ]));
+    assert!(indexes
+        .document_index_usage(&path, &fields)
+        .unwrap_err()
+        .to_string()
+        .contains("FS-LIMIT-INDEX-ENTRY-BYTES"));
+    let long_path = DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        &format!("tasks/{}", "x".repeat(1490)),
+    )
+    .unwrap();
+    let array = |count| {
+        BTreeMap::from([(
+            "v".into(),
+            Value::Array((0..count).map(Value::Integer).collect()),
+        )])
+    };
+    assert!(IndexSet::default()
+        .document_index_usage(&long_path, &array(2000))
+        .is_ok());
+    assert!(IndexSet::default()
+        .document_index_usage(&long_path, &array(3000))
+        .unwrap_err()
+        .to_string()
+        .contains("FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT"));
+}
+
+#[test]
+fn wildcard_exemption_allows_explicit_map_child_collection_group_index() {
+    let mut indexes = IndexSet::default();
+    let collection = CollectionId::try_new("tasks").unwrap();
+    indexes.set_default_single_field_indexes(&collection, vec![]);
+    indexes.set_single_field_indexes(
+        &collection,
+        &fp("map.x"),
+        vec![(IndexQueryScope::CollectionGroup, IndexFieldMode::Ascending)],
+    );
+    assert!(indexes
+        .single_field_modes(&collection, &fp("map"))
+        .is_empty());
+    assert!(indexes
+        .single_field_modes(&collection, &fp("map.y"))
+        .is_empty());
+    assert_eq!(
+        indexes.single_field_modes(&collection, &fp("map.x")),
+        vec![(IndexQueryScope::CollectionGroup, IndexFieldMode::Ascending)]
+    );
+}
 fn field(path: &str, op: FieldOp, v: Value) -> FilterExpr {
     FilterExpr::Field {
         field: fp(path),
@@ -337,6 +471,40 @@ fn conservative_accept_implies_reference_support() {
         IndexDecision::UseIndex { index } => assert_eq!(index.fields.len(), 2), // done ASC, __name__ ASC
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn contains_only_override_cannot_serve_scalar_equality() {
+    let mut indexes = IndexSet::default();
+    indexes.set_single_field_indexes(
+        &CollectionId::try_new("tasks").unwrap(),
+        &fp("tags"),
+        vec![(IndexQueryScope::Collection, IndexFieldMode::Contains)],
+    );
+    let scalar = tasks().with_filter(field("tags", FieldOp::Equal, Value::Integer(1)));
+    assert!(matches!(
+        decide(&scalar, &indexes, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+    let membership = tasks().with_filter(field("tags", FieldOp::ArrayContains, Value::Integer(1)));
+    assert!(matches!(
+        decide(&membership, &indexes, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+}
+
+#[test]
+fn literal_star_field_exemption_does_not_disable_other_fields() {
+    let mut indexes = IndexSet::default();
+    let collection = CollectionId::try_new("tasks").unwrap();
+    indexes.set_single_field_indexes(&collection, &fp("`*`"), vec![]);
+    assert!(indexes
+        .single_field_modes(&collection, &fp("`*`"))
+        .is_empty());
+    assert_eq!(
+        indexes.single_field_modes(&collection, &fp("other")).len(),
+        3
+    );
 }
 
 fn emulator() -> PlanningContext {

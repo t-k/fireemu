@@ -361,6 +361,11 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
         };
         for (key, documents) in databases {
             let mut state = FirestoreState::new();
+            state.set_index_catalog(
+                endpoints
+                    .backend
+                    .indexes_for_project_database(&key.0, &key.1),
+            );
             state.import_documents(documents, now).map_err(|e| {
                 ArtifactError::new(
                     "firestore",

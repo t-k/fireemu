@@ -201,7 +201,7 @@
       "enforcementStage": "config-load",
       "implemented": "unsupported",
       "officialText": "Maximum number of composite indexes for a database: 200 (billing disabled), 1,000 (billing enabled); support may raise the limit",
-      "notes": "Override via FirestorePlanProfile::composite_index_limit_override."
+      "notes": "Configuration loading enforces 200 entries for the supported billing-disabled plan. Billing-enabled profiles and raised limits remain unsupported."
     },
     {
       "id": "FS-LIMIT-SINGLE-FIELD-CONFIGS",
@@ -216,7 +216,7 @@
       "enforcementStage": "config-load",
       "implemented": "unsupported",
       "officialText": "Maximum number of single-field configurations for a database: 200 (billing disabled), 1,000 (billing enabled)",
-      "notes": "An exemption and a TTL on the same field count as one configuration."
+      "notes": "Configuration loading enforces 200 entries for the supported billing-disabled plan. Billing-enabled profiles and raised limits remain unsupported."
     },
     {
       "id": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
@@ -226,9 +226,9 @@
       "maximum": 40000,
       "precision": "exact",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum number of index entries for each document: 40,000",
-      "notes": "Exact once the native index generator counts entries."
+      "notes": "Automatic and configured composite entries are accounted before atomic write/import publication, including inherited field overrides. Indexed values are capped at 1,500 bytes for storage accounting."
     },
     {
       "id": "FS-LIMIT-FIELDS-PER-COMPOSITE-INDEX",
@@ -238,9 +238,9 @@
       "maximum": 100,
       "precision": "exact",
       "enforcementStage": "config-load",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum number of fields in a composite index: 100",
-      "notes": ""
+      "notes": "Index configuration loading rejects more than 100 fields and more than one array field."
     },
     {
       "id": "FS-LIMIT-INDEX-ENTRY-BYTES",
@@ -250,9 +250,9 @@
       "maximum": 7680,
       "precision": "boundary-conformance",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum size of an index entry: 7.5 KiB",
-      "notes": ""
+      "notes": "Automatic and configured composite entries are accounted before atomic write/import publication, including inherited field overrides. Indexed values are capped at 1,500 bytes for storage accounting."
     },
     {
       "id": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
@@ -262,9 +262,9 @@
       "maximum": 8388608,
       "precision": "boundary-conformance",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum sum of the sizes of a document's index entries: 8 MiB",
-      "notes": "Sum over all single-field and composite index entries."
+      "notes": "Automatic and configured composite entries are accounted before atomic write/import publication, including inherited field overrides. Indexed values are capped at 1,500 bytes for storage accounting."
     },
     {
       "id": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",

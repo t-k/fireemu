@@ -4301,7 +4301,7 @@ const MAX_AGGREGATIONS_PER_QUERY: usize = 5;
 
 /// Decodes and validates the aggregation list: 1..=5 entries, positive `count.up_to`,
 /// unique aliases.
-fn decode_aggregations(
+pub(crate) fn decode_aggregations(
     saq: &pb::StructuredAggregationQuery,
 ) -> Result<(Vec<String>, Vec<Aggregation>), Status> {
     if saq.aggregations.is_empty() || saq.aggregations.len() > MAX_AGGREGATIONS_PER_QUERY {

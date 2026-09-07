@@ -122,6 +122,17 @@ impl Gateway {
         self.validate_query_with_indexes(query, &self.indexes)
     }
 
+    /// Runs every strict check for an aggregation query using the gateway's index catalog.
+    /// Sum and average target fields participate in index validation without changing the
+    /// executable query.
+    pub fn validate_aggregation_query(
+        &self,
+        query: &Query,
+        aggregations: &[Aggregation],
+    ) -> Result<AcceptedQuery, Rejection> {
+        self.validate_aggregation_query_with_indexes(query, aggregations, &self.indexes)
+    }
+
     /// Runs every strict check with a borrowed database-specific index catalog.
     pub fn validate_query_with_indexes(
         &self,

@@ -21,7 +21,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::decode::{decode_structured_query, parse_parent};
 use crate::encode::decode_document_name;
 use crate::gateway::{Gateway, Rejection};
-use crate::local::LocalBackend;
+use crate::local::{decode_aggregations, LocalBackend};
 use crate::rules::{is_owner_credential, same_epoch, Principal, RulesEnforcer};
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use fireemu_core_app_check::header::{classify_app_check_header, is_app_check_header};
@@ -317,13 +317,14 @@ impl GatewayService {
                 "structured_aggregation_query requires a structured_query",
             ));
         };
+        let (_, aggregations) = decode_aggregations(aggregation)?;
         let accepted = if let Some(local) = self.local_backend() {
-            local.accepted_query(&parent, sq)?
+            local.accepted_aggregation_query(&parent, sq, &aggregations)?
         } else {
             let query = decode_structured_query(&parent, sq)
                 .map_err(|e| Rejection::Decode(e).to_status())?;
             self.gateway
-                .validate_query(&query)
+                .validate_aggregation_query(&query, &aggregations)
                 .map_err(|r| r.to_status())?
         };
         Ok(accepted.warnings)
@@ -1100,10 +1101,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use fireemu_core_firestore::field_path::FieldPath;
     use fireemu_core_firestore::index::{IndexSet, PlanningContext};
     use fireemu_core_firestore::store::FirestoreState;
     use fireemu_core_session::clock::VirtualClock;
     use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::ids::CollectionId;
     use fireemu_core_types::time::LogicalInstant;
 
     use super::*;
@@ -1139,6 +1142,63 @@ mod tests {
             )),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn proxy_aggregation_validation_rejects_unindexed_sum_before_upstream() {
+        let collection = CollectionId::try_new("orders").unwrap();
+        let mut indexes = IndexSet::default();
+        indexes.set_single_field_indexes(&collection, &FieldPath::parse("amount").unwrap(), vec![]);
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: fireemu_core_firestore::index::IndexValidationPolicy::Conservative,
+            },
+            indexes,
+        };
+        let service = GatewayService::new(gateway, None);
+        let request = pb::RunAggregationQueryRequest {
+            parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    pb::StructuredAggregationQuery {
+                        query_type: Some(
+                            pb::structured_aggregation_query::QueryType::StructuredQuery(
+                                pb::StructuredQuery {
+                                    from: vec![pb::structured_query::CollectionSelector {
+                                        collection_id: "orders".to_owned(),
+                                        all_descendants: false,
+                                    }],
+                                    ..Default::default()
+                                },
+                            ),
+                        ),
+                        aggregations: vec![pb::structured_aggregation_query::Aggregation {
+                            alias: "total".to_owned(),
+                            operator: Some(
+                                pb::structured_aggregation_query::aggregation::Operator::Sum(
+                                    pb::structured_aggregation_query::aggregation::Sum {
+                                        field: Some(pb::structured_query::FieldReference {
+                                            field_path: "amount".to_owned(),
+                                        }),
+                                    },
+                                ),
+                            ),
+                        }],
+                    },
+                ),
+            ),
+            ..Default::default()
+        };
+
+        let error = match Firestore::run_aggregation_query(&service, Request::new(request)).await {
+            Ok(_) => panic!("proxy aggregation unexpectedly reached the upstream client"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert!(error.message().contains("amount Ascending"), "{error}");
     }
 
     #[test]

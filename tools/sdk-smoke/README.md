@@ -135,3 +135,25 @@ session for it. It needs only Firestore and Storage:
   --storage-port 0 --ui-port 0 --hub-port 24400 \
   -- sh -c 'cd tools/sdk-smoke && node rules-unit-testing-explicit-rules.mjs'
 ```
+
+## Query completion and performance regressions
+
+Install the locked dependencies with `npm ci` in this directory before comparing results. Check the installed `firebase-admin` and `@google-cloud/firestore` versions: a pre-existing `node_modules` directory can disagree with the manifest.
+
+`npm run smoke:query-completion` seeds an isolated collection of 200 documents and checks exact IDs and values across internal-page boundaries, whole-query limits, offsets, descending field ordering, cursors, and read-only transactions. It independently reads the stored documents and deletes only its own fixture, including after a failed assertion. Use `fireemu exec` to own the daemon lifecycle:
+
+```sh
+fireemu exec --config tools/sdk-smoke/fireemu.smoke.json --only firestore --project demo-app -- npm --prefix tools/sdk-smoke run smoke:query-completion
+```
+
+`npm run bench:firestore` requires a loopback `FIRESTORE_EMULATOR_HOST` and measures create, get, update, query, and uncontended transactions against a fresh local emulator. It uses 20 warmups per operation, 256-byte payload strings, reused SDK connections, and unique fixture collections. Each worker updates its own document. Seed writes, result assertions, and cleanup are outside the measured interval. Throughput includes the drain of all issued operations; transaction retries are counted separately from completed logical operations. Results contain every latency sample, p50/p95/p99, errors, and a semantic validation status. Accept a measurement only when the process exits successfully and every operation has `validation: "passed"`.
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `BENCH_ITERATIONS` | `200` | Measured operation count when duration is zero |
+| `BENCH_CONCURRENCY` | `1` | Concurrent workers |
+| `BENCH_DURATION_MS` | `0` | Positive values select a steady-state issue interval, followed by drain |
+| `BENCH_QUERY_SIZE` | `33` | Exact query cardinality; zero selects an empty query |
+| `BENCH_OPERATIONS` | `create,get,update,query,transaction` | Unique comma-separated operation names |
+
+For example, set `BENCH_CONCURRENCY=32 BENCH_DURATION_MS=10000 BENCH_OPERATIONS=query` on the benchmark child for a sustained concurrent query run. Duration mode requires one operation per fresh daemon so growing create fixtures cannot affect later read comparisons. Run at least five paired comparisons, alternate backend order, retain raw JSON, and compare release builds on the same host with the same dependencies, settings, and fixtures. Measure the official emulator alongside the corrected query implementation instead of reusing historical targets derived from truncated queries. Keep Linux transport results separate from macOS results. Collect daemon CPU and memory externally; the driver retains responses until post-timing validation, so driver memory is a separate measurement scope. Growing create fixtures and deliberately contended transactions are distinct workloads from steady read comparisons.

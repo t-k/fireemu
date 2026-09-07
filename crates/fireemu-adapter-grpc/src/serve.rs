@@ -15,7 +15,7 @@ use hyper::HeaderMap;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::StreamExt;
 use tonic::codegen::Service;
 use tonic::Status;
@@ -350,6 +350,13 @@ fn channel_kind(path: &str) -> Option<StreamKind> {
     }
 }
 
+async fn accept_connection(listener: &TcpListener) -> std::io::Result<TcpStream> {
+    let (stream, _) = listener.accept().await?;
+    // Streaming gRPC frames must not wait for a delayed ACK before flushing.
+    stream.set_nodelay(true)?;
+    Ok(stream)
+}
+
 /// Serves gRPC, `WebChannel` and REST on `listener` until the task is aborted.
 pub async fn serve_multiplexed<S>(
     listener: TcpListener,
@@ -368,7 +375,7 @@ where
 {
     let hub = Arc::new(Hub::new(rest.clone()));
     loop {
-        let (stream, _) = listener.accept().await?;
+        let stream = accept_connection(&listener).await?;
         let grpc = grpc.clone();
         let rest = rest.clone();
         let hub = hub.clone();
@@ -438,6 +445,17 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn accepted_connections_send_small_responses_without_nagle_delay() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let peer = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let accepted = super::accept_connection(&listener).await.unwrap();
+        assert!(accepted.nodelay().unwrap());
+        drop(peer);
+    }
 
     use super::{normalize_prost_recursion_status, try_admit_rest_work};
     use bytes::Bytes;

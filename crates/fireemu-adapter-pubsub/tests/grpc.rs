@@ -893,6 +893,95 @@ async fn grpc_rejects_unsupported_subscription_options_before_creation() {
 }
 
 #[tokio::test]
+async fn modify_push_config_rejects_unsupported_options_without_mutating_the_endpoint() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let topic = "projects/demo-app/topics/modify-unsupported-options";
+    let subscription = "projects/demo-app/subscriptions/modify-unsupported-options";
+    let endpoint = "http://127.0.0.1:1/push";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint.to_owned(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    let options = vec![
+        (
+            "push_config.authentication_method",
+            pb::PushConfig {
+                push_endpoint: endpoint.to_owned(),
+                authentication_method: Some(pb::push_config::AuthenticationMethod::OidcToken(
+                    pb::push_config::OidcToken {
+                        service_account_email: "push@example.com".to_owned(),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            },
+        ),
+        (
+            "push_config.attributes",
+            pb::PushConfig {
+                push_endpoint: endpoint.to_owned(),
+                attributes: HashMap::from([("x-goog-version".to_owned(), "v1".to_owned())]),
+                ..Default::default()
+            },
+        ),
+        (
+            "push_config.wrapper",
+            pb::PushConfig {
+                push_endpoint: endpoint.to_owned(),
+                wrapper: Some(pb::push_config::Wrapper::NoWrapper(
+                    pb::push_config::NoWrapper {
+                        write_metadata: true,
+                    },
+                )),
+                ..Default::default()
+            },
+        ),
+    ];
+    for (field, push_config) in options {
+        let error = subc
+            .modify_push_config(pb::ModifyPushConfigRequest {
+                subscription: subscription.to_owned(),
+                push_config: Some(push_config),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{field}");
+        assert!(error.message().contains(field), "{field}: {error}");
+        let current = subc
+            .get_subscription(pb::GetSubscriptionRequest {
+                subscription: subscription.to_owned(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            current.push_config.unwrap().push_endpoint,
+            endpoint,
+            "{field} must not partially update the endpoint"
+        );
+    }
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn filter_drops_non_matching_messages() {
     let h = start().await;
     let mut pubc = h.publisher().await;

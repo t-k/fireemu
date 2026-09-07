@@ -15,7 +15,7 @@ use pb::subscriber_server::Subscriber;
 
 use crate::convert::{
     from_timestamp, received_to_proto, snapshot_to_proto, status, subscription_from_proto,
-    subscription_to_proto,
+    subscription_to_proto, validate_push_config_options,
 };
 use crate::PubSubHandle;
 
@@ -111,23 +111,8 @@ fn update_push_config(
         .iter()
         .any(|path| path == "push_config")
         .then(|| {
-            if let Some(push) = sub.push_config.as_ref() {
-                if !push.attributes.is_empty() {
-                    return Err(Status::unimplemented(
-                        "subscription.push_config.attributes is not supported by the Pub/Sub emulator",
-                    ));
-                }
-                if push.authentication_method.is_some() {
-                    return Err(Status::unimplemented(
-                        "subscription.push_config.authentication_method is not supported by the Pub/Sub emulator",
-                    ));
-                }
-                if push.wrapper.is_some() {
-                    return Err(Status::unimplemented(
-                        "subscription.push_config.wrapper is not supported by the Pub/Sub emulator",
-                    ));
-                }
-            }
+            validate_push_config_options(sub.push_config.as_ref())
+                .map_err(|error| status(&error))?;
             let endpoint = sub
                 .push_config
                 .as_ref()
@@ -373,9 +358,11 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
+        validate_push_config_options(req.push_config.as_ref()).map_err(|e| status(&e))?;
         let push_endpoint = req
             .push_config
-            .map_or_else(String::new, |config| config.push_endpoint);
+            .as_ref()
+            .map_or_else(String::new, |config| config.push_endpoint.clone());
         crate::push::validate_endpoint(&push_endpoint).map_err(Status::invalid_argument)?;
         self.handle
             .state()

@@ -107,6 +107,26 @@ fn duration_to_proto(d: LogicalDuration) -> prost_types::Duration {
     }
 }
 
+/// Rejects push fields that have no representation in the core state machine.
+pub fn validate_push_config_options(push: Option<&pb::PushConfig>) -> Result<(), PubSubError> {
+    let unsupported = push.and_then(|push| {
+        if !push.attributes.is_empty() {
+            Some("push_config.attributes")
+        } else if push.authentication_method.is_some() {
+            Some("push_config.authentication_method")
+        } else if push.wrapper.is_some() {
+            Some("push_config.wrapper")
+        } else {
+            None
+        }
+    });
+    unsupported.map_or(Ok(()), |field| {
+        Err(PubSubError::unimplemented(format!(
+            "subscription.{field} is not supported by the Pub/Sub emulator"
+        )))
+    })
+}
+
 /// Rejects subscription fields that have no representation in the core state machine.
 pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSubError> {
     let unsupported = if sub.bigquery_config.is_some() {
@@ -138,23 +158,14 @@ pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSu
     } else if !sub.tags.is_empty() {
         Some("tags")
     } else {
-        sub.push_config.as_ref().and_then(|push| {
-            if !push.attributes.is_empty() {
-                Some("push_config.attributes")
-            } else if push.authentication_method.is_some() {
-                Some("push_config.authentication_method")
-            } else if push.wrapper.is_some() {
-                Some("push_config.wrapper")
-            } else {
-                None
-            }
-        })
+        None
     };
-    unsupported.map_or(Ok(()), |field| {
-        Err(PubSubError::unimplemented(format!(
+    if let Some(field) = unsupported {
+        return Err(PubSubError::unimplemented(format!(
             "subscription.{field} is not supported by the Pub/Sub emulator"
-        )))
-    })
+        )));
+    }
+    validate_push_config_options(sub.push_config.as_ref())
 }
 
 /// Builds a validated [`SubscriptionConfig`] from a wire `Subscription`.

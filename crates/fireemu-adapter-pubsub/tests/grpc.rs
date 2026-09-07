@@ -1547,6 +1547,255 @@ async fn push_retry_waits_for_virtual_backoff_and_resumes_after_clock_advance() 
 }
 
 #[tokio::test]
+async fn a_new_publication_wakes_a_subscription_deferred_for_push_backoff() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![500, 500, 500, 204, 204]);
+    let topic = "projects/demo-app/topics/push-backoff-wake";
+    let subscription = "projects/demo-app/subscriptions/push-backoff-wake";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        retry_policy: Some(pb::RetryPolicy {
+            minimum_backoff: Some(prost_types::Duration {
+                seconds: 30,
+                nanos: 0,
+            }),
+            maximum_backoff: Some(prost_types::Duration {
+                seconds: 30,
+                nanos: 0,
+            }),
+        }),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"first")],
+    })
+    .await
+    .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while bodies.lock().unwrap().len() < 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first message must exhaust immediate HTTP attempts");
+
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"second")],
+    })
+    .await
+    .unwrap();
+    let second_delivered = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while bodies.lock().unwrap().len() < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+    second_delivered.expect("a new message must wake deferred push work");
+}
+
+#[tokio::test]
+async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() {
+    const DELAYED_SUBSCRIPTIONS: usize = 256;
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (blocked_endpoint, blocked_bodies, stop_blocked, blocked_worker) =
+        push_sink_sequence(vec![500; DELAYED_SUBSCRIPTIONS * 3]);
+    let (other_endpoint, other_bodies, stop_other, other_worker) = push_sink(204);
+    let blocked_topic = "projects/demo-app/topics/push-backoff-saturated";
+    let other_topic = "projects/demo-app/topics/push-backoff-other";
+
+    for topic in [blocked_topic, other_topic] {
+        pubc.create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    for index in 0..DELAYED_SUBSCRIPTIONS {
+        subc.create_subscription(pb::Subscription {
+            name: format!("projects/demo-app/subscriptions/push-backoff-{index:04}"),
+            topic: blocked_topic.to_owned(),
+            retry_policy: Some(pb::RetryPolicy {
+                minimum_backoff: Some(prost_types::Duration {
+                    seconds: 30,
+                    nanos: 0,
+                }),
+                maximum_backoff: Some(prost_types::Duration {
+                    seconds: 30,
+                    nanos: 0,
+                }),
+            }),
+            push_config: Some(pb::PushConfig {
+                push_endpoint: blocked_endpoint.clone(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    subc.create_subscription(pb::Subscription {
+        name: "projects/demo-app/subscriptions/push-backoff-other".to_owned(),
+        topic: other_topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: other_endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    pubc.publish(pb::PublishRequest {
+        topic: blocked_topic.to_owned(),
+        messages: vec![msg(b"defer")],
+    })
+    .await
+    .unwrap();
+    let attempts = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while blocked_bodies.lock().unwrap().len() < DELAYED_SUBSCRIPTIONS * 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+
+    pubc.publish(pb::PublishRequest {
+        topic: other_topic.to_owned(),
+        messages: vec![msg(b"other")],
+    })
+    .await
+    .unwrap();
+    let other_delivered = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while other_bodies.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+
+    h.shutdown().await;
+    stop_blocked.store(true, Ordering::Release);
+    stop_other.store(true, Ordering::Release);
+    blocked_worker.join().unwrap();
+    other_worker.join().unwrap();
+    attempts.expect("all delayed workers must reach their logical backoff");
+    other_delivered.expect("delayed workers must not consume all push capacity");
+}
+
+#[tokio::test]
+async fn deleting_an_unrelated_subscription_does_not_stop_a_deferred_retry() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![500, 500, 500, 204]);
+    let first_topic = "projects/demo-app/topics/push-delete-first";
+    let second_topic = "projects/demo-app/topics/push-delete-second";
+    let first_subscription = "projects/demo-app/subscriptions/push-delete-first";
+    let second_subscription = "projects/demo-app/subscriptions/push-delete-second";
+
+    for topic in [first_topic, second_topic] {
+        pubc.create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    subc.create_subscription(pb::Subscription {
+        name: first_subscription.to_owned(),
+        topic: first_topic.to_owned(),
+        retry_policy: Some(pb::RetryPolicy {
+            minimum_backoff: Some(prost_types::Duration {
+                seconds: 5,
+                nanos: 0,
+            }),
+            maximum_backoff: Some(prost_types::Duration {
+                seconds: 5,
+                nanos: 0,
+            }),
+        }),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: second_subscription.to_owned(),
+        topic: second_topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: "http://127.0.0.1:1/unused".to_owned(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: first_topic.to_owned(),
+        messages: vec![msg(b"retry")],
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while bodies.lock().unwrap().len() < 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first subscription must enter backoff");
+
+    subc.delete_subscription(pb::DeleteSubscriptionRequest {
+        subscription: second_subscription.to_owned(),
+    })
+    .await
+    .unwrap();
+    h.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5))
+        .unwrap();
+    h.handle.on_clock_changed();
+    let retried = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while bodies.lock().unwrap().len() < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+    retried.expect("deleting another subscription must not cancel this retry");
+}
+
+#[tokio::test]
 async fn saturated_workers_release_cross_topic_work_without_another_publish() {
     const SATURATED_WORKERS: usize = 256;
 

@@ -62,9 +62,17 @@ struct PushWork {
     generation: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PushQuantumResult {
+    Continue,
+    Stop,
+    Defer(LogicalInstant),
+}
+
 #[derive(Debug, Default)]
 struct PushDispatchState {
     ready: VecDeque<PushWork>,
+    deferred: BTreeMap<String, (PushWork, LogicalInstant)>,
     queued: BTreeSet<String>,
     active: BTreeMap<String, u64>,
     generations: BTreeMap<String, u64>,
@@ -101,6 +109,7 @@ impl PushDispatchState {
             return;
         }
         let key = subscription.to_full();
+        self.deferred.remove(&key);
         if self.queued.insert(key.clone()) {
             let generation = self.generation_for(&key);
             self.ready.push_back(PushWork {
@@ -144,8 +153,41 @@ impl PushDispatchState {
         }
     }
 
+    fn defer(&mut self, work: PushWork, eligible_at: LogicalInstant) {
+        let key = work.subscription.to_full();
+        if self.active.get(&key).copied() == Some(work.generation) {
+            self.active.remove(&key);
+        }
+        if !self.shutting_down && self.generations.get(&key).copied() == Some(work.generation) {
+            if self.queued.contains(&key) {
+                return;
+            }
+            self.deferred.insert(key, (work, eligible_at));
+        }
+    }
+
+    fn promote_due(&mut self, now: LogicalInstant) {
+        let due = self
+            .deferred
+            .iter()
+            .filter(|(_, (_, eligible_at))| *eligible_at <= now)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in due {
+            let Some((work, _)) = self.deferred.remove(&key) else {
+                continue;
+            };
+            if self.generations.get(&key).copied() == Some(work.generation)
+                && self.queued.insert(key)
+            {
+                self.ready.push_back(work);
+            }
+        }
+    }
+
     fn invalidate(&mut self, key: &str) {
         self.generations.remove(key);
+        self.deferred.remove(key);
         self.queued.remove(key);
         self.active.remove(key);
         self.ready.retain(|work| work.subscription.to_full() != key);
@@ -153,6 +195,7 @@ impl PushDispatchState {
 
     fn invalidate_all(&mut self) {
         self.generations.clear();
+        self.deferred.clear();
         self.queued.clear();
         self.ready.clear();
         self.active.clear();
@@ -557,16 +600,23 @@ impl PubSubHandle {
         let mut work_by_task = HashMap::new();
         loop {
             let notified = self.push_ready_notify.notified();
+            let clock_notified = self.push_clock_notify.notified();
+            tokio::pin!(clock_notified);
             let shutting_down = self
                 .push_dispatch
                 .lock()
                 .expect("push dispatch lock")
                 .shutting_down;
+            self.push_dispatch
+                .lock()
+                .expect("push dispatch lock")
+                .promote_due(self.now());
             if shutting_down {
                 workers.abort_all();
                 while workers.join_next().await.is_some() {}
                 let mut dispatch = self.push_dispatch.lock().expect("push dispatch lock");
                 dispatch.active.clear();
+                dispatch.deferred.clear();
                 dispatch.ready.clear();
                 dispatch.queued.clear();
                 return;
@@ -582,25 +632,34 @@ impl PubSubHandle {
                 let fallback = work.clone();
                 let task = workers.spawn(async move {
                     let task_id = tokio::task::id();
-                    let continue_delivery = handle.run_push_quantum(&work).await;
-                    (task_id, work, continue_delivery)
+                    let result = handle.run_push_quantum(&work).await;
+                    (task_id, work, result)
                 });
                 work_by_task.insert(task.id(), fallback);
             }
             if workers.is_empty() {
-                notified.await;
+                tokio::select! {
+                    () = notified => {},
+                    () = &mut clock_notified => {},
+                }
                 continue;
             }
             tokio::select! {
                 () = notified => {},
+                () = &mut clock_notified => {},
                 completed = workers.join_next() => {
                     match completed {
-                        Some(Ok((task_id, work, continue_delivery))) => {
+                        Some(Ok((task_id, work, result))) => {
                             work_by_task.remove(&task_id);
-                            self.push_dispatch
-                                .lock()
-                                .expect("push dispatch lock")
-                                .complete(&work, continue_delivery);
+                            let mut dispatch =
+                                self.push_dispatch.lock().expect("push dispatch lock");
+                            match result {
+                                PushQuantumResult::Continue => dispatch.complete(&work, true),
+                                PushQuantumResult::Stop => dispatch.complete(&work, false),
+                                PushQuantumResult::Defer(eligible_at) => {
+                                    dispatch.defer(work, eligible_at);
+                                }
+                            }
                         }
                         Some(Err(error)) => {
                             if let Some(work) = work_by_task.remove(&error.id()) {
@@ -617,49 +676,25 @@ impl PubSubHandle {
         }
     }
 
-    async fn run_push_quantum(&self, work: &PushWork) -> bool {
+    async fn run_push_quantum(&self, work: &PushWork) -> PushQuantumResult {
         let key = work.subscription.to_full();
         if !self.is_current_push_generation(&key, work.generation) {
-            return false;
+            return PushQuantumResult::Stop;
         }
         let received = self.pull(&work.subscription, 100).unwrap_or_default();
         if received.is_empty() {
-            return self.wait_until_push_eligible(work).await;
-        }
-        self.deliver_push_messages(&work.subscription, &key, work.generation, received)
-            .await
-    }
-
-    async fn wait_until_push_eligible(&self, work: &PushWork) -> bool {
-        let key = work.subscription.to_full();
-        loop {
-            if !self.is_current_push_generation(&key, work.generation) {
-                return false;
-            }
-            let now = self.now();
-            let Some(next) = self.next_push_delivery_at(&work.subscription) else {
-                return false;
+            return match self.next_push_delivery_at(&work.subscription) {
+                Some(next) if next > self.now() => PushQuantumResult::Defer(next),
+                _ => PushQuantumResult::Stop,
             };
-            if next <= now {
-                return true;
-            }
-
-            let notified = self.push_clock_notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if !self.is_current_push_generation(&key, work.generation) {
-                return false;
-            }
-            if self
-                .next_push_delivery_at(&work.subscription)
-                .is_none_or(|next| next <= self.now())
-            {
-                continue;
-            }
-            tokio::select! {
-                () = &mut notified => {},
-                () = self.push_cancel_notify.notified() => return false,
-            }
+        }
+        if self
+            .deliver_push_messages(&work.subscription, &key, work.generation, received)
+            .await
+        {
+            PushQuantumResult::Continue
+        } else {
+            PushQuantumResult::Stop
         }
     }
 
@@ -964,6 +999,64 @@ mod dispatch_tests {
         assert_eq!(dispatch.ready.len(), 1);
         dispatch.complete(&active, true);
         assert_eq!(dispatch.ready.len(), 1);
+    }
+
+    #[test]
+    fn deferred_push_work_is_released_by_time_or_new_publication() {
+        let topic = TopicName::new("demo-project", "topic").unwrap();
+        let first = subscription(0, &topic);
+        let second = subscription(1, &topic);
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut dispatch = PushDispatchState::default();
+        dispatch.enqueue(first.clone());
+        let first_work = dispatch.claim().unwrap();
+        dispatch.defer(
+            first_work,
+            now.checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(10))
+                .unwrap(),
+        );
+        assert!(dispatch.active.is_empty());
+        assert!(dispatch.ready.is_empty());
+        assert!(dispatch.deferred.contains_key(&first.to_full()));
+
+        dispatch.enqueue(first.clone());
+        assert!(dispatch.deferred.is_empty());
+        assert_eq!(dispatch.ready.len(), 1);
+        let second_work = {
+            dispatch.enqueue(second.clone());
+            dispatch.claim().unwrap()
+        };
+        dispatch.invalidate(&second.to_full());
+        assert!(!dispatch.deferred.contains_key(&second.to_full()));
+        dispatch.complete(&second_work, false);
+    }
+
+    #[test]
+    fn unrelated_invalidation_does_not_remove_deferred_push_work() {
+        let first_topic = TopicName::new("demo-project", "first").unwrap();
+        let second_topic = TopicName::new("demo-project", "second").unwrap();
+        let first = subscription(0, &first_topic);
+        let second = subscription(1, &second_topic);
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut dispatch = PushDispatchState::default();
+        dispatch.enqueue(first.clone());
+        dispatch.enqueue(second.clone());
+        let first_work = dispatch.claim().unwrap();
+        let second_work = dispatch.claim().unwrap();
+        dispatch.defer(
+            first_work,
+            now.checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(10))
+                .unwrap(),
+        );
+        dispatch.invalidate(&second.to_full());
+
+        assert!(dispatch.deferred.contains_key(&first.to_full()));
+        dispatch.promote_due(
+            now.checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(10))
+                .unwrap(),
+        );
+        assert_eq!(dispatch.claim().unwrap().subscription, first);
+        dispatch.complete(&second_work, false);
     }
 
     #[tokio::test]

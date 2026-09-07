@@ -420,11 +420,25 @@ impl SubscriptionState {
     /// eligible to run another pull quantum.
     #[must_use]
     pub fn next_available_at(&self) -> Option<LogicalInstant> {
+        let ordered = self.config.enable_message_ordering;
+        let mut blocked_keys = BTreeSet::new();
         self.entries[self.first_unacked..]
             .iter()
-            .filter_map(|entry| match &entry.state {
-                Delivery::Available { available_at } => Some(*available_at),
-                Delivery::Outstanding { .. } | Delivery::Acked | Delivery::ForwardPending => None,
+            .filter_map(|entry| {
+                if entry.state == Delivery::Acked {
+                    return None;
+                }
+                let ordering_key = &entry.stored.message.ordering_key;
+                if ordered && !ordering_key.is_empty() && !blocked_keys.insert(ordering_key.clone())
+                {
+                    return None;
+                }
+                match &entry.state {
+                    Delivery::Available { available_at } => Some(*available_at),
+                    Delivery::Outstanding { .. } | Delivery::ForwardPending | Delivery::Acked => {
+                        None
+                    }
+                }
             })
             .min()
     }
@@ -1093,6 +1107,32 @@ mod tests {
         s.acknowledge(&[ack]);
         let out2 = s.pull(10, now, &mut ids);
         assert_eq!(out2.received[0].message.message_id, "2");
+    }
+
+    #[test]
+    fn next_available_at_respects_ordering_key_blockers() {
+        let mut c = cfg();
+        c.enable_message_ordering = true;
+        c.retry_policy = Some(RetryPolicy {
+            minimum_backoff: LogicalDuration::from_seconds(10),
+            maximum_backoff: LogicalDuration::from_seconds(10),
+        });
+        let mut s = SubscriptionState::new(c);
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut m1 = stored("1", b"a", 100);
+        m1.message.ordering_key = "k".to_owned();
+        let mut m2 = stored("2", b"b", 100);
+        m2.message.ordering_key = "k".to_owned();
+        s.enqueue(m1, now).unwrap();
+        s.enqueue(m2, now).unwrap();
+        let mut ids = counter();
+        let first = s.pull(1, now, &mut ids);
+        s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
+
+        assert_eq!(
+            s.next_available_at(),
+            Some(now.checked_add(LogicalDuration::from_seconds(10)).unwrap())
+        );
     }
 
     #[test]

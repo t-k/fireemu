@@ -463,19 +463,26 @@ fn automatic_index_for(
             IndexQueryScope::Collection
         };
         let required_mode = if req.contains.is_some() {
-            IndexFieldMode::Contains
+            Some(IndexFieldMode::Contains)
         } else {
             req.order
                 .iter()
                 .find(|o| o.field == *f)
-                .map_or(IndexFieldMode::Ascending, |o| {
-                    mode_for_direction(o.direction)
-                })
+                .map(|o| mode_for_direction(o.direction))
         };
         let supported = set
             .single_field_modes(collection, f)
             .iter()
-            .any(|(candidate_scope, mode)| *candidate_scope == scope && *mode == required_mode);
+            .any(|(candidate_scope, mode)| {
+                *candidate_scope == scope
+                    && match required_mode {
+                        Some(required) => *mode == required,
+                        None => matches!(
+                            mode,
+                            IndexFieldMode::Ascending | IndexFieldMode::Descending
+                        ),
+                    }
+            });
         if !supported {
             return None;
         }

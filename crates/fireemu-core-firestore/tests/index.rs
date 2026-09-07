@@ -443,6 +443,23 @@ fn aggregation_fields_participate_in_index_validation_without_changing_the_query
 }
 
 #[test]
+fn equality_only_automatic_indexes_accept_either_enabled_order_direction() {
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let mut indexes = IndexSet::default();
+    indexes.set_single_field_indexes(
+        &collection,
+        &fp("priority"),
+        vec![(IndexQueryScope::Collection, IndexFieldMode::Descending)],
+    );
+
+    let equality = tasks().with_filter(field("priority", FieldOp::Equal, Value::Integer(1)));
+    assert!(matches!(
+        decide(&equality, &indexes, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+}
+
+#[test]
 fn collection_group_scope_is_not_ignored() {
     let q = Query::new(QueryScope::collection_group(
         CollectionId::try_new("tasks").unwrap(),

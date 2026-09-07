@@ -21,7 +21,9 @@ use fireemu_core_pubsub::{
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
 
+use crate::convert::validate_topic_options;
 use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
+use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 
 const MAX_JSON_BYTES: usize = MAX_MESSAGE_BYTES + 1024 * 1024;
 
@@ -174,28 +176,9 @@ fn dispatch_topic(
     let topic = TopicName::new(project, topic_id).map_err(RestError::from_core)?;
     match (method, operation) {
         (&Method::PUT, None) => {
-            let object = body
-                .as_object()
-                .ok_or_else(|| RestError::invalid("topic must be an object"))?;
-            for key in object.keys() {
-                match key.as_str() {
-                    "name" | "labels" => {}
-                    _ => {
-                        return Err(RestError::unimplemented(format!(
-                            "topic.{key} is not supported by the Pub/Sub emulator"
-                        )))
-                    }
-                }
-            }
-            if let Some(name) = object.get("name") {
-                let name = name
-                    .as_str()
-                    .ok_or_else(|| RestError::invalid("topic.name must be a string"))?;
-                if name != topic.to_full() {
-                    return Err(RestError::invalid("topic.name must match the request path"));
-                }
-            }
-            let labels = object_strings(body, "labels")?;
+            let topic_options = topic_from_json(&topic, body)?;
+            validate_topic_options(&topic_options).map_err(RestError::from_core)?;
+            let labels = topic_options.labels.into_iter().collect();
             let mut state = handle.state();
             state
                 .create_topic(topic.clone(), labels)
@@ -208,6 +191,7 @@ fn dispatch_topic(
             handle.retry_pending_dead_letters();
             Ok((StatusCode::OK, topic_json(&topic, &labels)))
         }
+        (&Method::PATCH, None) => update_topic(topic, body),
         (&Method::GET, None) => {
             let state = handle.state();
             let labels = state
@@ -227,6 +211,30 @@ fn dispatch_topic(
         (&Method::POST, Some("publish")) => publish(topic, body, handle),
         _ => Err(RestError::method_not_allowed()),
     }
+}
+
+fn update_topic(topic: TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
+    let topic_body = body.get("topic").unwrap_or(body);
+    let topic_options = topic_from_json(&topic, topic_body)?;
+    let update_mask = body
+        .get("updateMask")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RestError::invalid("updateMask must be a comma-separated string"))?;
+    if update_mask.is_empty() {
+        return Err(RestError::invalid("updateMask must not be empty"));
+    }
+    let paths = update_mask
+        .split(',')
+        .map(topic_update_field_path)
+        .collect();
+    let request = pb::UpdateTopicRequest {
+        topic: Some(topic_options),
+        update_mask: Some(prost_types::FieldMask { paths }),
+    };
+    crate::convert::validate_topic_update_options(&request).map_err(RestError::from_core)?;
+    Err(RestError::unimplemented(
+        "UpdateTopic is not supported by the Pub/Sub emulator",
+    ))
 }
 
 fn dispatch_subscription(
@@ -865,6 +873,120 @@ fn message_from_json(value: &Value) -> Result<PubsubMessage, RestError> {
 
 fn topic_json(name: &TopicName, labels: &BTreeMap<String, String>) -> Value {
     json!({"name": name.to_full(), "labels": labels})
+}
+
+fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestError> {
+    let object = body
+        .as_object()
+        .ok_or_else(|| RestError::invalid("topic must be an object"))?;
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "name"
+                | "labels"
+                | "schemaSettings"
+                | "messageRetentionDuration"
+                | "kmsKeyName"
+                | "messageStoragePolicy"
+                | "ingestionDataSourceSettings"
+                | "messageTransforms"
+                | "tags"
+                | "state"
+                | "satisfiesPzs"
+        ) {
+            return Err(RestError::unimplemented(format!(
+                "topic.{key} is not supported by the Pub/Sub emulator"
+            )));
+        }
+    }
+    if let Some(name) = object.get("name") {
+        let name = name
+            .as_str()
+            .ok_or_else(|| RestError::invalid("topic.name must be a string"))?;
+        if name != topic.to_full() {
+            return Err(RestError::invalid("topic.name must match the request path"));
+        }
+    }
+    let mut options = pb::Topic {
+        name: topic.to_full(),
+        labels: object_strings(body, "labels")?.into_iter().collect(),
+        ..Default::default()
+    };
+    if object
+        .get("schemaSettings")
+        .is_some_and(|value| !value.is_null())
+    {
+        options.schema_settings = Some(pb::SchemaSettings::default());
+    }
+    if object
+        .get("messageRetentionDuration")
+        .is_some_and(|value| !value.is_null())
+    {
+        options.message_retention_duration = Some(prost_types::Duration::default());
+    }
+    if let Some(value) = object.get("kmsKeyName") {
+        if !value.is_null() {
+            options.kms_key_name = value
+                .as_str()
+                .ok_or_else(|| RestError::invalid("topic.kmsKeyName must be a string"))?
+                .to_owned();
+        }
+    }
+    if object
+        .get("messageStoragePolicy")
+        .is_some_and(|value| !value.is_null())
+    {
+        options.message_storage_policy = Some(pb::MessageStoragePolicy::default());
+    }
+    if object
+        .get("ingestionDataSourceSettings")
+        .is_some_and(|value| !value.is_null())
+    {
+        options.ingestion_data_source_settings = Some(pb::IngestionDataSourceSettings::default());
+    }
+    if let Some(value) = object.get("messageTransforms") {
+        if !value.is_null() {
+            let transforms = value
+                .as_array()
+                .ok_or_else(|| RestError::invalid("topic.messageTransforms must be an array"))?;
+            if !transforms.is_empty() {
+                options
+                    .message_transforms
+                    .push(pb::MessageTransform::default());
+            }
+        }
+    }
+    if let Some(value) = object.get("tags") {
+        if !value.is_null() {
+            let tags = value
+                .as_object()
+                .ok_or_else(|| RestError::invalid("topic.tags must be an object"))?;
+            if !tags.is_empty() {
+                options.tags.insert(String::new(), String::new());
+            }
+        }
+    }
+    Ok(options)
+}
+
+fn topic_update_field_path(path: &str) -> String {
+    let (head, tail) = path
+        .split_once('.')
+        .map_or((path, None), |(head, tail)| (head, Some(tail)));
+    let normalized = match head {
+        "schemaSettings" => "schema_settings",
+        "messageRetentionDuration" => "message_retention_duration",
+        "kmsKeyName" => "kms_key_name",
+        "messageStoragePolicy" => "message_storage_policy",
+        "ingestionDataSourceSettings" => "ingestion_data_source_settings",
+        "messageTransforms" => "message_transforms",
+        "tags" => "tags",
+        _ => head,
+    };
+    tail.map_or_else(
+        || normalized.to_owned(),
+        |tail| format!("{normalized}.{tail}"),
+    )
 }
 
 fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value {

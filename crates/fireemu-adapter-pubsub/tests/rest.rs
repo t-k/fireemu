@@ -159,6 +159,115 @@ async fn rest_publish_is_visible_to_grpc_and_grpc_publish_is_visible_to_rest() {
 }
 
 #[tokio::test]
+async fn rest_topic_options_are_rejected_before_create_or_update_mutation() {
+    let address = start().await;
+    let rejected = "/v1/projects/demo-app/topics/rest-rejected-options";
+    let (status, error) = rest_request(
+        address,
+        "PUT",
+        rejected,
+        json!({"schemaSettings": {"schema": "projects/demo-app/schemas/orders"}}),
+    )
+    .await;
+    assert_eq!(status, 501);
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("schema_settings"));
+    let (status, _) = rest_request(address, "GET", rejected, json!({})).await;
+    assert_eq!(status, 404);
+
+    let topic = "/v1/projects/demo-app/topics/rest-supported-options";
+    let (status, _) = rest_request(address, "PUT", topic, json!({"labels": {"env": "test"}})).await;
+    assert_eq!(status, 200);
+    let (status, error) = rest_request(
+        address,
+        "PATCH",
+        topic,
+        json!({
+            "topic": {"name": "projects/demo-app/topics/rest-supported-options", "kmsKeyName": "projects/p/locations/l/keyRings/r/cryptoKeys/k"},
+            "updateMask": "kmsKeyName"
+        }),
+    )
+    .await;
+    assert_eq!(status, 501);
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("kms_key_name"));
+    let (status, current) = rest_request(address, "GET", topic, json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(current["labels"]["env"], "test");
+
+    let (status, error) = rest_request(
+        address,
+        "PATCH",
+        topic,
+        json!({
+            "topic": {"name": "projects/demo-app/topics/rest-supported-options", "schemaSettings": {}},
+            "updateMask": "schemaSettings.schema"
+        }),
+    )
+    .await;
+    assert_eq!(status, 501);
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("schema_settings"));
+}
+
+#[tokio::test]
+async fn rest_rejects_each_non_default_topic_option() {
+    let address = start().await;
+    let cases = [
+        ("schema", json!({"schemaSettings": {}}), "schema_settings"),
+        (
+            "retention",
+            json!({"messageRetentionDuration": "600s"}),
+            "message_retention_duration",
+        ),
+        (
+            "kms",
+            json!({"kmsKeyName": "projects/p/locations/l/keyRings/r/cryptoKeys/k"}),
+            "kms_key_name",
+        ),
+        (
+            "storage",
+            json!({"messageStoragePolicy": {}}),
+            "message_storage_policy",
+        ),
+        (
+            "ingestion",
+            json!({"ingestionDataSourceSettings": {}}),
+            "ingestion_data_source_settings",
+        ),
+        (
+            "transforms",
+            json!({"messageTransforms": [{}]}),
+            "message_transforms",
+        ),
+        ("tags", json!({"tags": {"env": "test"}}), "tags"),
+    ];
+    for (id, options, field) in cases {
+        let path = format!("/v1/projects/demo-app/topics/rest-rejected-{id}");
+        let (status, error) = rest_request(address, "PUT", &path, options).await;
+        assert_eq!(status, 501, "{id}: {error}");
+        assert!(error["error"]["message"].as_str().unwrap().contains(field));
+        let (status, _) = rest_request(address, "GET", &path, json!({})).await;
+        assert_eq!(status, 404, "{id} was created");
+    }
+
+    let (status, _) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/topics/rest-output-only",
+        json!({"state": "ACTIVE", "satisfiesPzs": true}),
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+#[tokio::test]
 async fn grpc_snapshot_can_be_sought_through_rest_into_a_new_subscription() {
     let address = start().await;
     let mut publisher = PublisherClient::new(grpc_channel(address).await);

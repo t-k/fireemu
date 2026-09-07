@@ -7,7 +7,10 @@ use fireemu_core_pubsub::TopicName;
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::publisher_server::Publisher;
 
-use crate::convert::{message_from_proto, status, topic_to_proto};
+use crate::convert::{
+    message_from_proto, status, topic_to_proto, validate_topic_options,
+    validate_topic_update_options,
+};
 use crate::PubSubHandle;
 
 /// Publisher service over the shared Pub/Sub state.
@@ -38,6 +41,7 @@ impl Publisher for PublisherService {
         request: Request<pb::Topic>,
     ) -> Result<Response<pb::Topic>, Status> {
         let topic = request.into_inner();
+        validate_topic_options(&topic).map_err(|e| status(&e))?;
         let name = TopicName::parse(&topic.name).map_err(|e| status(&e))?;
         let labels = topic.labels.into_iter().collect();
         self.handle
@@ -57,8 +61,10 @@ impl Publisher for PublisherService {
 
     async fn update_topic(
         &self,
-        _request: Request<pb::UpdateTopicRequest>,
+        request: Request<pb::UpdateTopicRequest>,
     ) -> Result<Response<pb::Topic>, Status> {
+        let request = request.into_inner();
+        validate_topic_update_options(&request).map_err(|e| status(&e))?;
         Err(Status::unimplemented(
             "UpdateTopic is not supported by the Pub/Sub emulator",
         ))

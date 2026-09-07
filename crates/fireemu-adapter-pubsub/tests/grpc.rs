@@ -190,6 +190,66 @@ async fn functions_bridge_receives_the_full_source_topic_resource() {
 }
 
 #[tokio::test]
+async fn topic_options_are_rejected_before_create_or_update_mutation() {
+    let harness = start().await;
+    let mut publisher = harness.publisher().await;
+    let rejected = "projects/demo-app/topics/rejected-options";
+    let error = publisher
+        .create_topic(pb::Topic {
+            name: rejected.to_owned(),
+            schema_settings: Some(pb::SchemaSettings::default()),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Unimplemented);
+    assert!(error.message().contains("schema_settings"));
+    let missing = publisher
+        .get_topic(pb::GetTopicRequest {
+            topic: rejected.to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code(), tonic::Code::NotFound);
+
+    let topic = "projects/demo-app/topics/supported-options";
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.to_owned(),
+            labels: [(String::from("env"), String::from("test"))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let error = publisher
+        .update_topic(pb::UpdateTopicRequest {
+            topic: Some(pb::Topic {
+                name: topic.to_owned(),
+                kms_key_name: "projects/p/locations/l/keyRings/r/cryptoKeys/k".to_owned(),
+                ..Default::default()
+            }),
+            update_mask: Some(prost_types::FieldMask {
+                paths: vec!["kms_key_name".to_owned()],
+            }),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Unimplemented);
+    assert!(error.message().contains("kms_key_name"));
+    let current = publisher
+        .get_topic(pb::GetTopicRequest {
+            topic: topic.to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(current.labels.get("env"), Some(&String::from("test")));
+    harness.shutdown().await;
+}
+
+#[tokio::test]
 async fn bridge_capacity_refusal_does_not_publish_to_the_broker() {
     let harness = start_with_bridge(Some(Arc::new(RejectingTopicDelivery))).await;
     let mut publisher = harness.publisher().await;

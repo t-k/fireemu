@@ -168,6 +168,64 @@ pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSu
     validate_push_config_options(sub.push_config.as_ref())
 }
 
+/// Rejects topic fields that are accepted by the wire schema but not represented by the core
+/// broker state. Output-only and reserved fields are intentionally ignored by this validator.
+pub fn validate_topic_options(topic: &pb::Topic) -> Result<(), PubSubError> {
+    let unsupported = if topic.schema_settings.is_some() {
+        Some("schema_settings")
+    } else if topic.message_retention_duration.is_some() {
+        Some("message_retention_duration")
+    } else if !topic.kms_key_name.is_empty() {
+        Some("kms_key_name")
+    } else if topic.message_storage_policy.is_some() {
+        Some("message_storage_policy")
+    } else if topic.ingestion_data_source_settings.is_some() {
+        Some("ingestion_data_source_settings")
+    } else if !topic.message_transforms.is_empty() {
+        Some("message_transforms")
+    } else if !topic.tags.is_empty() {
+        Some("tags")
+    } else {
+        None
+    };
+    unsupported.map_or(Ok(()), |field| {
+        Err(PubSubError::unimplemented(format!(
+            "topic.{field} is not supported by the Pub/Sub emulator"
+        )))
+    })
+}
+
+/// Rejects unsupported fields named by an UpdateTopic field mask before the endpoint's generic
+/// unsupported response. This keeps a future update implementation from silently dropping them.
+pub fn validate_topic_update_options(request: &pb::UpdateTopicRequest) -> Result<(), PubSubError> {
+    if let Some(mask) = request.update_mask.as_ref() {
+        for path in &mask.paths {
+            for field in [
+                "schema_settings",
+                "message_retention_duration",
+                "kms_key_name",
+                "message_storage_policy",
+                "ingestion_data_source_settings",
+                "message_transforms",
+                "tags",
+            ] {
+                if path == field
+                    || path
+                        .strip_prefix(field)
+                        .is_some_and(|rest| rest.starts_with('.'))
+                {
+                    return Err(PubSubError::unimplemented(format!(
+                        "topic.{field} is not supported by the Pub/Sub emulator"
+                    )));
+                }
+            }
+        }
+    } else if let Some(topic) = request.topic.as_ref() {
+        validate_topic_options(topic)?;
+    }
+    Ok(())
+}
+
 /// Builds a validated [`SubscriptionConfig`] from a wire `Subscription`.
 pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionConfig, PubSubError> {
     validate_subscription_options(sub)?;
@@ -292,5 +350,118 @@ pub fn snapshot_to_proto(snapshot: &Snapshot) -> pb::Snapshot {
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{validate_topic_options, validate_topic_update_options};
+    use fireemu_core_pubsub::Code;
+
+    use super::pb;
+
+    #[test]
+    fn topic_option_validation_rejects_each_unrepresentable_value() {
+        let cases = [
+            (
+                "schema_settings",
+                pb::Topic {
+                    schema_settings: Some(pb::SchemaSettings::default()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "message_retention_duration",
+                pb::Topic {
+                    message_retention_duration: Some(prost_types::Duration {
+                        seconds: 600,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                "kms_key_name",
+                pb::Topic {
+                    kms_key_name: "projects/p/locations/l/keyRings/r/cryptoKeys/k".to_owned(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "message_storage_policy",
+                pb::Topic {
+                    message_storage_policy: Some(pb::MessageStoragePolicy::default()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "ingestion_data_source_settings",
+                pb::Topic {
+                    ingestion_data_source_settings: Some(pb::IngestionDataSourceSettings::default()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "message_transforms",
+                pb::Topic {
+                    message_transforms: vec![pb::MessageTransform::default()],
+                    ..Default::default()
+                },
+            ),
+            (
+                "tags",
+                pb::Topic {
+                    tags: HashMap::from([(String::from("env"), String::from("test"))]),
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (field, topic) in cases {
+            let error = validate_topic_options(&topic).unwrap_err();
+            assert_eq!(error.code(), Code::Unimplemented);
+            assert!(error.message().contains(field), "{}: {error}", field);
+        }
+    }
+
+    #[test]
+    fn topic_option_validation_accepts_supported_and_output_only_defaults() {
+        assert!(validate_topic_options(&pb::Topic::default()).is_ok());
+        assert!(validate_topic_options(&pb::Topic {
+            name: "projects/p/topics/t".to_owned(),
+            labels: HashMap::from([(String::from("env"), String::from("test"))]),
+            satisfies_pzs: true,
+            state: pb::topic::State::Active as i32,
+            ..Default::default()
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn topic_update_validation_rejects_unsupported_mask_even_without_a_value() {
+        let error = validate_topic_update_options(&pb::UpdateTopicRequest {
+            update_mask: Some(prost_types::FieldMask {
+                paths: vec!["schema_settings".to_owned()],
+            }),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert_eq!(error.code(), Code::Unimplemented);
+        assert!(error.message().contains("schema_settings"));
+    }
+
+    #[test]
+    fn topic_update_validation_only_checks_values_selected_by_the_mask() {
+        assert!(validate_topic_update_options(&pb::UpdateTopicRequest {
+            topic: Some(pb::Topic {
+                schema_settings: Some(pb::SchemaSettings::default()),
+                ..Default::default()
+            }),
+            update_mask: Some(prost_types::FieldMask {
+                paths: vec!["labels".to_owned()],
+            }),
+        })
+        .is_ok());
     }
 }

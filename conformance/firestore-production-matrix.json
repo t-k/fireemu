@@ -15,7 +15,7 @@
       "evidenceSchema": 1,
       "evidence": {
         "identity": {
-          "sourceSha": "sha256-5f5dae84ecd20e9b2797923aef24e1b141da995f29dda6cd10c420111404e39b",
+          "sourceSha": "sha256-26d9e11435d17b991479a94c5fdcb1daa86414da8458596fae20791acd7d1356",
           "packageVersion": "0.0.0-dev",
           "packageManifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
           "packageIntegrity": null,
@@ -44,8 +44,8 @@
         "observation": {
           "side": "production",
           "mode": "live",
-          "startedAt": "2026-09-06T18:14:39.704Z",
-          "finishedAt": "2026-09-06T18:18:33.207Z",
+          "startedAt": "2026-09-07T01:03:25.243Z",
+          "finishedAt": "2026-09-07T01:07:14.673Z",
           "database": {
             "type": "FIRESTORE_NATIVE",
             "concurrencyMode": "PESSIMISTIC",
@@ -55,8 +55,8 @@
           }
         },
         "source": {
-          "gitSha": "6e501f1b53e0fcd3f1b150338aa4ffddc0bb1c1c",
-          "sourceTreeDigest": "sha256-5f5dae84ecd20e9b2797923aef24e1b141da995f29dda6cd10c420111404e39b",
+          "gitSha": "1a95039874c9c1788147f99e531acf7913c08c7b",
+          "sourceTreeDigest": "sha256-26d9e11435d17b991479a94c5fdcb1daa86414da8458596fae20791acd7d1356",
           "trackedTreeClean": true
         },
         "package": {
@@ -94,15 +94,15 @@
         "observation": {
           "side": "fireemu",
           "mode": "live",
-          "startedAt": "2026-09-06T18:18:33.225Z",
-          "finishedAt": "2026-09-06T18:19:03.393Z",
+          "startedAt": "2026-09-07T01:07:14.687Z",
+          "finishedAt": "2026-09-07T01:07:44.832Z",
           "database": {
             "target": "fireemu local Firestore"
           }
         },
         "source": {
-          "gitSha": "6e501f1b53e0fcd3f1b150338aa4ffddc0bb1c1c",
-          "sourceTreeDigest": "sha256-5f5dae84ecd20e9b2797923aef24e1b141da995f29dda6cd10c420111404e39b",
+          "gitSha": "1a95039874c9c1788147f99e531acf7913c08c7b",
+          "sourceTreeDigest": "sha256-26d9e11435d17b991479a94c5fdcb1daa86414da8458596fae20791acd7d1356",
           "trackedTreeClean": true
         },
         "package": {
@@ -114,8 +114,8 @@
         },
         "artifact": {
           "file": "fireemu",
-          "bytes": 11905776,
-          "sha256": "sha256-8861e36d7ce77769fde04c62a885d81adc9999b76385799a98e7ec019a882b99",
+          "bytes": 11938848,
+          "sha256": "sha256-bf295220d11bd1eae2dc1d1e3de9f2f39880ac48a3b59c83482c5a6f142e58c3",
           "platform": "darwin-arm64",
           "packageIntegrity": "sha512-h4/C6SpcJm2YcgGFMgbw4+NWLozPy/80vOgdPpQb/9prQ3OqPdKmzkAdmnZh0Jc9JwjDPfzgtenBe8HfZ9EGFw=="
         },
@@ -144,15 +144,15 @@
       "officialEmulator": {
         "side": "official-emulator",
         "mode": "stored",
-        "matrixDigest": "sha256-072dd9141eca02065659a03219b7947208be2256015010e72d0edcdd1543e1f8",
+        "matrixDigest": "sha256-9f6c2e5c827c585fff4539f5d58a13cc5bba6e8a7aff57b35fbb14af6f7ea577",
         "source": "firestore-matrix.json"
       }
     }
   },
   "summary": {
-    "fireemu-matches-production": 114,
-    "three-way-difference": 2,
+    "fireemu-matches-production": 115,
     "parity": 185,
+    "three-way-difference": 1,
     "emulators-diverge-from-production": 2,
     "excluded-local-only": 21
   },
@@ -4237,9 +4237,75 @@
           "fireemu": {
             "status": 200,
             "code": "OK",
-            "bodyDigest": "5 documents: ord/ts-late, ord/ts-early, ord/true, ord/str-kanji, ord/str-empty"
+            "body": [
+              {
+                "document": {
+                  "createTime": "<now>",
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2001-02-03T04:05:06.000001Z"
+                    }
+                  },
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/ord/ts-late",
+                  "updateTime": "<now>"
+                },
+                "readTime": "<now>"
+              },
+              {
+                "document": {
+                  "createTime": "<now>",
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2001-02-03T04:05:06Z"
+                    }
+                  },
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/ord/ts-early",
+                  "updateTime": "<now>"
+                },
+                "readTime": "<now>"
+              },
+              {
+                "document": {
+                  "createTime": "<now>",
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  },
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/ord/true",
+                  "updateTime": "<now>"
+                },
+                "readTime": "<now>"
+              },
+              {
+                "document": {
+                  "createTime": "<now>",
+                  "fields": {
+                    "v": {
+                      "stringValue": "日"
+                    }
+                  },
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/ord/str-kanji",
+                  "updateTime": "<now>"
+                },
+                "readTime": "<now>"
+              },
+              {
+                "document": {
+                  "createTime": "<now>",
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  },
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/ord/str-empty",
+                  "updateTime": "<now>"
+                },
+                "readTime": "<now>"
+              }
+            ]
           },
-          "status": "three-way-difference"
+          "status": "fireemu-matches-production"
         },
         "no-order-is-name-order": {
           "production": {
@@ -6632,9 +6698,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -6643,9 +6706,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -6658,6 +6718,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -6669,8 +6735,8 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {}
+                    "s": {
+                      "stringValue": "x"
                     },
                     "m": {
                       "mapValue": {
@@ -6681,11 +6747,11 @@
                         }
                       }
                     },
+                    "tags": {
+                      "arrayValue": {}
+                    },
                     "n": {
                       "integerValue": "3"
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -6697,6 +6763,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -6711,9 +6780,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -7079,9 +7145,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -7090,9 +7153,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -7105,6 +7165,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -7116,8 +7182,8 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {}
+                    "s": {
+                      "stringValue": "x"
                     },
                     "m": {
                       "mapValue": {
@@ -7128,11 +7194,11 @@
                         }
                       }
                     },
+                    "tags": {
+                      "arrayValue": {}
+                    },
                     "n": {
                       "integerValue": "3"
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -7144,6 +7210,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -7158,9 +7227,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -7187,6 +7253,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -7195,9 +7264,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -7209,12 +7275,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
-                    "s": {
-                      "stringValue": "z"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -7235,6 +7295,12 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
+                    "s": {
+                      "stringValue": "z"
                     }
                   },
                   "createTime": "<now>",
@@ -7614,6 +7680,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -7622,9 +7691,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -7636,12 +7702,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
-                    "s": {
-                      "stringValue": "z"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -7662,6 +7722,12 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
+                    "s": {
+                      "stringValue": "z"
                     }
                   },
                   "createTime": "<now>",
@@ -7880,6 +7946,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -7888,9 +7957,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -7930,8 +7996,8 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {}
+                    "s": {
+                      "stringValue": "x"
                     },
                     "m": {
                       "mapValue": {
@@ -7942,11 +8008,11 @@
                         }
                       }
                     },
+                    "tags": {
+                      "arrayValue": {}
+                    },
                     "n": {
                       "integerValue": "3"
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -8160,11 +8226,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/e",
                   "fields": {
-                    "n": {
-                      "stringValue": "2"
-                    },
                     "tags": {
                       "stringValue": "red"
+                    },
+                    "n": {
+                      "stringValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -8248,9 +8314,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -8259,9 +8322,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -8274,6 +8334,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -8285,12 +8351,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
-                    "s": {
-                      "stringValue": "z"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -8311,6 +8371,12 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
+                    "s": {
+                      "stringValue": "z"
                     }
                   },
                   "createTime": "<now>",
@@ -8585,9 +8651,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -8596,9 +8659,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -8611,6 +8671,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -8634,6 +8700,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -8642,9 +8711,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -8656,12 +8722,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
-                    "s": {
-                      "stringValue": "z"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -8682,6 +8742,12 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
+                    "s": {
+                      "stringValue": "z"
                     }
                   },
                   "createTime": "<now>",
@@ -8943,6 +9009,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -8951,9 +9020,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -8965,12 +9031,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
-                    "s": {
-                      "stringValue": "z"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -8991,6 +9051,12 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
+                    "s": {
+                      "stringValue": "z"
                     }
                   },
                   "createTime": "<now>",
@@ -9166,9 +9232,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -9177,9 +9240,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -9192,6 +9252,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -9203,11 +9269,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/e",
                   "fields": {
-                    "n": {
-                      "stringValue": "2"
-                    },
                     "tags": {
                       "stringValue": "red"
+                    },
+                    "n": {
+                      "stringValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -9219,6 +9285,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -9233,9 +9302,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -9452,6 +9518,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -9460,9 +9529,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -9474,12 +9540,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
-                    "s": {
-                      "stringValue": "z"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -9500,6 +9560,12 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
+                    "s": {
+                      "stringValue": "z"
                     }
                   },
                   "createTime": "<now>",
@@ -9718,6 +9784,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -9726,9 +9795,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -9842,6 +9908,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -9850,9 +9919,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -9954,6 +10020,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -9968,9 +10037,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -10069,9 +10135,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -10080,9 +10143,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -10095,6 +10155,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -10214,6 +10280,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -10222,9 +10291,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -10236,8 +10302,8 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {}
+                    "s": {
+                      "stringValue": "x"
                     },
                     "m": {
                       "mapValue": {
@@ -10248,11 +10314,11 @@
                         }
                       }
                     },
+                    "tags": {
+                      "arrayValue": {}
+                    },
                     "n": {
                       "integerValue": "3"
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -10410,9 +10476,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -10421,9 +10484,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -10436,6 +10496,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -10447,6 +10513,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -10461,9 +10530,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -10490,6 +10556,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -10498,9 +10567,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -10738,9 +10804,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -10749,9 +10812,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -10764,6 +10824,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -10775,6 +10841,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -10789,9 +10858,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -10964,9 +11030,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -10975,9 +11038,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -10990,6 +11050,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -11001,6 +11067,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -11015,9 +11084,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "n": {
                       "integerValue": "1"
@@ -11044,6 +11110,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -11052,9 +11121,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -11320,9 +11386,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -11331,9 +11394,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -11346,6 +11406,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -11357,6 +11423,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -11372,9 +11441,6 @@
                         }
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "n": {
                       "integerValue": "1"
                     }
@@ -11388,8 +11454,8 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {}
+                    "s": {
+                      "stringValue": "x"
                     },
                     "m": {
                       "mapValue": {
@@ -11400,11 +11466,11 @@
                         }
                       }
                     },
+                    "tags": {
+                      "arrayValue": {}
+                    },
                     "n": {
                       "integerValue": "3"
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -11428,6 +11494,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -11436,9 +11505,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -11816,9 +11882,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -11827,9 +11890,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -11842,6 +11902,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -11853,6 +11919,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -11868,9 +11937,6 @@
                         }
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "n": {
                       "integerValue": "1"
                     }
@@ -11884,8 +11950,8 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {}
+                    "s": {
+                      "stringValue": "x"
                     },
                     "m": {
                       "mapValue": {
@@ -11896,11 +11962,11 @@
                         }
                       }
                     },
+                    "tags": {
+                      "arrayValue": {}
+                    },
                     "n": {
                       "integerValue": "3"
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -11924,6 +11990,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -11932,9 +12001,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -12284,8 +12350,8 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {}
+                    "s": {
+                      "stringValue": "x"
                     },
                     "m": {
                       "mapValue": {
@@ -12296,11 +12362,11 @@
                         }
                       }
                     },
+                    "tags": {
+                      "arrayValue": {}
+                    },
                     "n": {
                       "integerValue": "3"
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -12312,9 +12378,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -12323,9 +12386,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -12338,6 +12398,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -12361,6 +12427,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -12369,9 +12438,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -12631,8 +12697,8 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/c",
                   "fields": {
-                    "tags": {
-                      "arrayValue": {}
+                    "s": {
+                      "stringValue": "x"
                     },
                     "m": {
                       "mapValue": {
@@ -12643,11 +12709,11 @@
                         }
                       }
                     },
+                    "tags": {
+                      "arrayValue": {}
+                    },
                     "n": {
                       "integerValue": "3"
-                    },
-                    "s": {
-                      "stringValue": "x"
                     }
                   },
                   "createTime": "<now>",
@@ -12659,6 +12725,9 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/g",
                   "fields": {
+                    "s": {
+                      "stringValue": "x"
+                    },
                     "nested": {
                       "mapValue": {
                         "fields": {
@@ -12674,9 +12743,6 @@
                         }
                       }
                     },
-                    "s": {
-                      "stringValue": "x"
-                    },
                     "n": {
                       "integerValue": "1"
                     }
@@ -12690,9 +12756,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/a",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "m": {
                       "mapValue": {
                         "fields": {
@@ -12701,9 +12764,6 @@
                           }
                         }
                       }
-                    },
-                    "s": {
-                      "stringValue": "x"
                     },
                     "tags": {
                       "arrayValue": {
@@ -12716,6 +12776,12 @@
                           }
                         ]
                       }
+                    },
+                    "s": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -12739,6 +12805,9 @@
                     "s": {
                       "stringValue": "y"
                     },
+                    "n": {
+                      "integerValue": "2"
+                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -12747,9 +12816,6 @@
                           }
                         ]
                       }
-                    },
-                    "n": {
-                      "integerValue": "2"
                     }
                   },
                   "createTime": "<now>",
@@ -12761,12 +12827,6 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/flt/f",
                   "fields": {
-                    "n": {
-                      "doubleValue": "NaN"
-                    },
-                    "s": {
-                      "stringValue": "z"
-                    },
                     "tags": {
                       "arrayValue": {
                         "values": [
@@ -12787,6 +12847,12 @@
                           }
                         ]
                       }
+                    },
+                    "n": {
+                      "doubleValue": "NaN"
+                    },
+                    "s": {
+                      "stringValue": "z"
                     }
                   },
                   "createTime": "<now>",
@@ -13216,11 +13282,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -13564,11 +13630,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -13730,11 +13796,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -14228,11 +14294,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -14571,7 +14637,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Cursor has too many values."
+            "message": "cursor has 3 values but the order-by has 2 fields"
           },
           "status": "parity"
         },
@@ -14909,11 +14975,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/b",
                   "fields": {
-                    "g": {
-                      "stringValue": "p"
-                    },
                     "n": {
                       "integerValue": "2"
+                    },
+                    "g": {
+                      "stringValue": "p"
                     }
                   },
                   "createTime": "<now>",
@@ -15161,11 +15227,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cg/a/items/1",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "t": {
                       "stringValue": "a1"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -15225,11 +15291,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/items/root",
                   "fields": {
-                    "n": {
-                      "integerValue": "0"
-                    },
                     "t": {
                       "stringValue": "root"
+                    },
+                    "n": {
+                      "integerValue": "0"
                     }
                   },
                   "createTime": "<now>",
@@ -15423,11 +15489,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/items/root",
                   "fields": {
-                    "n": {
-                      "integerValue": "0"
-                    },
                     "t": {
                       "stringValue": "root"
+                    },
+                    "n": {
+                      "integerValue": "0"
                     }
                   },
                   "createTime": "<now>",
@@ -15439,11 +15505,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cg/a/items/1",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "t": {
                       "stringValue": "a1"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -15803,11 +15869,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/cg/a/items/1",
                   "fields": {
-                    "n": {
-                      "integerValue": "1"
-                    },
                     "t": {
                       "stringValue": "a1"
+                    },
+                    "n": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -15953,11 +16019,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/items/root",
                   "fields": {
-                    "n": {
-                      "integerValue": "0"
-                    },
                     "t": {
                       "stringValue": "root"
+                    },
+                    "n": {
+                      "integerValue": "0"
                     }
                   },
                   "createTime": "<now>",
@@ -16291,11 +16357,11 @@
                 "document": {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/items/root",
                   "fields": {
-                    "n": {
-                      "integerValue": "0"
-                    },
                     "t": {
                       "stringValue": "root"
+                    },
+                    "n": {
+                      "integerValue": "0"
                     }
                   },
                   "createTime": "<now>",
@@ -17557,7 +17623,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Aggregation aliases contain duplicate alias: x."
+            "message": "duplicate aggregation alias \"x\""
           },
           "status": "parity"
         },
@@ -17575,7 +17641,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Aggregations can not be empty."
+            "message": "an aggregation query needs 1..=5 aggregations"
           },
           "status": "parity"
         },
@@ -17975,7 +18041,7 @@
             "body": {
               "documents": [
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "1"
@@ -18002,17 +18068,17 @@
                       }
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "updateTime": "<now>"
                 },
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "2"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
                   "updateTime": "<now>"
                 }
               ]
@@ -18029,18 +18095,6 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
-                    "b": {
-                      "mapValue": {
-                        "fields": {
-                          "c": {
-                            "integerValue": "2"
-                          },
-                          "d": {
-                            "integerValue": "3"
-                          }
-                        }
-                      }
-                    },
                     "e": {
                       "arrayValue": {
                         "values": [
@@ -18052,6 +18106,18 @@
                     },
                     "a": {
                       "integerValue": "1"
+                    },
+                    "b": {
+                      "mapValue": {
+                        "fields": {
+                          "c": {
+                            "integerValue": "2"
+                          },
+                          "d": {
+                            "integerValue": "3"
+                          }
+                        }
+                      }
                     }
                   },
                   "createTime": "<now>",
@@ -18107,7 +18173,7 @@
             "body": {
               "documents": [
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "1"
@@ -18134,7 +18200,7 @@
                       }
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "updateTime": "<now>"
                 }
               ],
@@ -18264,23 +18330,23 @@
             "body": {
               "documents": [
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "1"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "updateTime": "<now>"
                 },
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "2"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
                   "updateTime": "<now>"
                 }
               ]
@@ -18307,6 +18373,9 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
+                    "a": {
+                      "integerValue": "1"
+                    },
                     "b": {
                       "mapValue": {
                         "fields": {
@@ -18318,9 +18387,6 @@
                           }
                         }
                       }
-                    },
-                    "a": {
-                      "integerValue": "1"
                     },
                     "e": {
                       "arrayValue": {
@@ -18393,17 +18459,17 @@
             "body": {
               "documents": [
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "2"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
                   "updateTime": "<now>"
                 },
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "1"
@@ -18430,7 +18496,7 @@
                       }
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "updateTime": "<now>"
                 }
               ]
@@ -18447,8 +18513,14 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
-                    "a": {
-                      "integerValue": "1"
+                    "e": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
                     },
                     "b": {
                       "mapValue": {
@@ -18462,14 +18534,8 @@
                         }
                       }
                     },
-                    "e": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "integerValue": "1"
-                          }
-                        ]
-                      }
+                    "a": {
+                      "integerValue": "1"
                     }
                   },
                   "createTime": "<now>",
@@ -18549,7 +18615,7 @@
             "body": {
               "documents": [
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "1"
@@ -18576,17 +18642,17 @@
                       }
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "updateTime": "<now>"
                 },
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "2"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
                   "updateTime": "<now>"
                 },
                 {
@@ -18606,6 +18672,15 @@
                 {
                   "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "fields": {
+                    "e": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
+                    },
                     "a": {
                       "integerValue": "1"
                     },
@@ -18619,15 +18694,6 @@
                             "integerValue": "3"
                           }
                         }
-                      }
-                    },
-                    "e": {
-                      "arrayValue": {
-                        "values": [
-                          {
-                            "integerValue": "1"
-                          }
-                        ]
                       }
                     }
                   },
@@ -18708,7 +18774,7 @@
             "body": {
               "documents": [
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "1"
@@ -18735,17 +18801,17 @@
                       }
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
                   "updateTime": "<now>"
                 },
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
+                  "createTime": "<now>",
                   "fields": {
                     "a": {
                       "integerValue": "2"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/b",
                   "updateTime": "<now>"
                 },
                 {
@@ -18799,13 +18865,13 @@
             "body": {
               "documents": [
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/missing-parent/sub/x",
+                  "createTime": "<now>",
                   "fields": {
                     "z": {
                       "integerValue": "1"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/missing-parent/sub/x",
                   "updateTime": "<now>"
                 }
               ]
@@ -18985,7 +19051,7 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
+              "createTime": "<now>",
               "fields": {
                 "b": {
                   "mapValue": {
@@ -19006,7 +19072,7 @@
                   }
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/prj/a",
               "updateTime": "<now>"
             }
           },
@@ -19026,7 +19092,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/(default)/documents/prj/missing-parent) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/prj/missing-parent"
           },
           "status": "parity"
         },
@@ -19176,12 +19242,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -19200,7 +19266,7 @@
           "fireemu": {
             "status": 409,
             "code": "ALREADY_EXISTS",
-            "message": "entity already exists: EntityRef[partitionRef=dev~demo-firestore-probe, path=/wr/new]"
+            "message": "Document already exists: projects/demo-firestore-probe/databases/(default)/documents/wr/new"
           },
           "status": "parity"
         },
@@ -19218,7 +19284,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "no entity to update: app: \"dev~demo-firestore-probe\"\npath <\n  Element {\n    type: \"wr\"\n    name: \"none\"\n  }\n>\n"
+            "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
           "status": "parity"
         },
@@ -19251,12 +19317,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -19271,9 +19337,6 @@
                 "b": {
                   "integerValue": "2"
                 },
-                "a": {
-                  "integerValue": "1"
-                },
                 "nested": {
                   "mapValue": {
                     "fields": {
@@ -19282,6 +19345,9 @@
                       }
                     }
                   }
+                },
+                "a": {
+                  "integerValue": "1"
                 }
               },
               "createTime": "<now>",
@@ -19318,7 +19384,7 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/existing",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "integerValue": "1"
@@ -19336,7 +19402,7 @@
                   }
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/existing",
               "updateTime": "<now>"
             }
           },
@@ -19371,12 +19437,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -19414,13 +19480,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/masked-new",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/masked-new",
               "updateTime": "<now>"
             }
           },
@@ -19455,12 +19521,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -19472,6 +19538,9 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/existing",
               "fields": {
+                "a": {
+                  "integerValue": "1"
+                },
                 "nested": {
                   "mapValue": {
                     "fields": {
@@ -19480,9 +19549,6 @@
                       }
                     }
                   }
-                },
-                "a": {
-                  "integerValue": "1"
                 }
               },
               "createTime": "<now>",
@@ -19516,7 +19582,7 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/existing",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "integerValue": "1"
@@ -19531,7 +19597,7 @@
                   }
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/existing",
               "updateTime": "<now>"
             }
           },
@@ -19566,12 +19632,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -19609,13 +19675,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/existing",
+              "createTime": "<now>",
               "fields": {
                 "only": {
                   "booleanValue": true
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/existing",
               "updateTime": "<now>"
             }
           },
@@ -19650,12 +19716,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -19664,17 +19730,17 @@
           "production": {
             "status": 400,
             "code": "FAILED_PRECONDITION",
-            "message": "the stored version (1788718560628947) does not match the required base version (1788718560284525)"
+            "message": "the stored version (1788743083691697) does not match the required base version (1788743083308390)"
           },
           "emulator": {
             "status": 400,
             "code": "FAILED_PRECONDITION",
-            "message": "the stored version (1788718417039747) does not match the required base version (1788718417036999)"
+            "message": "the stored version (1788742667476335) does not match the required base version (1788742667473448)"
           },
           "fireemu": {
             "status": 400,
             "code": "FAILED_PRECONDITION",
-            "message": "the stored version (1788718417039747) does not match the required base version (1788718417036999)"
+            "message": "update time precondition failed for projects/demo-firestore-probe/databases/(default)/documents/wr/existing"
           },
           "status": "parity"
         },
@@ -19692,7 +19758,7 @@
           "fireemu": {
             "status": 400,
             "code": "FAILED_PRECONDITION",
-            "message": "the stored version (0) does not match the required base version (1577836800000000)"
+            "message": "update time precondition failed for projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
           "status": "parity"
         },
@@ -19721,10 +19787,10 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {}
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -19743,7 +19809,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "no entity to update: app: \"dev~demo-firestore-probe\"\npath <\n  Element {\n    type: \"wr\"\n    name: \"none\"\n  }\n>\n"
+            "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
           "status": "parity"
         },
@@ -19761,7 +19827,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "no entity to update: app: \"dev~demo-firestore-probe\"\npath <\n  Element {\n    type: \"wr\"\n    name: \"none\"\n  }\n>\n"
+            "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
           "status": "parity"
         },
@@ -19779,7 +19845,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/(default)/documents/wr/atomic-1) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/wr/atomic-1"
           },
           "status": "parity"
         },
@@ -19818,6 +19884,7 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
@@ -19825,8 +19892,7 @@
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -19838,11 +19904,11 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/twice",
               "fields": {
-                "b": {
-                  "integerValue": "1"
-                },
                 "a": {
                   "integerValue": "2"
+                },
+                "b": {
+                  "integerValue": "1"
                 }
               },
               "createTime": "<now>",
@@ -19870,16 +19936,16 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/twice",
+              "createTime": "<now>",
               "fields": {
-                "b": {
-                  "integerValue": "1"
-                },
                 "a": {
                   "integerValue": "2"
+                },
+                "b": {
+                  "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/twice",
               "updateTime": "<now>"
             }
           },
@@ -19932,12 +19998,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -19956,7 +20022,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "no entity to update: app: \"dev~demo-firestore-probe\"\npath <\n  Element {\n    type: \"wr\"\n    name: \"none\"\n  }\n>\n"
+            "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/none"
           },
           "status": "parity"
         },
@@ -19989,12 +20055,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -20038,16 +20104,16 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/twice",
+              "createTime": "<now>",
               "fields": {
-                "b": {
-                  "integerValue": "1"
-                },
                 "a": {
                   "integerValue": "2"
+                },
+                "b": {
+                  "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/twice",
               "updateTime": "<now>"
             }
           },
@@ -20067,7 +20133,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "no entity to update: app: \"dev~demo-firestore-probe\"\npath <\n  Element {\n    type: \"wr\"\n    name: \"patched\"\n  }\n>\n"
+            "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/patched"
           },
           "status": "parity"
         },
@@ -20104,13 +20170,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/patched",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/patched",
               "updateTime": "<now>"
             }
           },
@@ -20149,13 +20215,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/patched",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/patched",
               "updateTime": "<now>"
             }
           },
@@ -20194,13 +20260,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/created",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/created",
               "updateTime": "<now>"
             }
           },
@@ -20220,7 +20286,7 @@
           "fireemu": {
             "status": 409,
             "code": "ALREADY_EXISTS",
-            "message": "entity already exists: EntityRef[partitionRef=dev~demo-firestore-probe, path=/wr/created]"
+            "message": "Document already exists: projects/demo-firestore-probe/databases/(default)/documents/wr/created"
           },
           "status": "parity"
         },
@@ -20257,13 +20323,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/<auto-id>",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/wr/<auto-id>",
               "updateTime": "<now>"
             }
           },
@@ -20319,7 +20385,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "no entity to update: app: \"dev~demo-firestore-probe\"\npath <\n  Element {\n    type: \"wr\"\n    name: \"created\"\n  }\n>\n"
+            "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/wr/created"
           },
           "status": "parity"
         }
@@ -20398,9 +20464,9 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
-                  "updateTime": "<now>",
                   "transformResults": [
                     {
                       "timestampValue": "<now>"
@@ -20420,10 +20486,10 @@
                     {
                       "integerValue": "-5"
                     }
-                  ]
+                  ],
+                  "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -20447,6 +20513,15 @@
                     ]
                   }
                 },
+                "at": {
+                  "timestampValue": "<now>"
+                },
+                "d": {
+                  "doubleValue": 2.5
+                },
+                "n": {
+                  "integerValue": "3"
+                },
                 "m": {
                   "mapValue": {
                     "fields": {
@@ -20456,17 +20531,8 @@
                     }
                   }
                 },
-                "at": {
-                  "timestampValue": "<now>"
-                },
                 "missing": {
                   "doubleValue": 0.5
-                },
-                "d": {
-                  "doubleValue": 2.5
-                },
-                "n": {
-                  "integerValue": "3"
                 },
                 "s": {
                   "integerValue": "1"
@@ -20527,8 +20593,32 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
+              "createTime": "<now>",
               "fields": {
+                "at": {
+                  "timestampValue": "<now>"
+                },
+                "d": {
+                  "doubleValue": 2.5
+                },
+                "m": {
+                  "mapValue": {
+                    "fields": {
+                      "inner": {
+                        "integerValue": "-5"
+                      }
+                    }
+                  }
+                },
+                "missing": {
+                  "doubleValue": 0.5
+                },
+                "n": {
+                  "integerValue": "3"
+                },
+                "s": {
+                  "integerValue": "1"
+                },
                 "tags": {
                   "arrayValue": {
                     "values": [
@@ -20540,33 +20630,9 @@
                       }
                     ]
                   }
-                },
-                "at": {
-                  "timestampValue": "<now>"
-                },
-                "s": {
-                  "integerValue": "1"
-                },
-                "d": {
-                  "doubleValue": 2.5
-                },
-                "missing": {
-                  "doubleValue": 0.5
-                },
-                "m": {
-                  "mapValue": {
-                    "fields": {
-                      "inner": {
-                        "integerValue": "-5"
-                      }
-                    }
-                  }
-                },
-                "n": {
-                  "integerValue": "3"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "updateTime": "<now>"
             }
           },
@@ -20586,7 +20652,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Invalid property path \"max-missing\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+            "message": "invalid field path: character at byte 3 must be backtick-quoted"
           },
           "status": "parity"
         },
@@ -20597,8 +20663,20 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "fields": {
-                "missing": {
-                  "doubleValue": 0.5
+                "m": {
+                  "mapValue": {
+                    "fields": {
+                      "inner": {
+                        "integerValue": "-5"
+                      }
+                    }
+                  }
+                },
+                "s": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "3"
                 },
                 "tags": {
                   "arrayValue": {
@@ -20612,26 +20690,14 @@
                     ]
                   }
                 },
-                "m": {
-                  "mapValue": {
-                    "fields": {
-                      "inner": {
-                        "integerValue": "-5"
-                      }
-                    }
-                  }
-                },
-                "s": {
-                  "integerValue": "1"
-                },
                 "d": {
                   "doubleValue": 2.5
                 },
                 "at": {
                   "timestampValue": "<now>"
                 },
-                "n": {
-                  "integerValue": "3"
+                "missing": {
+                  "doubleValue": 0.5
                 }
               },
               "createTime": "<now>",
@@ -20689,8 +20755,32 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
+              "createTime": "<now>",
               "fields": {
+                "at": {
+                  "timestampValue": "<now>"
+                },
+                "d": {
+                  "doubleValue": 2.5
+                },
+                "m": {
+                  "mapValue": {
+                    "fields": {
+                      "inner": {
+                        "integerValue": "-5"
+                      }
+                    }
+                  }
+                },
+                "missing": {
+                  "doubleValue": 0.5
+                },
+                "n": {
+                  "integerValue": "3"
+                },
+                "s": {
+                  "integerValue": "1"
+                },
                 "tags": {
                   "arrayValue": {
                     "values": [
@@ -20702,33 +20792,9 @@
                       }
                     ]
                   }
-                },
-                "at": {
-                  "timestampValue": "<now>"
-                },
-                "s": {
-                  "integerValue": "1"
-                },
-                "d": {
-                  "doubleValue": 2.5
-                },
-                "missing": {
-                  "doubleValue": 0.5
-                },
-                "m": {
-                  "mapValue": {
-                    "fields": {
-                      "inner": {
-                        "integerValue": "-5"
-                      }
-                    }
-                  }
-                },
-                "n": {
-                  "integerValue": "3"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "updateTime": "<now>"
             }
           },
@@ -20785,9 +20851,9 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
-                  "updateTime": "<now>",
                   "transformResults": [
                     {
                       "nullValue": null
@@ -20798,10 +20864,10 @@
                     {
                       "nullValue": null
                     }
-                  ]
+                  ],
+                  "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -20813,27 +20879,6 @@
             "body": {
               "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "fields": {
-                "n": {
-                  "integerValue": "3"
-                },
-                "m": {
-                  "mapValue": {
-                    "fields": {
-                      "inner": {
-                        "integerValue": "-5"
-                      }
-                    }
-                  }
-                },
-                "at": {
-                  "timestampValue": "<now>"
-                },
-                "d": {
-                  "doubleValue": 2.5
-                },
-                "missing": {
-                  "doubleValue": 0.5
-                },
                 "tags": {
                   "arrayValue": {
                     "values": [
@@ -20846,6 +20891,24 @@
                     ]
                   }
                 },
+                "n": {
+                  "integerValue": "3"
+                },
+                "missing": {
+                  "doubleValue": 0.5
+                },
+                "at": {
+                  "timestampValue": "<now>"
+                },
+                "m": {
+                  "mapValue": {
+                    "fields": {
+                      "inner": {
+                        "integerValue": "-5"
+                      }
+                    }
+                  }
+                },
                 "s": {
                   "arrayValue": {
                     "values": [
@@ -20854,6 +20917,9 @@
                       }
                     ]
                   }
+                },
+                "d": {
+                  "doubleValue": 2.5
                 }
               },
               "createTime": "<now>",
@@ -20917,16 +20983,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
+              "createTime": "<now>",
               "fields": {
                 "at": {
                   "timestampValue": "<now>"
                 },
                 "d": {
                   "doubleValue": 2.5
-                },
-                "missing": {
-                  "doubleValue": 0.5
                 },
                 "m": {
                   "mapValue": {
@@ -20936,6 +20999,9 @@
                       }
                     }
                   }
+                },
+                "missing": {
+                  "doubleValue": 0.5
                 },
                 "n": {
                   "integerValue": "3"
@@ -20962,7 +21028,7 @@
                   }
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "updateTime": "<now>"
             }
           },
@@ -21013,9 +21079,9 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
-                  "updateTime": "<now>",
                   "transformResults": [
                     {
                       "integerValue": "1"
@@ -21023,10 +21089,10 @@
                     {
                       "timestampValue": "<now>"
                     }
-                  ]
+                  ],
+                  "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -21070,7 +21136,7 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/created",
+              "createTime": "<now>",
               "fields": {
                 "at": {
                   "timestampValue": "<now>"
@@ -21079,7 +21145,7 @@
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/created",
               "updateTime": "<now>"
             }
           },
@@ -21099,7 +21165,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "no entity to update: app: \"dev~demo-firestore-probe\"\npath <\n  Element {\n    type: \"tf\"\n    name: \"none\"\n  }\n>\n"
+            "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/tf/none"
           },
           "status": "parity"
         },
@@ -21117,7 +21183,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Input must be int64 or double."
+            "message": "increment operand must be numeric"
           },
           "status": "parity"
         },
@@ -21135,7 +21201,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "a delete must not specify a update transform."
+            "message": "transforms on a delete"
           },
           "status": "parity"
         },
@@ -21178,17 +21244,17 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
-                  "updateTime": "<now>",
                   "transformResults": [
                     {
                       "integerValue": "1001"
                     }
-                  ]
+                  ],
+                  "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -21203,14 +21269,8 @@
                 "d": {
                   "doubleValue": 2.5
                 },
-                "m": {
-                  "mapValue": {
-                    "fields": {
-                      "inner": {
-                        "integerValue": "-5"
-                      }
-                    }
-                  }
+                "at": {
+                  "timestampValue": "<now>"
                 },
                 "tags": {
                   "arrayValue": {
@@ -21224,15 +21284,6 @@
                     ]
                   }
                 },
-                "missing": {
-                  "doubleValue": 0.5
-                },
-                "at": {
-                  "timestampValue": "<now>"
-                },
-                "n": {
-                  "integerValue": "1001"
-                },
                 "s": {
                   "arrayValue": {
                     "values": [
@@ -21240,6 +21291,21 @@
                         "stringValue": "x"
                       }
                     ]
+                  }
+                },
+                "n": {
+                  "integerValue": "1001"
+                },
+                "missing": {
+                  "doubleValue": 0.5
+                },
+                "m": {
+                  "mapValue": {
+                    "fields": {
+                      "inner": {
+                        "integerValue": "-5"
+                      }
+                    }
                   }
                 }
               },
@@ -21304,16 +21370,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
+              "createTime": "<now>",
               "fields": {
                 "at": {
                   "timestampValue": "<now>"
                 },
                 "d": {
                   "doubleValue": 2.5
-                },
-                "missing": {
-                  "doubleValue": 0.5
                 },
                 "m": {
                   "mapValue": {
@@ -21323,6 +21386,12 @@
                       }
                     }
                   }
+                },
+                "missing": {
+                  "doubleValue": 0.5
+                },
+                "n": {
+                  "integerValue": "1001"
                 },
                 "s": {
                   "arrayValue": {
@@ -21344,12 +21413,9 @@
                       }
                     ]
                   }
-                },
-                "n": {
-                  "integerValue": "1001"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
               "updateTime": "<now>"
             }
           },
@@ -21394,17 +21460,17 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
-                  "updateTime": "<now>",
                   "transformResults": [
                     {
                       "integerValue": "9223372036854775807"
                     }
-                  ]
+                  ],
+                  "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -21442,13 +21508,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/sat",
+              "createTime": "<now>",
               "fields": {
                 "n": {
                   "integerValue": "9223372036854775807"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/sat",
               "updateTime": "<now>"
             }
           },
@@ -21493,17 +21559,17 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
-                  "updateTime": "<now>",
                   "transformResults": [
                     {
                       "doubleValue": "NaN"
                     }
-                  ]
+                  ],
+                  "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -21553,9 +21619,9 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
-                  "updateTime": "<now>",
                   "transformResults": [
                     {
                       "integerValue": "2"
@@ -21563,10 +21629,10 @@
                     {
                       "integerValue": "3"
                     }
-                  ]
+                  ],
+                  "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -21604,13 +21670,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/dup",
+              "createTime": "<now>",
               "fields": {
                 "n": {
                   "integerValue": "3"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/dup",
               "updateTime": "<now>"
             }
           },
@@ -21636,7 +21702,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "the same document cannot be written more than once in a single request"
+            "message": "BatchWrite contains multiple writes to projects/demo-firestore-probe/databases/(default)/documents/bw/existing"
           },
           "status": "parity"
         },
@@ -21654,7 +21720,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/(default)/documents/bw/one) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/bw/one"
           },
           "status": "parity"
         },
@@ -21691,13 +21757,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/bw/existing",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/bw/existing",
               "updateTime": "<now>"
             }
           },
@@ -21814,13 +21880,13 @@
             "body": [
               {
                 "found": {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/counter",
+                  "createTime": "<now>",
                   "fields": {
                     "value": {
                       "integerValue": "0"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/counter",
                   "updateTime": "<now>"
                 },
                 "readTime": "<now>"
@@ -21853,13 +21919,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/counter",
+              "createTime": "<now>",
               "fields": {
                 "value": {
                   "integerValue": "0"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/counter",
               "updateTime": "<now>"
             }
           },
@@ -21894,12 +21960,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -21991,13 +22057,13 @@
             "body": [
               {
                 "found": {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/counter",
+                  "createTime": "<now>",
                   "fields": {
                     "value": {
                       "integerValue": "1"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/counter",
                   "updateTime": "<now>"
                 },
                 "readTime": "<now>"
@@ -22020,7 +22086,7 @@
           "fireemu": {
             "status": 409,
             "code": "ABORTED",
-            "message": "Transaction lock timeout."
+            "message": "Too much contention on these documents. Please try again."
           },
           "status": "parity"
         },
@@ -22053,12 +22119,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -22096,13 +22162,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/counter",
+              "createTime": "<now>",
               "fields": {
                 "value": {
                   "integerValue": "3"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/counter",
               "updateTime": "<now>"
             }
           },
@@ -22161,12 +22227,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -22200,12 +22266,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -22387,7 +22453,7 @@
           "fireemu": {
             "status": 409,
             "code": "ABORTED",
-            "message": "Transaction lock timeout."
+            "message": "Too much contention on these documents. Please try again."
           },
           "status": "emulators-diverge-from-production"
         },
@@ -22420,12 +22486,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -22485,7 +22551,8 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_ARGUMENT"
+            "code": "INVALID_ARGUMENT",
+            "message": "The referenced transaction has expired or is no longer valid."
           },
           "status": "fireemu-matches-production"
         },
@@ -22599,7 +22666,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "invalid base64"
           },
           "status": "parity"
         },
@@ -22657,13 +22724,13 @@
               },
               {
                 "found": {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/third",
+                  "createTime": "<now>",
                   "fields": {
                     "value": {
                       "integerValue": "0"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/third",
                   "updateTime": "<now>"
                 },
                 "readTime": "<now>"
@@ -22773,7 +22840,8 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_ARGUMENT"
+            "code": "INVALID_ARGUMENT",
+            "message": "The requested 'read_time' cannot be before database creation time."
           },
           "status": "fireemu-matches-production"
         },
@@ -22815,7 +22883,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "transaction, readTime and newTransaction are mutually exclusive"
           },
           "status": "parity"
         }
@@ -22839,7 +22907,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/(default)/documents/err/none) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/err/none"
           },
           "status": "parity"
         },
@@ -22893,7 +22961,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+            "message": "invalid field path: field path segment 1 is empty"
           },
           "status": "parity"
         },
@@ -22929,7 +22997,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/nope/documents/err/a) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/nope/documents/err/a"
           },
           "status": "parity"
         },
@@ -22947,7 +23015,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/other-project/databases/(default)/documents/err/a) not found."
+            "message": "Document not found: projects/other-project/databases/(default)/documents/err/a"
           },
           "status": "emulators-diverge-from-production"
         },
@@ -22965,7 +23033,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "invalid JSON body: key must be a string at line 1 column 2"
           },
           "status": "parity"
         },
@@ -23044,7 +23112,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "only structured queries are supported"
+            "message": "structuredQuery is required"
           },
           "status": "parity"
         },
@@ -23062,7 +23130,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "unknown field filter operator \"NOT_AN_OP\""
           },
           "status": "parity"
         },
@@ -23080,7 +23148,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "unknown unary filter operator \"IS_SOMETHING\""
           },
           "status": "parity"
         },
@@ -23098,7 +23166,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Unknown FieldFilter operator."
+            "message": "unknown field filter operator \"OPERATOR_UNSPECIFIED\""
           },
           "status": "parity"
         },
@@ -23116,7 +23184,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "'IN' requires an non-empty ArrayValue."
+            "message": "IN requires a non-empty array value on a"
           },
           "status": "parity"
         },
@@ -23134,7 +23202,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "'IN' requires an ArrayValue."
+            "message": "IN requires a non-empty array value on a"
           },
           "status": "parity"
         },
@@ -23152,7 +23220,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "'IN' supports up to 30 comparison values."
+            "message": "query limit violation: FS-QUERY-LIMIT-DNF-DISJUNCTIONS: 31 disjunctions after DNF expansion (31 > 30)"
           },
           "status": "parity"
         },
@@ -23262,7 +23330,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Only a single 'NOT_EQUAL', 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query."
+            "message": "a query can have at most one not-in filter"
           },
           "status": "parity"
         },
@@ -23280,7 +23348,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "'NOT_IN' cannot be used in the same query with 'IN', 'ARRAY_CONTAINS_ANY' or 'OR'."
+            "message": "not-in cannot be combined with in, array-contains-any or or"
           },
           "status": "parity"
         },
@@ -23297,7 +23365,8 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_ARGUMENT"
+            "code": "INVALID_ARGUMENT",
+            "message": "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction."
           },
           "status": "fireemu-matches-production"
         },
@@ -23394,7 +23463,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Unsupported CompositeFilter operator."
+            "message": "compositeFilter.op must be AND or OR"
           },
           "status": "parity"
         },
@@ -23412,7 +23481,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+            "message": "invalid field path: field path segment 1 is empty"
           },
           "status": "parity"
         },
@@ -23430,7 +23499,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Invalid empty property path string."
+            "message": "invalid field path: field path is empty"
           },
           "status": "parity"
         },
@@ -23448,7 +23517,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Invalid empty property path string."
+            "message": "invalid field path: field path is empty"
           },
           "status": "parity"
         },
@@ -23527,7 +23596,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Cursor has too many values."
+            "message": "cursor has 3 values but the order-by has 2 fields"
           },
           "status": "parity"
         },
@@ -23545,7 +23614,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "limit is negative"
+            "message": "invalid query: negative limit"
           },
           "status": "parity"
         },
@@ -23563,7 +23632,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "offset is negative"
+            "message": "invalid query: negative offset"
           },
           "status": "parity"
         },
@@ -23581,7 +23650,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "StructuredQuery.from cannot have more than one collection selector."
+            "message": "invalid query: StructuredQuery.from cannot have more than one collection selector."
           },
           "status": "parity"
         },
@@ -23660,7 +23729,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Collection id \"a/b\" is invalid because it contains \"/\"."
+            "message": "invalid query: collection id: identifier contains '/'"
           },
           "status": "parity"
         },
@@ -23714,7 +23783,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "The request was for database 'projects/demo-firestore-probe/databases/(default)' but was attempting to access database 'projects/demo-firestore-probe/databases/other'"
+            "message": "invalid query: The request was for database 'projects/demo-firestore-probe/databases/(default)' but was attempting to access database 'projects/demo-firestore-probe/databases/other'"
           },
           "status": "parity"
         },
@@ -23732,7 +23801,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "unknown value key \"fooValue\""
           },
           "status": "parity"
         },
@@ -23750,7 +23819,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "integerValue \"99999999999999999999\" is not an int64"
           },
           "status": "parity"
         },
@@ -23768,7 +23837,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "invalid value: timestamp: SecondsOutOfRange"
           },
           "status": "parity"
         },
@@ -23786,7 +23855,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "The requested 'read_time' cannot be in the future."
+            "message": "read_time must not be in the future"
           },
           "status": "parity"
         },
@@ -23803,7 +23872,8 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_ARGUMENT"
+            "code": "INVALID_ARGUMENT",
+            "message": "The requested 'read_time' cannot be before database creation time."
           },
           "status": "fireemu-matches-production"
         },
@@ -23821,7 +23891,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/err\" lacks \"/\" at index 63."
+            "message": "invalid parent: document path has 1 segments; expected an even number"
           },
           "status": "parity"
         },
@@ -23845,7 +23915,8 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_ARGUMENT"
+            "code": "INVALID_ARGUMENT",
+            "message": "document projects/demo-firestore-probe/databases/other/documents/err/x does not belong to database projects/demo-firestore-probe/databases/(default)"
           },
           "status": "fireemu-matches-production"
         },
@@ -23863,7 +23934,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "The property.name is the empty string."
+            "message": "field name \"\": field path segment 0 is empty"
           },
           "status": "parity"
         },
@@ -23881,7 +23952,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "field name __id__ is reserved"
+            "message": "field name \"__id__\": segment 0 matches the reserved pattern __.*__"
           },
           "status": "parity"
         },
@@ -23914,12 +23985,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -23957,13 +24028,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/err/x",
+              "createTime": "<now>",
               "fields": {
                 "a.b": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/err/x",
               "updateTime": "<now>"
             }
           },
@@ -24016,12 +24087,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24040,7 +24111,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "integerValue \"99999999999999999999\" is not an int64"
           },
           "status": "parity"
         },
@@ -24073,12 +24144,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24112,12 +24183,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24136,7 +24207,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "unknown value key \"fooValue\""
           },
           "status": "parity"
         },
@@ -24154,7 +24225,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Cannot convert firestore.v1.Value with type unset."
+            "message": "a value must have exactly one *Value key"
           },
           "status": "parity"
         },
@@ -24172,7 +24243,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "invalid timestamp \"not a time\": invalid RFC 3339 timestamp at byte 0: expected four-digit year"
           },
           "status": "parity"
         },
@@ -24190,7 +24261,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Payload isn't valid for request."
+            "message": "invalid base64"
           },
           "status": "parity"
         },
@@ -24208,7 +24279,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Geo point latitude '91.0' outside permitted range -90.0 to 90.0."
+            "message": "geoPointValue.latitude out of range"
           },
           "status": "parity"
         },
@@ -24241,12 +24312,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24265,7 +24336,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Document parent name \"projects/demo-firestore-probe/databases/(default)/documents/x\" lacks \"/\" at index 61."
+            "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/x\" is not a document path: projects/{project}/databases/{database}/documents/{collection}/{document}..."
           },
           "status": "parity"
         },
@@ -24298,12 +24369,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24331,8 +24402,8 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/err/nofields",
               "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/err/nofields",
               "updateTime": "<now>"
             }
           },
@@ -24370,7 +24441,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "empty write operation"
+            "message": "invalid query: write without operation"
           },
           "status": "parity"
         },
@@ -24388,7 +24459,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+            "message": "invalid field path: field path segment 1 is empty"
           },
           "status": "parity"
         },
@@ -24421,12 +24492,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24482,7 +24553,7 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/err/x",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "referenceValue": "projects/other/databases/(default)/documents/x/y"
@@ -24497,7 +24568,7 @@
                   }
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/err/x",
               "updateTime": "<now>"
             }
           },
@@ -24517,7 +24588,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "a delete must not specify a document mask."
+            "message": "invalid query: update_mask is only valid with an update operation"
           },
           "status": "parity"
         },
@@ -24553,7 +24624,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "The value of property \"blob\" is longer than 1048487 bytes."
+            "message": "FS-LIMIT-DOCUMENT-BYTES: 1048662 exceeds 1048576 (BoundaryConformance)"
           },
           "status": "parity"
         },
@@ -24586,12 +24657,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24610,7 +24681,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Property a contains an invalid nested entity."
+            "message": "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH has maximum 20, got 21"
           },
           "status": "parity"
         },
@@ -24643,12 +24714,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24682,12 +24753,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24706,7 +24777,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "The property.name is longer than 1500 bytes."
+            "message": "field name \"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
           },
           "status": "parity"
         },
@@ -24739,12 +24810,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24763,7 +24834,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "The key path element name is longer than 1500 bytes."
+            "message": "invalid parent: segment 1: identifier is 1501 UTF-8 bytes, maximum is 1500"
           },
           "status": "parity"
         },
@@ -24781,7 +24852,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/err/..\" contains a resource id \"..\" at index 64."
+            "message": "invalid parent: segment 1: identifier must not be '.' or '..'"
           },
           "status": "parity"
         },
@@ -24799,7 +24870,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/err/.\" contains a resource id \".\" at index 64."
+            "message": "invalid parent: segment 1: identifier must not be '.' or '..'"
           },
           "status": "parity"
         },
@@ -24832,12 +24903,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -24856,7 +24927,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Resource id \"__x__\" is invalid because it is reserved."
+            "message": "invalid parent: segment 1: identifier matches reserved pattern __.*__"
           },
           "status": "parity"
         },
@@ -24874,7 +24945,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Collection id \"__err__\" is invalid because it is reserved."
+            "message": "invalid parent: segment 0: identifier matches reserved pattern __.*__"
           },
           "status": "parity"
         },
@@ -26403,7 +26474,8 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_ARGUMENT"
+            "code": "INVALID_ARGUMENT",
+            "message": "cannot have more than 500 field transforms on a single document"
           },
           "status": "fireemu-matches-production"
         },
@@ -29440,9 +29512,9 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
-                  "updateTime": "<now>",
                   "transformResults": [
                     {
                       "integerValue": "1"
@@ -30944,10 +31016,10 @@
                     {
                       "integerValue": "1"
                     }
-                  ]
+                  ],
+                  "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -30966,7 +31038,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Document name \"not/a/valid/name/at/all/x\" lacks \"projects\" at index 0."
+            "message": "invalid parent: not/a/valid/name/at/all/x"
           },
           "status": "parity"
         },
@@ -30984,7 +31056,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/err\" lacks \"/\" at index 63."
+            "message": "invalid parent: document path has 1 segments; expected an even number"
           },
           "status": "parity"
         },
@@ -31020,7 +31092,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Page size must be nonnegative."
+            "message": "page_size must not be negative"
           },
           "status": "parity"
         },
@@ -31037,7 +31109,8 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_ARGUMENT"
+            "code": "INVALID_ARGUMENT",
+            "message": "malformed page_token"
           },
           "status": "fireemu-matches-production"
         },
@@ -31142,7 +31215,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/(default)/documents/em/a) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/em/a"
           },
           "status": "excluded-local-only"
         },
@@ -31169,7 +31242,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/(default)/documents/em/a/sub/b) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/em/a/sub/b"
           },
           "status": "excluded-local-only"
         },
@@ -31223,7 +31296,7 @@
           "fireemu": {
             "status": 400,
             "code": "INVALID_ARGUMENT",
-            "message": "Error compiling rules:\nL1:91 Missing conditional expression after 'if'."
+            "message": "Error compiling rules:\nL1:91 expected expression, found `;`"
           },
           "status": "excluded-local-only"
         },
@@ -31258,7 +31331,8 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_ARGUMENT"
+            "code": "INVALID_ARGUMENT",
+            "message": "rules.files must be an array of {name, content}"
           },
           "status": "excluded-local-only"
         },
@@ -31312,7 +31386,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/named-db/documents/em/a) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/named-db/documents/em/a"
           },
           "status": "excluded-local-only"
         },
@@ -31336,7 +31410,8 @@
           },
           "fireemu": {
             "status": 400,
-            "code": "INVALID_ARGUMENT"
+            "code": "INVALID_ARGUMENT",
+            "message": "document projects/demo-firestore-probe/databases/named-db/documents/em/a does not belong to database projects/demo-firestore-probe/databases/(default)"
           },
           "status": "excluded-local-only"
         },
@@ -31362,12 +31437,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "excluded-local-only"
@@ -31396,13 +31471,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/named-db/documents/em/a",
+              "createTime": "<now>",
               "fields": {
                 "a": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/named-db/documents/em/a",
               "updateTime": "<now>"
             }
           },
@@ -31431,7 +31506,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/(default)/documents/em/a) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/(default)/documents/em/a"
           },
           "status": "excluded-local-only"
         },
@@ -31467,7 +31542,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/named-db/documents/em/a) not found."
+            "message": "Document not found: projects/demo-firestore-probe/databases/named-db/documents/em/a"
           },
           "status": "excluded-local-only"
         },
@@ -31485,7 +31560,7 @@
           "fireemu": {
             "status": 404,
             "code": "NOT_FOUND",
-            "message": "Document (projects/demo-firestore-probe/databases/Named/documents/em/a) not found."
+            "message": "The database Named does not exist for project demo-firestore-probe"
           },
           "status": "excluded-local-only"
         },
@@ -31512,7 +31587,7 @@
                   "freeTier": true,
                   "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
                   "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                  "etag": "IICL9LjI2pYDMODt3eb7z5YD"
+                  "etag": "ILuak+aj25YDMODt3eb7z5YD"
                 }
               ]
             }
@@ -31550,7 +31625,7 @@
               "freeTier": true,
               "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
               "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-              "etag": "IPWBw7nI2pYDMODt3eb7z5YD"
+              "etag": "IJGT2+aj25YDMODt3eb7z5YD"
             }
           },
           "emulator": {
@@ -31622,13 +31697,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
+              "createTime": "<now>",
               "fields": {
                 "v": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
               "updateTime": "<now>"
             }
           },
@@ -31663,12 +31738,12 @@
             "status": 200,
             "code": "OK",
             "body": {
+              "commitTime": "<now>",
               "writeResults": [
                 {
                   "updateTime": "<now>"
                 }
-              ],
-              "commitTime": "<now>"
+              ]
             }
           },
           "status": "parity"
@@ -31697,13 +31772,13 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
+              "createTime": "<now>",
               "fields": {
                 "v": {
                   "integerValue": "1"
                 }
               },
-              "createTime": "<now>",
+              "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
               "updateTime": "<now>"
             }
           },
@@ -31851,13 +31926,13 @@
             "body": [
               {
                 "found": {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
+                  "createTime": "<now>",
                   "fields": {
                     "v": {
                       "integerValue": "1"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
                   "updateTime": "<now>"
                 },
                 "readTime": "<now>"
@@ -31896,13 +31971,13 @@
             "body": {
               "documents": [
                 {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
+                  "createTime": "<now>",
                   "fields": {
                     "v": {
                       "integerValue": "1"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
                   "updateTime": "<now>"
                 }
               ]
@@ -32031,13 +32106,13 @@
             "body": [
               {
                 "found": {
-                  "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
+                  "createTime": "<now>",
                   "fields": {
                     "v": {
                       "integerValue": "1"
                     }
                   },
-                  "createTime": "<now>",
+                  "name": "projects/demo-firestore-probe/databases/(default)/documents/rt/a",
                   "updateTime": "<now>"
                 },
                 "readTime": "<now>"

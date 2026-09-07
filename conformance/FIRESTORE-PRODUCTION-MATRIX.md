@@ -4,18 +4,18 @@ Every row of `firestore-matrix.json` run against production Firestore (Native mo
 
 ## Evidence
 
-Fireemu observation: live artifact fireemu (sha256-8861e36d7ce77769fde04c62a885d81adc9999b76385799a98e7ec019a882b99), source 6e501f1b53e0fcd3f1b150338aa4ffddc0bb1c1c, profile firebase.
+Fireemu observation: live artifact fireemu (sha256-bf295220d11bd1eae2dc1d1e3de9f2f39880ac48a3b59c83482c5a6f142e58c3), source 1a95039874c9c1788147f99e531acf7913c08c7b, profile firebase.
 Inputs: corpus sha256-d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b, SDK lock sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432, indexes sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a.
-Official emulator values: stored expectation from firestore-matrix.json (sha256-072dd9141eca02065659a03219b7947208be2256015010e72d0edcdd1543e1f8).
+Official emulator values: stored expectation from firestore-matrix.json (sha256-9f6c2e5c827c585fff4539f5d58a13cc5bba6e8a7aff57b35fbb14af6f7ea577).
 Evidence status: verified.
 
 | status | rows | meaning |
 | --- | --- | --- |
 | parity | 185 | production, the official emulator and fireemu agree |
-| fireemu-matches-production | 114 | fireemu follows production where the official emulator differs |
+| fireemu-matches-production | 115 | fireemu follows production where the official emulator differs |
 | fireemu-divergence | 0 | production and the official emulator agree; fireemu differs |
 | emulators-diverge-from-production | 2 | the official emulator and fireemu agree with each other but not with production |
-| three-way-difference | 2 | production, the official emulator and fireemu all differ |
+| three-way-difference | 1 | production, the official emulator and fireemu all differ |
 | production-needs-index | 0 | production refused the query for want of a composite index in the oracle project; not a semantic comparison until the index exists |
 
 ## Rows that are not parity
@@ -25,7 +25,7 @@ Evidence status: verified.
 | values/type-order#ascending | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","fields":{"v":{"nullVa |
 | values/type-order#descending | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","fields":{"v":{"mapVal |
 | values/type-order#ascending-name-only | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","fields":{"v":{"arrayV |
-| values/type-order#descending-name-only | three-way-difference | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":400,"code":"FAILED_PRECONDITION"} | {"status":200,"code":"OK"} |
+| values/type-order#descending-name-only | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":400,"code":"FAILED_PRECONDITION"} | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","fields":{"v":{"timest |
 | values/type-order#no-order-is-name-order | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","fields":{"v":{"arrayV |
 | values/type-order#select-name-only | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","name":"projects/demo- |
 | values/numeric-ties#ascending | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","fields":{"v":{"double |
@@ -117,7 +117,7 @@ Evidence status: verified.
 | queries/projection-and-listing#list-documents-next-page | fireemu-matches-production | {"status":200,"code":"OK","body":{"documents":[{"name":"projects/demo-firestore-probe/data | {"status":200,"code":"OK","body":{"documents":[{"name":"projects/demo-firestore-probe/data | {"status":200,"code":"OK","body":{"documents":[{"createTime":"<now>","fields":{"a":{"integ |
 | queries/projection-and-listing#list-collection-ids-paged | fireemu-matches-production | {"status":200,"code":"OK","body":{"collectionIds":["prj"]}} | {"status":200,"code":"OK","body":{"collectionIds":["prj"],"nextPageToken":"<token>"}} | {"status":200,"code":"OK","body":{"collectionIds":["prj"]}} |
 | queries/projection-and-listing#batch-get-mixed | fireemu-matches-production | {"status":200,"code":"OK","body":[{"found":{"name":"projects/demo-firestore-probe/database | {"status":200,"code":"OK","body":[{"found":{"name":"projects/demo-firestore-probe/database | {"status":200,"code":"OK","body":[{"found":{"createTime":"<now>","fields":{"a":{"integerVa |
-| transactions/lifecycle#get-with-transaction-query-parameter | fireemu-matches-production | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default | {"status":0,"code":"no-response"} | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default |
+| transactions/lifecycle#get-with-transaction-query-parameter | fireemu-matches-production | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default | {"status":0,"code":"no-response"} | {"status":200,"code":"OK","body":{"createTime":"<now>","fields":{"value":{"integerValue":" |
 | transactions/lifecycle#query-in-transaction | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","fields":{"value":{"in |
 | transactions/lifecycle#phantom-write | emulators-diverge-from-production | {"status":0,"code":"no-response"} | {"status":409,"code":"ABORTED"} | {"status":409,"code":"ABORTED"} |
 | transactions/lifecycle#read-only-commit-without-writes | fireemu-matches-production | {"status":400,"code":"INVALID_ARGUMENT"} | {"status":200,"code":"OK","body":{}} | {"status":400,"code":"INVALID_ARGUMENT"} |
@@ -147,8 +147,8 @@ Evidence status: verified.
 | emulator/routes#unknown-emulator-route | excluded-local-only | {"status":404,"code":"non-json"} | {"status":404,"code":"non-json"} | {"status":404,"code":"non-json"} |
 | emulator/routes#named-database-is-served | excluded-local-only | {"status":404,"code":"NOT_FOUND"} | {"status":404,"code":"NOT_FOUND"} | {"status":404,"code":"NOT_FOUND"} |
 | emulator/routes#write-to-a-named-database | excluded-local-only | {"status":400,"code":"INVALID_ARGUMENT"} | {"status":200,"code":"OK","body":{"writeResults":[{"updateTime":"<now>"}],"commitTime":"<n | {"status":400,"code":"INVALID_ARGUMENT"} |
-| emulator/routes#commit-on-the-named-database-route | excluded-local-only | {"status":404,"code":"NOT_FOUND"} | {"status":200,"code":"OK","body":{"writeResults":[{"updateTime":"<now>"}],"commitTime":"<n | {"status":200,"code":"OK","body":{"writeResults":[{"updateTime":"<now>"}],"commitTime":"<n |
-| emulator/routes#named-database-document | excluded-local-only | {"status":404,"code":"NOT_FOUND"} | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/named-db | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/named-db |
+| emulator/routes#commit-on-the-named-database-route | excluded-local-only | {"status":404,"code":"NOT_FOUND"} | {"status":200,"code":"OK","body":{"writeResults":[{"updateTime":"<now>"}],"commitTime":"<n | {"status":200,"code":"OK","body":{"commitTime":"<now>","writeResults":[{"updateTime":"<now |
+| emulator/routes#named-database-document | excluded-local-only | {"status":404,"code":"NOT_FOUND"} | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/named-db | {"status":200,"code":"OK","body":{"createTime":"<now>","fields":{"a":{"integerValue":"1"}} |
 | emulator/routes#default-database-is-separate | excluded-local-only | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default | {"status":404,"code":"NOT_FOUND"} | {"status":404,"code":"NOT_FOUND"} |
 | emulator/routes#clear-named-database | excluded-local-only | {"status":404,"code":"non-json"} | {"status":200,"code":"OK","body":{}} | {"status":200,"code":"OK","body":{}} |
 | emulator/routes#named-database-cleared | excluded-local-only | {"status":404,"code":"NOT_FOUND"} | {"status":404,"code":"NOT_FOUND"} | {"status":404,"code":"NOT_FOUND"} |
@@ -156,8 +156,8 @@ Evidence status: verified.
 | emulator/routes#list-databases | excluded-local-only | {"status":200,"code":"OK","body":{"databases":[{"name":"projects/demo-firestore-probe/data | {"status":404,"code":"non-json"} | {"status":404,"code":"non-json"} |
 | emulator/routes#get-database | excluded-local-only | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default | {"status":404,"code":"non-json"} | {"status":404,"code":"non-json"} |
 | emulator/routes#get-named-database | excluded-local-only | {"status":404,"code":"NOT_FOUND"} | {"status":404,"code":"non-json"} | {"status":404,"code":"non-json"} |
-| reads/read-time#read-at-the-first-update-time | fireemu-matches-production | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default | {"status":400,"code":"INVALID_ARGUMENT"} | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default |
+| reads/read-time#read-at-the-first-update-time | fireemu-matches-production | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default | {"status":400,"code":"INVALID_ARGUMENT"} | {"status":200,"code":"OK","body":{"createTime":"<now>","fields":{"v":{"integerValue":"1"}} |
 | reads/read-time#read-at-the-second-update-time | fireemu-matches-production | {"status":200,"code":"OK","body":{"name":"projects/demo-firestore-probe/databases/(default | {"status":400,"code":"INVALID_ARGUMENT"} | {"status":200,"code":"OK","body":{"createTime":"<now>","fields":{"v":{"integerValue":"2"}} |
 | reads/read-time#query-at-the-first-update-time | fireemu-matches-production | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"name":"projects/demo-firestore-probe/datab | {"status":200,"code":"OK","body":[{"document":{"createTime":"<now>","fields":{"v":{"intege |
-| reads/read-time#list-at-the-first-update-time | fireemu-matches-production | {"status":200,"code":"OK","body":{"documents":[{"name":"projects/demo-firestore-probe/data | {"status":400,"code":"INVALID_ARGUMENT"} | {"status":200,"code":"OK","body":{"documents":[{"name":"projects/demo-firestore-probe/data |
+| reads/read-time#list-at-the-first-update-time | fireemu-matches-production | {"status":200,"code":"OK","body":{"documents":[{"name":"projects/demo-firestore-probe/data | {"status":400,"code":"INVALID_ARGUMENT"} | {"status":200,"code":"OK","body":{"documents":[{"createTime":"<now>","fields":{"v":{"integ |
 | reads/read-time#count-at-the-first-update-time | fireemu-matches-production | {"status":200,"code":"OK","body":[{"result":{"aggregateFields":{"count":{"integerValue":"1 | {"status":200,"code":"OK","body":[{"result":{"aggregateFields":{"count":{"integerValue":"1 | {"status":200,"code":"OK","body":[{"readTime":"<now>","result":{"aggregateFields":{"count" |

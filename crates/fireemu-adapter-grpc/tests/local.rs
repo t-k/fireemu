@@ -2425,6 +2425,63 @@ async fn run_query_logical_completion_covers_every_page_and_limit() {
 }
 
 #[tokio::test]
+async fn paged_query_preserves_offset_and_read_time_metadata() {
+    let (mut client, _clock, _backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| update_write(&format!("offset-page/{index:03}"), &[("v", i(index))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for offset in [0, 1, 31, 32, 66] {
+        let mut request = query("offset-page", None);
+        let Some(pb::run_query_request::QueryType::StructuredQuery(ref mut query)) =
+            request.query_type
+        else {
+            unreachable!()
+        };
+        query.offset = offset;
+        let responses = client
+            .run_query(request)
+            .await
+            .unwrap()
+            .into_inner()
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(responses
+            .iter()
+            .all(|r| r.read_time.is_some() && r.transaction.is_empty()));
+        assert_eq!(
+            responses.iter().map(|r| r.skipped_results).sum::<i32>(),
+            offset.min(65)
+        );
+        let names = responses
+            .iter()
+            .filter_map(|r| r.document.as_ref().map(|d| d.name.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            (offset..65)
+                .map(|index| format!("{DOCS}/offset-page/{index:03}"))
+                .collect::<Vec<_>>()
+        );
+        assert!(matches!(
+            responses.last().unwrap().continuation_selector,
+            Some(pb::run_query_response::ContinuationSelector::Done(true))
+        ));
+    }
+    handle.abort();
+}
+
+#[tokio::test]
 async fn later_query_page_failure_never_announces_success_and_releases_pin() {
     use fireemu_core_session::fault::{
         FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,

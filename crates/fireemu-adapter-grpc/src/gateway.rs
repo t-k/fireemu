@@ -2,8 +2,12 @@
 
 use core::fmt;
 
-use fireemu_core_firestore::index::{decide, IndexDecision, IndexSet, PlanningContext};
+use fireemu_core_firestore::index::{
+    decide, validate_aggregation_query as validate_aggregation_index_query, IndexDecision,
+    IndexSet, PlanningContext,
+};
 use fireemu_core_firestore::query::{Query, QueryLimitViolation};
+use fireemu_core_firestore::store::Aggregation;
 use fireemu_core_types::edition::FirestoreEdition;
 
 use crate::decode::DecodeError;
@@ -124,9 +128,39 @@ impl Gateway {
         query: &Query,
         indexes: &IndexSet,
     ) -> Result<AcceptedQuery, Rejection> {
-        let canonical = query
-            .canonicalize()
-            .map_err(|e| Rejection::InvalidQuery(e.to_string()))?;
+        self.validate_canonical_query(
+            query
+                .canonicalize()
+                .map_err(|e| Rejection::InvalidQuery(e.to_string()))?,
+            indexes,
+            None,
+        )
+    }
+
+    /// Runs every strict check for an aggregation query with a borrowed database-specific index
+    /// catalog. Sum and average fields participate in index validation only; the accepted query
+    /// remains the original executable query.
+    pub fn validate_aggregation_query_with_indexes(
+        &self,
+        query: &Query,
+        aggregations: &[Aggregation],
+        indexes: &IndexSet,
+    ) -> Result<AcceptedQuery, Rejection> {
+        self.validate_canonical_query(
+            query
+                .canonicalize()
+                .map_err(|e| Rejection::InvalidQuery(e.to_string()))?,
+            indexes,
+            Some(aggregations),
+        )
+    }
+
+    fn validate_canonical_query(
+        &self,
+        canonical: Query,
+        indexes: &IndexSet,
+        aggregations: Option<&[Aggregation]>,
+    ) -> Result<AcceptedQuery, Rejection> {
         let disjunctions = canonical.dnf_disjunction_count();
         if disjunctions > fireemu_core_firestore::query::MAX_MATERIALIZED_DISJUNCTIONS {
             return Err(Rejection::InvalidQuery(format!(
@@ -152,7 +186,12 @@ impl Gateway {
                 );
             }
         }
-        let decision = decide(&canonical, indexes, &self.ctx);
+        let decision = aggregations.map_or_else(
+            || decide(&canonical, indexes, &self.ctx),
+            |aggregations| {
+                validate_aggregation_index_query(&canonical, aggregations, indexes, &self.ctx)
+            },
+        );
         match &decision {
             IndexDecision::UseIndex { .. } | IndexDecision::KindlessScan => {}
             IndexDecision::AssumedIndex { requirement } => {

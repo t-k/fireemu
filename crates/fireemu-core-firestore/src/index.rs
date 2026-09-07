@@ -13,6 +13,7 @@ use fireemu_core_types::ids::CollectionId;
 
 use crate::field_path::FieldPath;
 use crate::query::{Direction, FieldOp, FilterExpr, OrderClause, Query, UnaryOp};
+use crate::store::Aggregation;
 
 /// Index field mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -302,6 +303,7 @@ fn describe(i: &IndexDefinition) -> String {
 }
 
 /// Requirement derived from one DNF disjunction.
+#[derive(Clone)]
 struct Requirement {
     equality: Vec<FieldPath>,
     contains: Option<FieldPath>,
@@ -345,6 +347,44 @@ fn requirement_for(disjunction: &[FilterExpr], effective_order: &[OrderClause]) 
         contains,
         order,
     }
+}
+
+fn requirement_for_aggregation(
+    disjunction: &[FilterExpr],
+    effective_order: &[OrderClause],
+    aggregations: &[Aggregation],
+) -> Requirement {
+    let mut requirement = requirement_for(disjunction, effective_order);
+    let mut fields = BTreeSet::new();
+    for aggregation in aggregations {
+        match aggregation {
+            Aggregation::Count { .. } => {}
+            Aggregation::Sum(field) | Aggregation::Avg(field) => {
+                fields.insert(field.clone());
+            }
+        }
+    }
+    for field in fields {
+        if requirement.equality.contains(&field)
+            || requirement.contains.as_ref() == Some(&field)
+            || requirement.order.iter().any(|o| o.field == field)
+        {
+            continue;
+        }
+        let name_position = requirement
+            .order
+            .iter()
+            .position(|o| o.field.is_document_name())
+            .unwrap_or(requirement.order.len());
+        requirement.order.insert(
+            name_position,
+            OrderClause {
+                field,
+                direction: Direction::Ascending,
+            },
+        );
+    }
+    requirement
 }
 
 /// The index that would serve `req` (canonical: equality fields in canonical order, then the
@@ -535,9 +575,12 @@ fn composite_serves(
     true
 }
 
-/// Decides how a canonical query is served.
-#[must_use]
-pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> IndexDecision {
+fn decide_with_requirements(
+    query: &Query,
+    indexes: &IndexSet,
+    ctx: &PlanningContext,
+    mut requirement_for_query: impl FnMut(&[FilterExpr], &[OrderClause]) -> Requirement,
+) -> IndexDecision {
     let Some(collection) = query.scope.collection_id() else {
         return IndexDecision::KindlessScan;
     };
@@ -546,7 +589,7 @@ pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> Index
     let mut chosen: Option<IndexDefinition> = None;
     let mut assumed: Option<IndexDefinition> = None;
     for disjunction in query.dnf() {
-        let req = requirement_for(&disjunction, &effective_order);
+        let req = requirement_for_query(&disjunction, &effective_order);
         if let Some(auto) = automatic_index_for(&req, indexes, collection, group) {
             chosen.get_or_insert(auto);
             continue;
@@ -590,4 +633,24 @@ pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> Index
             feature: "empty query plan",
         },
     }
+}
+
+/// Decides how a canonical query is served.
+#[must_use]
+pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> IndexDecision {
+    decide_with_requirements(query, indexes, ctx, requirement_for)
+}
+
+/// Decides how a canonical aggregation query is served. `sum` and `avg` fields are added to the
+/// index requirement only; the executable query and its document set remain unchanged.
+#[must_use]
+pub fn validate_aggregation_query(
+    query: &Query,
+    aggregations: &[Aggregation],
+    indexes: &IndexSet,
+    ctx: &PlanningContext,
+) -> IndexDecision {
+    decide_with_requirements(query, indexes, ctx, |disjunction, effective_order| {
+        requirement_for_aggregation(disjunction, effective_order, aggregations)
+    })
 }

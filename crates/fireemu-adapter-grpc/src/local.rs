@@ -1992,6 +1992,30 @@ impl LocalBackend {
             .map_err(|rejection| rejection.to_status())
     }
 
+    /// Decodes and validates a structured aggregation query through the strict gateway.
+    pub fn accepted_aggregation_query(
+        &self,
+        parent: &Parent,
+        sq: &pb::StructuredQuery,
+        aggregations: &[Aggregation],
+    ) -> Result<AcceptedQuery, Status> {
+        let query = decode_structured_query(parent, sq).map_err(status)?;
+        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
+        let empty = fireemu_core_firestore::index::IndexSet::default();
+        let project_key = (
+            Some(parent.project.as_str().to_owned()),
+            parent.database.as_str().to_owned(),
+        );
+        let shared_key = (None, parent.database.as_str().to_owned());
+        let database_indexes = indexes
+            .get(&project_key)
+            .or_else(|| indexes.get(&shared_key))
+            .unwrap_or(&empty);
+        self.gateway
+            .validate_aggregation_query_with_indexes(&query, aggregations, database_indexes)
+            .map_err(|rejection| rejection.to_status())
+    }
+
     /// Atomically replaces the index catalog used by subsequent query plans.
     pub fn replace_indexes(&self, indexes: fireemu_core_firestore::index::IndexSet) {
         self.replace_database_indexes(DatabaseId::DEFAULT, indexes);
@@ -3635,8 +3659,8 @@ impl LocalBackend {
                 "aggregation query requires a structured_query",
             ));
         };
-        let accepted = self.accepted_query(&parent, sq)?;
         let (aliases, aggregations) = decode_aggregations(saq)?;
+        let accepted = self.accepted_aggregation_query(&parent, sq, &aggregations)?;
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_aggregation_query_request::ConsistencySelector::Transaction(bytes)) => {

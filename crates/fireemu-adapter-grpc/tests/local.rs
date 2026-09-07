@@ -2062,6 +2062,68 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
     handle.abort();
 }
 
+#[tokio::test]
+async fn aggregation_index_validation_rejects_unindexed_fields_before_transaction_observation() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    let collection = CollectionId::try_new("orders").unwrap();
+    let mut indexes = IndexSet::default();
+    indexes.set_single_field_indexes(&collection, &FieldPath::parse("amount").unwrap(), vec![]);
+    backend.replace_indexes(indexes);
+
+    let request = |consistency_selector| pb::RunAggregationQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(
+            pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                agg_count_and_sum("orders", "amount"),
+            ),
+        ),
+        consistency_selector,
+        ..Default::default()
+    };
+    let error = client
+        .run_aggregation_query(request(None))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert!(error.message().contains("amount Ascending"), "{error}");
+
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let error = client
+        .run_aggregation_query(request(Some(
+            pb::run_aggregation_query_request::ConsistencySelector::Transaction(
+                transaction.clone(),
+            ),
+        )))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+
+    // Validation happened before the rejected aggregation could record a read, so the same
+    // transaction remains usable.
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write(
+                "after-rejected-aggregation/doc",
+                &[("v", i(1))],
+            )],
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    handle.abort();
+}
+
 fn agg_count(collection: &str, alias: &str) -> pb::StructuredAggregationQuery {
     pb::StructuredAggregationQuery {
         query_type: Some(

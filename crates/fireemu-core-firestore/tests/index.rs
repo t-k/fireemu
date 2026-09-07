@@ -9,6 +9,7 @@ use fireemu_core_firestore::index::{
 use fireemu_core_firestore::query::{
     Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope,
 };
+use fireemu_core_firestore::store::Aggregation;
 use fireemu_core_firestore::value::Value;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::ids::CollectionId;
@@ -372,6 +373,72 @@ fn automatic_single_field_indexes_require_the_requested_direction() {
     assert!(matches!(
         decide(&inequality_descending, &indexes, standard()),
         IndexDecision::MissingRequired { .. }
+    ));
+}
+
+#[test]
+fn aggregation_fields_participate_in_index_validation_without_changing_the_query() {
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let mut disabled = IndexSet::default();
+    disabled.set_single_field_indexes(&collection, &fp("amount"), vec![]);
+    let bare = tasks();
+
+    assert!(matches!(
+        fireemu_core_firestore::index::validate_aggregation_query(
+            &bare.canonicalize().unwrap(),
+            &[Aggregation::Sum(fp("amount"))],
+            &disabled,
+            &standard(),
+        ),
+        IndexDecision::MissingRequired { .. }
+    ));
+    assert!(matches!(
+        fireemu_core_firestore::index::validate_aggregation_query(
+            &bare.canonicalize().unwrap(),
+            &[Aggregation::Avg(fp("amount"))],
+            &disabled,
+            &standard(),
+        ),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    assert!(matches!(
+        fireemu_core_firestore::index::validate_aggregation_query(
+            &bare.canonicalize().unwrap(),
+            &[Aggregation::Count { up_to: None }],
+            &disabled,
+            &standard(),
+        ),
+        IndexDecision::UseIndex { .. }
+    ));
+
+    let filtered = tasks().with_filter(field(
+        "status",
+        FieldOp::Equal,
+        Value::String("open".to_owned()),
+    ));
+    let mut composite_indexes = IndexSet::default();
+    composite_indexes.add_composite(composite(&[
+        ("status", IndexFieldMode::Ascending),
+        ("amount", IndexFieldMode::Ascending),
+    ]));
+    assert!(matches!(
+        fireemu_core_firestore::index::validate_aggregation_query(
+            &filtered.canonicalize().unwrap(),
+            &[Aggregation::Sum(fp("amount"))],
+            &disabled,
+            &standard(),
+        ),
+        IndexDecision::MissingRequired { .. }
+    ));
+    assert!(matches!(
+        fireemu_core_firestore::index::validate_aggregation_query(
+            &filtered.canonicalize().unwrap(),
+            &[Aggregation::Sum(fp("amount"))],
+            &composite_indexes,
+            &standard(),
+        ),
+        IndexDecision::UseIndex { .. }
     ));
 }
 

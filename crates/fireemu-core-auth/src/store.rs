@@ -2580,17 +2580,6 @@ impl AuthStore {
             .is_some_and(|user| user.mfa.clear_pending_sign_in_credentials(&pending.0))
     }
 
-    /// Completes the second-factor step.
-    pub fn finalize_mfa_sign_in(
-        &mut self,
-        uid: &LocalId,
-        pending: &PendingSignInId,
-        code: u32,
-        now: LogicalInstant,
-    ) -> Result<SecondFactorAssertion, MfaError> {
-        self.finalize_mfa_sign_in_inner(uid, pending, None, code, now)
-    }
-
     /// Completes a TOTP second-factor sign-in for the factor named by `enrollment_id`.
     ///
     /// The pending credential and replay state are changed only after the selected factor
@@ -2601,17 +2590,6 @@ impl AuthStore {
         uid: &LocalId,
         pending: &PendingSignInId,
         enrollment_id: &str,
-        code: u32,
-        now: LogicalInstant,
-    ) -> Result<SecondFactorAssertion, MfaError> {
-        self.finalize_mfa_sign_in_inner(uid, pending, Some(enrollment_id), code, now)
-    }
-
-    fn finalize_mfa_sign_in_inner(
-        &mut self,
-        uid: &LocalId,
-        pending: &PendingSignInId,
-        enrollment_id: Option<&str>,
         code: u32,
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
@@ -2628,35 +2606,25 @@ impl AuthStore {
 
             let mut replayed = false;
             let mut accepted = None;
-            let factors = user.mfa.totp_factors();
-            let candidates = enrollment_id.map_or_else(
-                || factors.iter().collect::<Vec<_>>(),
-                |id| {
-                    factors
-                        .iter()
-                        .filter(|factor| factor.mfa_enrollment_id == id)
-                        .collect()
-                },
-            );
-            if candidates.is_empty() {
-                return Err(MfaError::NoEnrolledFactor);
-            }
-            for factor in candidates {
-                match match_code(
-                    &factor.secret,
-                    &policy.params(),
-                    policy.window_steps,
-                    factor.last_accepted_step,
-                    code,
-                    now,
-                ) {
-                    CodeMatch::Accepted { step } => {
-                        accepted = Some((factor.mfa_enrollment_id.clone(), step));
-                        break;
-                    }
-                    CodeMatch::Replayed => replayed = true,
-                    CodeMatch::NoMatch => {}
+            let factor = user
+                .mfa
+                .totp_factors()
+                .iter()
+                .find(|factor| factor.mfa_enrollment_id == enrollment_id)
+                .ok_or(MfaError::NoEnrolledFactor)?;
+            match match_code(
+                &factor.secret,
+                &policy.params(),
+                policy.window_steps,
+                factor.last_accepted_step,
+                code,
+                now,
+            ) {
+                CodeMatch::Accepted { step } => {
+                    accepted = Some((factor.mfa_enrollment_id.clone(), step));
                 }
+                CodeMatch::Replayed => replayed = true,
+                CodeMatch::NoMatch => {}
             }
             accepted.ok_or(if replayed {
                 MfaError::CodeAlreadyUsed

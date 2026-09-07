@@ -229,10 +229,14 @@ fn pending_enrollments_and_sign_ins_expire_and_the_per_user_budget_refuses() {
     assert_eq!(s.pending_mfa_user_count(), 0);
     assert!(s.retained_user_bytes() < retained_with_raw);
     let late = after(1000 + PENDING_SIGN_IN_TTL_SECONDS + 1);
+    let enrollment_id = s.user(&uid).unwrap().mfa.totp_factors()[0]
+        .mfa_enrollment_id
+        .clone();
     assert_eq!(
-        s.finalize_mfa_sign_in(
+        s.finalize_mfa_sign_in_for_factor(
             &uid,
             &pending,
+            &enrollment_id,
             totp_at(&secret, &s.policy().params(), late),
             late
         ),

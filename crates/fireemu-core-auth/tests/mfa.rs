@@ -4,7 +4,7 @@ use fireemu_core_auth::claims::{ClaimValue, CustomClaims, CustomClaimsError};
 use fireemu_core_auth::mfa::{
     MfaError, PendingSignInContext, PendingSignInCredentials, TotpFactor, TotpPolicy, TotpSecret,
 };
-use fireemu_core_auth::store::{AuthStore, NewUser, SecondFactorAssertion};
+use fireemu_core_auth::store::{AuthStore, LocalId, NewUser, SecondFactorAssertion};
 use fireemu_core_auth::totp::totp_at;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -19,6 +19,12 @@ fn t0() -> LogicalInstant {
 
 fn secs(n: i64) -> LogicalDuration {
     LogicalDuration::from_seconds(n)
+}
+
+fn factor_id(store: &AuthStore, uid: &LocalId) -> String {
+    store.user(uid).unwrap().mfa.totp_factors()[0]
+        .mfa_enrollment_id
+        .clone()
 }
 
 #[test]
@@ -47,8 +53,9 @@ fn enrollment_then_sign_in_with_a_valid_code() {
     let later = t0().checked_add(secs(90)).unwrap();
     let pending = s.start_mfa_sign_in(&uid, later).unwrap();
     let code = totp_at(&secret, &s.policy().params(), later);
-    let assertion: SecondFactorAssertion =
-        s.finalize_mfa_sign_in(&uid, &pending, code, later).unwrap();
+    let assertion: SecondFactorAssertion = s
+        .finalize_mfa_sign_in_for_factor(&uid, &pending, &factor.mfa_enrollment_id, code, later)
+        .unwrap();
     assert_eq!(assertion.sign_in_second_factor, "totp");
     assert_eq!(assertion.second_factor_identifier, factor.mfa_enrollment_id);
 }
@@ -150,16 +157,17 @@ fn totp_finalize_verifies_only_the_selected_enrollment() {
     assert_eq!(factors[0].last_accepted_step, None);
     assert!(factors[1].last_accepted_step.is_some());
 
-    let legacy_pending = s.start_mfa_sign_in(&uid, t0()).unwrap();
-    let legacy = s
-        .finalize_mfa_sign_in(
+    let first_factor_pending = s.start_mfa_sign_in(&uid, t0()).unwrap();
+    let first_factor = s
+        .finalize_mfa_sign_in_for_factor(
             &uid,
-            &legacy_pending,
+            &first_factor_pending,
+            "factor-one",
             totp_at(&first_secret, &s.policy().params(), t0()),
             t0(),
         )
         .unwrap();
-    assert_eq!(legacy.second_factor_identifier, "factor-one");
+    assert_eq!(first_factor.second_factor_identifier, "factor-one");
 }
 
 #[test]
@@ -200,7 +208,9 @@ fn pending_sign_in_provenance_is_redacted_and_consumed_with_the_credential() {
     );
 
     let code = totp_at(&secret, &s.policy().params(), later);
-    s.finalize_mfa_sign_in(&uid, &pending, code, later).unwrap();
+    let enrollment_id = factor_id(&s, &uid);
+    s.finalize_mfa_sign_in_for_factor(&uid, &pending, &enrollment_id, code, later)
+        .unwrap();
     assert!(s.pending_sign_in_context(&pending).is_none());
     assert!(s.retained_user_bytes() < retained_before_pending + 64);
 }
@@ -251,6 +261,7 @@ fn window_accepts_adjacent_steps_and_rejects_beyond() {
     let params = s.policy().params();
     s.finalize_totp_enrollment(&uid, &m.session_id, totp_at(&secret, &params, t0()), t0())
         .unwrap();
+    let enrollment_id = factor_id(&s, &uid);
 
     // Codes for steps -1 and +1 relative to `now` are accepted (window_steps = 1); -2 / +2 are not.
     for (offset, ok) in [
@@ -264,7 +275,7 @@ fn window_accepts_adjacent_steps_and_rejects_beyond() {
         let code_time = now.checked_add(secs(offset)).unwrap();
         let code = totp_at(&secret, &params, code_time);
         let pending = s.start_mfa_sign_in(&uid, now).unwrap();
-        let result = s.finalize_mfa_sign_in(&uid, &pending, code, now);
+        let result = s.finalize_mfa_sign_in_for_factor(&uid, &pending, &enrollment_id, code, now);
         assert_eq!(result.is_ok(), ok, "offset {offset}");
         // Advance beyond the window so that accepted counters do not collide between iterations.
         s.user_mut(&uid).unwrap().mfa.reset_replay_state_for_test();
@@ -283,27 +294,35 @@ fn a_code_is_never_accepted_twice() {
     let params = s.policy().params();
     s.finalize_totp_enrollment(&uid, &m.session_id, totp_at(&secret, &params, t0()), t0())
         .unwrap();
+    let enrollment_id = factor_id(&s, &uid);
     let now = t0().checked_add(secs(300)).unwrap();
     let code = totp_at(&secret, &params, now);
     let p1 = s.start_mfa_sign_in(&uid, now).unwrap();
-    s.finalize_mfa_sign_in(&uid, &p1, code, now).unwrap();
+    s.finalize_mfa_sign_in_for_factor(&uid, &p1, &enrollment_id, code, now)
+        .unwrap();
     let p2 = s.start_mfa_sign_in(&uid, now).unwrap();
     assert_eq!(
-        s.finalize_mfa_sign_in(&uid, &p2, code, now),
+        s.finalize_mfa_sign_in_for_factor(&uid, &p2, &enrollment_id, code, now),
         Err(MfaError::CodeAlreadyUsed)
     );
     // Even a code from an earlier step than the last accepted one is refused.
     let earlier = totp_at(&secret, &params, now.checked_add(secs(-30)).unwrap());
     let p3 = s.start_mfa_sign_in(&uid, now).unwrap();
     assert_eq!(
-        s.finalize_mfa_sign_in(&uid, &p3, earlier, now),
+        s.finalize_mfa_sign_in_for_factor(&uid, &p3, &enrollment_id, earlier, now),
         Err(MfaError::CodeAlreadyUsed)
     );
     // The next step is fine.
     let next_time = now.checked_add(secs(30)).unwrap();
     let p4 = s.start_mfa_sign_in(&uid, next_time).unwrap();
     assert!(s
-        .finalize_mfa_sign_in(&uid, &p4, totp_at(&secret, &params, next_time), next_time)
+        .finalize_mfa_sign_in_for_factor(
+            &uid,
+            &p4,
+            &enrollment_id,
+            totp_at(&secret, &params, next_time),
+            next_time,
+        )
         .is_ok());
 }
 

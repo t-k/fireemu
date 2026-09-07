@@ -691,7 +691,10 @@ mod tests {
             );
             let pending = s.start_mfa_sign_in(&uid, t1).unwrap();
             let code = totp_at(&secret, &s.policy().params(), t1);
-            s.finalize_mfa_sign_in(&uid, &pending, code, t1)
+            let enrollment_id = s.user(&uid).unwrap().mfa.totp_factors()[0]
+                .mfa_enrollment_id
+                .clone();
+            s.finalize_mfa_sign_in_for_factor(&uid, &pending, &enrollment_id, code, t1)
                 .expect("the restored factor is rebound to the live secret and still verifies");
         }
 

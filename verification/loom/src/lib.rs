@@ -309,6 +309,7 @@ mod scenarios {
         Arc<Mutex<fireemu_core_auth::store::AuthStore>>,
         fireemu_core_auth::store::LocalId,
         Vec<u8>,
+        String,
         LogicalInstant,
     ) {
         use fireemu_core_auth::mfa::TotpPolicy;
@@ -327,7 +328,10 @@ mod scenarios {
         store
             .finalize_totp_enrollment(&uid, &m.session_id, code, t0)
             .unwrap();
-        (Arc::new(Mutex::new(store)), uid, secret, t0)
+        let enrollment_id = store.user(&uid).unwrap().mfa.totp_factors()[0]
+            .mfa_enrollment_id
+            .clone();
+        (Arc::new(Mutex::new(store)), uid, secret, enrollment_id, t0)
     }
 
     /// INV-AUTH-001: two sign-ins presenting the same code race; at most one succeeds and the
@@ -339,17 +343,19 @@ mod scenarios {
         use fireemu_core_types::time::LogicalDuration;
 
         loom::model(|| {
-            let (store, uid, secret, t0) = auth_fixture();
+            let (store, uid, secret, enrollment_id, t0) = auth_fixture();
             let now = t0.checked_add(LogicalDuration::from_seconds(120)).unwrap();
             let code = totp_at(&secret, &store.lock().unwrap().policy().params(), now);
             let outcomes: Vec<_> = (0..2)
                 .map(|_| {
                     let store = store.clone();
                     let uid = uid.clone();
+                    let enrollment_id = enrollment_id.clone();
                     thread::spawn(move || {
                         let mut s = store.lock().unwrap();
                         let pending = s.start_mfa_sign_in(&uid, now).unwrap();
-                        s.finalize_mfa_sign_in(&uid, &pending, code, now).is_ok()
+                        s.finalize_mfa_sign_in_for_factor(&uid, &pending, &enrollment_id, code, now)
+                            .is_ok()
                     })
                 })
                 .collect();
@@ -361,7 +367,7 @@ mod scenarios {
             let mut s = store.lock().unwrap();
             let p = s.start_mfa_sign_in(&uid, now).unwrap();
             assert_eq!(
-                s.finalize_mfa_sign_in(&uid, &p, code, now),
+                s.finalize_mfa_sign_in_for_factor(&uid, &p, &enrollment_id, code, now),
                 Err(MfaError::CodeAlreadyUsed)
             );
         });

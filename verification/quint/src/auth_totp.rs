@@ -234,17 +234,25 @@ impl AuthTotpDriver {
             }
             Err(error) => return Err(classified_mfa_error(&error)),
         };
-        let secret = self
+        let (enrollment_id, secret) = self
             .store
             .user(&self.uid)
             .and_then(|user| user.mfa.totp_factors().first())
-            .map(|factor| factor.secret.expose_for_enrollment().to_vec())
+            .map(|factor| {
+                (
+                    factor.mfa_enrollment_id.clone(),
+                    factor.secret.expose_for_enrollment().to_vec(),
+                )
+            })
             .ok_or_else(|| invalid_data("enrolled TOTP secret is unavailable"))?;
         let code = self.code_for_step(&secret, code_step)?;
-        match self
-            .store
-            .finalize_mfa_sign_in(&self.uid, &pending, code, self.now)
-        {
+        match self.store.finalize_mfa_sign_in_for_factor(
+            &self.uid,
+            &pending,
+            &enrollment_id,
+            code,
+            self.now,
+        ) {
             Ok(assertion) => {
                 self.assertion = Some(assertion);
                 "VerificationAccepted".clone_into(&mut self.last_result);

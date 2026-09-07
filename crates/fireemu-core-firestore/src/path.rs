@@ -179,6 +179,23 @@ impl DocumentPath {
         })
     }
 
+    /// Exclusive upper bound of every strict descendant of this document in path order: the
+    /// same path with the document ID replaced by [`DocumentId::ordered_successor`]. Paths in
+    /// `(self, bound)` are exactly the strict descendants; the bound itself is never a stored
+    /// path.
+    #[must_use]
+    pub fn descendants_upper_bound(&self) -> Self {
+        let mut pairs = self.pairs.clone();
+        if let Some((_, document)) = pairs.last_mut() {
+            *document = document.ordered_successor();
+        }
+        Self {
+            project: self.project.clone(),
+            database: self.database.clone(),
+            pairs,
+        }
+    }
+
     /// Relative path `users/jeff/tasks/my_task_id`.
     #[must_use]
     pub fn relative(&self) -> String {

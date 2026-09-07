@@ -708,6 +708,78 @@ fn descending_name_continuation_seeks_backwards_through_the_scope_index() {
 }
 
 #[test]
+fn descending_name_pages_under_a_parent_seek_the_parent_range() {
+    // owners/m holds 64 target documents; owners/z holds 1_000 unrelated ones that sort after
+    // them. A name-descending scan under owners/m must not walk owners/z first.
+    let mut db = FirestoreState::new();
+    let now = LogicalInstant::from_unix_seconds(1_788_000_000);
+    let mut writes = Vec::new();
+    for index in 0..64 {
+        writes.push(set(
+            &format!("owners/m/items/d{index:04}"),
+            BTreeMap::from([("n".to_owned(), Value::Integer(index))]),
+        ));
+    }
+    for index in 0..1_000 {
+        writes.push(set(&format!("owners/z/items/d{index:04}"), BTreeMap::new()));
+    }
+    // `owners/mz` shares a prefix with the parent ID but is not under it.
+    writes.push(set("owners/mz/items/d0000", BTreeMap::new()));
+    for batch in writes.chunks(500) {
+        db.commit(batch, None, now).unwrap();
+    }
+
+    let scopes = [
+        QueryScope::collection_group_under(Some(path("owners/m")), collection("items")),
+        QueryScope::kindless_all_descendants(Some(path("owners/m"))),
+    ];
+    for scope in scopes {
+        let mut query = Query::new(scope);
+        query.order_by.push(OrderClause {
+            field: FieldPath::document_name(),
+            direction: Direction::Descending,
+        });
+        query.limit = Some(32);
+
+        let (first, first_stats) = db.run_query_with_stats(&query, None).unwrap();
+        assert_eq!(first.len(), 32);
+        assert_eq!(first[0].fields.get("n"), Some(&Value::Integer(63)));
+        assert_eq!(first[31].fields.get("n"), Some(&Value::Integer(32)));
+        assert_eq!(first_stats.index_paths_visited, 32);
+        assert_eq!(first_stats.scanned, 32);
+
+        let (second, second_stats) = db
+            .run_query_after_document_with_stats(&query, None, &first[31].path)
+            .unwrap();
+        assert_eq!(second.len(), 32);
+        assert_eq!(second[0].fields.get("n"), Some(&Value::Integer(31)));
+        assert_eq!(second[31].fields.get("n"), Some(&Value::Integer(0)));
+        assert_eq!(second_stats.index_paths_visited, 32);
+        assert_eq!(second_stats.scanned, 32);
+
+        let (rest, rest_stats) = db
+            .run_query_after_document_with_stats(&query, None, &second[31].path)
+            .unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(rest_stats.index_paths_visited, 0);
+
+        // A continuation outside the parent yields nothing and visits nothing.
+        let (outside, outside_stats) = db
+            .run_query_after_document_with_stats(&query, None, &path("owners/z/items/d0500"))
+            .unwrap();
+        assert!(outside.is_empty());
+        assert_eq!(outside_stats.index_paths_visited, 0);
+
+        // Ascending scans under the same parent are bounded the same way.
+        let mut ascending = Query::new(query.scope.clone());
+        ascending.limit = Some(32);
+        let (first, stats) = db.run_query_with_stats(&ascending, None).unwrap();
+        assert_eq!(first.len(), 32);
+        assert_eq!(stats.index_paths_visited, 32);
+    }
+}
+
+#[test]
 fn ordered_path_selection_scans_candidates_once_for_repeated_pages() {
     let db = large_collection(500);
     let mut query = Query::new(QueryScope::collection(None, collection("items")));

@@ -622,6 +622,11 @@ pub struct QueryStats {
     pub cloned_field_bytes: u64,
     /// Retained history paths inspected to establish historical listing visibility.
     pub visibility_checks: u64,
+    /// Scope-index paths visited before visibility resolution. A parent-scoped scan that walks
+    /// unrelated paths shows up here even when `scanned` stays small.
+    pub index_paths_visited: u64,
+    /// Documents whose filter expression was evaluated (in-scope rows with a filter).
+    pub filter_evaluations: u64,
 }
 
 /// Bounded transaction-ledger counters exposed for performance regression tests.
@@ -1053,6 +1058,12 @@ fn path_in_scope(path: &DocumentPath, scope: &QueryScope) -> bool {
             path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
         }),
     }
+}
+
+/// Exclusive bounds `(parent, successor)` enclosing exactly the strict descendants of
+/// `parent` in path order.
+fn descendant_bounds(parent: &DocumentPath) -> (DocumentPath, DocumentPath) {
+    (parent.clone(), parent.descendants_upper_bound())
 }
 
 fn is_strict_descendant(path: &DocumentPath, parent: &DocumentPath) -> bool {
@@ -1518,6 +1529,8 @@ impl FirestoreState {
         scope: &'a QueryScope,
         version: Option<CommitVersion>,
     ) -> Box<dyn Iterator<Item = &'a DocumentPath> + 'a> {
+        use core::ops::Bound::Excluded;
+
         match scope {
             QueryScope::Collection {
                 parent,
@@ -1547,28 +1560,41 @@ impl FirestoreState {
                 let Some(paths) = paths.get(collection_id) else {
                     return Box::new(core::iter::empty());
                 };
-                let paths = paths.iter().rev().map(AsRef::as_ref);
                 if let Some(parent) = parent {
-                    Box::new(paths.filter(move |path| is_strict_descendant(path, parent)))
+                    let (lower, upper) = descendant_bounds(parent);
+                    Box::new(
+                        paths
+                            .range::<DocumentPath, _>((Excluded(&lower), Excluded(&upper)))
+                            .rev()
+                            .map(AsRef::as_ref),
+                    )
                 } else {
-                    Box::new(paths)
+                    Box::new(paths.iter().rev().map(AsRef::as_ref))
                 }
             }
             QueryScope::KindlessAllDescendants { parent } => {
                 if version.is_some() {
-                    let paths = self.history.keys().rev();
                     if let Some(parent) = parent {
-                        Box::new(paths.filter(move |path| is_strict_descendant(path, parent)))
+                        let (lower, upper) = descendant_bounds(parent);
+                        Box::new(
+                            self.history
+                                .range::<DocumentPath, _>((Excluded(&lower), Excluded(&upper)))
+                                .rev()
+                                .map(|(path, _)| path),
+                        )
                     } else {
-                        Box::new(paths)
+                        Box::new(self.history.keys().rev())
                     }
+                } else if let Some(parent) = parent {
+                    let (lower, upper) = descendant_bounds(parent);
+                    Box::new(
+                        self.live_paths
+                            .range::<DocumentPath, _>((Excluded(&lower), Excluded(&upper)))
+                            .rev()
+                            .map(AsRef::as_ref),
+                    )
                 } else {
-                    let paths = self.live_paths.iter().rev().map(AsRef::as_ref);
-                    if let Some(parent) = parent {
-                        Box::new(paths.filter(move |path| is_strict_descendant(path, parent)))
-                    } else {
-                        Box::new(paths)
-                    }
+                    Box::new(self.live_paths.iter().rev().map(AsRef::as_ref))
                 }
             }
         }
@@ -1705,39 +1731,43 @@ impl FirestoreState {
                 let Some(paths) = paths.get(collection_id) else {
                     return Box::new(core::iter::empty());
                 };
-                let paths = paths
-                    .range::<DocumentPath, _>((Unbounded, Excluded(before)))
-                    .rev()
-                    .map(AsRef::as_ref);
+                // Every path strictly between a parent and one of its descendants is itself a
+                // descendant, so the parent is the lower bound and no per-path filter is needed.
+                // A continuation outside the parent yields nothing.
                 if let Some(parent) = parent {
-                    Box::new(paths.filter(move |path| is_strict_descendant(path, parent)))
-                } else {
-                    Box::new(paths)
+                    if !is_strict_descendant(before, parent) {
+                        return Box::new(core::iter::empty());
+                    }
                 }
+                let lower = parent.as_ref().map_or(Unbounded, Excluded);
+                Box::new(
+                    paths
+                        .range::<DocumentPath, _>((lower, Excluded(before)))
+                        .rev()
+                        .map(AsRef::as_ref),
+                )
             }
             QueryScope::KindlessAllDescendants { parent } => {
+                if let Some(parent) = parent {
+                    if !is_strict_descendant(before, parent) {
+                        return Box::new(core::iter::empty());
+                    }
+                }
+                let lower = parent.as_ref().map_or(Unbounded, Excluded);
                 if version.is_some() {
-                    let paths = self
-                        .history
-                        .range::<DocumentPath, _>((Unbounded, Excluded(before)))
-                        .rev()
-                        .map(|(path, _)| path);
-                    if let Some(parent) = parent {
-                        Box::new(paths.filter(move |path| is_strict_descendant(path, parent)))
-                    } else {
-                        Box::new(paths)
-                    }
+                    Box::new(
+                        self.history
+                            .range::<DocumentPath, _>((lower, Excluded(before)))
+                            .rev()
+                            .map(|(path, _)| path),
+                    )
                 } else {
-                    let paths = self
-                        .live_paths
-                        .range::<DocumentPath, _>((Unbounded, Excluded(before)))
-                        .rev()
-                        .map(AsRef::as_ref);
-                    if let Some(parent) = parent {
-                        Box::new(paths.filter(move |path| is_strict_descendant(path, parent)))
-                    } else {
-                        Box::new(paths)
-                    }
+                    Box::new(
+                        self.live_paths
+                            .range::<DocumentPath, _>((lower, Excluded(before)))
+                            .rev()
+                            .map(AsRef::as_ref),
+                    )
                 }
             }
         }
@@ -4064,18 +4094,22 @@ impl FirestoreState {
         } else {
             self.scope_paths_after(&query.scope, version, after)
         };
+        let visited = core::cell::Cell::new(0u64);
         let mut out = Vec::new();
         let mut stats = select_from(
             query,
-            paths.filter_map(|path| match version {
-                Some(version) => self.get_at(path, version),
-                None => self.get(path),
-            }),
+            paths
+                .inspect(|_| visited.set(visited.get() + 1))
+                .filter_map(|path| match version {
+                    Some(version) => self.get_at(path, version),
+                    None => self.get(path),
+                }),
             Some(order[0].direction),
             &[],
             Consumption::Ordered,
             |doc| out.push(project_document(doc, query.projection.as_deref())),
         )?;
+        stats.index_paths_visited = visited.get();
         stats.cloned_documents = out.len() as u64;
         stats.cloned_field_bytes = out
             .iter()
@@ -4137,16 +4171,18 @@ impl FirestoreState {
             order.as_slice(),
             [order] if order.field.is_document_name() && order.direction == Direction::Descending
         );
+        let visited = core::cell::Cell::new(0u64);
         let documents = if descending_name {
             self.scope_paths_descending(scope, version)
         } else {
             self.scope_paths(scope, version)
         }
+        .inspect(|_| visited.set(visited.get() + 1))
         .filter_map(|path| match version {
             Some(version) => self.get_at(path, version),
             None => self.get(path),
         });
-        select_from(
+        let mut stats = select_from(
             query,
             documents,
             Some(if descending_name {
@@ -4157,7 +4193,9 @@ impl FirestoreState {
             required_fields,
             consumption,
             sink,
-        )
+        )?;
+        stats.index_paths_visited = visited.get();
+        Ok(stats)
     }
 
     /// Runs aggregations over the query results.
@@ -4511,6 +4549,7 @@ where
             continue;
         }
         if let Some(filter) = &query.filter {
+            stats.filter_evaluations += 1;
             if !eval_filter(filter, document)? {
                 continue;
             }

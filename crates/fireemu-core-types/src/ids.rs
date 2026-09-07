@@ -213,6 +213,20 @@ string_id!(
     validate_path_segment
 );
 
+impl DocumentId {
+    /// The smallest value that orders after this identifier and after every identifier that
+    /// extends it (`id` + U+0000). Every stored identifier rejects control characters, so the
+    /// result is never a valid identifier and never a stored key: it exists only as an
+    /// exclusive upper bound for ordered-range lookups over paths under this document.
+    #[must_use]
+    pub fn ordered_successor(&self) -> Self {
+        let mut value = String::with_capacity(self.0.len() + 1);
+        value.push_str(&self.0);
+        value.push('\0');
+        Self(value)
+    }
+}
+
 string_id!(
     /// Immutable limit catalog identifier such as `firestore-standard-2026-08-25`.
     LimitCatalogId,

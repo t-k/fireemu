@@ -1526,13 +1526,20 @@ fn package_node_engine(source: &Path) -> Result<Option<String>, String> {
     }
 }
 
+/// Keeps `candidate` under its own name: version managers install `node` as a symlink to a
+/// multi-tool shim that refuses to run when invoked as anything else (Volta exits 126 with
+/// "'volta-shim' should not be called directly"). The canonical path only deduplicates
+/// entries that resolve to the same file.
 fn push_node_candidate(out: &mut Vec<PathBuf>, candidate: PathBuf) {
     if !node_candidate_is_executable(&candidate) {
         return;
     }
-    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
-    if !out.contains(&canonical) {
-        out.push(canonical);
+    let canonical = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+    let duplicate = out.iter().any(|existing| {
+        std::fs::canonicalize(existing).unwrap_or_else(|_| existing.clone()) == canonical
+    });
+    if !duplicate {
+        out.push(candidate);
     }
 }
 
@@ -3244,6 +3251,7 @@ mod tests {
         MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
         MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
     };
+    use super::{push_node_candidate, run_node_probe};
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
@@ -3891,10 +3899,44 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(
-            path_node_candidates(&path),
-            vec![std::fs::canonicalize(&first).unwrap()]
-        );
+        assert_eq!(path_node_candidates(&path), vec![first]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A version manager's `node` is a symlink to a multi-tool shim that refuses to run under
+    /// any other name (Volta: "'volta-shim' should not be called directly", exit 126). The
+    /// candidate keeps the PATH entry's own name; canonical paths serve deduplication only.
+    #[cfg(unix)]
+    #[test]
+    fn node_discovery_runs_a_symlinked_shim_by_its_link_name() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-node-shim-discovery-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let shim = root.join("lib/multi-shim");
+        let link = root.join("bin/node");
+        let other_link = root.join("other/node");
+        std::fs::create_dir_all(shim.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(other_link.parent().unwrap()).unwrap();
+        std::fs::write(
+            &shim,
+            "#!/bin/sh\ncase \"$(basename \"$0\")\" in node) echo v22.0.0;; *) exit 126;; esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(&shim, &link).unwrap();
+        std::os::unix::fs::symlink(&shim, &other_link).unwrap();
+
+        let mut candidates = Vec::new();
+        push_node_candidate(&mut candidates, link.clone());
+        push_node_candidate(&mut candidates, other_link);
+        assert_eq!(candidates, vec![link.clone()], "one candidate per shim");
+        let output = run_node_probe(&link, &["--version"], "--version").unwrap();
+        assert_eq!(String::from_utf8_lossy(&output).trim(), "v22.0.0");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -3986,8 +4028,8 @@ mod tests {
 
         let candidates = path_node_candidates(&path);
 
-        assert_eq!(candidates, vec![std::fs::canonicalize(path_node).unwrap()]);
-        assert!(!candidates.contains(&std::fs::canonicalize(current_node).unwrap()));
+        assert_eq!(candidates, vec![path_node]);
+        assert!(!candidates.contains(&current_node));
         std::fs::remove_dir_all(root).unwrap();
     }
 

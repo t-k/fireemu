@@ -1274,14 +1274,27 @@ pub fn runner_candidates() -> Vec<(RunnerSource, PathBuf)> {
             }
         }
     }
-    out.push((
-        RunnerSource::WorkspaceSource,
-        PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tools/runner-node/index.mjs"
-        )),
-    ));
+    if let Some(script) = workspace_runner() {
+        out.push((RunnerSource::WorkspaceSource, script));
+    }
     out
+}
+
+/// The runner in the source tree, for a binary that runs out of a cargo `target/` directory.
+///
+/// The workspace is recognised at run time by walking up from the executable to a directory
+/// holding both `Cargo.toml` and `tools/runner-node/index.mjs`; nothing about the build
+/// machine is compiled in. (An `env!("CARGO_MANIFEST_DIR")` string here would survive
+/// `--remap-path-prefix`, which only rewrites debug info and panic locations, and would make
+/// the same commit build to different bytes from different checkouts.) `target/<profile>/`
+/// and `target/<triple>/<profile>/` are both covered by the ancestor walk.
+fn workspace_runner() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    exe.ancestors().skip(1).take(5).find_map(|root| {
+        let script = root.join("tools").join("runner-node").join("index.mjs");
+        (root.join("Cargo.toml").is_file() && script.is_file()).then_some(script)
+    })
 }
 
 /// Locates the bundled Node runner, or explains every place that was tried.
@@ -5091,5 +5104,28 @@ mod tests {
         .expect("both tasks reach the barrier because they run concurrently");
 
         assert_eq!(outcomes, vec![Ok("first"), Err("second failed".to_owned())]);
+    }
+
+    #[test]
+    fn workspace_runner_is_found_from_the_executable_without_a_compiled_in_path() {
+        let candidates = super::runner_candidates();
+        let (_, path) = candidates
+            .iter()
+            .find(|(source, _)| *source == super::RunnerSource::WorkspaceSource)
+            .expect("a test binary under target/ sees the workspace runner");
+        assert!(path.is_file(), "{} is not a file", path.display());
+        assert!(
+            !path
+                .components()
+                .any(|c| c == std::path::Component::ParentDir),
+            "the workspace candidate must be resolved at run time, not spelled from the build directory: {}",
+            path.display()
+        );
+        let expected = std::fs::canonicalize(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tools/runner-node/index.mjs"),
+        )
+        .unwrap();
+        assert_eq!(*path, expected);
     }
 }

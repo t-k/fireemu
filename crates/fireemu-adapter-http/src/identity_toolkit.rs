@@ -638,6 +638,21 @@ fn not_found() -> JsonResponse {
     }
 }
 
+/// A `303 See Other` to `location`. The HTTP server turns the body into the `Location`
+/// header ([`redirect_location`]); nothing else produces a 303.
+fn redirect(location: &str) -> JsonResponse {
+    JsonResponse {
+        status: 303,
+        body: json!({"location": location}),
+    }
+}
+
+/// The target of a redirect response built by this module, or `None` for any other body.
+#[must_use]
+pub fn redirect_location(body: &Value) -> Option<&str> {
+    body.get("location").and_then(Value::as_str)
+}
+
 /// `JSON.stringify` semantics for a success body: the official emulator builds its responses
 /// from optional fields, so a field it has no value for is absent rather than `null`. The
 /// SDKs treat both the same; the recorded fixtures compare key sets, so the shape matters.
@@ -1039,6 +1054,7 @@ fn app_check_bypass(
         {
             PrivilegedBypass::IdentityToolkitAdmin
         }
+        Some(routes::RouteClass::ActionLink) => PrivilegedBypass::IdentityToolkitActionLink,
         Some(routes::RouteClass::Admin | routes::RouteClass::EndUser) | None => {
             PrivilegedBypass::None
         }
@@ -2230,7 +2246,9 @@ fn privilege_check(
     store: &AuthStore,
 ) -> Result<(), JsonResponse> {
     match class {
-        routes::RouteClass::Jwks | routes::RouteClass::EndUser => Ok(()),
+        routes::RouteClass::Jwks | routes::RouteClass::EndUser | routes::RouteClass::ActionLink => {
+            Ok(())
+        }
         routes::RouteClass::Emulator => {
             emulator_guard(state, headers)?;
             if project != Some(store.project_id()) {
@@ -2375,6 +2393,9 @@ fn dispatch(
         }
         Handler::EmulatorGetConfig => emulator_route(store, "GET", "config", headers, body),
         Handler::EmulatorPatchConfig => emulator_route(store, "PATCH", "config", headers, body),
+        Handler::EmulatorAction => {
+            emulator_action(store, query, headers, at, options.stateless_refresh_tokens)
+        }
     }
 }
 
@@ -2696,15 +2717,7 @@ fn select_store(
             .or_else(|| registry.routed_store_for(project))
             .unwrap_or_else(|| state.store.clone()));
     }
-    // Keys are declared from [A-Za-z0-9._-], but a client may still percent-encode them.
-    let api_key = query
-        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("key=")))
-        .map(|value| {
-            fireemu_core_types::codec::percent_decode(
-                value,
-                fireemu_core_types::codec::PlusMode::Space,
-            )
-        });
+    let (api_key, query_tenant) = query_selectors(query);
     if let Some(key) = api_key.as_deref() {
         let project = state
             .tenancy
@@ -2712,7 +2725,7 @@ fn select_store(
             .and_then(|t| t.read().ok())
             .and_then(|t| t.project_of_api_key(key).map(str::to_owned));
         if let Some(project) = project {
-            let tenant = str_field(body, "tenantId");
+            let tenant = str_field(body, "tenantId").or(query_tenant.as_deref());
             if let Some(store) = tenant
                 .and_then(|tenant| registry.tenant_store(&project, tenant))
                 .or_else(|| registry.store_for(&project))
@@ -2781,12 +2794,30 @@ fn select_store(
             RefreshTokenStoreMatch::NotFound => {}
         }
     }
-    if let Some(tenant) = str_field(body, "tenantId") {
+    if let Some(tenant) = str_field(body, "tenantId").or(query_tenant.as_deref()) {
         if let Some(store) = registry.tenant_store(registry.default_project(), tenant) {
             return Ok(store);
         }
     }
     Ok(state.store.clone())
+}
+
+/// The API key (`key`, or the action link's `apiKey`) and the action link's `tenantId` a
+/// query carries, decoded. Keys are declared from [A-Za-z0-9._-], but a client may still
+/// percent-encode them.
+fn query_selectors(query: Option<&str>) -> (Option<String>, Option<String>) {
+    let decode = |value: &str| {
+        fireemu_core_types::codec::percent_decode(value, fireemu_core_types::codec::PlusMode::Space)
+    };
+    let find = |names: &[&str]| {
+        query
+            .and_then(|q| {
+                q.split('&')
+                    .find_map(|kv| names.iter().find_map(|name| kv.strip_prefix(name)))
+            })
+            .map(decode)
+    };
+    (find(&["key=", "apiKey="]), find(&["tenantId="]))
 }
 
 fn custom_token_uid(body: &Value) -> Option<String> {
@@ -5077,6 +5108,300 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
         status: 200,
         body: json!({"kind": "identitytoolkit#SetAccountInfoResponse", "localId": uid.as_str(), "email": email, "emailVerified": true}),
     }
+}
+
+/// The `authEmulator` JSON document every action-link answer is wrapped in.
+fn action_response(status: u16, auth_emulator: Value) -> JsonResponse {
+    JsonResponse {
+        status,
+        body: Value::Object(serde_json::Map::from_iter([(
+            "authEmulator".to_owned(),
+            auth_emulator,
+        )])),
+    }
+}
+
+/// The official wording for a code that is gone, whatever the reason.
+fn action_expired(what: &str, retry: &str) -> JsonResponse {
+    action_response(
+        400,
+        json!({
+            "error": format!("Your request to {what} has expired or the link has already been used."),
+            "instructions": retry,
+        }),
+    )
+}
+
+/// `GET /emulator/action`: the link the emulator prints instead of mailing, as the official
+/// emulator's handler serves it. Each mode acts on the code and answers an `authEmulator`
+/// JSON document, or redirects (303) to `continueUrl` once it has acted. `signIn` does not
+/// consume the code: it forwards every parameter to `continueUrl`, where the SDK finishes.
+fn emulator_action(
+    store: &mut AuthStore,
+    query: Option<&str>,
+    headers: &RequestHeaders,
+    at: LogicalInstant,
+    stateless_refresh_tokens: bool,
+) -> JsonResponse {
+    let params = query_params(query);
+    let param = |name: &str| {
+        params
+            .get(name)
+            .map(String::as_str)
+            .filter(|v| !v.is_empty())
+    };
+    if param("apiKey").is_none() {
+        return action_response(
+            400,
+            json!({
+                "error": "missing apiKey query parameter",
+                "instructions": "Please modify the URL to specify an apiKey, such as ...&apiKey=YOUR_API_KEY",
+            }),
+        );
+    }
+    let Some(code) = param("oobCode") else {
+        return action_response(
+            400,
+            json!({
+                "error": "missing oobCode query parameter",
+                "instructions": "Please modify the URL to specify an oobCode, such as ...&oobCode=YOUR_OOB_CODE",
+            }),
+        );
+    };
+    let continue_url = param("continueUrl");
+    match param("mode") {
+        Some("recoverEmail") => action_response(
+            400,
+            json!({
+                "error": "Requested mode does not match the OOB code provided.",
+                "instructions": "If you're trying to test the reverting email flow, try changing the email again to generate a new link.",
+            }),
+        ),
+        Some("resetPassword") => action_reset_password(
+            store,
+            code,
+            param("newPassword"),
+            continue_url,
+            headers,
+            at,
+            stateless_refresh_tokens,
+        ),
+        Some("verifyEmail") => action_apply(
+            store,
+            code,
+            continue_url,
+            at,
+            ("verify your email", "Try verifying your email again."),
+            |email| json!({"success": "The email has been successfully verified.", "email": email}),
+        ),
+        Some("verifyAndChangeEmail") => action_apply(
+            store,
+            code,
+            continue_url,
+            at,
+            ("change your email", "Try changing your email again."),
+            |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
+        ),
+        Some("signIn") => action_sign_in(query, &params, continue_url),
+        _ => action_response(400, json!({"error": "Invalid mode"})),
+    }
+}
+
+/// `mode=resetPassword`: the code must be a live reset code, `newPassword` must be given and
+/// must not be the placeholder; then the reset runs as `accounts:resetPassword` would.
+fn action_reset_password(
+    store: &mut AuthStore,
+    code: &str,
+    new_password: Option<&str>,
+    continue_url: Option<&str>,
+    headers: &RequestHeaders,
+    at: LogicalInstant,
+    stateless_refresh_tokens: bool,
+) -> JsonResponse {
+    let Some(entry) = store
+        .oob_code(code)
+        .filter(|c| c.request_type == OobRequestType::PasswordReset)
+        .cloned()
+    else {
+        return action_expired("reset your password", "Try resetting your password again.");
+    };
+    let template = format!(
+        "{}&newPassword=NEW_PASSWORD_HERE",
+        oob_link(
+            headers,
+            entry.request_type,
+            code,
+            &Value::Null,
+            store.tenant_id()
+        )
+    );
+    let Some(new_password) = new_password else {
+        return action_response(
+            400,
+            json!({
+                "error": "missing newPassword query parameter",
+                "instructions": format!("To reset the password for {}, send an HTTP GET request to the following URL.", entry.email),
+                "instructions2": "You may use a web browser or any HTTP client, such as curl.",
+                "urlTemplate": template,
+            }),
+        );
+    };
+    if new_password == "NEW_PASSWORD_HERE" {
+        return action_response(
+            400,
+            json!({
+                "error": "newPassword must be something other than 'NEW_PASSWORD_HERE'",
+                "instructions": "The string 'NEW_PASSWORD_HERE' is just a placeholder.",
+                "instructions2": "Please change the URL to specify a new password instead.",
+                "urlTemplate": template,
+            }),
+        );
+    }
+    let response = reset_password(
+        store,
+        &json!({"oobCode": code, "newPassword": new_password}),
+        at,
+        stateless_refresh_tokens,
+    );
+    if response.status != 200 {
+        return response;
+    }
+    match continue_url {
+        Some(url) => redirect(url),
+        None => action_response(
+            200,
+            json!({"success": "The password has been successfully updated.", "email": entry.email}),
+        ),
+    }
+}
+
+/// `mode=verifyEmail` and `mode=verifyAndChangeEmail`: `applyActionCode`, with
+/// `INVALID_OOB_CODE` mapped to the official wording and every other API error passed
+/// through unchanged, as the official handler does.
+fn action_apply(
+    store: &mut AuthStore,
+    code: &str,
+    continue_url: Option<&str>,
+    at: LogicalInstant,
+    (what, retry): (&str, &str),
+    success: impl FnOnce(&Value) -> Value,
+) -> JsonResponse {
+    let response = apply_oob_code(store, code, at);
+    if response.status != 200 {
+        return if response.body["error"]["message"].as_str() == Some("INVALID_OOB_CODE") {
+            action_expired(what, retry)
+        } else {
+            response
+        };
+    }
+    match continue_url {
+        Some(url) => redirect(url),
+        None => action_response(200, success(&response.body["email"])),
+    }
+}
+
+/// `mode=signIn`: redirect to `continueUrl` with every other parameter of the link set on
+/// it, in the order the link carried them (`URLSearchParams.set`).
+fn action_sign_in(
+    query: Option<&str>,
+    params: &BTreeMap<String, String>,
+    continue_url: Option<&str>,
+) -> JsonResponse {
+    let Some(url) = continue_url else {
+        return action_response(
+            400,
+            json!({
+                "error": "Missing continueUrl query parameter",
+                "instructions": "To sign in, append &continueUrl=YOUR_APP_URL to the link.",
+            }),
+        );
+    };
+    let mut ordered: Vec<(&str, &str)> = Vec::new();
+    for kv in query.unwrap_or("").split('&') {
+        let raw_name = kv.split_once('=').map_or(kv, |(k, _)| k);
+        let Some(name) = query_params(Some(raw_name)).into_keys().next() else {
+            continue;
+        };
+        if name == "continueUrl" || ordered.iter().any(|(n, _)| *n == name) {
+            continue;
+        }
+        if let Some((name, value)) = params.get_key_value(&name) {
+            ordered.push((name.as_str(), value.as_str()));
+        }
+    }
+    redirect(&with_query_params(url, &ordered))
+}
+
+/// `url` with each of `params` set the way `URLSearchParams.set` does: an existing name is
+/// replaced in place (further duplicates dropped), a new name is appended. The fragment is
+/// kept.
+fn with_query_params(url: &str, params: &[(&str, &str)]) -> String {
+    let (url, fragment) = match url.split_once('#') {
+        Some((u, f)) => (u, Some(f)),
+        None => (url, None),
+    };
+    let (base, query) = match url.split_once('?') {
+        Some((b, q)) => (b, q),
+        None => (url, ""),
+    };
+    let mut pairs: Vec<(String, String)> = query
+        .split('&')
+        .filter(|kv| !kv.is_empty())
+        .map(|kv| {
+            let mut decoded = query_params(Some(kv));
+            decoded.pop_first().unwrap_or_default()
+        })
+        .collect();
+    for (name, value) in params {
+        let mut seen = false;
+        pairs.retain_mut(|(n, v)| {
+            if n != name {
+                return true;
+            }
+            if seen {
+                return false;
+            }
+            seen = true;
+            (*value).clone_into(v);
+            true
+        });
+        if !seen {
+            pairs.push(((*name).to_owned(), (*value).to_owned()));
+        }
+    }
+    let mut out = base.to_owned();
+    if !pairs.is_empty() {
+        out.push('?');
+        let encoded: Vec<String> = pairs
+            .iter()
+            .map(|(n, v)| format!("{}={}", form_encode(n), form_encode(v)))
+            .collect();
+        out.push_str(&encoded.join("&"));
+    }
+    if let Some(fragment) = fragment {
+        out.push('#');
+        out.push_str(fragment);
+    }
+    out
+}
+
+/// `application/x-www-form-urlencoded` serialization of one component, as `URLSearchParams`
+/// writes it (`*-._` and alphanumerics literal, space as `+`).
+fn form_encode(s: &str) -> String {
+    use std::fmt::Write as _;
+    s.bytes()
+        .fold(String::with_capacity(s.len()), |mut out, b| {
+            match b {
+                b' ' => out.push('+'),
+                b if b.is_ascii_alphanumeric() || matches!(b, b'*' | b'-' | b'.' | b'_') => {
+                    out.push(b as char);
+                }
+                b => {
+                    let _ = write!(out, "%{b:02X}");
+                }
+            }
+            out
+        })
 }
 
 /// `accounts:signInWithEmailLink`: an `EMAIL_SIGNIN` code for `email`.

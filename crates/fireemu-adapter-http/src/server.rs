@@ -243,6 +243,19 @@ async fn respond(
             }
         }
     };
+    // The email action link redirects to its `continueUrl` once it has acted, as the
+    // official emulator does; only that route builds a 303.
+    if status == 303 {
+        if let Some(location) = crate::identity_toolkit::redirect_location(&body) {
+            return Ok(
+                with_cors(Response::builder().status(303), origin.as_deref())
+                    .header("location", location)
+                    .header("cache-control", "no-store")
+                    .body(Full::new(Bytes::new()))
+                    .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))),
+            );
+        }
+    }
     // Production Identity Toolkit uses an HTML 404 for unknown methods. Match only the
     // route-miss envelope: missing tenants and other API errors must remain JSON.
     if status == 404 && body == fireemu_adapter_support::api_error::identity_not_found() {

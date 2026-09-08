@@ -317,6 +317,7 @@ A malformed or invalid token is never converted into an anonymous valid app. Aut
 | Storage authenticated JSON API privileged/Admin dialect | yes | Existing privileged server surface |
 | Identity Toolkit Admin SDK routes with a verified owner principal | yes | Server administration is not an end-user app request |
 | Storage Firebase download URL with a verified download token bound to the requested object | yes | The download token is an explicit bearer capability intended for URL access outside an initialized Firebase app |
+| Identity Toolkit email action link (`GET /emulator/action`) | yes | The emulator's stand-in for the Firebase-hosted action page; the OOB code is the bearer capability and a browser navigation carries no App Check credential |
 | Ordinary `onRequest` Functions | no automatic decision | The raw header is forwarded; application code owns custom-backend verification |
 | Callable Functions | no | Per-function callable policy applies |
 
@@ -359,7 +360,7 @@ The Storage header allowlist and CORS preflight defaults shall include `x-fireba
 
 ### 13.3 Firebase Authentication
 
-Baseline enforcement applies to end-user Identity Toolkit and Secure Token operations handled by the emulator. It does not apply to Admin SDK routes, emulator inspection routes, control routes, App Check exchange, or JWKS.
+Baseline enforcement applies to end-user Identity Toolkit and Secure Token operations handled by the emulator. It does not apply to Admin SDK routes, emulator inspection routes, the email action link, control routes, App Check exchange, or JWKS.
 
 App Check is evaluated independently from the Firebase Auth credential being created, refreshed, linked, or consumed. In particular, token refresh is not an App Check bypass. A denied Auth request must not create a user, issue or rotate Auth credentials, consume an OOB code, consume a phone verification code, change MFA state, or increment a modeled abuse counter.
 

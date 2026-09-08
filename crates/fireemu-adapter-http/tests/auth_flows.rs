@@ -3465,3 +3465,332 @@ fn tenant_action_links_name_the_tenant() {
     let printed = drain(&lines);
     assert!(!printed[0].contains("tenantId"), "{}", printed[0]);
 }
+
+/// `GET /emulator/action?...` as a browser opens it: no Origin, no credential, JSON body.
+fn follow(state: &AuthState, link: &str) -> (u16, Value) {
+    let path = link
+        .strip_prefix("http://127.0.0.1:9099")
+        .unwrap_or_else(|| panic!("link is not on the emulator host: {link}"));
+    let headers = RequestHeaders {
+        authorization: None,
+        origin: None,
+        content_type: None,
+        host: Some("127.0.0.1:9099".to_owned()),
+        app_check: Vec::new(),
+    };
+    let r = handle_with(state, "GET", path, &headers, &json!({}));
+    (r.status, r.body)
+}
+
+fn issued_code(state: &AuthState, request_type: &str) -> String {
+    let (_, codes) = get(state, &format!("{EMU}/oobCodes"));
+    codes["oobCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|c| c["requestType"] == request_type)
+        .unwrap()["oobCode"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn the_announced_verify_email_link_verifies_the_address_when_opened() {
+    let (s, lines) = recording_state();
+    let user = sign_up(&s, "opened@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": id_token}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let announced = drain(&lines).remove(0);
+    let link = announced
+        .split("follow this link: ")
+        .nth(1)
+        .unwrap()
+        .to_owned();
+
+    let (status, body) = follow(&s, &link);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body,
+        json!({"authEmulator": {"success": "The email has been successfully verified.", "email": "opened@example.com"}})
+    );
+    let (_, looked) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": id_token}),
+    );
+    assert_eq!(looked["users"][0]["emailVerified"], json!(true));
+
+    // The code is consumed: the same link reports the official wording.
+    let (status, body) = follow(&s, &link);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body,
+        json!({"authEmulator": {"error": "Your request to verify your email has expired or the link has already been used.", "instructions": "Try verifying your email again."}})
+    );
+}
+
+#[test]
+fn action_links_refuse_missing_parameters_and_unknown_modes_like_the_official_emulator() {
+    let s = state();
+    let (status, body) = follow(
+        &s,
+        "http://127.0.0.1:9099/emulator/action?mode=verifyEmail&oobCode=x",
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        body["authEmulator"]["error"],
+        "missing apiKey query parameter"
+    );
+    let (status, body) = follow(
+        &s,
+        "http://127.0.0.1:9099/emulator/action?mode=verifyEmail&apiKey=fake-api-key",
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        body["authEmulator"]["error"],
+        "missing oobCode query parameter"
+    );
+    let (status, body) = follow(
+        &s,
+        "http://127.0.0.1:9099/emulator/action?mode=dance&oobCode=x&apiKey=fake-api-key",
+    );
+    assert_eq!(status, 400);
+    assert_eq!(body, json!({"authEmulator": {"error": "Invalid mode"}}));
+    // A mode this runtime has no request type for is refused by the code check.
+    let (status, body) = follow(
+        &s,
+        "http://127.0.0.1:9099/emulator/action?mode=recoverEmail&oobCode=x&apiKey=fake-api-key",
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        body["authEmulator"]["error"],
+        "Requested mode does not match the OOB code provided."
+    );
+    // The route accepts GET only, and the path stays known for other methods.
+    let r = handle(
+        &s,
+        "POST",
+        "/emulator/action?mode=verifyEmail&oobCode=x&apiKey=k",
+        &json!({}),
+    );
+    assert_eq!(r.status, 405, "{}", r.body);
+}
+
+#[test]
+fn a_verify_email_link_with_a_wrong_code_kind_is_expired_wording() {
+    let s = state();
+    sign_up(&s, "kind@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "kind@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let code = issued_code(&s, "PASSWORD_RESET");
+    let (status, body) = follow(
+        &s,
+        &format!("http://127.0.0.1:9099/emulator/action?mode=verifyEmail&oobCode={code}&apiKey=fake-api-key"),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["authEmulator"]["error"],
+        "Your request to verify your email has expired or the link has already been used."
+    );
+    // The reset code is untouched.
+    assert_eq!(issued_code(&s, "PASSWORD_RESET"), code);
+}
+
+#[test]
+fn the_reset_password_link_needs_a_real_new_password_and_then_sets_it() {
+    let s = state();
+    sign_up(&s, "reset@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "reset@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let code = issued_code(&s, "PASSWORD_RESET");
+    let link = format!(
+        "http://127.0.0.1:9099/emulator/action?mode=resetPassword&lang=en&oobCode={code}&apiKey=fake-api-key"
+    );
+
+    let (status, body) = follow(&s, &link);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body,
+        json!({"authEmulator": {
+            "error": "missing newPassword query parameter",
+            "instructions": "To reset the password for reset@example.com, send an HTTP GET request to the following URL.",
+            "instructions2": "You may use a web browser or any HTTP client, such as curl.",
+            "urlTemplate": format!("{link}&newPassword=NEW_PASSWORD_HERE"),
+        }})
+    );
+    let (status, body) = follow(&s, &format!("{link}&newPassword=NEW_PASSWORD_HERE"));
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["authEmulator"]["error"],
+        "newPassword must be something other than 'NEW_PASSWORD_HERE'"
+    );
+    assert_eq!(
+        body["authEmulator"]["urlTemplate"],
+        json!(format!("{link}&newPassword=NEW_PASSWORD_HERE"))
+    );
+    // A refused password is the ordinary API error.
+    let (status, body) = follow(&s, &format!("{link}&newPassword=short"));
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("WEAK_PASSWORD"),
+        "{body}"
+    );
+
+    let (status, body) = follow(&s, &format!("{link}&newPassword=fresh%20pass1"));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body,
+        json!({"authEmulator": {"success": "The password has been successfully updated.", "email": "reset@example.com"}})
+    );
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "reset@example.com", "password": "fresh pass1"}),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    // Used up: the official wording for a stale reset link.
+    let (status, body) = follow(&s, &format!("{link}&newPassword=another1"));
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body,
+        json!({"authEmulator": {"error": "Your request to reset your password has expired or the link has already been used.", "instructions": "Try resetting your password again."}})
+    );
+}
+
+#[test]
+fn action_links_with_a_continue_url_redirect_after_acting() {
+    let s = state();
+    let user = sign_up(&s, "redirect@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": id_token, "continueUrl": "https://app.example/done?x=1"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let code = issued_code(&s, "VERIFY_EMAIL");
+    let (status, body) = follow(
+        &s,
+        &format!("http://127.0.0.1:9099/emulator/action?mode=verifyEmail&oobCode={code}&apiKey=fake-api-key&continueUrl=https%3A%2F%2Fapp.example%2Fdone%3Fx%3D1"),
+    );
+    assert_eq!(status, 303, "{body}");
+    assert_eq!(
+        fireemu_adapter_http::identity_toolkit::redirect_location(&body),
+        Some("https://app.example/done?x=1")
+    );
+    let (_, looked) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": id_token}),
+    );
+    assert_eq!(looked["users"][0]["emailVerified"], json!(true));
+
+    // Password reset with continueUrl redirects too.
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "redirect@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let code = issued_code(&s, "PASSWORD_RESET");
+    let (status, body) = follow(
+        &s,
+        &format!("http://127.0.0.1:9099/emulator/action?mode=resetPassword&oobCode={code}&apiKey=fake-api-key&continueUrl=https%3A%2F%2Fapp.example%2Fback&newPassword=newpass99"),
+    );
+    assert_eq!(status, 303, "{body}");
+    assert_eq!(
+        fireemu_adapter_http::identity_toolkit::redirect_location(&body),
+        Some("https://app.example/back")
+    );
+}
+
+#[test]
+fn the_sign_in_link_forwards_its_parameters_to_the_continue_url() {
+    let s = state();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link@example.com", "continueUrl": "https://app.example/finish?keep=1&mode=old"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let code = issued_code(&s, "EMAIL_SIGNIN");
+    // Without continueUrl the link cannot complete the sign-in.
+    let (status, body) = follow(
+        &s,
+        &format!(
+            "http://127.0.0.1:9099/emulator/action?mode=signIn&oobCode={code}&apiKey=fake-api-key"
+        ),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["authEmulator"]["error"],
+        "Missing continueUrl query parameter"
+    );
+
+    let (status, body) = follow(
+        &s,
+        &format!("http://127.0.0.1:9099/emulator/action?mode=signIn&lang=en&oobCode={code}&apiKey=fake-api-key&continueUrl=https%3A%2F%2Fapp.example%2Ffinish%3Fkeep%3D1%26mode%3Dold"),
+    );
+    assert_eq!(status, 303, "{body}");
+    // `URLSearchParams.set`: an existing name is replaced in place, new names are appended.
+    assert_eq!(
+        fireemu_adapter_http::identity_toolkit::redirect_location(&body),
+        Some(format!("https://app.example/finish?keep=1&mode=signIn&lang=en&oobCode={code}&apiKey=fake-api-key").as_str())
+    );
+    // The code is not consumed by the redirect; the SDK consumes it.
+    assert_eq!(issued_code(&s, "EMAIL_SIGNIN"), code);
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
+fn the_verify_and_change_email_link_switches_the_address() {
+    let s = state();
+    let user = sign_up(&s, "before@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": id_token, "newEmail": "after@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let code = issued_code(&s, "VERIFY_AND_CHANGE_EMAIL");
+    let link = format!(
+        "http://127.0.0.1:9099/emulator/action?mode=verifyAndChangeEmail&oobCode={code}&apiKey=fake-api-key"
+    );
+    let (status, body) = follow(&s, &link);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body,
+        json!({"authEmulator": {"success": "The email has been successfully changed.", "newEmail": "after@example.com"}})
+    );
+    let (status, body) = follow(&s, &link);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body,
+        json!({"authEmulator": {"error": "Your request to change your email has expired or the link has already been used.", "instructions": "Try changing your email again."}})
+    );
+}

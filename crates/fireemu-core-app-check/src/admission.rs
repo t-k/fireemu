@@ -47,6 +47,10 @@ pub enum PrivilegedBypass {
     StorageDownloadToken,
     /// The control API, the Emulator UI API, the App Check exchange and the JWKS endpoints.
     ControlApi,
+    /// The Identity Toolkit email action link (`/emulator/action`), the emulator's stand-in
+    /// for the Firebase-hosted action page: the OOB code is the capability and a browser
+    /// navigation carries no App Check credential.
+    IdentityToolkitActionLink,
 }
 
 impl PrivilegedBypass {
@@ -67,6 +71,7 @@ impl PrivilegedBypass {
             Self::StorageJsonApi => "storage-json-api",
             Self::StorageDownloadToken => "storage-download-token",
             Self::ControlApi => "control-api",
+            Self::IdentityToolkitActionLink => "identity-toolkit-action-link",
         }
     }
 }

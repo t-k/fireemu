@@ -34,6 +34,10 @@ pub(crate) enum RouteClass {
     Admin,
     /// Everything a client SDK calls; App Check protects these under enforcement.
     EndUser,
+    /// `/emulator/action`: the email action link the emulator prints instead of mailing. A
+    /// browser opens it with no credential; the OOB code in the query is the capability, as
+    /// on the official emulator and on the production hosted action page.
+    ActionLink,
 }
 
 /// What a route's path looks like.
@@ -172,6 +176,7 @@ pub(crate) enum Handler {
     EmulatorClearAccounts,
     EmulatorGetConfig,
     EmulatorPatchConfig,
+    EmulatorAction,
 }
 
 impl Handler {
@@ -222,6 +227,7 @@ impl Handler {
         Self::EmulatorClearAccounts,
         Self::EmulatorGetConfig,
         Self::EmulatorPatchConfig,
+        Self::EmulatorAction,
     ];
 }
 
@@ -695,6 +701,14 @@ pub(crate) const ROUTES: &[Route] = &[
         "emulator/config",
         Handler::EmulatorPatchConfig,
     ),
+    // The email action link (`follow this link: ...`), opened by a browser or curl.
+    Route {
+        method: "GET",
+        pattern: Pattern::Exact("/emulator/action"),
+        class: RouteClass::ActionLink,
+        operation: "emulator/action",
+        handler: Handler::EmulatorAction,
+    },
 ];
 
 /// The outcome of resolving a request against the table.

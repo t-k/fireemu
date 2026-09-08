@@ -50,6 +50,8 @@ pub struct GatewayService {
     app_check: Option<Arc<ServiceAdmission>>,
     #[cfg(test)]
     first_query_page_ready: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(test)]
+    continuation_query_page_ready: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl GatewayService {
@@ -64,6 +66,8 @@ impl GatewayService {
             app_check: None,
             #[cfg(test)]
             first_query_page_ready: None,
+            #[cfg(test)]
+            continuation_query_page_ready: None,
         }
     }
 
@@ -77,6 +81,8 @@ impl GatewayService {
             app_check: None,
             #[cfg(test)]
             first_query_page_ready: None,
+            #[cfg(test)]
+            continuation_query_page_ready: None,
         }
     }
 
@@ -685,6 +691,8 @@ impl Firestore for GatewayService {
             } else {
                 rollback.take()
             };
+            #[cfg(test)]
+            let continuation_query_page_ready = self.continuation_query_page_ready.clone();
             tokio::spawn(async move {
                 let rollback = rollback;
                 // Keep one response until exhaustion and execution finalization are known.
@@ -736,19 +744,26 @@ impl Firestore for GatewayService {
                     }
                     let authorization = req.clone();
                     let selection = selection.clone();
+                    #[cfg(test)]
+                    let continuation_query_page_ready = continuation_query_page_ready.clone();
                     let batch = blocking_read(
                         local.clone(),
                         rules.clone(),
                         caller.clone(),
                         move |local, guard| {
-                            local.run_query_authorized_as_after_for_execution(
+                            let result = local.run_query_authorized_as_after_for_execution(
                                 &page,
                                 &authorization,
                                 guard,
                                 continuation.as_ref(),
                                 query_execution_id,
                                 selection,
-                            )
+                            );
+                            #[cfg(test)]
+                            if let Some(ready) = continuation_query_page_ready {
+                                ready();
+                            }
+                            result
                         },
                     )
                     .await;
@@ -1497,6 +1512,8 @@ mod tests {
             }
         }
     }
+
+    mod query_transaction_tests;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn saturated_blocking_queries_leave_runtime_and_other_databases_responsive() {

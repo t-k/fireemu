@@ -76,7 +76,7 @@ The npm package installs the binary for the current platform as an optional depe
 
 Linux packages are statically linked. Java is not required. Running a Functions codebase requires Node.js and `firebase-functions` v6 or v7 in that codebase.
 
-Release archives and SHA-256 checksums are also available from [GitHub Releases](https://github.com/t-k/fireemu/releases).
+Releases are Git tags. Each tag is built by the release workflow, which publishes the launcher and the platform packages to npm with provenance; the platform package tarballs on npm are the release archives. The changes in each release are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Usage
 

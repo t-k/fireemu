@@ -67,6 +67,15 @@ jobs:
             publish=false
           fi
           node npm/scripts/stamp-version.mjs "$version" --print
+          # The binary embeds CARGO_PKG_VERSION, so a tag that disagrees with the workspace
+          # version would publish an npm package whose binary reports another version.
+          if [ "$publish" = "true" ]; then
+            workspace=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+            if [ "$workspace" != "$version" ]; then
+              echo "tag version ${version} does not match the workspace version ${workspace} in Cargo.toml" >&2
+              exit 1
+            fi
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "publish=${publish}" >> "$GITHUB_OUTPUT"
           echo "releasing ${version} (publish: ${publish})"

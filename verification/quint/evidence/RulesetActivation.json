@@ -60,7 +60,7 @@
     "verification/quint/bin/process-group": "b75c438b3ce254d4d112d2005afc52d94e64a1fc22e0d5d86f5652ef30285b94",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/RulesetActivation.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "175b4cdb99a1c044a350653d487ce8e54ecb87e20fe2be909405682e04f0f95f",
+    "verification/quint/evidence/cargo-authority.json": "a9b54e89002be4c95373961a6fc9568b7e8bac7a6bcb2f6ec2658f54792b07e8",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
     "verification/quint/mutations/RulesetActivation.json": "5b0d578f3d43543c25c35e9717f357390048a586349d786485d4114054c5d70e",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",

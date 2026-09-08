@@ -3866,8 +3866,10 @@ impl LocalBackend {
             let skipped = if after_document.is_some() {
                 0
             } else {
-                i32::try_from(u64::from(accepted.query.offset).min(stats.matched))
-                    .unwrap_or(i32::MAX)
+                let available = selection.as_ref().map_or(stats.matched, |selection| {
+                    u64::try_from(selection.inner.paths.len()).unwrap_or(u64::MAX)
+                });
+                i32::try_from(u64::from(accepted.query.offset).min(available)).unwrap_or(i32::MAX)
             };
             Ok((
                 query_responses(&docs, read_time, access.report(), skipped),

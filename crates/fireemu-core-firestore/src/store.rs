@@ -609,7 +609,8 @@ enum TransactionState {
 pub struct QueryStats {
     /// Documents visited by the scan.
     pub scanned: u64,
-    /// Documents that passed scope, filter, ordering and cursors.
+    /// Documents that passed scope, filter, ordering and cursors, or documents materialized
+    /// from a cached selection during this page. The selection total is recorded separately.
     pub matched: u64,
     /// Largest number of candidate rows held at once. With a finite `offset + limit` this
     /// never exceeds that sum, whatever the size of the matched set.
@@ -4058,7 +4059,7 @@ impl FirestoreState {
     }
 
     /// [`Self::documents_at_query_paths`] with the page-stage statistics: `matched` is the
-    /// selection size, `cloned_documents` and `cloned_field_bytes` cover the page's output, and
+    /// materialized page size, `cloned_documents` and `cloned_field_bytes` cover the page's output, and
     /// the scan counters stay zero because no candidate is visited again.
     pub fn documents_at_query_paths_with_stats(
         &self,
@@ -4068,7 +4069,7 @@ impl FirestoreState {
     ) -> (Vec<Document>, QueryStats) {
         let docs = self.documents_at_query_paths(query, paths, version);
         let stats = QueryStats {
-            matched: u64::try_from(paths.len()).unwrap_or(u64::MAX),
+            matched: u64::try_from(docs.len()).unwrap_or(u64::MAX),
             cloned_documents: u64::try_from(docs.len()).unwrap_or(u64::MAX),
             cloned_field_bytes: docs
                 .iter()
@@ -4854,6 +4855,10 @@ fn apply_transform(
             }
             let want_max = matches!(t.kind, TransformKind::Maximum(_));
             match current {
+                Some(Value::Double(n)) if n.is_nan() => Value::Double(n),
+                Some(c) if is_number(&c) && matches!(operand, Value::Double(n) if n.is_nan()) => {
+                    operand.clone()
+                }
                 Some(c) if is_number(&c) => {
                     let ord = c.canonical_cmp(operand);
                     if (want_max && ord == Ordering::Less)

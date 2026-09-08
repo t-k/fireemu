@@ -181,6 +181,9 @@ impl Gateway {
         }
         let mut warnings = Vec::new();
         if self.ctx.edition == FirestoreEdition::Standard {
+            canonical
+                .check_standard_constraints()
+                .map_err(|error| Rejection::InvalidQuery(error.to_string()))?;
             if let Err(violations) = canonical.check_standard_limits() {
                 // The limits the official emulator refuses too are refused under either
                 // setting; the switch only decides the production-only ones.

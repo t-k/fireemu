@@ -5462,6 +5462,30 @@ async fn streamed_query_execution_records_selection_and_page_stats_separately() 
             .expect("the streamed execution recorded its stats");
         assert_selection_then_pages(&stats, &format!("transactional {transactional}"));
     }
+    for offset in [2, 34, 35, 40] {
+        let mut request = kept_stats_by_v_desc();
+        let Some(pb::run_query_request::QueryType::StructuredQuery(q)) =
+            request.query_type.as_mut()
+        else {
+            unreachable!()
+        };
+        q.offset = offset;
+        let mut stream = client.run_query(request).await.unwrap().into_inner();
+        let mut skipped = 0;
+        let mut returned = 0;
+        while let Some(response) = stream.message().await.unwrap() {
+            skipped += response.skipped_results;
+            returned += u64::from(response.document.is_some());
+        }
+        assert_eq!(skipped, offset.min(35));
+        assert_eq!(
+            returned,
+            35u64.saturating_sub(u64::try_from(offset).unwrap())
+        );
+        let (_, stats) = backend.latest_query_execution_stats().unwrap();
+        assert_eq!(stats.pages.matched, returned);
+        assert_eq!(stats.pages.cloned_documents, returned);
+    }
     handle.abort();
 }
 
@@ -5505,5 +5529,6 @@ fn assert_selection_then_pages(stats: &QueryExecutionStats, context: &str) {
     assert_eq!(stats.pages.index_paths_visited, 0, "{context}");
     assert_eq!(stats.pages.filter_evaluations, 0, "{context}");
     assert_eq!(stats.pages.cloned_documents, 35, "{context}");
+    assert_eq!(stats.pages.matched, 35, "{context}");
     assert!(stats.pages.cloned_field_bytes > 0, "{context}");
 }

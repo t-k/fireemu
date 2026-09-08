@@ -43,6 +43,93 @@ fn set(p: &str, f: &[(&str, Value)]) -> Write {
 }
 
 #[test]
+fn numeric_extrema_propagate_nan_and_preserve_equal_stored_values() {
+    let values = [
+        None,
+        Some(Value::String("text".into())),
+        Some(Value::Integer(0)),
+        Some(Value::Double(-0.0)),
+        Some(Value::Integer(5)),
+        Some(Value::Double(5.0)),
+        Some(Value::Double(f64::NAN)),
+    ];
+    for maximum in [true, false] {
+        for current in &values {
+            for operand in [
+                Value::Integer(0),
+                Value::Double(-0.0),
+                Value::Integer(5),
+                Value::Double(5.0),
+                Value::Double(f64::NAN),
+            ] {
+                let mut state = FirestoreState::new();
+                let initial: Vec<_> = current.iter().map(|v| ("x", v.clone())).collect();
+                state
+                    .commit(&[set("extrema/doc", &initial)], None, t(0))
+                    .unwrap();
+                let numeric = |v: &Value| match v {
+                    Value::Integer(n) => Some(f64::from(i32::try_from(*n).unwrap())),
+                    Value::Double(n) => Some(*n),
+                    _ => None,
+                };
+                let expected = match current.as_ref().and_then(numeric) {
+                    Some(n) if n.is_nan() || numeric(&operand).unwrap().is_nan() => {
+                        Value::Double(f64::NAN)
+                    }
+                    Some(n)
+                        if if maximum {
+                            n >= numeric(&operand).unwrap()
+                        } else {
+                            n <= numeric(&operand).unwrap()
+                        } =>
+                    {
+                        current.clone().unwrap()
+                    }
+                    _ => operand.clone(),
+                };
+                let write = Write {
+                    op: WriteOp::Set {
+                        path: path("extrema/doc"),
+                        fields: BTreeMap::new(),
+                        update_mask: Some(vec![]),
+                    },
+                    precondition: None,
+                    transforms: vec![FieldTransform {
+                        field: FieldPath::parse("x").unwrap(),
+                        kind: if maximum {
+                            TransformKind::Maximum(operand.clone())
+                        } else {
+                            TransformKind::Minimum(operand.clone())
+                        },
+                    }],
+                };
+                let result = state.commit(&[write], None, t(1)).unwrap();
+                for actual in [
+                    &result.write_results[0].transform_results[0],
+                    state
+                        .get(&path("extrema/doc"))
+                        .unwrap()
+                        .fields
+                        .get("x")
+                        .unwrap(),
+                ] {
+                    match (&expected, actual) {
+                        (Value::Double(e), Value::Double(a)) if e.is_nan() => assert!(
+                            a.is_nan(),
+                            "maximum={maximum}, current={current:?}, operand={operand:?}"
+                        ),
+                        (Value::Double(e), Value::Double(a)) => {
+                            assert_eq!(a.to_bits(), e.to_bits());
+                        }
+                        _ => assert_eq!(actual, &expected),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn nested_map_field_names_are_validated_and_failure_is_atomic() {
     for name in [
         "x".repeat(1501),

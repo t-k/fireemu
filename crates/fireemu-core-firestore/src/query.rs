@@ -296,6 +296,8 @@ pub enum QueryError {
     OrderAfterDocumentName,
     /// A filter on `__name__` compares against something other than a document reference.
     NameFilterValue,
+    /// A key equality with other inequalities requires a key inequality too (Standard).
+    KeyEqualityWithOtherInequalities,
 }
 
 impl fmt::Display for QueryError {
@@ -326,6 +328,9 @@ impl fmt::Display for QueryError {
                 f.write_str("order by clause cannot contain more fields after the key")
             }
             Self::NameFilterValue => f.write_str("__key__ filter value must be a Key"),
+            Self::KeyEqualityWithOtherInequalities => f.write_str(
+                "Equality on key is not allowed if there are other inequality fields and key does not appear in inequalities.",
+            ),
         }
     }
 }
@@ -359,6 +364,32 @@ pub struct ComponentCount {
 }
 
 impl Query {
+    /// Validates Standard operator combinations independently of configurable limits.
+    /// Call after canonicalization to preserve structural error precedence.
+    pub fn check_standard_constraints(&self) -> Result<(), QueryError> {
+        fn has_key_equality(filter: &FilterExpr) -> bool {
+            match filter {
+                FilterExpr::Field {
+                    field,
+                    op: FieldOp::Equal | FieldOp::In,
+                    ..
+                } => field.is_document_name(),
+                FilterExpr::And(children) | FilterExpr::Or(children) => {
+                    children.iter().any(has_key_equality)
+                }
+                _ => false,
+            }
+        }
+        let inequalities = self.inequality_fields();
+        if !inequalities.is_empty()
+            && !inequalities.iter().any(FieldPath::is_document_name)
+            && self.filter.as_ref().is_some_and(has_key_equality)
+        {
+            return Err(QueryError::KeyEqualityWithOtherInequalities);
+        }
+        Ok(())
+    }
+
     /// A query over `scope` with no filter, ordering or cursor.
     #[must_use]
     pub const fn new(scope: QueryScope) -> Self {
@@ -466,7 +497,7 @@ impl Query {
         let mut out = self.order_by.clone();
         let last_direction = out.last().map_or(Direction::Ascending, |o| o.direction);
         for field in self.inequality_fields() {
-            if !out.iter().any(|o| o.field == field) {
+            if !field.is_document_name() && !out.iter().any(|o| o.field == field) {
                 out.push(OrderClause {
                     field,
                     direction: last_direction,

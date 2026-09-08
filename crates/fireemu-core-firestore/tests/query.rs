@@ -256,6 +256,48 @@ fn component_count_includes_orders_and_parent_path() {
 }
 
 #[test]
+fn implicit_key_inequality_orders_last_but_explicit_key_order_is_not_rewritten() {
+    let q = base().with_filter(FilterExpr::And(vec![
+        field(
+            "__name__",
+            FieldOp::GreaterThan,
+            Value::Reference("projects/demo-app/databases/(default)/documents/tasks/a".into()),
+        ),
+        field("amount", FieldOp::GreaterThan, Value::Integer(0)),
+    ]));
+    for direction in [Direction::Ascending, Direction::Descending] {
+        let ordered = if direction == Direction::Descending {
+            q.clone().with_order(OrderClause {
+                field: fp("amount"),
+                direction,
+            })
+        } else {
+            q.clone()
+        };
+        assert_eq!(
+            ordered.canonicalize().unwrap().effective_order_by(),
+            vec![
+                OrderClause {
+                    field: fp("amount"),
+                    direction
+                },
+                OrderClause {
+                    field: fp("__name__"),
+                    direction
+                }
+            ]
+        );
+    }
+    assert!(q
+        .with_order(OrderClause {
+            field: fp("__name__"),
+            direction: Direction::Ascending
+        })
+        .canonicalize()
+        .is_err());
+}
+
+#[test]
 fn effective_order_appends_inequality_fields_and_document_name() {
     let q = base()
         .with_filter(field("age", FieldOp::GreaterThan, Value::Integer(18)))

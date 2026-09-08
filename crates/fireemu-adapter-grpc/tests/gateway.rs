@@ -17,6 +17,136 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
 use tokio_stream::wrappers::TcpListenerStream;
 
+#[test]
+#[allow(clippy::too_many_lines)] // Keep the bounded operator/boolean/policy matrix together.
+fn key_equalities_and_other_inequalities_follow_production_constraints() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope, UnaryOp};
+    use fireemu_core_firestore::value::Value;
+    let filter = |name: &str, op, value| FilterExpr::Field {
+        field: FieldPath::parse(name).unwrap(),
+        op,
+        value,
+    };
+    let key = Value::Reference("projects/demo-app/databases/(default)/documents/tasks/a".into());
+    for enforce_limits in [false, true] {
+        let gateway = Gateway {
+            enforce_limits,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Emulator,
+            },
+            indexes: IndexSet::default(),
+        };
+        for key_op in [FieldOp::Equal, FieldOp::In] {
+            let equality = filter(
+                "__name__",
+                key_op,
+                if key_op == FieldOp::In {
+                    Value::Array(vec![key.clone()])
+                } else {
+                    key.clone()
+                },
+            );
+            let mut inequalities: Vec<_> = [
+                FieldOp::LessThan,
+                FieldOp::LessThanOrEqual,
+                FieldOp::GreaterThan,
+                FieldOp::GreaterThanOrEqual,
+                FieldOp::NotEqual,
+            ]
+            .into_iter()
+            .map(|op| filter("amount", op, Value::Integer(0)))
+            .collect();
+            if key_op == FieldOp::Equal {
+                inequalities.push(filter(
+                    "amount",
+                    FieldOp::NotIn,
+                    Value::Array(vec![Value::Integer(0)]),
+                ));
+            }
+            inequalities.extend([UnaryOp::IsNotNull, UnaryOp::IsNotNan].map(|op| {
+                FilterExpr::Unary {
+                    field: FieldPath::parse("amount").unwrap(),
+                    op,
+                }
+            }));
+            for inequality in inequalities {
+                for disjunction in [false, true] {
+                    let children = vec![
+                        equality.clone(),
+                        inequality.clone(),
+                        filter("category", FieldOp::Equal, Value::String("x".into())),
+                    ];
+                    let combined = if disjunction {
+                        FilterExpr::Or(children)
+                    } else {
+                        FilterExpr::And(children)
+                    };
+                    // NOT_IN + OR already has its own structural rejection.
+                    if disjunction
+                        && matches!(
+                            inequality,
+                            FilterExpr::Field {
+                                op: FieldOp::NotIn,
+                                ..
+                            }
+                        )
+                    {
+                        continue;
+                    }
+                    let query = Query::new(QueryScope::collection(
+                        None,
+                        CollectionId::try_new("tasks").unwrap(),
+                    ))
+                    .with_filter(combined.clone());
+                    let err = gateway.validate_query(&query).expect_err("unsupported key equality must fail independently of indexes and limit policy");
+                    assert!(
+                        format!("{err:?}").contains("Equality on key is not allowed"),
+                        "{err:?}"
+                    );
+                    for allowed in [
+                        equality.clone(),
+                        inequality.clone(),
+                        FilterExpr::And(vec![
+                            equality.clone(),
+                            filter("category", FieldOp::Equal, Value::String("x".into())),
+                        ]),
+                        FilterExpr::And(vec![
+                            combined.clone(),
+                            filter("__name__", FieldOp::LessThan, key.clone()),
+                        ]),
+                        FilterExpr::Or(vec![
+                            combined.clone(),
+                            filter("__name__", FieldOp::LessThan, key.clone()),
+                        ]),
+                    ] {
+                        if matches!(
+                            inequality,
+                            FilterExpr::Field {
+                                op: FieldOp::NotIn,
+                                ..
+                            }
+                        ) && matches!(allowed, FilterExpr::Or(_))
+                        {
+                            continue;
+                        }
+                        let q = Query {
+                            filter: Some(allowed),
+                            ..query.clone()
+                        };
+                        assert!(
+                            gateway.validate_query(&q).is_ok(),
+                            "{q:?}: {:?}",
+                            gateway.validate_query(&q)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn start(
     edition: FirestoreEdition,
     indexes: IndexSet,

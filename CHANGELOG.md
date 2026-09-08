@@ -8,10 +8,16 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-09
+
 ### Added
 
 - `GET /emulator/action`, the email action link the Auth emulator prints (`follow this link: ...`), is served like the official emulator's handler: `verifyEmail` and `verifyAndChangeEmail` apply the code, `resetPassword` needs a `newPassword` other than the placeholder and sets it, `signIn` forwards the link's parameters to `continueUrl`, and a `continueUrl` on the other modes is followed with a 303 once the code has acted. Missing parameters, unknown modes and used, expired or mismatched codes answer the official `authEmulator` JSON. The link opened with a browser answered 404 before.
 - The action link is an App Check bypass surface (it stands in for the Firebase-hosted action page), published in the specification's bypass matrix as `identity-toolkit-action-link`.
+
+### Changed
+
+- The npm package page (`npm/README.md`) and the crate description now open with the same positioning as the repository README: an experimental local runtime for testing Firebase SDK and Functions code, not a replacement for the official Emulator Suite. The page had kept the earlier wording.
 
 ## [0.3.0] - 2026-09-09
 
@@ -87,7 +93,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/t-k/fireemu/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/t-k/fireemu/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/t-k/fireemu/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/t-k/fireemu/releases/tag/v0.1.0

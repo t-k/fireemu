@@ -1680,3 +1680,137 @@ fn server_timestamps_follow_the_commit_order_when_the_clock_stands_still() {
     let doc = s.get(&path("t/second")).unwrap();
     assert_eq!(doc.update_time.as_nanos(), second);
 }
+
+#[test]
+fn rewriting_a_nan_document_is_a_no_op_but_a_type_change_is_not() {
+    for current in [
+        Value::Double(f64::NAN),
+        Value::Array(vec![Value::Double(f64::NAN), Value::Integer(1)]),
+        Value::Map(fields(&[("inner", Value::Double(f64::NAN))])),
+    ] {
+        let mut s = FirestoreState::new();
+        let first = s
+            .commit(&[set("nan/doc", &[("v", current.clone())])], None, t(0))
+            .unwrap();
+        assert_eq!(first.changes.len(), 1);
+        let before = s.get(&path("nan/doc")).unwrap().clone();
+
+        // The same NaN payload again: no change, no new version, no update time.
+        let rewrite = s
+            .commit(&[set("nan/doc", &[("v", current.clone())])], None, t(5))
+            .unwrap();
+        assert!(
+            rewrite.changes.is_empty(),
+            "{current:?} rewrite produced changes"
+        );
+        assert_eq!(rewrite.version, first.version);
+        assert_eq!(
+            rewrite.write_results[0].update_time,
+            Some(before.update_time)
+        );
+        let after = s.get(&path("nan/doc")).unwrap();
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.update_time, before.update_time);
+
+        // A verify changes nothing either, even with NaN in the document.
+        let verify = Write {
+            op: WriteOp::Verify {
+                path: path("nan/doc"),
+            },
+            precondition: Some(Precondition::Exists(true)),
+            transforms: vec![],
+        };
+        let verified = s.commit(&[verify], None, t(6)).unwrap();
+        assert!(verified.changes.is_empty());
+        assert_eq!(verified.version, first.version);
+        assert_eq!(
+            verified.write_results[0].update_time,
+            Some(before.update_time)
+        );
+    }
+
+    // Storing NaN over NaN via a maximum transform is a no-op as well.
+    let mut s = FirestoreState::new();
+    let first = s
+        .commit(
+            &[set("nan/max", &[("v", Value::Double(f64::NAN))])],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let transform = Write {
+        transforms: vec![FieldTransform {
+            field: FieldPath::parse("v").unwrap(),
+            kind: TransformKind::Maximum(Value::Integer(5)),
+        }],
+        ..set("nan/max", &[])
+    };
+    let mut transform = transform;
+    if let WriteOp::Set { update_mask, .. } = &mut transform.op {
+        *update_mask = Some(vec![]);
+    }
+    let maxed = s.commit(&[transform], None, t(1)).unwrap();
+    assert!(maxed.changes.is_empty());
+    assert_eq!(maxed.version, first.version);
+    assert!(matches!(
+        s.get(&path("nan/max")).unwrap().fields.get("v"),
+        Some(Value::Double(d)) if d.is_nan()
+    ));
+
+    // Control: changing the numeric type (integer to double) is a real change.
+    let mut s = FirestoreState::new();
+    let first = s
+        .commit(&[set("num/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let retyped = s
+        .commit(&[set("num/doc", &[("v", Value::Double(1.0))])], None, t(1))
+        .unwrap();
+    assert_eq!(retyped.changes.len(), 1);
+    assert_ne!(retyped.version, first.version);
+}
+
+#[test]
+fn stored_timestamps_are_truncated_to_microseconds() {
+    use fireemu_core_firestore::value::Timestamp;
+    let nanos = |n: u32| Value::Timestamp(Timestamp::new(1_788_000_000, n).unwrap());
+    let mut s = FirestoreState::new();
+    let doc = fields(&[
+        ("at", nanos(123_456_789)),
+        ("list", Value::Array(vec![nanos(123_456_001)])),
+        ("nested", Value::Map(fields(&[("at", nanos(999_999_999))]))),
+    ]);
+    let entries: Vec<_> = doc.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+    let first = s.commit(&[set("ts/doc", &entries)], None, t(0)).unwrap();
+    let stored = s.get(&path("ts/doc")).unwrap();
+    assert_eq!(stored.fields.get("at"), Some(&nanos(123_456_000)));
+    assert_eq!(
+        stored.fields.get("list"),
+        Some(&Value::Array(vec![nanos(123_456_000)]))
+    );
+    assert_eq!(
+        stored.fields.get("nested"),
+        Some(&Value::Map(fields(&[("at", nanos(999_999_000))])))
+    );
+
+    // A rewrite that only differs below microsecond precision is a no-op.
+    let rewrite = s.commit(&[set("ts/doc", &entries)], None, t(1)).unwrap();
+    assert!(rewrite.changes.is_empty());
+    assert_eq!(rewrite.version, first.version);
+
+    // Partial updates and array transforms go through the same normalization.
+    let mut masked = set("ts/doc", &[("at", nanos(5_001))]);
+    if let WriteOp::Set { update_mask, .. } = &mut masked.op {
+        *update_mask = Some(vec![FieldPath::parse("at").unwrap()]);
+    }
+    masked.transforms.push(FieldTransform {
+        field: FieldPath::parse("list").unwrap(),
+        kind: TransformKind::AppendMissingElements(vec![nanos(7_999)]),
+    });
+    s.commit(&[masked], None, t(2)).unwrap();
+    let stored = s.get(&path("ts/doc")).unwrap();
+    assert_eq!(stored.fields.get("at"), Some(&nanos(5_000)));
+    assert_eq!(
+        stored.fields.get("list"),
+        Some(&Value::Array(vec![nanos(123_456_000), nanos(7_000)]))
+    );
+}

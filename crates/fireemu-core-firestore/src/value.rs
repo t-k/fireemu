@@ -55,6 +55,16 @@ impl Timestamp {
     pub const fn nanos(self) -> u32 {
         self.nanos
     }
+
+    /// The timestamp Firestore stores for this value: precision below one microsecond is
+    /// truncated (the documented storage precision for timestamp fields).
+    #[must_use]
+    pub const fn truncated_to_micros(self) -> Self {
+        Self {
+            seconds: self.seconds,
+            nanos: self.nanos / 1_000 * 1_000,
+        }
+    }
 }
 
 /// Geographical point. Ordered by latitude, then longitude.
@@ -223,6 +233,37 @@ impl Value {
         }
     }
 
+    /// Whether two stored values are the same document content. Unlike `==`, every NaN
+    /// equals every other NaN (Firestore stores a single NaN), and unlike
+    /// [`canonical_cmp`](Self::canonical_cmp) an integer never equals a double and `-0.0`
+    /// never equals `0.0`: rewriting a field with a different numeric representation is a
+    /// real change.
+    #[must_use]
+    pub fn stored_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Double(a), Self::Double(b)) => double_bits_eq(*a, *b),
+            (Self::Vector(a), Self::Vector(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| double_bits_eq(*x, *y))
+            }
+            (Self::Array(a), Self::Array(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.stored_eq(y))
+            }
+            (Self::Map(a), Self::Map(b)) => stored_fields_eq(a, b),
+            _ => self == other,
+        }
+    }
+
+    /// Rewrites the value into the form Firestore stores: timestamps lose sub-microsecond
+    /// precision, recursively through arrays and maps.
+    pub fn normalize_for_storage(&mut self) {
+        match self {
+            Self::Timestamp(timestamp) => *timestamp = timestamp.truncated_to_micros(),
+            Self::Array(items) => items.iter_mut().for_each(Self::normalize_for_storage),
+            Self::Map(entries) => entries.values_mut().for_each(Self::normalize_for_storage),
+            _ => {}
+        }
+    }
+
     /// Nesting depth: each map or array level adds one (`FS-LIMIT-NESTED-MAP-ARRAY-DEPTH`).
     #[must_use]
     pub fn nesting_depth(&self) -> u32 {
@@ -248,6 +289,24 @@ impl Value {
 }
 
 impl Eq for Value {}
+
+/// [`Value::stored_eq`] over whole field trees.
+#[must_use]
+pub fn stored_fields_eq(a: &BTreeMap<String, Value>, b: &BTreeMap<String, Value>) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|((ka, va), (kb, vb))| ka == kb && va.stored_eq(vb))
+}
+
+/// [`Value::normalize_for_storage`] over a whole field tree.
+pub fn normalize_fields_for_storage(fields: &mut BTreeMap<String, Value>) {
+    fields.values_mut().for_each(Value::normalize_for_storage);
+}
+
+fn double_bits_eq(a: f64, b: f64) -> bool {
+    (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
+}
 
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {

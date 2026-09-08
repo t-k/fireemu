@@ -151,3 +151,61 @@ fn nesting_depth_is_counted_per_map_and_array_level() {
     assert_eq!(deeper.nesting_depth(), 21);
     assert_eq!(Value::Integer(1).nesting_depth(), 0);
 }
+
+#[test]
+fn stored_equality_unifies_nan_but_keeps_numeric_representation() {
+    let nan = Value::Double(f64::NAN);
+    assert!(nan.stored_eq(&Value::Double(-f64::NAN)));
+    assert!(Value::Array(vec![nan.clone()]).stored_eq(&Value::Array(vec![nan.clone()])));
+    assert!(Value::Vector(vec![f64::NAN]).stored_eq(&Value::Vector(vec![f64::NAN])));
+    let map = |v: Value| Value::Map([("k".to_owned(), v)].into_iter().collect());
+    assert!(map(nan.clone()).stored_eq(&map(nan.clone())));
+    assert!(!Value::Integer(1).stored_eq(&Value::Double(1.0)));
+    assert!(!Value::Double(0.0).stored_eq(&Value::Double(-0.0)));
+    assert!(!map(nan.clone()).stored_eq(&map(Value::Null)));
+    assert!(!Value::Array(vec![nan.clone()]).stored_eq(&Value::Array(vec![nan, Value::Null])));
+    // Ordinary values keep plain equality.
+    assert!(Value::String("a".into()).stored_eq(&Value::String("a".into())));
+    assert!(!Value::String("a".into()).stored_eq(&Value::String("b".into())));
+}
+
+#[test]
+fn storage_normalization_truncates_timestamps_to_microseconds_recursively() {
+    let ts = |n: u32| Value::Timestamp(Timestamp::new(1, n).unwrap());
+    assert_eq!(
+        Timestamp::new(1, 999_999_999)
+            .unwrap()
+            .truncated_to_micros(),
+        Timestamp::new(1, 999_999_000).unwrap()
+    );
+    assert_eq!(
+        Timestamp::new(1, 1_000).unwrap().truncated_to_micros(),
+        Timestamp::new(1, 1_000).unwrap()
+    );
+    let mut value = Value::Map(
+        [
+            ("at".to_owned(), ts(123_456_789)),
+            (
+                "list".to_owned(),
+                Value::Array(vec![ts(999), Value::Integer(1)]),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    value.normalize_for_storage();
+    assert_eq!(
+        value,
+        Value::Map(
+            [
+                ("at".to_owned(), ts(123_456_000)),
+                (
+                    "list".to_owned(),
+                    Value::Array(vec![ts(0), Value::Integer(1)])
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        )
+    );
+}

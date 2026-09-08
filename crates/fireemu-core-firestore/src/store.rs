@@ -30,7 +30,7 @@ use crate::query::{
     Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
 };
 use crate::size::{document_size, document_size_bytes};
-use crate::value::{Timestamp, Value, ValueKind};
+use crate::value::{normalize_fields_for_storage, stored_fields_eq, Timestamp, Value, ValueKind};
 
 /// How far back a snapshot selector may reach: the documented Firestore `read_time` window
 /// of one hour (no PITR). The store owns this value because it decides which versions stay
@@ -1930,9 +1930,11 @@ impl FirestoreState {
         // Stage and validate everything before anything is published.
         let mut staged: BTreeMap<DocumentPath, Document> = BTreeMap::new();
         for imported in documents {
+            let mut fields = imported.fields;
+            normalize_fields_for_storage(&mut fields);
             let document = Document {
                 path: imported.path.clone(),
-                fields: imported.fields,
+                fields,
                 create_time: imported.create_time.unwrap_or(commit_time),
                 update_time: imported.update_time.unwrap_or(commit_time),
                 version: next_version,
@@ -3278,11 +3280,15 @@ impl FirestoreState {
                 // the time of the state it verified.
                 result.update_time = current.map(|c| c.update_time);
             }
-            let unchanged = match (current, &next) {
-                (Some(c), Some(n)) => c.fields == n.fields,
-                (None, None) => true,
-                _ => false,
-            };
+            // A verify never changes state, whatever the document holds; every other write
+            // is a no-op when its result is the stored content of the current document
+            // (NaN equals NaN here, but an integer never equals a double).
+            let unchanged = matches!(write.op, WriteOp::Verify { .. })
+                || match (current, &next) {
+                    (Some(c), Some(n)) => stored_fields_eq(&c.fields, &n.fields),
+                    (None, None) => true,
+                    _ => false,
+                };
             if unchanged {
                 // A no-op Set keeps the existing update time.
                 if let (Some(c), false) = (current, matches!(write.op, WriteOp::Verify { .. })) {
@@ -4511,6 +4517,9 @@ fn apply_write(
                 let produced = apply_transform(&mut next_fields, t, now)?;
                 transform_results.push(produced);
             }
+            // Store what production stores (timestamps at microsecond precision) so that
+            // reads, ordering and the no-op check below see the same content as production.
+            normalize_fields_for_storage(&mut next_fields);
             let doc = Document {
                 path: path.clone(),
                 fields: next_fields,

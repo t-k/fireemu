@@ -9,6 +9,18 @@ test.describe("Runtime controls", () => {
     await api(request, "DELETE", "control/v1/sessions/default/faultPlan");
   });
 
+  test("keeps a session reset confirmation open across two polls", async ({ page }) => {
+    await gotoApp(page, "/runtime");
+    await page.getByTestId("session-reset-default").click();
+    const confirm = page.getByTestId("session-reset-default-confirm");
+    for (let i = 0; i < 2; i += 1) {
+      await page.waitForResponse((r) => r.url().endsWith("/control/v1/sessions") && r.ok());
+      await expect(confirm).toBeVisible();
+    }
+    await confirm.click();
+    await expect(confirm).not.toBeVisible();
+  });
+
   test("advances the virtual clock", async ({ page }) => {
     await gotoApp(page, "/runtime");
     const before = await page.getByTestId("runtime-clock").textContent();

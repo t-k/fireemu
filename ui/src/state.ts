@@ -1,4 +1,4 @@
-import { createRoot, createSignal } from "solid-js";
+import { createMemo, createRoot, createSignal } from "solid-js";
 import { initialConfig, type RuntimeConfig, type Session } from "./config";
 import { sessionInfo, listSessions } from "./api/control";
 
@@ -6,14 +6,24 @@ import { sessionInfo, listSessions } from "./api/control";
 const store = createRoot(() => {
   const [config, setConfig] = createSignal<RuntimeConfig>(initialConfig());
   const [clock, setClock] = createSignal<string>("");
-  const [sessions, setSessions] = createSignal<Session[]>(initialConfig().sessions);
+  const [sessions, setSessionSnapshot] = createSignal<Session[]>(initialConfig().sessions);
+  // Keep row-local forms for unchanged targets, but discard them for a replacement project.
+  const setSessions = (snapshot: Session[]) =>
+    setSessionSnapshot((previous) =>
+      snapshot.map(
+        (next) =>
+          previous.find((old) => old.name === next.name && old.project === next.project) ?? next,
+      ),
+    );
   const [session, setSession] = createSignal<string>("default");
   /** Whether the last poll of the daemon answered (null until the first one). */
   const [connected, setConnected] = createSignal<boolean | null>(null);
 
   /** The project of the selected session. */
-  const project = (): string =>
-    sessions().find((s) => s.name === session())?.project ?? config().project;
+  // Polling must not invalidate consumers when the selected project is unchanged.
+  const project = createMemo(
+    () => sessions().find((s) => s.name === session())?.project ?? config().project,
+  );
 
   /** Re-reads the clock (and the session list) from the daemon. */
   const refreshClock = async (): Promise<void> => {

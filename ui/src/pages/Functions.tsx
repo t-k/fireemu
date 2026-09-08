@@ -1,5 +1,6 @@
 import {
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   For,
@@ -193,6 +194,36 @@ const FunctionRow: Component<{
   );
 };
 
+export const FunctionRows: Component<{
+  functions: FunctionInfo[];
+  project: string;
+  onNotice: (m: string) => void;
+  onError: (m: string) => void;
+}> = (props) => {
+  // Refreshed objects describe the same target. Keep its form mounted until that target changes.
+  const byTarget = createMemo(
+    () =>
+      new Map(
+        props.functions.map((f) => [
+          JSON.stringify([appState.session(), props.project, f.region, f.name, f.trigger]),
+          f,
+        ]),
+      ),
+  );
+  return (
+    <For each={[...byTarget().keys()]}>
+      {(key) => (
+        <FunctionRow
+          f={byTarget().get(key)!}
+          project={props.project}
+          onNotice={props.onNotice}
+          onError={props.onError}
+        />
+      )}
+    </For>
+  );
+};
+
 const Functions: Component = () => {
   const [overview, { refetch }] = createResource(() => settle(functionsOverview()));
   const [status, { refetch: refetchStatus }] = createResource(() =>
@@ -323,16 +354,12 @@ const Functions: Component = () => {
                 </tr>
               </thead>
               <tbody>
-                <For each={o()?.functions ?? []}>
-                  {(f) => (
-                    <FunctionRow
-                      f={f}
-                      project={o()?.project ?? appState.project()}
-                      onNotice={setNotice}
-                      onError={setError}
-                    />
-                  )}
-                </For>
+                <FunctionRows
+                  functions={o()?.functions ?? []}
+                  project={o()?.project ?? appState.project()}
+                  onNotice={setNotice}
+                  onError={setError}
+                />
               </tbody>
             </table>
           </Section>

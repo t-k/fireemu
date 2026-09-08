@@ -28,6 +28,10 @@ test.describe("Functions", () => {
     await page.getByTestId("await-idle").click();
     await expect(page.getByTestId("invocation-table")).toContainText("tick");
     await page.getByTestId("publish-onJob").click();
+    const message = page.getByLabel("Message (JSON or text)");
+    await message.fill('{"draft": "survives refresh"}');
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(message).toHaveValue('{"draft": "survives refresh"}');
     await page.getByTestId("publish-jobs-send").click();
     await expect(page.getByRole("status").filter({ hasText: "Published 1 message" })).toBeVisible();
     await page.getByTestId("await-idle").click();

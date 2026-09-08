@@ -8,6 +8,25 @@ test.describe("Firestore data browser", () => {
     await resetSession(request);
   });
 
+  test("keeps the focused document draft across two session polls", async ({ page, request }) => {
+    await api(request, "PATCH", `${DOCS}/polling/draft`, {
+      fields: { value: { stringValue: "original" } },
+    });
+    await gotoApp(page, "/firestore/polling/draft");
+    await expect(page.getByTestId("document-fields")).toContainText("original");
+    await page.getByTestId("document-edit").click();
+    const input = page.getByLabel("Value");
+    await input.fill("unsaved draft");
+    // Await real polling responses, not an arbitrary delay shorter than the poll interval.
+    for (let i = 0; i < 2; i += 1) {
+      await page.waitForResponse((r) => r.url().endsWith("/control/v1/sessions") && r.ok());
+      await expect(input).toHaveValue("unsaved draft");
+      await expect(input).toBeFocused();
+    }
+    await page.getByTestId("document-save").click();
+    await expect(page.getByTestId("document-fields")).toContainText("unsaved draft");
+  });
+
   test("starts a collection, edits a document with typed fields and deletes it", async ({
     page,
   }) => {

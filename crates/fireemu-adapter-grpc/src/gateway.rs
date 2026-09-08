@@ -81,7 +81,7 @@ impl fmt::Display for Rejection {
 }
 
 /// Accepted query plan.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AcceptedQuery {
     /// Canonical query.
     pub query: Query,

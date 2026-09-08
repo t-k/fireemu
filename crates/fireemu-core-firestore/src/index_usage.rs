@@ -7,7 +7,7 @@ use crate::index::{IndexFieldMode, IndexQueryScope, IndexSet};
 use crate::path::DocumentPath;
 use crate::size::{index_entry_size, IndexEntryScope};
 use crate::store::{get_field, FirestoreError};
-use crate::value::Value;
+use crate::value::{IndexValue, Value};
 
 /// Index usage of one document, including automatic and configured composite indexes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +112,7 @@ impl IndexSet {
                 IndexQueryScope::CollectionGroup => IndexEntryScope::CompositeCollectionGroup,
             };
             if let Some((position, items)) = array {
-                for value in items.iter().collect::<BTreeSet<_>>() {
+                for IndexValue(value) in items.iter().map(IndexValue).collect::<BTreeSet<_>>() {
                     values[position].1 = value;
                     usage.add(entry_size(scope, document, parent.as_ref(), &values)?, 1)?;
                 }
@@ -145,7 +145,7 @@ impl IndexSet {
                     let Value::Array(items) = value else {
                         continue;
                     };
-                    for item in items.iter().collect::<BTreeSet<_>>() {
+                    for IndexValue(item) in items.iter().map(IndexValue).collect::<BTreeSet<_>>() {
                         usage.add(
                             entry_size(scope, document, parent.as_ref(), &[(&canonical, item)])?,
                             // Automatic membership indexes have both document-name

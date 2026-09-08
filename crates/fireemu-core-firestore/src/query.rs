@@ -9,7 +9,7 @@ use fireemu_core_types::ids::CollectionId;
 
 use crate::field_path::FieldPath;
 use crate::path::DocumentPath;
-use crate::value::Value;
+use crate::value::{IndexValue, Value};
 
 /// Where a query reads from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +183,7 @@ pub enum UnaryOp {
 }
 
 /// Filter expression tree.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FilterExpr {
     /// Field comparison.
     Field {
@@ -237,7 +237,7 @@ pub struct OrderClause {
 }
 
 /// Cursor position.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Cursor {
     /// Values aligned with the effective order-by.
     pub values: Vec<Value>,
@@ -246,7 +246,7 @@ pub struct Cursor {
 }
 
 /// Canonical query.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     /// Scope.
     pub scope: QueryScope,
@@ -745,6 +745,42 @@ fn canonicalize_filter(f: &FilterExpr) -> Result<FilterExpr, QueryError> {
     }
 }
 
+// Canonicalization order is separate from structural filter equality (notably for NaN
+// and integer/double operands). Keep deduplication structural below.
+fn canonical_filter_cmp(a: &FilterExpr, b: &FilterExpr) -> core::cmp::Ordering {
+    use core::cmp::Ordering;
+    let rank = |filter: &FilterExpr| match filter {
+        FilterExpr::Field { .. } => 0,
+        FilterExpr::Unary { .. } => 1,
+        FilterExpr::And(_) => 2,
+        FilterExpr::Or(_) => 3,
+    };
+    rank(a).cmp(&rank(b)).then_with(|| match (a, b) {
+        (
+            FilterExpr::Field {
+                field: af,
+                op: ao,
+                value: av,
+            },
+            FilterExpr::Field {
+                field: bf,
+                op: bo,
+                value: bv,
+            },
+        ) => (af, ao, IndexValue(av)).cmp(&(bf, bo, IndexValue(bv))),
+        (FilterExpr::Unary { field: af, op: ao }, FilterExpr::Unary { field: bf, op: bo }) => {
+            (af, ao).cmp(&(bf, bo))
+        }
+        (FilterExpr::And(a), FilterExpr::And(b)) | (FilterExpr::Or(a), FilterExpr::Or(b)) => a
+            .iter()
+            .zip(b)
+            .map(|(a, b)| canonical_filter_cmp(a, b))
+            .find(|order| *order != Ordering::Equal)
+            .unwrap_or_else(|| a.len().cmp(&b.len())),
+        _ => Ordering::Equal,
+    })
+}
+
 fn canonicalize_composite(children: &[FilterExpr], is_and: bool) -> Result<FilterExpr, QueryError> {
     let mut flat: Vec<FilterExpr> = Vec::new();
     for child in children {
@@ -762,7 +798,7 @@ fn canonicalize_composite(children: &[FilterExpr], is_and: bool) -> Result<Filte
     if flat.is_empty() {
         return Ok(FilterExpr::And(Vec::new()));
     }
-    flat.sort();
+    flat.sort_by(canonical_filter_cmp);
     flat.dedup();
     if flat.len() == 1 {
         return Ok(flat.remove(0));

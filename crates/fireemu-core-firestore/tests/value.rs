@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value, ValueKind};
+use fireemu_core_firestore::value::{GeoPoint, IndexValue, Timestamp, Value, ValueKind};
 
 fn map(entries: &[(&str, Value)]) -> Value {
     Value::Map(
@@ -217,15 +217,15 @@ fn canonical_order_is_total_over_vectors_with_nan_components() {
     let a = Value::Vector(vec![f64::NAN, 0.0]);
     let b = Value::Vector(vec![0.0, 1.0]);
     let c = Value::Vector(vec![1.0, -1.0]);
-    assert_eq!(a.cmp(&b), Ordering::Less);
-    assert_eq!(b.cmp(&c), Ordering::Less);
-    assert_eq!(a.cmp(&c), Ordering::Less);
+    assert_eq!(a.canonical_cmp(&b), Ordering::Less);
+    assert_eq!(b.canonical_cmp(&c), Ordering::Less);
+    assert_eq!(a.canonical_cmp(&c), Ordering::Less);
     assert_eq!(
-        Value::Vector(vec![f64::NAN]).cmp(&Value::Vector(vec![-f64::NAN])),
+        Value::Vector(vec![f64::NAN]).canonical_cmp(&Value::Vector(vec![-f64::NAN])),
         Ordering::Equal
     );
     assert_eq!(
-        Value::Vector(vec![f64::NEG_INFINITY]).cmp(&Value::Vector(vec![f64::NAN])),
+        Value::Vector(vec![f64::NEG_INFINITY]).canonical_cmp(&Value::Vector(vec![f64::NAN])),
         Ordering::Greater
     );
 
@@ -246,14 +246,73 @@ fn canonical_order_is_total_over_vectors_with_nan_components() {
         Value::Array(vec![Value::Integer(0), Value::Integer(1)]),
     ];
     for x in &values {
-        assert_eq!(x.cmp(x), Ordering::Equal, "reflexive: {x:?}");
+        assert_eq!(x.canonical_cmp(x), Ordering::Equal, "reflexive: {x:?}");
         for y in &values {
-            assert_eq!(x.cmp(y), y.cmp(x).reverse(), "antisymmetric: {x:?} {y:?}");
+            assert_eq!(
+                x.canonical_cmp(y),
+                y.canonical_cmp(x).reverse(),
+                "antisymmetric: {x:?} {y:?}"
+            );
             for z in &values {
-                if x.cmp(y) != Ordering::Greater && y.cmp(z) != Ordering::Greater {
-                    assert_ne!(x.cmp(z), Ordering::Greater, "transitive: {x:?} {y:?} {z:?}");
+                if x.canonical_cmp(y) != Ordering::Greater
+                    && y.canonical_cmp(z) != Ordering::Greater
+                {
+                    assert_ne!(
+                        x.canonical_cmp(z),
+                        Ordering::Greater,
+                        "transitive: {x:?} {y:?} {z:?}"
+                    );
                 }
             }
         }
     }
+}
+
+#[test]
+fn index_equality_agrees_with_ordering() {
+    let values = [
+        Value::Integer(1),
+        Value::Double(1.0),
+        Value::Double(f64::NAN),
+        Value::Double(-f64::NAN),
+        Value::Double(-0.0),
+        Value::Double(0.0),
+        Value::GeoPoint(GeoPoint::new(-0.0, 0.0).unwrap()),
+        Value::GeoPoint(GeoPoint::new(0.0, -0.0).unwrap()),
+        Value::Array(vec![Value::Double(f64::NAN)]),
+        Value::Array(vec![Value::Integer(1)]),
+        Value::Array(vec![Value::Double(1.0)]),
+        Value::Vector(vec![f64::NAN, -0.0]),
+        Value::Vector(vec![-f64::NAN, 0.0]),
+        Value::Map(
+            [("n".to_owned(), Value::Double(f64::NAN))]
+                .into_iter()
+                .collect(),
+        ),
+    ];
+    for a in &values {
+        assert_eq!(IndexValue(a), IndexValue(a));
+        for b in &values {
+            assert_eq!(
+                IndexValue(a).partial_cmp(&IndexValue(b)),
+                Some(a.canonical_cmp(b))
+            );
+            assert_eq!(
+                IndexValue(a) == IndexValue(b),
+                IndexValue(a).cmp(&IndexValue(b)) == Ordering::Equal,
+                "{a:?}, {b:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn geopoint_order_treats_signed_zero_as_equal_on_both_axes() {
+    for (a, b) in [((-0.0, 0.0), (0.0, 0.0)), ((1.0, -0.0), (1.0, 0.0))] {
+        let a = GeoPoint::new(a.0, a.1).unwrap();
+        let b = GeoPoint::new(b.0, b.1).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+    }
+    assert!(GeoPoint::new(-0.0, 1.0).unwrap() > GeoPoint::new(0.0, 0.0).unwrap());
 }

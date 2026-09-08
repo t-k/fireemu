@@ -113,18 +113,15 @@ impl PartialOrd for GeoPoint {
 
 impl Ord for GeoPoint {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Constructor guarantees finite values, so total_cmp equals numeric order here.
-        self.latitude
-            .total_cmp(&other.latitude)
-            .then_with(|| self.longitude.total_cmp(&other.longitude))
+        cmp_doubles(self.latitude, other.latitude)
+            .then_with(|| cmp_doubles(self.longitude, other.longitude))
     }
 }
 
 /// A Firestore field value.
 ///
-/// `==` is structural (`1 != 1.0`, `NaN != NaN`), while [`Ord`] is the official index order
-/// in which those pairs are `Equal`; ordered collections keyed by `Value` therefore unify
-/// numerically equal values, and content identity uses [`Value::stored_eq`].
+/// `==` is structural (`1 != 1.0`, `NaN != NaN`). Use [`IndexValue`] for canonical
+/// ordering and [`Value::stored_eq`] for stored document content identity.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// Null.
@@ -292,7 +289,18 @@ impl Value {
     }
 }
 
-impl Eq for Value {}
+/// Borrowed Firestore index key. Equality and ordering both use canonical value order.
+/// Numeric representations and NaN payloads that sort equally are equal keys.
+#[derive(Debug, Clone, Copy)]
+pub struct IndexValue<'a>(pub &'a Value);
+
+impl PartialEq for IndexValue<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for IndexValue<'_> {}
 
 /// [`Value::stored_eq`] over whole field trees.
 #[must_use]
@@ -312,15 +320,15 @@ fn double_bits_eq(a: f64, b: f64) -> bool {
     (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
 }
 
-impl PartialOrd for Value {
+impl PartialOrd for IndexValue<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for Value {
+impl Ord for IndexValue<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.canonical_cmp(other)
+        self.0.canonical_cmp(other.0)
     }
 }
 

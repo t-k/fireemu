@@ -1,6 +1,6 @@
 {
   "name": "fireemu-ui",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "The fireemu Emulator UI (Solid + Vite + Tailwind), embedded into the daemon at build time.",
   "type": "module",

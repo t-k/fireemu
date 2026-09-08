@@ -8,6 +8,18 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-09
+
+### Added
+
+- The Auth emulator prints every issued email action link and SMS verification code to the daemon's standard output with the official emulator's wording (`To verify the email address ..., follow this link: ...`, `To enroll MFA with ..., use the code ...`), once per issued code, and streams the same line to the Logging emulator for the UI Logs page. The banner says that these lines are credentials. `auth.logActionCodes = false` or `--log-verbosity quiet` silences them; the codes stay readable from the emulator inspection routes. Admin link generators (`returnOobLink`) receive the link in the response and print nothing, as before.
+- The `auth.logActionCodes` configuration key.
+- The tenant-scoped emulator inspection routes `/emulator/v1/projects/{project}/tenants/{tenant}/oobCodes`, `verificationCodes` and `accounts` (DELETE) of the official API, which answered 404.
+
+### Changed
+
+- A tenant's email action links carry `tenantId`, as the official emulator's tenant state appends it, in the Admin link generator response, the console line and the inspection route.
+
 ### Fixed
 
 - The release binary no longer embeds the build checkout's absolute path. The workspace runner candidate used when running out of a cargo `target/` directory is now resolved at run time from the executable's location, so the same commit builds to the same bytes from any directory and the release workflow's reproducibility check passes.
@@ -70,6 +82,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/t-k/fireemu/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/t-k/fireemu/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/t-k/fireemu/releases/tag/v0.1.0

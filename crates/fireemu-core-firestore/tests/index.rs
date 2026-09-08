@@ -1031,3 +1031,219 @@ fn the_emulator_policy_serves_queries_without_their_composite_index() {
         IndexDecision::UseIndex { .. }
     ));
 }
+
+fn restaurants() -> Query {
+    Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("restaurants").unwrap(),
+    ))
+}
+
+fn restaurant_composite(fields: &[(&str, IndexFieldMode)]) -> IndexDefinition {
+    IndexDefinition {
+        collection_group: CollectionId::try_new("restaurants").unwrap(),
+        ..composite(fields)
+    }
+}
+
+/// The index-merging example from the Firestore index overview: `category`/`city`/
+/// `editors_pick` equality clauses sorted by `star_rating` are served by merging one composite
+/// index per equality field, each ending in `star_rating ASC`.
+#[test]
+fn firebase_policy_merges_composite_indexes_sharing_the_order_suffix() {
+    let star_rating = OrderClause {
+        field: fp("star_rating"),
+        direction: Direction::Ascending,
+    };
+    let two = restaurants()
+        .with_filter(FilterExpr::And(vec![
+            field(
+                "category",
+                FieldOp::Equal,
+                Value::String("burgers".to_owned()),
+            ),
+            field("city", FieldOp::Equal, Value::String("SF".to_owned())),
+        ]))
+        .with_order(star_rating.clone());
+    let three = restaurants()
+        .with_filter(FilterExpr::And(vec![
+            field(
+                "category",
+                FieldOp::Equal,
+                Value::String("burgers".to_owned()),
+            ),
+            field("city", FieldOp::Equal, Value::String("SF".to_owned())),
+            field("editors_pick", FieldOp::Equal, Value::Boolean(true)),
+        ]))
+        .with_order(star_rating.clone());
+    let category = restaurant_composite(&[
+        ("category", IndexFieldMode::Ascending),
+        ("star_rating", IndexFieldMode::Ascending),
+    ]);
+    let city = restaurant_composite(&[
+        ("city", IndexFieldMode::Ascending),
+        ("star_rating", IndexFieldMode::Ascending),
+    ]);
+    let editors_pick = restaurant_composite(&[
+        ("editors_pick", IndexFieldMode::Ascending),
+        ("star_rating", IndexFieldMode::Ascending),
+    ]);
+
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(category.clone());
+    indexes.add_composite(city.clone());
+    indexes.add_composite(editors_pick.clone());
+    match decide(&two, &indexes, firebase()) {
+        IndexDecision::MergeIndexes { indexes } => {
+            assert_eq!(indexes, vec![category.clone(), city.clone()]);
+        }
+        other => panic!("{other:?}"),
+    }
+    match decide(&three, &indexes, firebase()) {
+        IndexDecision::MergeIndexes { indexes } => {
+            assert_eq!(
+                indexes,
+                vec![category.clone(), city.clone(), editors_pick.clone()]
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    // Conservative still asks for the one composite index that serves the query.
+    assert!(matches!(
+        decide(&two, &indexes, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    // One index short: nothing covers `city`.
+    let mut only_category = IndexSet::default();
+    only_category.add_composite(category.clone());
+    assert!(matches!(
+        decide(&two, &only_category, firebase()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    // Members must agree on the order suffix: `city DESC, star_rating DESC` sorts the wrong way.
+    let mut mismatched = IndexSet::default();
+    mismatched.add_composite(category.clone());
+    mismatched.add_composite(restaurant_composite(&[
+        ("city", IndexFieldMode::Ascending),
+        ("star_rating", IndexFieldMode::Descending),
+    ]));
+    assert!(matches!(
+        decide(&two, &mismatched, firebase()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    // An automatic index on `city` does not end in `star_rating`, so it cannot fill the gap.
+    assert!(matches!(
+        decide(&two, &only_category, firebase()),
+        IndexDecision::MissingRequired { .. }
+    ));
+}
+
+/// A composite covering several equality fields merges with the automatic index of the rest
+/// when nothing but `__name__` is ordered.
+#[test]
+fn firebase_policy_merges_a_composite_index_with_automatic_indexes() {
+    let mut pair = IndexSet::default();
+    let category_city = restaurant_composite(&[
+        ("category", IndexFieldMode::Ascending),
+        ("city", IndexFieldMode::Ascending),
+    ]);
+    pair.add_composite(category_city.clone());
+    let unordered_three = restaurants().with_filter(FilterExpr::And(vec![
+        field(
+            "category",
+            FieldOp::Equal,
+            Value::String("burgers".to_owned()),
+        ),
+        field("city", FieldOp::Equal, Value::String("SF".to_owned())),
+        field("editors_pick", FieldOp::Equal, Value::Boolean(true)),
+    ]));
+    match decide(&unordered_three, &pair, firebase()) {
+        IndexDecision::MergeIndexes { indexes } => {
+            assert_eq!(indexes.len(), 2);
+            assert_eq!(indexes[0], category_city);
+            assert_eq!(
+                index_modes(&indexes[1]),
+                vec![
+                    ("editors_pick".to_owned(), IndexFieldMode::Ascending),
+                    ("__name__".to_owned(), IndexFieldMode::Ascending),
+                ]
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// `__name__` is the primary key: equality and `in` filters on it never need a single-field
+/// index, so a wildcard exemption of every field leaves them servable. Other fields keep
+/// their exemption checks.
+#[test]
+fn document_name_equality_is_served_without_field_indexes() {
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let mut all_exempt = IndexSet::default();
+    all_exempt.set_default_single_field_indexes(&collection, vec![]);
+    let reference = |id: &str| {
+        Value::Reference(format!(
+            "projects/p/databases/(default)/documents/tasks/{id}"
+        ))
+    };
+
+    let by_name = tasks().with_filter(FilterExpr::Field {
+        field: FieldPath::document_name(),
+        op: FieldOp::Equal,
+        value: reference("a"),
+    });
+    assert!(matches!(
+        decide(&by_name, &all_exempt, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+    let by_names = tasks().with_filter(FilterExpr::Field {
+        field: FieldPath::document_name(),
+        op: FieldOp::In,
+        value: Value::Array(vec![reference("a"), reference("b")]),
+    });
+    assert!(matches!(
+        decide(&by_names, &all_exempt, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+
+    // A name filter does not lift the exemption of the other field in the conjunction.
+    let name_and_field = tasks().with_filter(FilterExpr::And(vec![
+        FilterExpr::Field {
+            field: FieldPath::document_name(),
+            op: FieldOp::Equal,
+            value: reference("a"),
+        },
+        field("done", FieldOp::Equal, Value::Boolean(true)),
+    ]));
+    assert!(matches!(
+        decide(&name_and_field, &all_exempt, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+    // With the field indexed, the name filter rides on the automatic index of `done`.
+    assert!(matches!(
+        decide(&name_and_field, &IndexSet::default(), standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+    // And a composite index serving the other equality fields serves the query too.
+    let mut explicit = IndexSet::default();
+    explicit.add_composite(composite(&[
+        ("done", IndexFieldMode::Ascending),
+        ("owner", IndexFieldMode::Ascending),
+    ]));
+    let name_and_two = tasks().with_filter(FilterExpr::And(vec![
+        FilterExpr::Field {
+            field: FieldPath::document_name(),
+            op: FieldOp::Equal,
+            value: reference("a"),
+        },
+        field("done", FieldOp::Equal, Value::Boolean(true)),
+        field("owner", FieldOp::Equal, Value::String("u1".to_owned())),
+    ]));
+    assert!(matches!(
+        decide(&name_and_two, &explicit, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+}

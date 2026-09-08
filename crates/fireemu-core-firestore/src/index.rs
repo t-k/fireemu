@@ -248,9 +248,10 @@ pub enum IndexDecision {
         index: IndexDefinition,
     },
     /// `IndexValidationPolicy::Firebase`: no single index serves the query, but production
-    /// merges these automatic single-field indexes (scalar equality filters only).
+    /// merges these indexes (scalar equality filters, optionally ordered): each member serves
+    /// some of the equality fields followed by the same order suffix.
     MergeIndexes {
-        /// Automatic indexes merged, one per equality field.
+        /// Indexes merged; together they cover every equality field.
         indexes: Vec<IndexDefinition>,
     },
     /// Enterprise: no index; scan the collection with a cost warning.
@@ -334,7 +335,9 @@ fn requirement_for(disjunction: &[FilterExpr], effective_order: &[OrderClause]) 
                 field,
                 op: UnaryOp::IsNull | UnaryOp::IsNan,
             } => {
-                if !equality.contains(field) {
+                // `__name__` is the primary key: an equality on it is served by any index (or
+                // by the key itself) and never needs a field index of its own.
+                if !field.is_document_name() && !equality.contains(field) {
                     equality.push(field.clone());
                 }
             }
@@ -571,32 +574,74 @@ fn automatic_index_for(
     ))
 }
 
-/// Production merges automatic single-field indexes for a conjunction of scalar equality
-/// filters (no array filter, no inequality, no ordering beyond `__name__`), provided each
-/// field's automatic index in the requested `__name__` direction is enabled.
+/// Production merges indexes for a conjunction of scalar equality filters (no array filter,
+/// no inequality): each member serves a subset of the equality fields followed by the same
+/// order suffix, and together the members cover every equality field. Members are explicit
+/// composite indexes; with nothing but `__name__` ordered, the automatic single-field indexes
+/// qualify too, provided the one in the requested `__name__` direction is enabled. Returns the
+/// members chosen, largest equality prefix first.
 fn merged_indexes_for(
     req: &Requirement,
     set: &IndexSet,
     collection: &CollectionId,
     group: bool,
 ) -> Option<Vec<IndexDefinition>> {
-    if req.equality.len() < 2
-        || req.contains.is_some()
-        || req.order.iter().any(|o| !o.field.is_document_name())
-    {
+    if req.equality.len() < 2 || req.contains.is_some() {
         return None;
     }
-    let name_mode = mode_for_direction(requested_name_direction(req));
-    let mut fields = req.equality.clone();
-    fields.sort();
-    fields
-        .iter()
-        .map(|field| {
-            (!set.is_exempt(collection, field, group)
-                && has_single_field_mode(set, collection, field, group, name_mode))
-            .then(|| single_field_index(collection, group, field, name_mode, name_mode))
-        })
-        .collect()
+    let wanted: BTreeSet<&FieldPath> = req.equality.iter().collect();
+    // (equality fields served, index), composites first.
+    let mut candidates: Vec<(BTreeSet<&FieldPath>, IndexDefinition)> = Vec::new();
+    for index in set.composites() {
+        let served: Vec<FieldPath> = index
+            .fields
+            .iter()
+            .take_while(|f| wanted.contains(&f.path) && f.mode != IndexFieldMode::Contains)
+            .map(|f| f.path.clone())
+            .collect();
+        if served.is_empty() {
+            continue;
+        }
+        let sub = Requirement {
+            equality: served,
+            contains: None,
+            order: req.order.clone(),
+        };
+        if composite_serves(index, &sub, collection, group) {
+            let fields: BTreeSet<&FieldPath> = sub
+                .equality
+                .iter()
+                .filter_map(|f| wanted.get(f).copied())
+                .collect();
+            candidates.push((fields, index.clone()));
+        }
+    }
+    candidates.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    if req.order.iter().all(|o| o.field.is_document_name()) {
+        let name_mode = mode_for_direction(requested_name_direction(req));
+        let mut fields = req.equality.clone();
+        fields.sort();
+        for field in &fields {
+            if !set.is_exempt(collection, field, group)
+                && has_single_field_mode(set, collection, field, group, name_mode)
+            {
+                candidates.push((
+                    BTreeSet::from([wanted.get(field).copied()?]),
+                    single_field_index(collection, group, field, name_mode, name_mode),
+                ));
+            }
+        }
+    }
+    let mut covered: BTreeSet<&FieldPath> = BTreeSet::new();
+    let mut members = Vec::new();
+    for (fields, index) in candidates {
+        if fields.is_subset(&covered) {
+            continue;
+        }
+        covered.extend(fields);
+        members.push(index);
+    }
+    (covered == wanted).then_some(members)
 }
 
 /// Whether composite `index` serves `req`: equality fields (any order) as a prefix, then the

@@ -63,6 +63,8 @@ assert(
   release_test_runs.include?("cargo nextest run -p fireemu --test leak_fixture --profile pr"),
   "release test job must run the process leak fixture in isolation"
 )
+assert(release.dig("jobs", "reproducible", "continue-on-error").nil?, "release reproducible job must block publication")
+assert(release.dig("jobs", "publish", "needs").include?("reproducible"), "release publish must depend on the reproducible job")
 assert(release.dig("jobs", "publish", "environment") == "npm-release", "release publish must use the protected npm-release environment")
 assert(release.dig("concurrency", "cancel-in-progress") == false, "release publication must never be cancelled in progress")
 publish_runs = release.dig("jobs", "publish", "steps").map { |step| step["run"] }.compact.join("\n")

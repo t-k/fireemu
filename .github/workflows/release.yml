@@ -220,11 +220,12 @@ jobs:
   # The same commit, built twice under different directories, has to produce the same bytes.
   # Only linux-x64 is checked: it is the platform every CI container installs, and the other
   # targets are built with the same flags on the same pinned compiler. The verdict is printed
-  # and does not yet block a release; once it has passed on a tag, drop continue-on-error.
+  # and blocks publication: a release whose bytes depend on where they were built is not
+  # the release the tag names. (It first passed on run 34227041064, after the build checkout's
+  # path stopped being compiled into the binary.)
   reproducible:
     needs: [plan, ui]
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -306,7 +307,7 @@ jobs:
           pnpm -C conformance run check
 
   publish:
-    needs: [plan, build, verify-artifact]
+    needs: [plan, build, verify-artifact, reproducible]
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:

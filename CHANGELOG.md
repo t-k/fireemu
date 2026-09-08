@@ -10,7 +10,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
-- The release binary no longer embeds the build checkout's absolute path. The workspace runner candidate used when running out of a cargo `target/` directory is now resolved at run time from the executable's location, so the same commit builds to the same bytes from any directory and the release workflow's reproducibility check can pass.
+- The release binary no longer embeds the build checkout's absolute path. The workspace runner candidate used when running out of a cargo `target/` directory is now resolved at run time from the executable's location, so the same commit builds to the same bytes from any directory and the release workflow's reproducibility check passes.
+- The reproducibility check now blocks publication instead of being advisory.
 
 ## [0.2.0] - 2026-09-08
 

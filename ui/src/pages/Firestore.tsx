@@ -594,7 +594,7 @@ const DocumentView: Component<{
     <div data-testid="document-view">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 class="mono text-base font-semibold">{lastSegment(props.path)}</h2>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap items-start gap-2">
           <Show when={!editing()}>
             <button type="button" class="btn" data-testid="document-edit" onClick={startEdit}>
               {t("firestore.edit")}
@@ -798,7 +798,7 @@ const CollectionView: Component<{
     <div data-testid="collection-view">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 class="mono text-base font-semibold">{lastSegment(props.path)}</h2>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap items-start gap-2">
           <button
             type="button"
             class="btn btn-primary"

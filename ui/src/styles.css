@@ -17,7 +17,7 @@
 @layer components {
   /* Keyboard focus is always visible: a ring that reads on light and dark grounds. */
   .btn {
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-50 dark:focus-visible:ring-offset-zinc-950 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-sm font-medium text-zinc-800 shadow-xs hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-50 dark:focus-visible:ring-offset-zinc-950 inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-sm font-medium text-zinc-800 shadow-xs hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800;
   }
   /* Dark text on amber in both themes: white on amber-500 is about 2.1:1, far below WCAG AA. */
   .btn-primary {

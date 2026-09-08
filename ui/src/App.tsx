@@ -93,8 +93,12 @@ export const App: Component<RouteSectionProps> = (props) => {
                 void appState.refreshClock();
               }}
             >
-              <For each={appState.sessions()}>
-                {(s) => <option value={s.name}>{s.name}</option>}
+              <For each={appState.sessions().map((s) => s.name)}>
+                {(name) => (
+                  <option value={name} selected={name === appState.session()}>
+                    {name}
+                  </option>
+                )}
               </For>
             </select>
           </label>

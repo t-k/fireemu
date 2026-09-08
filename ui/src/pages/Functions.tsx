@@ -1,4 +1,5 @@
 import {
+  createEffect,
   createResource,
   createSignal,
   For,
@@ -239,6 +240,13 @@ const Functions: Component = () => {
     return records.slice(-MAX_INVOCATIONS);
   };
 
+  // Keep the tail in view after every render that changes the lines (or mounts the box).
+  createEffect(() => {
+    const box = logBox();
+    void filteredLines();
+    if (box && following()) box.scrollTop = box.scrollHeight;
+  });
+
   onMount(() => {
     const stop = subscribeLogs(
       (e) => {
@@ -258,8 +266,6 @@ const Functions: Component = () => {
           void refetchStatus();
         }
         setConnected(true);
-        const box = logBox();
-        if (box && following()) box.scrollTop = box.scrollHeight;
       },
       () => setConnected(false),
     );

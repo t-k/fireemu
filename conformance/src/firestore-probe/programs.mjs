@@ -781,7 +781,7 @@ const transforms = {
       ),
     ]),
     get("read-after-increments", "tf/doc"),
-    commit("maximum-and-minimum", [
+    commit("maximum-and-minimum-invalid-field-path", [
       update(
         "tf/doc",
         {},
@@ -797,7 +797,25 @@ const transforms = {
         },
       ),
     ]),
-    get("read-after-max-min", "tf/doc"),
+    get("read-after-invalid-max-min", "tf/doc"),
+    commit("maximum-and-minimum", [
+      update(
+        "tf/extrema",
+        { finite: int(5), nan: dbl("NaN"), equal: int(5), zero: dbl(-0), text: str("text") },
+        {
+          updateTransforms: [
+            fieldTransform("finite", { maximum: dbl("NaN") }),
+            fieldTransform("nan", { maximum: int(5) }),
+            fieldTransform("equal", { maximum: dbl(5) }),
+            fieldTransform("zero", { minimum: int(0) }),
+            fieldTransform("text", { maximum: int(7) }),
+            fieldTransform("max_missing", { maximum: int(3) }),
+            fieldTransform("min_missing", { minimum: dbl(-1) }),
+          ],
+        },
+      ),
+    ]),
+    get("read-after-max-min", "tf/extrema"),
     commit("array-transforms", [
       update(
         "tf/doc",

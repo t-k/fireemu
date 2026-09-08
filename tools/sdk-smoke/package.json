@@ -17,6 +17,7 @@
     "smoke:appcheck": "node appcheck.mjs",
     "smoke:missing-index": "node missing-index.mjs",
     "smoke:index-merge": "node index-merge-oracle.mjs",
+    "test:oracle-probe": "node --test oracle-probe.test.mjs",
     "smoke:rules-unit-testing": "node rules-unit-testing.mjs",
     "smoke:rules-unit-testing-explicit-rules": "node rules-unit-testing-explicit-rules.mjs",
     "smoke:recursive-delete": "node recursive-delete.mjs",

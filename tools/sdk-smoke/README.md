@@ -159,3 +159,11 @@ fireemu exec --config tools/sdk-smoke/fireemu.smoke.json --only firestore --proj
 | `BENCH_OPERATIONS` | `create,get,update,query,transaction` | Unique comma-separated operation names |
 
 For example, set `BENCH_CONCURRENCY=32 BENCH_DURATION_MS=10000 BENCH_OPERATIONS=query` on the benchmark child for a sustained concurrent query run. Duration mode requires one operation per fresh daemon so growing create fixtures cannot affect later read comparisons. Run at least five paired comparisons, alternate backend order, retain raw JSON, and compare release builds on the same host with the same dependencies, settings, and fixtures. Measure the official emulator alongside the corrected query implementation instead of reusing historical targets derived from truncated queries. Keep Linux transport results separate from macOS results. Collect daemon CPU and memory externally; the driver retains responses until post-timing validation, so driver memory is a separate measurement scope. Growing create fixtures and deliberately contended transactions are distinct workloads from steady read comparisons.
+
+`npm run smoke:index-merge` probes index merging and primary-key filters against the indexes in `conformance/firestore.indexes.json` (`mrg`: two composites ending in `star_rating ASC`; `pk`: wildcard `*` override with no single-field indexes). It records every outcome so fireemu and production can be compared line by line and asserts the documented cases (two composites merge, a missing third or a mismatched direction is rejected, an exempt field is rejected). Locally:
+
+```sh
+fireemu exec --config tools/sdk-smoke/fireemu.index-merge.json --firebase-json conformance/firebase.json --only firestore -- sh -c 'cd tools/sdk-smoke && GOOGLE_CLOUD_PROJECT=demo-app npm run smoke:index-merge'
+```
+
+Against production, set `PRODUCTION_ORACLE_PROJECT_ID=fireemu-35fe6` and `PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER=592603257417` (the conformance indexes must be deployed to that project). Recorded on 2026-09-08: every `mrg` case and every `pk` case agreed between production and fireemu except the bare `orderBy(__name__, desc)` family, which production rejects without an explicit `__name__ DESC` index (already listed in `conformance/divergences.json` as an intentional local policy; the wildcard override and collection-group scope do not change that outcome).

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native",
+    "indexValidationPolicy": "firebase"
+  }
+}

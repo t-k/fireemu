@@ -2469,7 +2469,19 @@ async fn run_query_streams_bounded_batches_and_releases_its_snapshot_pin() {
 
 #[tokio::test]
 async fn run_query_pages_seek_value_and_descending_name_orders() {
-    let (mut client, _clock, handle) = start().await;
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    // A bare descending name order needs an explicit index, as in production.
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(IndexDefinition {
+        collection_group: CollectionId::try_new("ordered").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![IndexField {
+            path: FieldPath::document_name(),
+            mode: IndexFieldMode::Descending,
+        }],
+    });
+    backend.replace_indexes(indexes);
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),

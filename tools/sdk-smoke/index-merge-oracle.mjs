@@ -75,18 +75,20 @@ try {
     ids(await pk.where(FieldPath.documentId(), "in", [pk.doc(`${run}-a`), pk.doc(`${run}-b`)]).get()));
   await probe("pk: __name__ > ref", null, async () =>
     ids(await pk.where(FieldPath.documentId(), ">", pk.doc(`${run}-a`)).where(FieldPath.documentId(), "<", pk.doc(`${run}-c`)).get()));
-  await probe("pk: orderBy __name__ desc", null, async () =>
+  await probe("pk: orderBy __name__ desc (no __name__ DESC index)", "9", async () =>
     ids(await pk.orderBy(FieldPath.documentId(), "desc").limit(2).get()));
-  await probe("pk: __name__ > ref orderBy __name__ desc", null, async () =>
+  await probe("pk: __name__ > ref orderBy __name__ desc", "9", async () =>
     ids(await pk.where(FieldPath.documentId(), ">", pk.doc(`${run}-a`)).orderBy(FieldPath.documentId(), "desc").get()));
-  await probe("pk: collectionGroup orderBy __name__ desc", null, async () =>
+  await probe("pk: collectionGroup orderBy __name__ desc", "9", async () =>
     ids(await db.collectionGroup("pk").orderBy(FieldPath.documentId(), "desc").limit(2).get()));
-  await probe("mrg: orderBy __name__ desc (default single-field config)", null, async () =>
+  await probe("mrg: category == orderBy __name__ desc (automatic descending index)", "ok", async () =>
     ids(await mrg.where("category", "==", run).orderBy(FieldPath.documentId(), "desc").get()));
-  await probe("mrg: orderBy __name__ desc without filter (default single-field config)", null, async () =>
+  await probe("mrg: orderBy __name__ desc without filter (default single-field config)", "9", async () =>
     ids(await mrg.orderBy(FieldPath.documentId(), "desc").limit(1).get()));
-  await probe("mrg: collectionGroup orderBy __name__ desc (default single-field config)", null, async () =>
+  await probe("mrg: collectionGroup orderBy __name__ desc (default single-field config)", "9", async () =>
     ids(await db.collectionGroup("mrg").orderBy(FieldPath.documentId(), "desc").limit(1).get()));
+  await probe("ord: orderBy __name__ desc (explicit __name__ DESC composite)", "ok", async () =>
+    (await db.collection("ord").orderBy(FieldPath.documentId(), "desc").limit(1).get()).size);
   await probe("pk: __name__ == ref AND n == 1 (exempt field stays required)", null, async () =>
     ids(await pk.where(FieldPath.documentId(), "==", pk.doc(`${run}-a`)).where("n", "==", 1).get()));
 } finally {

@@ -574,14 +574,112 @@ fn automatic_index_name_direction_for_equality_and_array_queries() {
         other => panic!("{other:?}"),
     }
 
-    // A bare name order in either direction needs no field index.
+    // A bare name order: see `bare_descending_name_order_needs_an_explicit_index`.
+}
+
+/// Production serves `orderBy(__name__, desc)` only through an explicit `(__name__ DESC)`
+/// index in the query's scope; the wildcard single-field override does not change that, and
+/// a `__name__` inequality with the same order is the same query.
+#[test]
+fn bare_descending_name_order_needs_an_explicit_index() {
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let desc = tasks().with_order(name_order(Direction::Descending));
+    let group_desc = Query::new(QueryScope::collection_group(collection.clone()))
+        .with_order(name_order(Direction::Descending));
+    let name_desc = composite(&[("__name__", IndexFieldMode::Descending)]);
+
+    // A bare ascending name order is the primary key; a bare descending one needs an explicit
+    // `(__name__ DESC)` index (production, 2026-09-08: FAILED_PRECONDITION without it).
     assert!(matches!(
         decide(
-            &tasks().with_order(name_order(Direction::Descending)),
+            &tasks().with_order(name_order(Direction::Ascending)),
             &IndexSet::default(),
             standard(),
         ),
         IndexDecision::UseIndex { .. }
+    ));
+    match decide(&desc, &IndexSet::default(), standard()) {
+        IndexDecision::MissingRequired { requirement } => assert_eq!(
+            index_modes(&requirement),
+            vec![("__name__".to_owned(), IndexFieldMode::Descending)]
+        ),
+        other => panic!("{other:?}"),
+    }
+
+    let mut explicit = IndexSet::default();
+    explicit.add_composite(name_desc.clone());
+    match decide(&desc, &explicit, standard()) {
+        IndexDecision::UseIndex { index } => assert_eq!(index, name_desc),
+        other => panic!("{other:?}"),
+    }
+    match decide(&desc, &explicit, firebase()) {
+        IndexDecision::UseIndex { index } => assert_eq!(index, name_desc),
+        other => panic!("{other:?}"),
+    }
+    // A collection-scoped index does not serve the collection group.
+    assert!(matches!(
+        decide(&group_desc, &explicit, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+    let mut group_index = IndexSet::default();
+    group_index.add_composite(IndexDefinition {
+        query_scope: IndexQueryScope::CollectionGroup,
+        ..name_desc.clone()
+    });
+    assert!(matches!(
+        decide(&group_desc, &group_index, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+}
+
+/// Exempting every field neither helps nor hurts the primary key; a `__name__` range with a
+/// descending name order is rejected like the bare order, while an equality prefix still
+/// serves it through the automatic descending index.
+#[test]
+fn descending_name_order_ignores_field_overrides_but_rides_equality_prefixes() {
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let desc = tasks().with_order(name_order(Direction::Descending));
+    let mut all_exempt = IndexSet::default();
+    all_exempt.set_default_single_field_indexes(&collection, vec![]);
+    assert!(matches!(
+        decide(&desc, &all_exempt, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+    assert!(matches!(
+        decide(
+            &tasks().with_order(name_order(Direction::Ascending)),
+            &all_exempt,
+            standard()
+        ),
+        IndexDecision::UseIndex { .. }
+    ));
+
+    // `__name__ > ref` ordered descending by name is rejected too.
+    let range_desc = tasks()
+        .with_filter(FilterExpr::Field {
+            field: FieldPath::document_name(),
+            op: FieldOp::GreaterThan,
+            value: Value::Reference("projects/p/databases/(default)/documents/tasks/a".to_owned()),
+        })
+        .with_order(name_order(Direction::Descending));
+    assert!(matches!(
+        decide(&range_desc, &IndexSet::default(), standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    // An equality prefix still serves the descending name through its automatic index.
+    let equality_desc = tasks()
+        .with_filter(field("done", FieldOp::Equal, Value::Boolean(true)))
+        .with_order(name_order(Direction::Descending));
+    assert!(matches!(
+        decide(&equality_desc, &IndexSet::default(), standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+
+    // The Emulator policy assumes the index like every other composite.
+    assert!(matches!(
+        decide(&desc, &IndexSet::default(), emulator()),
+        IndexDecision::AssumedIndex { .. }
     ));
 }
 

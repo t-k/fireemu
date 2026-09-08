@@ -2713,7 +2713,7 @@
               "code": "OK",
               "bodyDigest": "5 documents: ord/ts-late, ord/ts-early, ord/true, ord/str-kanji, ord/str-empty"
             },
-            "reason": "The official emulator refuses a query whose first order is `__name__` descending (FAILED_PRECONDITION 'Firestore does not support descending key scans'); fireemu serves it, in reverse name order, which is the ordering the SDKs' `orderBy(documentId(), 'desc')` asks for. Production Firestore (Native, REST, 2026-09-06) refuses orderBy(__name__, desc) with FAILED_PRECONDITION until a composite index exists, so without an index it agrees with the official emulator that fireemu diverges. fireemu serves the order the SDKs ask for; whether production serves it once the index exists is unverified."
+            "reason": "The official emulator refuses a query whose first order is `__name__` descending (FAILED_PRECONDITION 'Firestore does not support descending key scans') even when a `(__name__ DESC)` composite index is declared. Production Firestore (Native, 2026-09-06 and 2026-09-08) refuses orderBy(__name__, desc) with FAILED_PRECONDITION until that index exists in the query's scope (the wildcard single-field override and collection-group scope do not change this) and serves it in reverse name order once it does. fireemu follows production: without the index it rejects the query (index validation), and with the index declared in `conformance/firestore.indexes.json` for `ord` it serves the order the SDKs' `orderBy(documentId(), 'desc')` asks for, which is this fixture."
           }
         },
         "no-order-is-name-order": {

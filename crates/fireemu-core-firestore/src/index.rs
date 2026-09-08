@@ -498,9 +498,9 @@ fn single_field_index(
     }
 }
 
-/// Whether the automatic single-field indexes serve `req`: at most one non-`__name__` field
-/// is touched (by equality, array-contains, or ordering), it is not exempt, and the index's
-/// implicit `__name__` runs in the requested direction. Each automatic index is
+/// Whether the automatic single-field indexes (or the primary key) serve `req`: at most one
+/// non-`__name__` field is touched (by equality, array-contains, or ordering), it is not
+/// exempt, and the index's implicit `__name__` runs in the requested direction. Each automatic index is
 /// `(field ASC, __name__ ASC)`, `(field DESC, __name__ DESC)` or `(field CONTAINS, __name__
 /// ASC)`; a `__name__` direction none of them provides needs a composite index. Returns the
 /// concrete index that serves the query.
@@ -525,7 +525,13 @@ fn automatic_index_for(
     let name_direction = requested_name_direction(req);
     let name_mode = mode_for_direction(name_direction);
     let Some(field) = touched.into_iter().next() else {
-        // Only `__name__`: the primary key serves either direction.
+        // Only `__name__`: the primary key serves the ascending direction. Production answers
+        // a bare descending name order with FAILED_PRECONDITION until an explicit
+        // `(__name__ DESC)` index exists in the query's scope (oracle, 2026-09-08), whatever
+        // the single-field configuration says.
+        if name_direction == Direction::Descending {
+            return None;
+        }
         return Some(IndexDefinition {
             collection_group: collection.clone(),
             query_scope: scope_for(group),

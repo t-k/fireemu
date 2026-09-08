@@ -47,6 +47,7 @@ fn state(users: usize) -> AuthState {
         totp_extension_enabled: false,
         barrier: None,
         events: None,
+        notices: None,
         blocking: None,
         operation_gate: Arc::new(Mutex::new(())),
         control_token: None,

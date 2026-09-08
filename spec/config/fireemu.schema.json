@@ -173,6 +173,10 @@
         "improvedEmailPrivacy": {
           "type": "boolean",
           "description": "Email enumeration protection, as production enables it for every new project: wrong-password and unknown-address sign-ins answer INVALID_LOGIN_CREDENTIALS and a password reset for an unknown address is acknowledged. Defaults to true; false restores the official Auth emulator's EMAIL_NOT_FOUND and INVALID_PASSWORD answers."
+        },
+        "logActionCodes": {
+          "type": "boolean",
+          "description": "Print every email action link and SMS verification code to the daemon's standard output (and the Logging emulator) as the official Auth emulator does. Defaults to true. These lines carry credentials: set false where the console is shared or captured, and read the codes from /emulator/v1/projects/{project}/oobCodes and verificationCodes instead. --log-verbosity quiet also silences them."
         }
       }
     },

@@ -612,9 +612,95 @@ pub struct AuthStore {
     pending_user_ids: BTreeSet<LocalId>,
     created_users: Vec<LocalId>,
     deleted_users: Vec<UserRecord>,
+    /// Codes issued since the last drain (see [`CredentialNotice`]).
+    credential_notices: Vec<CredentialNotice>,
     /// The project-level Auth configuration an import carried, kept so an export can write
     /// it back.
     config: ProjectAuthConfig,
+}
+
+/// What a phone verification code was issued for, as the official emulator names it in
+/// its console line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhoneCodeUse {
+    /// `accounts:sendVerificationCode` (phone sign-in or linking).
+    SignIn,
+    /// `mfaEnrollment:start` with a phone factor.
+    MfaEnrollment,
+    /// `mfaSignIn:start` with a phone factor.
+    MfaSignIn,
+}
+
+/// A credential the official Auth emulator prints to its console instead of mailing or
+/// texting it (`firebase-tools/lib/emulator/auth/operations.js`, the `BULLET` log lines).
+/// Recorded by the request that issued the code and drained once by the shell after the
+/// request, so each issue is announced exactly once and a refused request announces nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialNotice {
+    /// An email action link (`accounts:sendOobCode` without `returnOobLink`).
+    EmailAction {
+        /// The action.
+        request_type: OobRequestType,
+        /// The address the mail would have gone to.
+        email: String,
+        /// The new address of `VERIFY_AND_CHANGE_EMAIL`.
+        new_email: Option<String>,
+        /// The action link, as the client would follow it.
+        link: String,
+    },
+    /// An SMS code.
+    PhoneCode {
+        /// The number the SMS would have gone to.
+        phone_number: String,
+        /// The six-digit code.
+        code: String,
+        /// Which flow issued it.
+        purpose: PhoneCodeUse,
+    },
+}
+
+impl CredentialNotice {
+    /// The official emulator's console line for this credential, verbatim.
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::EmailAction {
+                request_type,
+                email,
+                new_email,
+                link,
+            } => match request_type {
+                OobRequestType::EmailSignIn => {
+                    format!("To sign in as {email}, follow this link: {link}")
+                }
+                OobRequestType::PasswordReset => format!(
+                    "To reset the password for {email}, follow this link: {link}&newPassword=NEW_PASSWORD_HERE"
+                ),
+                OobRequestType::VerifyEmail => {
+                    format!("To verify the email address {email}, follow this link: {link}")
+                }
+                OobRequestType::VerifyAndChangeEmail => format!(
+                    "To verify and change the email address from {email} to {}, follow this link: {link}",
+                    new_email.as_deref().unwrap_or_default()
+                ),
+            },
+            Self::PhoneCode {
+                phone_number,
+                code,
+                purpose,
+            } => match purpose {
+                PhoneCodeUse::SignIn => {
+                    format!("To verify the phone number {phone_number}, use the code {code}.")
+                }
+                PhoneCodeUse::MfaEnrollment => {
+                    format!("To enroll MFA with {phone_number}, use the code {code}.")
+                }
+                PhoneCodeUse::MfaSignIn => {
+                    format!("To sign in with MFA using {phone_number}, use the code {code}.")
+                }
+            },
+        }
+    }
 }
 
 /// Email action codes expire after an hour of virtual time.
@@ -710,6 +796,7 @@ impl AuthStore {
             pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
+            credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
         }
     }
@@ -758,6 +845,16 @@ impl AuthStore {
             }
         }
         events
+    }
+
+    /// Records a code the request just issued, for the shell to announce once.
+    pub fn push_credential_notice(&mut self, notice: CredentialNotice) {
+        self.credential_notices.push(notice);
+    }
+
+    /// The codes issued since the last call, in issue order; the queue is emptied.
+    pub fn take_credential_notices(&mut self) -> Vec<CredentialNotice> {
+        std::mem::take(&mut self.credential_notices)
     }
 
     /// TOTP policy.

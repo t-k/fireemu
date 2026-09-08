@@ -1006,6 +1006,10 @@
             {
               "behaviour": "an admin batchCreate row whose passwordHash is not the emulator's fakeHash form creates the account without a password credential instead of storing an unverifiable hash; sign-in fails the same way on both sides",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "the console lines for issued email action links and SMS codes carry the official wording but a two-space `auth:` prefix instead of the CLI's `i  auth:` bullet, are printed once per issued code after the issuing request, and can be silenced with auth.logActionCodes = false (the official emulator has no such switch); a RECOVER_EMAIL line is not produced because the recover-email action is not served",
+              "precision": "exact-for-local-semantics"
             }
           ],
           "productionOnly": [

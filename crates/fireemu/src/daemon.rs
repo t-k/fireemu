@@ -85,6 +85,7 @@ struct ServiceAssembly {
     app_check: Option<Arc<fireemu_adapter_http::app_check::AppCheckState>>,
     callable_trusted_protocol: bool,
     functions_runtime: Option<Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>>,
+    log_bus: fireemu_adapter_logging::LogBus,
     firestore_policy: Option<Arc<fireemu_core_app_check::ServiceAdmission>>,
     auth: Arc<AuthState>,
     storage: Arc<fireemu_adapter_http::storage::StorageState>,
@@ -108,6 +109,23 @@ fn function_log_input(
     input.user = user;
     input.fields = fields;
     input
+}
+
+/// Prints each email action link and SMS code the Auth emulator issues, the way the official
+/// emulator's console does (`i  auth: To verify the email address ..., follow this link: ...`),
+/// and streams the same line to the Logging emulator for the UI Logs page.
+fn auth_notice_sink(
+    bus: fireemu_adapter_logging::LogBus,
+    clock: Arc<Mutex<VirtualClock>>,
+) -> fireemu_adapter_http::identity_toolkit::AuthNoticeSink {
+    Arc::new(move |notice| {
+        let message = notice.message();
+        println!("  auth: {message}");
+        bus.publish(
+            &fireemu_adapter_logging::LogInput::plain("info", message, clock_millis(&clock))
+                .for_emulator("auth"),
+        );
+    })
 }
 
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
@@ -201,6 +219,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         "storage",
         only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Storage),
     );
+    let log_bus = fireemu_adapter_logging::LogBus::new();
     // Auth user events reach the functions runtime after each Auth request.
     let auth = Arc::new(AuthState {
         store: auth_store.clone(),
@@ -209,6 +228,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         totp_extension_enabled: cfg.auth_totp.is_some(),
         barrier: Some(barrier.clone()),
         events: functions_runtime.as_ref().map(functions::auth_sink),
+        notices: (cfg.auth_log_action_codes && !quiet)
+            .then(|| auth_notice_sink(log_bus.clone(), clock.clone())),
         blocking: functions_runtime.as_ref().map(|runtime| {
             Arc::new(
                 functions::BlockingAuthBridge::new_with_forward_inbound_credentials(
@@ -321,6 +342,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         &pubsub_resources,
     ));
     Ok(ServiceAssembly {
+        log_bus,
         cfg,
         only,
         verbosity,
@@ -364,6 +386,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
 
 fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySuite, String> {
     let ServiceAssembly {
+        log_bus,
         cfg,
         only,
         verbosity,
@@ -472,6 +495,13 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             println!("{note}");
         }
         print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
+        if addrs.auth.is_some() {
+            if cfg.auth_log_action_codes {
+                println!("  auth codes:       email action links and SMS codes are printed here as they are issued (they are credentials: do not forward this output to CI or shared logs; auth.logActionCodes = false silences them)");
+            } else {
+                println!("  auth codes:       not printed (auth.logActionCodes = false); read /emulator/v1/projects/{{project}}/oobCodes and verificationCodes");
+            }
+        }
         if let Some(runtime) = &functions_runtime {
             let names: Vec<&str> = runtime
                 .manifest()
@@ -509,6 +539,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         app_check: firestore_policy,
     });
     Ok(ReadySuite {
+        log_bus,
         cfg,
         only,
         quiet,
@@ -546,6 +577,7 @@ struct ReadySuite {
     control: Arc<fireemu_adapter_http::control::ControlState>,
     app_check: Option<Arc<fireemu_adapter_http::app_check::AppCheckState>>,
     functions_runtime: Option<Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>>,
+    log_bus: fireemu_adapter_logging::LogBus,
     exporter: Arc<Exporter>,
     hub_state: Arc<hub::HubState>,
     locator: Option<hub::Locator>,
@@ -561,6 +593,7 @@ struct ReadySuite {
 
 async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, String> {
     let ReadySuite {
+        log_bus,
         cfg,
         only,
         quiet,
@@ -669,7 +702,6 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
             fireemu_adapter_pubsub::serve_pubsub(listener, pubsub.clone())
         );
     }
-    let log_bus = fireemu_adapter_logging::LogBus::new();
     for (name, addr) in [
         ("firestore", addrs.firestore),
         ("auth", addrs.auth),

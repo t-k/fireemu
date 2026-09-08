@@ -110,6 +110,7 @@ fn auth_state(app_check: Option<Arc<AppCheckState>>) -> Arc<AuthState> {
         totp_extension_enabled: false,
         barrier: None,
         events: None,
+        notices: None,
         blocking: None,
         operation_gate: Arc::new(Mutex::new(())),
         control_token: Some(CONTROL_TOKEN.to_owned()),

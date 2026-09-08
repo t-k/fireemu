@@ -99,24 +99,16 @@ impl AuthBlockingHook for PassthroughBlockingHook {
     }
 }
 
-#[test]
-fn auth_jwks_uses_the_signers_precomputed_structured_key() {
-    let mut store = AuthStore::new("demo-app", SplitMix64::new(42), TotpPolicy::default());
-    store.set_signer(Arc::new(StructuredJwkSigner(PublicJwk {
-        kty: "RSA",
-        alg: "RS256",
-        usage: "sig",
-        kid: "structured".to_owned(),
-        modulus: "AQID".to_owned(),
-        exponent: "AQAB".to_owned(),
-    })));
-    let state = AuthState {
-        store: Arc::new(Mutex::new(store)),
+/// An Auth surface over `store` with the shared virtual clock and no shell integrations.
+fn auth_state(store: Arc<Mutex<AuthStore>>) -> AuthState {
+    AuthState {
+        store,
         clock: Arc::new(Mutex::new(VirtualClock::new(START))),
         wall_clock: None,
         totp_extension_enabled: false,
         barrier: None,
         events: None,
+        notices: None,
         blocking: None,
         operation_gate: Arc::new(Mutex::new(())),
         control_token: None,
@@ -129,7 +121,21 @@ fn auth_jwks_uses_the_signers_precomputed_structured_key() {
         app_check: None,
         app_check_policy: None,
         tenancy: None,
-    };
+    }
+}
+
+#[test]
+fn auth_jwks_uses_the_signers_precomputed_structured_key() {
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(42), TotpPolicy::default());
+    store.set_signer(Arc::new(StructuredJwkSigner(PublicJwk {
+        kty: "RSA",
+        alg: "RS256",
+        usage: "sig",
+        kid: "structured".to_owned(),
+        modulus: "AQID".to_owned(),
+        exponent: "AQAB".to_owned(),
+    })));
+    let state = auth_state(Arc::new(Mutex::new(store)));
 
     let response = handle(&state, "GET", JWKS_PATHS[0], &json!({}));
     assert_eq!(response.status, 200);
@@ -177,26 +183,7 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
         calls: AtomicUsize::new(0),
     });
     store.lock().unwrap().set_signer(signer.clone());
-    let mut state = AuthState {
-        store,
-        clock: Arc::new(Mutex::new(VirtualClock::new(START))),
-        wall_clock: None,
-        totp_extension_enabled: false,
-        barrier: None,
-        events: None,
-        blocking: None,
-        operation_gate: Arc::new(Mutex::new(())),
-        control_token: None,
-        registry: None,
-        allow_routed_projects: false,
-        stateless_refresh_tokens: true,
-        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
-        fake_custom_token_expiry:
-            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
-        app_check: None,
-        app_check_policy: None,
-        tenancy: None,
-    };
+    let mut state = auth_state(store);
 
     let response = handle(
         &state,
@@ -248,26 +235,7 @@ fn blocking_auth_with_fifty_thousand_sessions_copies_only_changed_registries() {
         SplitMix64::new(43),
         TotpPolicy::default(),
     )));
-    let mut state = AuthState {
-        store: Arc::clone(&store),
-        clock: Arc::new(Mutex::new(VirtualClock::new(START))),
-        wall_clock: None,
-        totp_extension_enabled: false,
-        barrier: None,
-        events: None,
-        blocking: None,
-        operation_gate: Arc::new(Mutex::new(())),
-        control_token: None,
-        registry: None,
-        allow_routed_projects: false,
-        stateless_refresh_tokens: true,
-        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
-        fake_custom_token_expiry:
-            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
-        app_check: None,
-        app_check_policy: None,
-        tenancy: None,
-    };
+    let mut state = auth_state(Arc::clone(&store));
     let created = handle(
         &state,
         "POST",
@@ -446,26 +414,7 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
     let signer = fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX);
     let mut store = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
     store.set_signer(signer.clone());
-    let state = AuthState {
-        store: Arc::new(Mutex::new(store)),
-        clock: Arc::new(Mutex::new(VirtualClock::new(START))),
-        wall_clock: None,
-        totp_extension_enabled: false,
-        barrier: None,
-        events: None,
-        blocking: None,
-        operation_gate: Arc::new(Mutex::new(())),
-        control_token: None,
-        registry: None,
-        allow_routed_projects: false,
-        stateless_refresh_tokens: true,
-        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
-        fake_custom_token_expiry:
-            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
-        app_check: None,
-        app_check_policy: None,
-        tenancy: None,
-    };
+    let state = auth_state(Arc::new(Mutex::new(store)));
     let r = handle(
         &state,
         "POST",
@@ -518,30 +467,11 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
         assert_eq!(r.body["keys"][0]["kid"], signer.kid(), "{path}");
     }
     // Without a signer the JWKS is empty.
-    let plain = AuthState {
-        store: Arc::new(Mutex::new(AuthStore::new(
-            "demo-app",
-            SplitMix64::new(3),
-            TotpPolicy::default(),
-        ))),
-        clock: Arc::new(Mutex::new(VirtualClock::new(START))),
-        wall_clock: None,
-        totp_extension_enabled: false,
-        barrier: None,
-        events: None,
-        blocking: None,
-        operation_gate: Arc::new(Mutex::new(())),
-        control_token: None,
-        registry: None,
-        allow_routed_projects: false,
-        stateless_refresh_tokens: true,
-        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
-        fake_custom_token_expiry:
-            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
-        app_check: None,
-        app_check_policy: None,
-        tenancy: None,
-    };
+    let plain = auth_state(Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    ))));
     let r = handle(&plain, "GET", JWKS_PATHS[0], &json!({}));
     assert_eq!(r.body, json!({"keys": []}));
 }

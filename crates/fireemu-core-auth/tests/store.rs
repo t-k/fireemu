@@ -651,3 +651,79 @@ fn a_verified_email_recycles_an_unverified_account() {
     assert!(!s.has_password(&uid));
     assert!(s.user(&uid).unwrap().email_verified);
 }
+
+// ------------------------------------------------------------------------------------------
+// Credential notices: the console lines the official emulator prints instead of sending mail
+// or SMS (firebase-tools/lib/emulator/auth/operations.js).
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn credential_notice_messages_are_the_official_console_lines() {
+    use fireemu_core_auth::store::{CredentialNotice, OobRequestType, PhoneCodeUse};
+    let email = |request_type, new_email: Option<&str>| CredentialNotice::EmailAction {
+        request_type,
+        email: "a@example.com".to_owned(),
+        new_email: new_email.map(str::to_owned),
+        link: "http://127.0.0.1:9099/emulator/action?mode=x&oobCode=oob-1".to_owned(),
+    };
+    assert_eq!(
+        email(OobRequestType::VerifyEmail, None).message(),
+        "To verify the email address a@example.com, follow this link: http://127.0.0.1:9099/emulator/action?mode=x&oobCode=oob-1"
+    );
+    assert_eq!(
+        email(OobRequestType::PasswordReset, None).message(),
+        "To reset the password for a@example.com, follow this link: http://127.0.0.1:9099/emulator/action?mode=x&oobCode=oob-1&newPassword=NEW_PASSWORD_HERE"
+    );
+    assert_eq!(
+        email(OobRequestType::EmailSignIn, None).message(),
+        "To sign in as a@example.com, follow this link: http://127.0.0.1:9099/emulator/action?mode=x&oobCode=oob-1"
+    );
+    assert_eq!(
+        email(OobRequestType::VerifyAndChangeEmail, Some("b@example.com")).message(),
+        "To verify and change the email address from a@example.com to b@example.com, follow this link: http://127.0.0.1:9099/emulator/action?mode=x&oobCode=oob-1"
+    );
+    let phone = |purpose| CredentialNotice::PhoneCode {
+        phone_number: "+15551234567".to_owned(),
+        code: "123456".to_owned(),
+        purpose,
+    };
+    assert_eq!(
+        phone(PhoneCodeUse::SignIn).message(),
+        "To verify the phone number +15551234567, use the code 123456."
+    );
+    assert_eq!(
+        phone(PhoneCodeUse::MfaEnrollment).message(),
+        "To enroll MFA with +15551234567, use the code 123456."
+    );
+    assert_eq!(
+        phone(PhoneCodeUse::MfaSignIn).message(),
+        "To sign in with MFA using +15551234567, use the code 123456."
+    );
+}
+
+#[test]
+fn credential_notices_are_drained_once_in_issue_order() {
+    use fireemu_core_auth::store::{CredentialNotice, PhoneCodeUse};
+    let mut s = store();
+    assert!(s.take_credential_notices().is_empty());
+    let first = CredentialNotice::PhoneCode {
+        phone_number: "+15551234567".to_owned(),
+        code: "000001".to_owned(),
+        purpose: PhoneCodeUse::SignIn,
+    };
+    let second = CredentialNotice::PhoneCode {
+        phone_number: "+15557654321".to_owned(),
+        code: "000002".to_owned(),
+        purpose: PhoneCodeUse::MfaEnrollment,
+    };
+    s.push_credential_notice(first.clone());
+    s.push_credential_notice(second.clone());
+    // A clone (the speculative store of a blocking-hook request) carries its own queue.
+    let mut speculative = s.clone();
+    assert_eq!(
+        speculative.take_credential_notices(),
+        vec![first.clone(), second.clone()]
+    );
+    assert_eq!(s.take_credential_notices(), vec![first, second]);
+    assert!(s.take_credential_notices().is_empty());
+}

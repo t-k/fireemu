@@ -138,6 +138,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             totp_extension_enabled: false,
             barrier: None,
             events: None,
+            notices: None,
             blocking: None,
             operation_gate: Arc::new(Mutex::new(())),
             control_token: Some(TOKEN.to_owned()),

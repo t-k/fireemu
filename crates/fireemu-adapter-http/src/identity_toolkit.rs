@@ -25,8 +25,9 @@ use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, FederatedIdentity, LocalId, NewUser, OobRequestType, PendingSignInId,
-    RoutedStoreInstall, SecondFactorAssertion, VerificationPurpose,
+    AuthError, AuthStore, CredentialNotice, FederatedIdentity, LocalId, NewUser, OobRequestType,
+    PendingSignInId, PhoneCodeUse, RoutedStoreInstall, SecondFactorAssertion, VerificationCode,
+    VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -42,6 +43,11 @@ mod widget_templates;
 /// Observer of user lifecycle events (Auth triggers), called after each request while
 /// the store is locked, in the order the events happened.
 pub type AuthEventSink = Arc<dyn Fn(&fireemu_core_auth::store::UserEvent) + Send + Sync>;
+
+/// Observer of the credentials the official emulator prints instead of sending (email
+/// action links, SMS codes), called once per issued code after the request that issued it
+/// released the store. `None` drops them; the codes stay readable from the emulator routes.
+pub type AuthNoticeSink = Arc<dyn Fn(&fireemu_core_auth::store::CredentialNotice) + Send + Sync>;
 
 /// A monotonic wall-time anchor for unpinned daemon sessions. The shared virtual clock remains
 /// authoritative and may be advanced explicitly; this anchor only prevents Auth request time
@@ -497,6 +503,8 @@ pub struct AuthState {
     pub barrier: Option<Arc<fireemu_core_session::barrier::AdmissionBarrier>>,
     /// User lifecycle observer; `None` drops the events.
     pub events: Option<AuthEventSink>,
+    /// Issued-credential observer (console lines for action links and SMS codes).
+    pub notices: Option<AuthNoticeSink>,
     /// Identity Platform blocking-function bridge, when Functions registered one.
     pub blocking: Option<Arc<dyn AuthBlockingHook>>,
     /// Serializes Auth operations while a blocking hook runs without the store lock.
@@ -533,19 +541,25 @@ pub struct AuthState {
 struct EventDrain<'a> {
     store: Arc<Mutex<AuthStore>>,
     sink: Option<&'a AuthEventSink>,
+    notices: Option<&'a AuthNoticeSink>,
 }
 
 impl Drop for EventDrain<'_> {
     fn drop(&mut self) {
         // Taken under the lock, delivered without it: a sink that calls back into Auth
         // must not deadlock, and other Auth requests are not held up by the sink.
-        let events = match self.store.lock() {
-            Ok(mut store) => store.take_user_events(),
+        let (events, notices) = match self.store.lock() {
+            Ok(mut store) => (store.take_user_events(), store.take_credential_notices()),
             Err(_) => return,
         };
         if let Some(sink) = self.sink {
             for e in &events {
                 sink(e);
+            }
+        }
+        if let Some(sink) = self.notices {
+            for n in &notices {
+                sink(n);
             }
         }
     }
@@ -2048,6 +2062,7 @@ pub fn handle_with(
     let _drain = EventDrain {
         store: store_arc.clone(),
         sink: state.events.as_ref().filter(|_| default_store),
+        notices: state.notices.as_ref(),
     };
     let Ok(mut store) = store_arc.lock() else {
         return error(500, "INTERNAL");
@@ -4584,10 +4599,13 @@ fn mfa_enrollment_start(
             VerificationPurpose::Enrollment { uid },
             at,
         ) {
-            Ok(code) => JsonResponse {
-                status: 200,
-                body: json!({"phoneSessionInfo": {"sessionInfo": code.session_info}}),
-            },
+            Ok(code) => {
+                announce_phone_code(store, &code, PhoneCodeUse::MfaEnrollment);
+                JsonResponse {
+                    status: 200,
+                    body: json!({"phoneSessionInfo": {"sessionInfo": code.session_info}}),
+                }
+            }
             Err(e) => auth_error(&e),
         };
     }
@@ -4937,6 +4955,14 @@ fn send_oob_code(
     if body.get("returnOobLink").and_then(Value::as_bool) == Some(true) {
         response["oobCode"] = json!(code);
         response["oobLink"] = json!(oob_link(headers, request_type, &code, body));
+    } else {
+        // The mail that is not sent: the official emulator prints the link instead.
+        store.push_credential_notice(CredentialNotice::EmailAction {
+            request_type,
+            email: email.clone(),
+            new_email: store.oob_code(&code).and_then(|c| c.new_email.clone()),
+            link: oob_link(headers, request_type, &code, body),
+        });
     }
     JsonResponse {
         status: 200,
@@ -5111,6 +5137,15 @@ fn sign_in_with_email_link(
 
 // ---- phone sign-in ----------------------------------------------------------------------
 
+/// The SMS that is not sent: the official emulator prints the code instead.
+fn announce_phone_code(store: &mut AuthStore, code: &VerificationCode, purpose: PhoneCodeUse) {
+    store.push_credential_notice(CredentialNotice::PhoneCode {
+        phone_number: code.phone_number.clone(),
+        code: code.code.clone(),
+        purpose,
+    });
+}
+
 /// `accounts:sendVerificationCode`: no SMS is sent; the code is kept for
 /// `/emulator/v1/projects/{p}/verificationCodes` (reCAPTCHA tokens are not checked).
 fn send_verification_code(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
@@ -5118,10 +5153,13 @@ fn send_verification_code(store: &mut AuthStore, body: &Value, at: LogicalInstan
         return error(400, "MISSING_PHONE_NUMBER");
     };
     match store.send_verification_code(phone, VerificationPurpose::SignIn, at) {
-        Ok(code) => JsonResponse {
-            status: 200,
-            body: json!({"sessionInfo": code.session_info}),
-        },
+        Ok(code) => {
+            announce_phone_code(store, &code, PhoneCodeUse::SignIn);
+            JsonResponse {
+                status: 200,
+                body: json!({"sessionInfo": code.session_info}),
+            }
+        }
         Err(e) => auth_error(&e),
     }
 }
@@ -5826,10 +5864,13 @@ fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) ->
         },
         at,
     ) {
-        Ok(code) => JsonResponse {
-            status: 200,
-            body: json!({"phoneResponseInfo": {"sessionInfo": code.session_info}}),
-        },
+        Ok(code) => {
+            announce_phone_code(store, &code, PhoneCodeUse::MfaSignIn);
+            JsonResponse {
+                status: 200,
+                body: json!({"phoneResponseInfo": {"sessionInfo": code.session_info}}),
+            }
+        }
         Err(e) => auth_error(&e),
     }
 }

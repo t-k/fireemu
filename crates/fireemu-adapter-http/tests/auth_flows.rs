@@ -171,6 +171,7 @@ fn state() -> AuthState {
         totp_extension_enabled: false,
         barrier: None,
         events: None,
+        notices: None,
         blocking: None,
         operation_gate: Arc::new(Mutex::new(())),
         control_token: None,
@@ -3127,4 +3128,234 @@ fn the_idp_widget_handler_lists_accounts_and_escapes_them() {
     let iframe = widget::render(&s, "/emulator/auth/iframe", None);
     assert_eq!(iframe.status, 200);
     assert!(iframe.body.contains("Auth Emulator Helper Iframe"));
+}
+
+// ------------------------------------------------------------------------------------------
+// The console lines the official emulator prints instead of sending mail or SMS. The shell
+// receives one notice per issued code, after the request, through `AuthState::notices`.
+// ------------------------------------------------------------------------------------------
+
+fn recording_state() -> (AuthState, Arc<Mutex<Vec<String>>>) {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&lines);
+    let mut s = state();
+    s.notices = Some(Arc::new(move |notice| {
+        sink.lock().unwrap().push(notice.message());
+    }));
+    (s, lines)
+}
+
+fn drain(lines: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+    std::mem::take(&mut *lines.lock().unwrap())
+}
+
+#[test]
+fn email_action_links_are_announced_once_unless_the_link_is_returned() {
+    let (s, lines) = recording_state();
+    let user = sign_up(&s, "notice@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    assert!(drain(&lines).is_empty(), "sign-up issues no code");
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": id_token}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (_, codes) = get(&s, &format!("{EMU}/oobCodes"));
+    let code = codes["oobCodes"][0]["oobCode"].as_str().unwrap().to_owned();
+    assert_eq!(
+        drain(&lines),
+        vec![format!(
+            "To verify the email address notice@example.com, follow this link: http://127.0.0.1:9099/emulator/action?mode=verifyEmail&lang=en&oobCode={code}&apiKey=fake-api-key"
+        )]
+    );
+    // Reading the inspection route announces nothing, and neither does a second read.
+    let _ = get(&s, &format!("{EMU}/oobCodes"));
+    assert!(drain(&lines).is_empty());
+
+    // The Admin link generators receive the link in the response and print nothing.
+    let (status, link) = admin(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "email": "notice@example.com", "returnOobLink": true}),
+    );
+    assert_eq!(status, 200, "{link}");
+    assert!(link["oobLink"].is_string());
+    assert!(drain(&lines).is_empty());
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "notice@example.com", "continueUrl": "https://app.example/x?y=1"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (_, codes) = get(&s, &format!("{EMU}/oobCodes"));
+    let reset = codes["oobCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["requestType"] == "PASSWORD_RESET")
+        .unwrap()["oobCode"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        drain(&lines),
+        vec![format!(
+            "To reset the password for notice@example.com, follow this link: http://127.0.0.1:9099/emulator/action?mode=resetPassword&lang=en&oobCode={reset}&apiKey=fake-api-key&continueUrl=https%3A%2F%2Fapp.example%2Fx%3Fy%3D1&newPassword=NEW_PASSWORD_HERE"
+        )]
+    );
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let lines_now = drain(&lines);
+    assert_eq!(lines_now.len(), 1);
+    assert!(
+        lines_now[0].starts_with("To sign in as link@example.com, follow this link: http://127.0.0.1:9099/emulator/action?mode=signIn&"),
+        "{}",
+        lines_now[0]
+    );
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": id_token, "newEmail": "next@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let lines_now = drain(&lines);
+    assert_eq!(lines_now.len(), 1);
+    assert!(
+        lines_now[0].starts_with("To verify and change the email address from notice@example.com to next@example.com, follow this link: http://127.0.0.1:9099/emulator/action?mode=verifyAndChangeEmail&"),
+        "{}",
+        lines_now[0]
+    );
+
+    // A refused request issues nothing and announces nothing.
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com"}),
+    );
+    assert_eq!(status, 400);
+    assert!(drain(&lines).is_empty());
+}
+
+/// The outstanding SMS code whose `field` (`phoneNumber`, `sessionInfo`) is `value`.
+fn outstanding_sms_code(state: &AuthState, field: &str, value: &Value) -> String {
+    let (_, codes) = get(state, &format!("{EMU}/verificationCodes"));
+    codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| &c[field] == value)
+        .unwrap_or_else(|| panic!("no outstanding code with {field} = {value}"))["code"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn sms_codes_are_announced_per_number_for_sign_in_enrollment_and_mfa_sign_in() {
+    let (s, lines) = recording_state();
+    let (status, bad) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "555"}),
+    );
+    assert_eq!(status, 400, "{bad}");
+    assert!(
+        drain(&lines).is_empty(),
+        "a refused request announces nothing"
+    );
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+15551234567", "recaptchaToken": "ignored"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let code = outstanding_sms_code(&s, "phoneNumber", &json!("+15551234567"));
+    assert_eq!(
+        drain(&lines),
+        vec![format!(
+            "To verify the phone number +15551234567, use the code {code}."
+        )]
+    );
+
+    // Two users enrol at the same time: each line names its own number and code.
+    let mut sessions = Vec::new();
+    for (email, phone) in [
+        ("one@example.com", "+15550000001"),
+        ("two@example.com", "+15550000002"),
+    ] {
+        let user = sign_up(&s, email);
+        verify_email(&s, user["localId"].as_str().unwrap());
+        let (status, start) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": user["idToken"], "phoneEnrollmentInfo": {"phoneNumber": phone, "recaptchaToken": "x"}}),
+        );
+        assert_eq!(status, 200, "{start}");
+        sessions.push((
+            user,
+            phone,
+            start["phoneSessionInfo"]["sessionInfo"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        ));
+    }
+    let expected: Vec<String> = sessions
+        .iter()
+        .map(|(_, phone, _)| {
+            let code = outstanding_sms_code(&s, "phoneNumber", &json!(phone));
+            format!("To enroll MFA with {phone}, use the code {code}.")
+        })
+        .collect();
+    assert_eq!(drain(&lines), expected);
+
+    // Finalizing consumes the codes without announcing anything more.
+    for (user, _, session) in &sessions {
+        let code = outstanding_sms_code(&s, "sessionInfo", &json!(session));
+        let (status, done) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            &json!({"idToken": user["idToken"], "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+        );
+        assert_eq!(status, 200, "{done}");
+    }
+    assert!(drain(&lines).is_empty());
+
+    // The second factor step of a sign-in.
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "two@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(drain(&lines).is_empty());
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {"recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    // The unconsumed first-factor code from above is still outstanding: the line names the
+    // code of this session, not the oldest one.
+    let code = outstanding_sms_code(
+        &s,
+        "sessionInfo",
+        &started["phoneResponseInfo"]["sessionInfo"],
+    );
+    assert_eq!(
+        drain(&lines),
+        vec![format!(
+            "To sign in with MFA using +15550000002, use the code {code}."
+        )]
+    );
 }

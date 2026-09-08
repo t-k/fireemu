@@ -179,6 +179,10 @@ pub struct RuntimeConfig {
     /// answers `INVALID_LOGIN_CREDENTIALS`, and a password reset for an unknown address is
     /// acknowledged. `false` restores the official Auth emulator's revealing answers.
     pub auth_improved_email_privacy: bool,
+    /// `auth.logActionCodes`: print every email action link and SMS code to the daemon's
+    /// standard output as the official Auth emulator does, on by default. `false` keeps the
+    /// codes off the console; they stay readable from the emulator inspection routes.
+    pub auth_log_action_codes: bool,
     /// Path of `firestore.indexes.json`, if configured.
     pub index_file: Option<String>,
     /// Path of `firestore.text-indexes.json`, if configured.
@@ -432,6 +436,7 @@ impl Default for RuntimeConfig {
             auth_totp: None,
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
+            auth_log_action_codes: true,
             index_file: None,
             text_index_file: None,
             rules_file: None,
@@ -481,7 +486,7 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-const AUTH_KEYS: [&str; 7] = [
+const AUTH_KEYS: [&str; 8] = [
     "enabled",
     "projectIssuer",
     "idTokenSigning",
@@ -489,6 +494,7 @@ const AUTH_KEYS: [&str; 7] = [
     "secretMaterialization",
     "forwardInboundCredentials",
     "improvedEmailPrivacy",
+    "logActionCodes",
 ];
 
 /// Configuration errors.
@@ -2288,6 +2294,11 @@ impl RuntimeConfig {
                     ConfigError("auth.improvedEmailPrivacy must be a boolean".to_owned())
                 })?;
             }
+            if let Some(log) = auth.get("logActionCodes") {
+                cfg.auth_log_action_codes = log.as_bool().ok_or_else(|| {
+                    ConfigError("auth.logActionCodes must be a boolean".to_owned())
+                })?;
+            }
             if let Some(totp) = auth.get("totp") {
                 const TOTP_KEYS: [&str; 4] = [
                     "periodSeconds",
@@ -3577,6 +3588,22 @@ mod tests {
             parse(&json!({"improvedEmailPrivacy": "off"})),
             Err(ConfigError(
                 "auth.improvedEmailPrivacy must be a boolean".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn action_code_logging_matches_the_official_emulator_unless_switched_off() {
+        assert!(parse(&json!({})).unwrap().auth_log_action_codes);
+        assert!(
+            !parse(&json!({"logActionCodes": false}))
+                .unwrap()
+                .auth_log_action_codes
+        );
+        assert_eq!(
+            parse(&json!({"logActionCodes": "no"})),
+            Err(ConfigError(
+                "auth.logActionCodes must be a boolean".to_owned()
             ))
         );
     }

@@ -167,6 +167,7 @@
       "accounts:delete (the session's own account)",
       "accounts:sendOobCode / resetPassword / signInWithEmailLink (PASSWORD_RESET, VERIFY_EMAIL, EMAIL_SIGNIN, VERIFY_AND_CHANGE_EMAIL; applyActionCode through accounts:update)",
       "accounts:sendVerificationCode / signInWithPhoneNumber",
+      "the official console lines for every issued email action link and SMS code (To verify the email address ..., follow this link: ...; To enroll MFA with ..., use the code ...), printed to standard output and streamed to the Logging emulator; auth.logActionCodes = false or --log-verbosity quiet silences them",
       "accounts:createAuthUri",
       "GET /v1/projects and /v1/recaptchaParams (the fixed documents the official emulator serves)",
       "securetoken token (JSON and form)",

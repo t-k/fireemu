@@ -42,6 +42,9 @@ pub const DOCUMENT_NAME_BYTES: &str = "FS-LIMIT-DOCUMENT-NAME-BYTES";
 pub const FIELD_NAME: &str = "FS-LIMIT-FIELD-NAME";
 /// Maximum string or bytes field payload, excluding storage accounting overhead.
 pub const MAX_FIELD_PAYLOAD_BYTES: usize = 1_048_487;
+/// Most dimensions a stored vector embedding may have (production: `Vectors must be at most
+/// 2048 dimensions.`).
+pub const MAX_VECTOR_DIMENSIONS: usize = 2048;
 
 /// Per-document automatic and composite entry count, checked before publication.
 pub const INDEX_ENTRIES_PER_DOCUMENT: &str = "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT";

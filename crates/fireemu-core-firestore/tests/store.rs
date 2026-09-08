@@ -168,6 +168,77 @@ fn nested_map_field_names_are_validated_and_failure_is_atomic() {
 }
 
 #[test]
+fn vector_dimension_limit_and_nan_components_reject_the_whole_commit() {
+    let vector = |dimensions: usize| {
+        Value::Map(BTreeMap::from([(
+            "embedding".to_owned(),
+            Value::Vector(vec![0.5; dimensions]),
+        )]))
+    };
+    let mut state = FirestoreState::new();
+    state
+        .commit(&[set("v/max", &[("nested", vector(2048))])], None, t(0))
+        .unwrap();
+    let before = state.get(&path("v/max")).unwrap().clone();
+
+    let rejected = [
+        (
+            Value::Vector(vec![0.5; 2049]),
+            "Vectors must be at most 2048 dimensions.",
+        ),
+        (
+            Value::Vector(vec![f64::NAN; 2049]),
+            "Vectors must be at most 2048 dimensions.",
+        ),
+        (
+            Value::Vector(vec![0.5, f64::NAN]),
+            "Vector cannot contain NaN values.",
+        ),
+        (
+            Value::Vector(Vec::new()),
+            "Cannot have a zero length vector.",
+        ),
+    ];
+    for (bad, message) in rejected {
+        for wrap in 0..3 {
+            let value = match wrap {
+                0 => bad.clone(),
+                1 => Value::Array(vec![bad.clone()]),
+                _ => Value::Map(BTreeMap::from([("inner".to_owned(), bad.clone())])),
+            };
+            let result = state.commit(
+                &[
+                    set("v/other", &[("ok", Value::Integer(1))]),
+                    set("v/max", &[("nested", value)]),
+                ],
+                None,
+                t(1),
+            );
+            match result {
+                Err(FirestoreError::InvalidArgument(actual)) => assert_eq!(actual, message),
+                other => panic!("{other:?}"),
+            }
+            assert!(
+                state.get(&path("v/other")).is_none(),
+                "the valid write must not publish"
+            );
+            assert_eq!(state.get(&path("v/max")), Some(&before));
+        }
+    }
+    // Infinite components are stored as production stores them.
+    state
+        .commit(
+            &[set(
+                "v/inf",
+                &[("e", Value::Vector(vec![f64::INFINITY, f64::NEG_INFINITY]))],
+            )],
+            None,
+            t(2),
+        )
+        .unwrap();
+}
+
+#[test]
 fn field_payload_size_accepts_the_production_boundary_and_rejects_one_more_byte() {
     for bytes in [false, true] {
         for size in [1_048_486, 1_048_487, 1_048_488] {

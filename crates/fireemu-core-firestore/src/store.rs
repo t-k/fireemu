@@ -4740,9 +4740,11 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
     Ok(())
 }
 
-/// The value rules every stored value obeys: an array never holds an array directly, and a
+/// The value rules every stored value obeys: an array never holds an array directly, a
 /// reference names a document (`projects/{p}/databases/{d}/documents/` plus an even number
-/// of non-empty segments).
+/// of non-empty segments), and a vector has between one and
+/// [`limits::MAX_VECTOR_DIMENSIONS`] finite-or-infinite dimensions (production refuses NaN
+/// components but stores infinities; observed 2026-09-08 against the oracle project).
 fn validate_value(value: &Value, inside_array: bool) -> Result<(), FirestoreError> {
     // Production counts the payload, not storage accounting's trailing string byte.
     let payload_bytes = match value {
@@ -4769,8 +4771,30 @@ fn validate_value(value: &Value, inside_array: bool) -> Result<(), FirestoreErro
             validate_value(value, false)
         }),
         Value::Reference(name) => validate_reference(name),
+        Value::Vector(dimensions) => validate_vector(dimensions),
         _ => Ok(()),
     }
+}
+
+/// Production checks the dimension count before the component values, so an oversized
+/// vector with a NaN reports the size.
+fn validate_vector(dimensions: &[f64]) -> Result<(), FirestoreError> {
+    if dimensions.is_empty() {
+        return Err(FirestoreError::InvalidArgument(
+            "Cannot have a zero length vector.".into(),
+        ));
+    }
+    if dimensions.len() > limits::MAX_VECTOR_DIMENSIONS {
+        return Err(FirestoreError::InvalidArgument(
+            "Vectors must be at most 2048 dimensions.".into(),
+        ));
+    }
+    if dimensions.iter().any(|dimension| dimension.is_nan()) {
+        return Err(FirestoreError::InvalidArgument(
+            "Vector cannot contain NaN values.".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_reference(name: &str) -> Result<(), FirestoreError> {

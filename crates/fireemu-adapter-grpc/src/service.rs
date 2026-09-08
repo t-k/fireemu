@@ -615,26 +615,35 @@ impl Firestore for GatewayService {
             }
             let first_authorization = req.clone();
             let query_execution_id = local.next_query_execution_id();
-            let (mut first, warnings, selection) = blocking_read(
+            let guard_database = database_name_from_query_parent(&req.parent);
+            // The worker that mints the internal transaction also owns its release: the guard
+            // travels with the first page, so a handler cancelled before this `.await`
+            // resolves (a `spawn_blocking` task cannot be aborted once running) still rolls the
+            // transaction back when the runtime drops the unreceived result.
+            let guard_local = Arc::clone(&local);
+            let (mut first, warnings, selection, rollback) = blocking_read(
                 local.clone(),
                 self.rules.clone(),
                 caller.clone(),
                 move |local, guard| {
-                    local.run_query_authorized_as_for_execution(
-                        &first_request,
-                        &first_authorization,
-                        guard,
-                        query_execution_id,
-                    )
+                    let (first, warnings, selection) = local
+                        .run_query_authorized_as_for_execution(
+                            &first_request,
+                            &first_authorization,
+                            guard,
+                            query_execution_id,
+                        )?;
+                    let rollback = internal_transaction.then(|| QueryTransactionGuard {
+                        local: guard_local,
+                        database: guard_database,
+                        transaction: announced_transaction(&first).unwrap_or_default(),
+                    });
+                    Ok((first, warnings, selection, rollback))
                 },
             )
             .await?;
-            let transaction = first
-                .iter()
-                .find_map(|response| {
-                    (!response.transaction.is_empty()).then(|| response.transaction.clone())
-                })
-                .or_else(|| match &req.consistency_selector {
+            let transaction =
+                announced_transaction(&first).or_else(|| match &req.consistency_selector {
                     Some(pb::run_query_request::ConsistencySelector::Transaction(transaction)) => {
                         Some(transaction.clone())
                     }
@@ -656,11 +665,7 @@ impl Firestore for GatewayService {
             let (sender, receiver) = tokio::sync::mpsc::channel(RUN_QUERY_CHANNEL_CAPACITY);
             let rules = self.rules.clone();
             tokio::spawn(async move {
-                let rollback = internal_transaction.then(|| QueryTransactionGuard {
-                    local: local.clone(),
-                    database: database_name_from_query_parent(&req.parent),
-                    transaction: transaction.clone().unwrap_or_default(),
-                });
+                let rollback = rollback;
                 // Keep one response until exhaustion and execution finalization are known.
                 // Page-local completion must never terminate the public query stream.
                 let mut pending = None;
@@ -1071,6 +1076,13 @@ fn last_query_document_path(
         .transpose()
 }
 
+/// The transaction a page announces (`NewTransaction` selectors answer with one).
+fn announced_transaction(responses: &[pb::RunQueryResponse]) -> Option<Vec<u8>> {
+    responses.iter().find_map(|response| {
+        (!response.transaction.is_empty()).then(|| response.transaction.clone())
+    })
+}
+
 fn database_name_from_query_parent(parent: &str) -> String {
     parent
         .split_once("/documents")
@@ -1260,6 +1272,80 @@ mod tests {
                 .code(),
             tonic::Code::Unavailable
         );
+    }
+
+    /// A client that disconnects before the first page is delivered cancels the handler
+    /// while the blocking worker (which cannot be aborted) is still minting the internal
+    /// read-only transaction. The worker's result is then dropped unreceived; the
+    /// transaction it carries must be rolled back rather than retained with its snapshot.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_query_cancelled_before_its_first_page_releases_the_internal_transaction() {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: fireemu_core_firestore::index::IndexValidationPolicy::Conservative,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let backend = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+        let service = Arc::new(GatewayService::local(gateway, backend.clone()));
+        let parent = parse_parent(&query_request().parent).unwrap();
+        let stats = |backend: &LocalBackend| {
+            backend
+                .database_handle(&parent)
+                .unwrap()
+                .with(|state| Ok(state.transaction_bookkeeping_stats()))
+                .unwrap()
+        };
+        assert_eq!(stats(&backend).active, 0);
+
+        // Hold the database lock so the first-page worker is parked inside `spawn_blocking`
+        // when the handler is cancelled (a sync point, not a timing assumption).
+        let handle = backend.database_handle(&parent).unwrap();
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            handle.with(|_| {
+                held_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        held_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let query = tokio::spawn({
+            let service = Arc::clone(&service);
+            async move {
+                Firestore::run_query(&*service, Request::new(query_request()))
+                    .await
+                    .map(|_| ())
+            }
+        });
+        // Let the handler reach its blocking wait, then drop it as a disconnect would.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        query.abort();
+        assert!(query.await.unwrap_err().is_cancelled());
+
+        release_tx.send(()).unwrap();
+        holder.join().unwrap().unwrap();
+        // The worker finishes on its own; the transaction it minted is rolled back (kept as
+        // finished lineage) without the virtual clock ever advancing.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let current = stats(&backend);
+            if current.finished == 1 {
+                assert_eq!(current.active, 0, "{current:?}");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "internal transaction was never released: {current:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

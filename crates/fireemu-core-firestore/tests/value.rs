@@ -209,3 +209,51 @@ fn storage_normalization_truncates_timestamps_to_microseconds_recursively() {
         )
     );
 }
+
+#[test]
+fn canonical_order_is_total_over_vectors_with_nan_components() {
+    // Elementwise comparison must not treat NaN as equal to every number: with
+    // A=[NaN,0], B=[0,1], C=[1,-1] that gave A<B, B<C, A>C.
+    let a = Value::Vector(vec![f64::NAN, 0.0]);
+    let b = Value::Vector(vec![0.0, 1.0]);
+    let c = Value::Vector(vec![1.0, -1.0]);
+    assert_eq!(a.cmp(&b), Ordering::Less);
+    assert_eq!(b.cmp(&c), Ordering::Less);
+    assert_eq!(a.cmp(&c), Ordering::Less);
+    assert_eq!(
+        Value::Vector(vec![f64::NAN]).cmp(&Value::Vector(vec![-f64::NAN])),
+        Ordering::Equal
+    );
+    assert_eq!(
+        Value::Vector(vec![f64::NEG_INFINITY]).cmp(&Value::Vector(vec![f64::NAN])),
+        Ordering::Greater
+    );
+
+    let values = [
+        a,
+        b,
+        c,
+        Value::Vector(vec![f64::NAN, f64::NAN]),
+        Value::Vector(vec![f64::NAN]),
+        Value::Vector(vec![0.0, -0.0]),
+        Value::Vector(vec![-0.0, 0.0]),
+        Value::Vector(vec![f64::INFINITY, 0.0]),
+        Value::Vector(vec![0.0, f64::NEG_INFINITY]),
+        Value::Double(f64::NAN),
+        Value::Double(0.0),
+        Value::Integer(0),
+        Value::Array(vec![Value::Double(f64::NAN), Value::Integer(1)]),
+        Value::Array(vec![Value::Integer(0), Value::Integer(1)]),
+    ];
+    for x in &values {
+        assert_eq!(x.cmp(x), Ordering::Equal, "reflexive: {x:?}");
+        for y in &values {
+            assert_eq!(x.cmp(y), y.cmp(x).reverse(), "antisymmetric: {x:?} {y:?}");
+            for z in &values {
+                if x.cmp(y) != Ordering::Greater && y.cmp(z) != Ordering::Greater {
+                    assert_ne!(x.cmp(z), Ordering::Greater, "transitive: {x:?} {y:?} {z:?}");
+                }
+            }
+        }
+    }
+}

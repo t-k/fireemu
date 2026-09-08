@@ -121,6 +121,10 @@ impl Ord for GeoPoint {
 }
 
 /// A Firestore field value.
+///
+/// `==` is structural (`1 != 1.0`, `NaN != NaN`), while [`Ord`] is the official index order
+/// in which those pairs are `Equal`; ordered collections keyed by `Value` therefore unify
+/// numerically equal values, and content identity uses [`Value::stored_eq`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// Null.
@@ -320,9 +324,17 @@ impl Ord for Value {
     }
 }
 
+/// Doubles in canonical order: NaN is one value below every other double (as the type order
+/// places it), `-0.0` equals `0.0`. Top-level doubles have NaN handled by kind before this;
+/// vector components reach it directly, and stored vectors never hold NaN (production
+/// refuses them), but the order stays total for any value the model can represent.
 fn cmp_doubles(a: f64, b: f64) -> Ordering {
-    // Callers never pass NaN here (handled by kind). -0.0 and 0.0 compare equal.
-    a.partial_cmp(&b).unwrap_or(Ordering::Equal)
+    match (a.is_nan(), b.is_nan()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        (false, false) => a.partial_cmp(&b).unwrap_or(Ordering::Equal),
+    }
 }
 
 /// Exact comparison of an i64 with a non-NaN f64 without precision loss.

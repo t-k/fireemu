@@ -26,3 +26,32 @@ describe("alert types", () => {
     }
   });
 });
+
+describe("alert type inventory", () => {
+  it("is exactly the SDK's list, grouped by product in declaration order", () => {
+    expect(ALERT_TYPES).toEqual([
+      { alerttype: "billing.planUpdate", product: "Billing" },
+      { alerttype: "billing.planAutomatedUpdate", product: "Billing" },
+      { alerttype: "crashlytics.newFatalIssue", product: "Crashlytics" },
+      { alerttype: "crashlytics.newNonfatalIssue", product: "Crashlytics" },
+      { alerttype: "crashlytics.regression", product: "Crashlytics" },
+      { alerttype: "crashlytics.stabilityDigest", product: "Crashlytics" },
+      { alerttype: "crashlytics.velocity", product: "Crashlytics" },
+      { alerttype: "crashlytics.newAnrIssue", product: "Crashlytics" },
+      { alerttype: "appDistribution.newTesterIosDevice", product: "App Distribution" },
+      { alerttype: "appDistribution.inAppFeedback", product: "App Distribution" },
+      { alerttype: "performance.threshold", product: "Performance" },
+    ]);
+  });
+
+  it("gives exact example payloads", () => {
+    expect(examplePayload("crashlytics.newFatalIssue")).toEqual({
+      createTime: "2026-08-29T12:00:00Z",
+      payload: { issue: { id: "issue-1", title: "NullPointerException in MainActivity" } },
+    });
+    expect(examplePayload("billing.planUpdate")).toEqual({
+      createTime: "2026-08-29T12:00:00Z",
+      payload: {},
+    });
+  });
+});

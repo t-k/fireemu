@@ -77,3 +77,13 @@ describe("counterTotals", () => {
     expect(counterTotals([])).toEqual({ admitted: 0, denied: 0, byCategory: [] });
   });
 });
+
+describe("canonicalDebugSecret shape", () => {
+  it("names the failure and anchors the whole string", () => {
+    expect(canonicalDebugSecret("x").unwrapOr("ok")).toBe("ok");
+    expect(canonicalDebugSecret("x")._unsafeUnwrapErr()).toBe("shape");
+    expect(canonicalDebugSecret("z00000000-0000-4000-8000-000000000000").isErr()).toBe(true);
+    expect(canonicalDebugSecret("00000000-0000-4000-8000-000000000000z").isErr()).toBe(true);
+    expect(canonicalDebugSecret("00000000-0000-4000-8000-00000000000g").isErr()).toBe(true);
+  });
+});

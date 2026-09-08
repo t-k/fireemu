@@ -47,3 +47,35 @@ describe("rule coverage", () => {
     expect(coverageSummary(sample)).toEqual({ reached: 3, total: 4 });
   });
 });
+
+describe("value readings", () => {
+  const row = (value: object) =>
+    coverageRows([
+      {
+        sourcePosition: { line: 1, column: 1, currentOffset: 0, endOffset: 1 },
+        values: [{ value, count: 2 }],
+      },
+    ])[0]!.summary;
+  it("reads every value kind, in priority order, and null for an empty value", () => {
+    expect(row({ intValue: "7" })).toBe("7 ×2");
+    expect(row({ floatValue: 1.5 })).toBe("1.5 ×2");
+    expect(row({ typeValue: "map" })).toBe("map ×2");
+    expect(row({})).toBe("null ×2");
+    expect(row({ boolValue: false })).toBe("false ×2");
+    expect(row({ intValue: "1", typeValue: "int" })).toBe("1 ×2");
+    expect(row({ stringValue: "", typeValue: "string" })).toBe('"" ×2');
+    expect(row({ floatValue: 0, stringValue: "s" })).toBe("0 ×2");
+  });
+  it("joins several values of one expression", () => {
+    const rows = coverageRows([
+      {
+        sourcePosition: { line: 1, column: 1, currentOffset: 0, endOffset: 1 },
+        values: [
+          { value: { boolValue: true }, count: 1 },
+          { value: { boolValue: false }, count: 3 },
+        ],
+      },
+    ]);
+    expect(rows[0]!.summary).toBe("true ×1, false ×3");
+  });
+});

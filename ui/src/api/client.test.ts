@@ -28,3 +28,26 @@ describe("server-sent event parsing", () => {
     expect(events).toEqual([{ event: "message", data: "one\ntwo" }]);
   });
 });
+
+describe("server-sent event edge cases", () => {
+  it("skips an empty leading block and keeps parsing", () => {
+    expect(parseSse("\n\ndata: x\n\n").events).toEqual([{ event: "message", data: "x" }]);
+  });
+
+  it("reads a data line with no value and one with no colon as empty data", () => {
+    expect(parseSse("data:\n\n").events).toEqual([{ event: "message", data: "" }]);
+    expect(parseSse("data\n\n").events).toEqual([{ event: "message", data: "" }]);
+  });
+
+  it("strips exactly one leading space of a value", () => {
+    expect(parseSse("data:a b\n\n").events[0]?.data).toBe("a b");
+    expect(parseSse("data:  two\n\n").events[0]?.data).toBe(" two");
+  });
+
+  it("ignores fields other than event and data", () => {
+    expect(parseSse("id: 1\nretry: 5\ndata: x\n\n").events).toEqual([
+      { event: "message", data: "x" },
+    ]);
+    expect(parseSse("id: 1\n\n").events).toEqual([]);
+  });
+});

@@ -92,17 +92,13 @@ export const toPlain = (v: FsValue): unknown => {
 
 /** A one-line rendering of a REST value for lists. */
 export const summarize = (v: FsValue): string => {
-  if ("stringValue" in v) return JSON.stringify(v.stringValue);
-  if ("nullValue" in v) return "null";
-  if ("booleanValue" in v) return String(v.booleanValue);
-  if ("integerValue" in v) return v.integerValue;
   if ("doubleValue" in v) return String(v.doubleValue);
   if ("timestampValue" in v) return v.timestampValue;
   if ("geoPointValue" in v) return `[${v.geoPointValue.latitude}, ${v.geoPointValue.longitude}]`;
   if ("referenceValue" in v)
     return v.referenceValue.replace(/^projects\/[^/]+\/databases\/[^/]+\/documents\//, "");
   if ("bytesValue" in v) return `bytes(${v.bytesValue.length})`;
-  if ("arrayValue" in v) return JSON.stringify((v.arrayValue.values ?? []).map(toPlain));
+  // Strings, null, booleans, integers, arrays and maps read as their plain JSON.
   return JSON.stringify(toPlain(v));
 };
 

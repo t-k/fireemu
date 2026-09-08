@@ -39,3 +39,62 @@ describe("product scope", () => {
     }
   });
 });
+
+describe("product scope inventory", () => {
+  it("is exactly the documented list, in Overview order", () => {
+    expect(productScope()).toEqual([
+      { id: "auth", nameKey: "scope.auth", status: "supported", noteKey: "scope.authNote" },
+      {
+        id: "firestore",
+        nameKey: "scope.firestore",
+        status: "supported",
+        noteKey: "scope.firestoreNote",
+      },
+      {
+        id: "functions",
+        nameKey: "scope.functions",
+        status: "supported",
+        noteKey: "scope.functionsNote",
+      },
+      {
+        id: "storage",
+        nameKey: "scope.storage",
+        status: "supported",
+        noteKey: "scope.storageNote",
+      },
+      { id: "rules", nameKey: "scope.rules", status: "supported", noteKey: "scope.rulesNote" },
+      {
+        id: "appCheck",
+        nameKey: "scope.appCheck",
+        status: "supported",
+        noteKey: "scope.appCheckNote",
+      },
+      { id: "rtdb", nameKey: "scope.rtdb", status: "deferred", noteKey: "scope.rtdbNote" },
+      {
+        id: "extensions",
+        nameKey: "scope.extensions",
+        status: "notPlanned",
+        noteKey: "scope.extensionsNote",
+      },
+      {
+        id: "requests",
+        nameKey: "scope.requests",
+        status: "supported",
+        noteKey: "scope.requestsNote",
+      },
+      {
+        id: "coverage",
+        nameKey: "scope.coverage",
+        status: "supported",
+        noteKey: "scope.coverageNote",
+      },
+      { id: "alerts", nameKey: "scope.alerts", status: "supported", noteKey: "scope.alertsNote" },
+      {
+        id: "logging",
+        nameKey: "scope.logging",
+        status: "supported",
+        noteKey: "scope.loggingNote",
+      },
+    ]);
+  });
+});

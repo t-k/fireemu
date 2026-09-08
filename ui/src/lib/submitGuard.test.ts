@@ -31,3 +31,12 @@ describe("submit guard", () => {
     });
   });
 });
+
+describe("submit guard initial state", () => {
+  it("starts idle", () => {
+    createRoot((dispose) => {
+      expect(createSubmitGuard().pending()).toBe(false);
+      dispose();
+    });
+  });
+});

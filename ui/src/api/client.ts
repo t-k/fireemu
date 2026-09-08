@@ -23,7 +23,12 @@ export const errorOf = <T>(r: Result<T, ApiError> | undefined): string | null =>
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
-const BASE = "/ui/api";
+let base = "/ui/api";
+
+/** Points the client at another origin (tests run it against a local HTTP server). */
+export const setApiBase = (url: string): void => {
+  base = url;
+};
 
 const authHeaders = (): Record<string, string> => {
   const token = controlToken();
@@ -91,7 +96,7 @@ export const request = <T = Json>(
         headers["content-type"] = "application/json";
         payload = JSON.stringify(body);
       }
-      const response = await fetch(`${BASE}/${path}`, {
+      const response = await fetch(`${base}/${path}`, {
         method,
         headers,
         body: payload ?? null,
@@ -113,7 +118,7 @@ export const requestBytes = (
 ): ResultAsync<{ blob: Blob; contentType: string }, ApiError> =>
   ResultAsync.fromPromise(
     (async (): Promise<Result<{ blob: Blob; contentType: string }, ApiError>> => {
-      const response = await fetch(`${BASE}/${path}`, { headers: authHeaders() });
+      const response = await fetch(`${base}/${path}`, { headers: authHeaders() });
       if (!response.ok) {
         const parsed = await parseBody(response);
         return err({ status: response.status, message: messageOf(response.status, parsed) });
@@ -177,7 +182,7 @@ export const subscribe = (
   const controller = new AbortController();
   (async () => {
     try {
-      const response = await fetch(`${BASE}/${path}`, {
+      const response = await fetch(`${base}/${path}`, {
         headers: { ...authHeaders(), accept: "text/event-stream" },
         signal: controller.signal,
       });

@@ -49,3 +49,17 @@ describe("matchesLog", () => {
     expect(matchesLog("error write failed", { level: "error", text: "read" })).toBe(false);
   });
 });
+
+describe("edge tokens", () => {
+  it("reads the level after leading whitespace and before a tab", () => {
+    expect(lineLevel("   info\tindented")).toBe("info");
+    expect(lineLevel("info")).toBe("info");
+    expect(lineLevel(" ")).toBeNull();
+    expect(lineLevel("inform")).toBeNull();
+  });
+  it("an empty text filter passes any level match, a non-empty one is required", () => {
+    expect(matchesLog("info x", { level: "info", text: "" })).toBe(true);
+    expect(matchesLog("info x", { level: "all", text: "y" })).toBe(false);
+    expect(matchesLog("info X", { level: "all", text: "x" })).toBe(true);
+  });
+});

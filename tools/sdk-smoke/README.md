@@ -167,3 +167,29 @@ fireemu exec --config tools/sdk-smoke/fireemu.index-merge.json --firebase-json c
 ```
 
 Against production, set `PRODUCTION_ORACLE_PROJECT_ID=fireemu-35fe6` and `PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER=592603257417` (the conformance indexes must be deployed to that project). Recorded on 2026-09-08: every case agreed between production and fireemu, including the bare `orderBy(__name__, desc)` family, which both reject without an explicit `__name__ DESC` index in the query's scope (the wildcard override does not change that) and both serve for `ord`, whose index is declared.
+
+### Timestamp array storage precision
+
+`timestamp-array-oracle.mjs` sends unmodified nine-digit REST timestamps and checks repeated union/remove, microsecond controls, maps, nested arrays within maps, same-write set plus transform, ordinary duplicate arrays, and no-op update times. It checks 60 operations against expectations observed on production on 2026-09-08. It does not observe Cloud Functions trigger delivery; commit change publication is covered separately by core tests and the atomic outbox model.
+
+Run against an owned local session:
+
+```sh
+fireemu exec --only firestore --project demo-app -- node tools/sdk-smoke/timestamp-array-oracle.mjs
+```
+
+Run against the explicitly authorized production oracle using Application Default Credentials:
+
+```sh
+PRODUCTION_ORACLE_PROJECT_ID=fireemu-35fe6 PRODUCTION_ORACLE_EXPECTED_PROJECT_NUMBER=592603257417 node tools/sdk-smoke/timestamp-array-oracle.mjs
+```
+
+The production path checks the actual project number before writing. The local path accepts only loopback endpoints. Each case exclusively creates a UUID document and deletes only that owned document in cleanup. Output retains request values, stored values, and precise update times. A failed remote create with an uncertain response can leave its uniquely named fixture behind.
+
+The core Verify benchmark varies payload size (1, 100, 900 KiB) and Verify count (1, 100, 500), excludes setup, and reports median commit time after warmup:
+
+```sh
+cargo bench -p fireemu-core-firestore --bench verify
+```
+
+This measures elapsed time; it does not measure allocations or peak RSS.

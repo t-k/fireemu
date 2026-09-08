@@ -21,3 +21,7 @@ workspace = true
 [[bench]]
 name = "commit_batch"
 harness = false
+
+[[bench]]
+name = "verify"
+harness = false

@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "size": "node scripts/size-report.mjs",
-    "size:test": "node --test scripts/*.test.mjs"
+    "size:test": "node --test scripts/*.test.mjs",
+    "mutation": "stryker run"
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",
@@ -25,6 +26,8 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@solidjs/testing-library": "^0.8.10",
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.4.0",
     "jsdom": "^30.0.1",

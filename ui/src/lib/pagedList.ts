@@ -79,21 +79,17 @@ export const createPagedList = <T>(
   };
 
   const refresh = async (): Promise<void> => {
+    // A failed load left nothing good to keep (the list is empty whenever `error` is set):
+    // behave as a fresh load.
+    if (error() !== null) return load();
     const mine = ++generation;
-    const shown = items().length;
-    if (shown === 0 && error() !== null) {
-      // Nothing good to keep: behave as a fresh load.
-      generation -= 1;
-      return load();
-    }
-    const r = await readFrom(Math.max(shown, 1));
+    const r = await readFrom(Math.max(items().length, 1));
     if (mine !== generation) return;
     batch(() => {
       setLoading(false);
       if (r.ok) {
         setItems(r.page.items);
         setNextToken(r.page.nextToken);
-        setError(null);
         setStale(null);
       } else {
         setStale(r.message);

@@ -3359,3 +3359,109 @@ fn sms_codes_are_announced_per_number_for_sign_in_enrollment_and_mfa_sign_in() {
         )]
     );
 }
+
+/// A tenant's action links carry `tenantId`, as the official emulator's `TenantProjectState`
+/// appends it: in the Admin link generator response, in the console line and on the
+/// inspection route. The default project's links carry none.
+#[test]
+fn tenant_action_links_name_the_tenant() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let (mut s, lines) = recording_state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer-a").unwrap();
+    s.registry = Some(registry);
+    let tenant = format!("{V1}/projects/demo-app/tenants/customer-a");
+    let (status, created) = admin(
+        &s,
+        &format!("{tenant}/accounts"),
+        &json!({"email": "tenant@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    let (status, link) = admin(
+        &s,
+        &format!("{tenant}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "tenant@example.com", "returnOobLink": true, "continueUrl": "https://app.example/x"}),
+    );
+    assert_eq!(status, 200, "{link}");
+    let admin_link = link["oobLink"].as_str().unwrap();
+    assert!(
+        admin_link.ends_with("&continueUrl=https%3A%2F%2Fapp.example%2Fx&tenantId=customer-a"),
+        "{admin_link}"
+    );
+    assert!(drain(&lines).is_empty());
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "tenant@example.com", "tenantId": "customer-a"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let printed = drain(&lines);
+    assert_eq!(printed.len(), 1);
+    assert!(
+        printed[0]
+            .contains("&apiKey=fake-api-key&tenantId=customer-a&newPassword=NEW_PASSWORD_HERE"),
+        "{}",
+        printed[0]
+    );
+
+    let (status, codes) = get(
+        &s,
+        "/emulator/v1/projects/demo-app/tenants/customer-a/oobCodes",
+    );
+    assert_eq!(status, 200, "{codes}");
+    let codes = codes["oobCodes"].as_array().unwrap();
+    assert_eq!(codes.len(), 2, "{codes:?}");
+    for code in codes {
+        assert!(
+            code["oobLink"]
+                .as_str()
+                .unwrap()
+                .contains("&tenantId=customer-a"),
+            "{code}"
+        );
+    }
+    // The default project's list does not show the tenant's codes.
+    let (_, codes) = get(&s, &format!("{EMU}/oobCodes"));
+    assert_eq!(codes["oobCodes"].as_array().map(Vec::len), Some(0));
+
+    // The tenant's SMS codes and account wipe are scoped the same way.
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+15550009999", "recaptchaToken": "x", "tenantId": "customer-a"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, codes) = get(
+        &s,
+        "/emulator/v1/projects/demo-app/tenants/customer-a/verificationCodes",
+    );
+    assert_eq!(status, 200, "{codes}");
+    assert_eq!(codes["verificationCodes"][0]["phoneNumber"], "+15550009999");
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    assert_eq!(codes["verificationCodes"].as_array().map(Vec::len), Some(0));
+    let wiped = handle(
+        &s,
+        "DELETE",
+        "/emulator/v1/projects/demo-app/tenants/customer-a/accounts",
+        &json!({}),
+    );
+    assert_eq!(wiped.status, 200, "{}", wiped.body);
+    let (status, users) = admin(&s, &format!("{tenant}/accounts:query"), &json!({}));
+    assert_eq!(status, 200, "{users}");
+    assert_eq!(users["recordsCount"], "0", "{users}");
+    drain(&lines);
+
+    // The default project's links carry no tenant.
+    let user = sign_up(&s, "plain@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": user["idToken"]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let printed = drain(&lines);
+    assert!(!printed[0].contains("tenantId"), "{}", printed[0]);
+}

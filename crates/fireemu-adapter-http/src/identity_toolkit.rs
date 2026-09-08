@@ -4831,6 +4831,7 @@ fn oob_link(
     request_type: OobRequestType,
     code: &str,
     body: &Value,
+    tenant: Option<&str>,
 ) -> String {
     let host = headers.host.as_deref().unwrap_or("127.0.0.1:9099");
     let mode = match request_type {
@@ -4845,6 +4846,11 @@ fn oob_link(
     if let Some(url) = str_field(body, "continueUrl") {
         link.push_str("&continueUrl=");
         link.push_str(&percent_encode(url));
+    }
+    // A tenant's link names the tenant, as the official emulator's TenantProjectState does.
+    if let Some(tenant) = tenant {
+        link.push_str("&tenantId=");
+        link.push_str(&percent_encode(tenant));
     }
     link
 }
@@ -4954,14 +4960,20 @@ fn send_oob_code(
         json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email});
     if body.get("returnOobLink").and_then(Value::as_bool) == Some(true) {
         response["oobCode"] = json!(code);
-        response["oobLink"] = json!(oob_link(headers, request_type, &code, body));
+        response["oobLink"] = json!(oob_link(
+            headers,
+            request_type,
+            &code,
+            body,
+            store.tenant_id()
+        ));
     } else {
         // The mail that is not sent: the official emulator prints the link instead.
         store.push_credential_notice(CredentialNotice::EmailAction {
             request_type,
             email: email.clone(),
             new_email: store.oob_code(&code).and_then(|c| c.new_email.clone()),
-            link: oob_link(headers, request_type, &code, body),
+            link: oob_link(headers, request_type, &code, body, store.tenant_id()),
         });
     }
     JsonResponse {
@@ -5943,7 +5955,7 @@ fn emulator_route(
                     json!({
                         "email": c.email,
                         "oobCode": c.code,
-                        "oobLink": oob_link(headers, c.request_type, &c.code, &Value::Null),
+                        "oobLink": oob_link(headers, c.request_type, &c.code, &Value::Null, store.tenant_id()),
                         "requestType": c.request_type.as_str(),
                     })
                 })

@@ -366,6 +366,26 @@ const fn emulator(
     }
 }
 
+/// The tenant-scoped inspection routes (`/emulator/v1/projects/{p}/tenants/{t}/...`) the
+/// official emulator serves for accounts, oobCodes and verificationCodes.
+const fn emulator_tenant(
+    method: &'static str,
+    suffix: &'static str,
+    operation: &'static str,
+    handler: Handler,
+) -> Route {
+    Route {
+        method,
+        pattern: Pattern::Tenant {
+            prefix: EMULATOR,
+            suffix,
+        },
+        class: RouteClass::Emulator,
+        operation,
+        handler,
+    }
+}
+
 const fn jwks(path: &'static str) -> Route {
     Route {
         method: "GET",
@@ -640,6 +660,24 @@ pub(crate) const ROUTES: &[Route] = &[
         Handler::EmulatorVerificationCodes,
     ),
     emulator(
+        "DELETE",
+        "/accounts",
+        "emulator/accounts",
+        Handler::EmulatorClearAccounts,
+    ),
+    emulator_tenant(
+        "GET",
+        "/oobCodes",
+        "emulator/oobCodes",
+        Handler::EmulatorOobCodes,
+    ),
+    emulator_tenant(
+        "GET",
+        "/verificationCodes",
+        "emulator/verificationCodes",
+        Handler::EmulatorVerificationCodes,
+    ),
+    emulator_tenant(
         "DELETE",
         "/accounts",
         "emulator/accounts",

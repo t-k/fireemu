@@ -6,6 +6,29 @@ test.describe("Authentication", () => {
     await resetSession(request);
   });
 
+  test("shows second-factor enrollment in user rows", async ({ page, request }) => {
+    const admin = "auth/identitytoolkit.googleapis.com/v1/projects/demo-app";
+    const user = (await api(request, "POST", `${admin}/accounts`, {
+      email: "mfa@example.com",
+      password: "hunter22",
+      emailVerified: true,
+    })) as { localId: string };
+    await api(request, "POST", `${admin}/accounts:update`, {
+      localId: user.localId,
+      mfa: { enrollments: [{ mfaEnrollmentId: "phone-factor", phoneInfo: "+15555550123" }] },
+    });
+    await gotoApp(page, "/auth");
+    await expect(page.getByRole("columnheader", { name: "Second factors" })).toBeVisible();
+    const row = page.getByTestId(`user-row-${user.localId}`);
+    await expect(row.getByRole("cell", { name: "Phone", exact: true })).toBeVisible();
+    await api(request, "POST", `${admin}/accounts:update`, {
+      localId: user.localId,
+      mfa: { enrollments: [] },
+    });
+    await page.getByTestId("user-refresh").click();
+    await expect(row).toContainText("No second factors");
+  });
+
   test("creates, edits, disables and deletes a user", async ({ page }) => {
     await gotoApp(page, "/auth");
     await expect(page.getByText("No users")).toBeVisible();

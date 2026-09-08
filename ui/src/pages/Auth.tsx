@@ -337,6 +337,23 @@ const UserEditor: Component<{
   );
 };
 
+/** Only factor kinds belong in the list; enrollment details stay in the editor. */
+export const MfaSummary: Component<{ enrollments?: UserInfo["mfaInfo"] }> = (props) => (
+  <>
+    {props.enrollments?.length
+      ? props.enrollments
+          .map((factor) =>
+            factor.totpInfo
+              ? t("auth.mfaTotp")
+              : factor.phoneInfo
+                ? t("auth.mfaPhone")
+                : t("auth.mfaUnknown"),
+          )
+          .join(", ")
+      : t("auth.mfaNone")}
+  </>
+);
+
 const Auth: Component = () => {
   const project = appState.project;
   const [query, setQuery] = createSignal("");
@@ -472,6 +489,7 @@ const Auth: Component = () => {
                   <th>{t("auth.phone")}</th>
                   <th>{t("auth.displayName")}</th>
                   <th>{t("auth.providers")}</th>
+                  <th>{t("auth.mfa")}</th>
                   <th>{t("auth.created")}</th>
                   <th>{t("auth.lastSignIn")}</th>
                   <th />
@@ -505,6 +523,9 @@ const Auth: Component = () => {
                       <td>{u.displayName}</td>
                       <td class="text-xs">
                         {(u.providerUserInfo ?? []).map((p) => p.providerId).join(", ")}
+                      </td>
+                      <td class="text-xs">
+                        <MfaSummary enrollments={u.mfaInfo} />
                       </td>
                       <td class="mono text-xs">{formatMillis(u.createdAt)}</td>
                       <td class="mono text-xs">{formatMillis(u.lastLoginAt)}</td>

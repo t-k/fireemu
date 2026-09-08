@@ -44,17 +44,31 @@
         "status": 200
       },
       "testd": {
-        "body": {
-          "error": {
-            "code": 400,
-            "message": "The query requires an index. missing index (age Ascending, name Ascending, __name__ Ascending)\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"conf_index\",\n  \"queryScope\": \"COLLECTION\",\n  \"fields\": [\n      {\"fieldPath\": \"age\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"name\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"__name__\", \"order\": \"ASCENDING\"}\n  ]\n}",
-            "status": "FAILED_PRECONDITION"
+        "body": [
+          {
+            "document": {
+              "createTime": "<timestamp>",
+              "fields": {
+                "age": {
+                  "integerValue": "1"
+                },
+                "city": {
+                  "stringValue": "tokyo"
+                },
+                "name": {
+                  "stringValue": "x"
+                }
+              },
+              "name": "projects/demo-conformance/databases/(default)/documents/conf_index/one",
+              "updateTime": "<timestamp>"
+            },
+            "readTime": "<timestamp>"
           }
-        },
-        "status": 400
+        ],
+        "status": 200
       },
-      "documents": "README.md, \"Composite indexes\"",
-      "reason": "The REST envelope of the same refusal: HTTP 400 FAILED_PRECONDITION with the index fragment, where the official emulator answers 200 with results."
+      "documents": "README.md, \"Gap from the official Firebase Emulator Suite\"",
+      "reason": "The query itself is served on both sides since index merging landed. The official emulator ends the REST runQuery stream with `done: true` on the last response; production omits `done` (probed against the oracle project on 2026-09-08) and fireemu follows production."
     },
     {
       "id": "runQuery-with-an-unknown-operator",

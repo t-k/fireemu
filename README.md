@@ -158,6 +158,7 @@ fireemu is compatible with the listed Local Emulator Suite products as shipped b
 In practical terms:
 
 - the `firebase` profile targets the behavior of the pinned Firebase Emulator Suite release, while `strict` deliberately adds refusals and validation;
+- where production and the official emulator disagree, fireemu follows production and records the difference in `conformance/divergences.json`. Two examples: an equality filter combined with an inequality on another field is refused without a composite index, as production does, and a REST `runQuery` response omits the `done` flag that the official emulator adds;
 - fireemu serves its own UI with the supported Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts workflows. The official UI Logs browser boundary is also tested; Android, Apple and Unity SDK matrices plus optional accessibility and visual snapshots remain outside the current scope;
 - Eventarc publication and trigger-management workflows, Cloud Tasks queue inspection, Pub/Sub snapshots, and loopback push delivery are supported through the Functions and Pub/Sub runtimes. Local safety limits and reload semantics are recorded in the compatibility contract;
 - Realtime Database, Firebase Hosting, App Hosting, and Data Connect are deferred and not served;

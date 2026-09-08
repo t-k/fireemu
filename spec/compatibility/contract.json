@@ -209,11 +209,7 @@
           "profileValue": "emulator",
           "emulatorValue": "emulator",
           "authorityRefs": [
-            "firestore/missing-composite-index#admin-two-equality-filters",
-            "firestore/missing-composite-index#admin-equality-plus-inequality",
-            "firestore/missing-composite-index#client-two-equality-filters",
-            "firestore/lite-rest-transport#query-needing-a-composite-index",
-            "firestore/rest-error-shapes#runQuery-needing-a-composite-index"
+            "firestore/missing-composite-index#admin-equality-plus-inequality"
           ],
           "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs and reports each assumption as FS_EMULATOR_INDEX_ASSUMED. The firebase value reproduces the Firebase backend instead, which refuses the same query; a run whose oracle is production rather than the emulator sets it explicitly. Both values are official behaviour of a different oracle; conservative is neither and belongs to the strict profile."
         },

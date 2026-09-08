@@ -9,8 +9,8 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 7,
-    "documented-divergence": 1,
+    "parity": 8,
+    "documented-divergence": 0,
     "debt": 1,
     "pending": 0
   },
@@ -99,20 +99,13 @@
     },
     {
       "id": "query-needing-a-composite-index",
-      "status": "documented-divergence",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "ids": [
           "one"
         ],
         "size": 1
-      },
-      "testd": {
-        "thrown": true,
-        "code": "failed-precondition",
-        "message": "Request failed with error: The query requires an index. missing index (age Ascending, name Ascending, __name__ Ascending)\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"conf_index\",\n  \"queryScope\": \"COLLECTION\",\n  \"fields\": [\n      {\"fieldPath\": \"age\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"name\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"__name__\", \"order\": \"ASCENDING\"}\n  ]\n}"
-      },
-      "documents": "README.md, \"Composite indexes\"",
-      "reason": "The same policy difference over the REST transport, where the SDK surfaces it as `failed-precondition`."
+      }
     }
   ]
 }

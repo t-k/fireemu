@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Deterministic, test-only local Firebase runtime (Firestore gRPC, Auth REST, control API)"
+description = "An experimental local runtime for testing Firebase SDK and Functions code"
 
 [[bin]]
 name = "fireemu"

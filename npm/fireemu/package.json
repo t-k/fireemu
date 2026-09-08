@@ -1,7 +1,7 @@
 {
   "name": "fireemu",
   "version": "0.0.0-dev",
-  "description": "A deterministic, test-only local runtime for Firebase SDK and Functions code",
+  "description": "An experimental local runtime for testing Firebase SDK and Functions code",
   "keywords": [
     "emulator",
     "firebase",

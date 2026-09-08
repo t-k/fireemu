@@ -71,6 +71,8 @@ export const AsyncButton: Component<{
 export const ConfirmButton: Component<{
   label: string;
   question: string;
+  /** What the action reaches (project, session, path, recursion, undo), for heavy actions. */
+  details?: string | undefined;
   onConfirm: () => Promise<unknown>;
   class?: string | undefined;
   testId?: string | undefined;
@@ -90,8 +92,16 @@ export const ConfirmButton: Component<{
         </button>
       }
     >
-      <span class="inline-flex items-center gap-2 text-sm">
-        <span>{props.question}</span>
+      <span
+        class="inline-flex flex-wrap items-center gap-2 rounded-md border border-red-300 bg-red-50 px-2 py-1 text-sm dark:border-red-800 dark:bg-red-950"
+        role="alertdialog"
+      >
+        <span>
+          <span class="font-semibold">{props.question}</span>
+          <Show when={props.details}>
+            <span class="block text-xs text-zinc-600 dark:text-zinc-300">{props.details}</span>
+          </Show>
+        </span>
         <AsyncButton
           class="btn btn-danger"
           testId={props.testId ? `${props.testId}-confirm` : undefined}
@@ -163,6 +173,68 @@ export const CopyField: Component<{
     </div>
   );
 };
+
+/**
+ * The state of a fetched list or record, told apart so a failure never reads as "empty":
+ * loading (nothing shown yet), failed (with retry), stale (an older successful read is shown
+ * because the latest refresh failed), empty, or the content.
+ */
+export const FetchState: Component<{
+  loading: boolean;
+  error?: string | null | undefined;
+  stale?: string | null | undefined;
+  onRetry?: (() => Promise<unknown>) | undefined;
+  empty?: boolean | undefined;
+  emptyMessage?: string | undefined;
+  children: JSX.Element;
+}> = (props) => (
+  <Show
+    when={!props.error}
+    fallback={
+      <div
+        role="alert"
+        data-testid="fetch-error"
+        class="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200"
+      >
+        <span class="font-semibold">{t("app.fetchFailed")}</span>
+        <span class="break-all">{props.error}</span>
+        <Show when={props.onRetry}>
+          {(retry) => (
+            <AsyncButton class="btn" onClick={retry()} testId="fetch-retry">
+              {t("app.retry")}
+            </AsyncButton>
+          )}
+        </Show>
+      </div>
+    }
+  >
+    <Show when={!props.loading} fallback={<Spinner />}>
+      <Show when={props.stale}>
+        <div
+          role="status"
+          data-testid="fetch-stale"
+          class="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+        >
+          <span class="font-semibold">{t("app.fetchStale")}</span>
+          <span class="break-all">{props.stale}</span>
+          <Show when={props.onRetry}>
+            {(retry) => (
+              <AsyncButton class="btn" onClick={retry()}>
+                {t("app.retry")}
+              </AsyncButton>
+            )}
+          </Show>
+        </div>
+      </Show>
+      <Show
+        when={!props.empty}
+        fallback={<p class="text-sm text-zinc-500">{props.emptyMessage ?? t("app.none")}</p>}
+      >
+        {props.children}
+      </Show>
+    </Show>
+  </Show>
+);
 
 export const Spinner: Component = () => (
   <span class="text-sm text-zinc-500" role="status">

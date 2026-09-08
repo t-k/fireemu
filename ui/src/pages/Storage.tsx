@@ -1,15 +1,26 @@
 import { A, useNavigate, useParams, useSearchParams } from "@solidjs/router";
-import { createEffect, createResource, createSignal, For, Show, type Component } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  on,
+  Show,
+  type Component,
+} from "solid-js";
 import { t } from "../i18n";
 import { appState } from "../state";
 import {
   AsyncButton,
   ConfirmButton,
   ErrorBanner,
+  FetchState,
   Field,
   Notice,
   Spinner,
 } from "../components/common";
+import { decodeSplat, storageHref } from "../lib/hrefs";
+import { createPagedList } from "../lib/pagedList";
 import {
   deleteObject,
   downloadObject,
@@ -125,39 +136,34 @@ const Storage: Component = () => {
   const bucket = () =>
     (typeof search.bucket === "string" && search.bucket) || `${appState.project()}.appspot.com`;
   const prefix = () => {
-    const p = (params.path ?? "").split("/").filter(Boolean).join("/");
+    const p = decodeSplat(params.path).join("/");
     return p ? `${p}/` : "";
   };
-  const [objects, setObjects] = createSignal<ObjectInfo[]>([]);
-  const [folders, setFolders] = createSignal<string[]>([]);
-  const [nextToken, setNextToken] = createSignal<string | undefined>(undefined);
-  const [loading, setLoading] = createSignal(false);
+  // Folders and objects share one listing: a row is either a prefix or an object.
+  type Entry = { kind: "folder"; name: string } | { kind: "object"; object: ObjectInfo };
+  const list = createPagedList<Entry>((token) =>
+    listObjects(bucket(), prefix(), token).map((page) => ({
+      items: [
+        ...(page.prefixes ?? []).map((name): Entry => ({ kind: "folder", name })),
+        ...(page.items ?? []).map((object): Entry => ({ kind: "object", object })),
+      ],
+      nextToken: page.nextPageToken,
+    })),
+  );
+  const folders = () => list.items().flatMap((e) => (e.kind === "folder" ? [e.name] : []));
+  const objects = () => list.items().flatMap((e) => (e.kind === "object" ? [e.object] : []));
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
   const [selected, setSelected] = createSignal<string | null>(null);
-  const [version, setVersion] = createSignal(0);
   const [fileInput, setFileInput] = createSignal<HTMLInputElement>();
 
-  const load = async (token?: string) => {
-    setLoading(true);
-    setError(null);
-    const r = await listObjects(bucket(), prefix(), token);
-    setLoading(false);
-    r.match(
-      (page) => {
-        setObjects(token ? [...objects(), ...(page.items ?? [])] : (page.items ?? []));
-        setFolders(token ? [...folders(), ...(page.prefixes ?? [])] : (page.prefixes ?? []));
-        setNextToken(page.nextPageToken);
-      },
-      (e) => setError(e.message),
-    );
-  };
-  createEffect(() => {
-    void [bucket(), prefix(), version()];
-    void load();
-  });
-  const link = (folder: string) =>
-    `/storage/${folder.replace(/\/$/, "")}?bucket=${encodeURIComponent(bucket())}`;
+  createEffect(
+    on(
+      () => [bucket(), prefix()] as const,
+      () => void list.load(),
+    ),
+  );
+  const link = (folder: string) => storageHref(folder, bucket());
   const upload = async () => {
     const file = fileInput()?.files?.[0];
     if (!file) return;
@@ -169,7 +175,7 @@ const Storage: Component = () => {
         setNotice(`${t("storage.upload")}: ${o.name}`);
         const input = fileInput();
         if (input) input.value = "";
-        setVersion((v) => v + 1);
+        void list.refresh();
       },
       (e) => setError(e.message),
     );
@@ -186,18 +192,22 @@ const Storage: Component = () => {
             value={bucket()}
             onChange={(e) => {
               setSearch({ bucket: e.currentTarget.value });
-              navigate(`/storage?bucket=${encodeURIComponent(e.currentTarget.value)}`);
+              navigate(storageHref("", e.currentTarget.value));
             }}
           >
             <For each={bucketList()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
           </select>
         </label>
+        <ErrorBanner message={errorOf(buckets())} />
+        <span
+          class="badge bg-violet-100 text-violet-900 dark:bg-violet-900 dark:text-violet-100"
+          title={t("app.adminHint")}
+        >
+          {t("app.admin")}
+        </span>
       </div>
       <nav class="mono mb-3 flex flex-wrap items-center gap-1" aria-label={t("storage.path")}>
-        <A
-          href={`/storage?bucket=${encodeURIComponent(bucket())}`}
-          class="text-amber-700 hover:underline dark:text-amber-300"
-        >
+        <A href={storageHref("", bucket())} class="link">
           {bucket()}
         </A>
         <For each={prefix().split("/").filter(Boolean)}>
@@ -212,7 +222,7 @@ const Storage: Component = () => {
                     .slice(0, i() + 1)
                     .join("/"),
                 )}
-                class="text-amber-700 hover:underline dark:text-amber-300"
+                class="link"
               >
                 {s}
               </A>
@@ -247,73 +257,65 @@ const Storage: Component = () => {
               onClose={() => setSelected(null)}
               onDeleted={() => {
                 setSelected(null);
-                setVersion((v) => v + 1);
+                void list.refresh();
               }}
             />
           )}
         </Show>
-        <Show
-          when={!loading() || objects().length > 0 || folders().length > 0}
-          fallback={<Spinner />}
+        <FetchState
+          loading={list.loading()}
+          error={list.error()}
+          stale={list.stale()}
+          onRetry={list.refresh}
+          empty={list.items().length === 0}
+          emptyMessage={t("storage.noObjects")}
         >
-          <Show
-            when={objects().length > 0 || folders().length > 0}
-            fallback={<p class="text-sm text-zinc-500">{t("storage.noObjects")}</p>}
-          >
-            <table class="table" data-testid="object-table">
-              <thead>
-                <tr>
-                  <th>{t("storage.name")}</th>
-                  <th>{t("storage.size")}</th>
-                  <th>{t("storage.contentType")}</th>
-                  <th>{t("storage.updated")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={folders()}>
-                  {(f) => (
-                    <tr>
-                      <td class="mono">
-                        <A
-                          href={link(f)}
-                          class="text-amber-700 hover:underline dark:text-amber-300"
-                        >
-                          {f.slice(prefix().length)}
-                        </A>
-                      </td>
-                      <td class="text-xs text-zinc-500">{t("storage.folder")}</td>
-                      <td />
-                      <td />
-                    </tr>
-                  )}
-                </For>
-                <For each={objects()}>
-                  {(o) => (
-                    <tr data-testid={`object-row-${o.name}`}>
-                      <td class="mono">
-                        <button
-                          type="button"
-                          class="text-amber-700 hover:underline dark:text-amber-300"
-                          onClick={() => setSelected(o.name)}
-                        >
-                          {o.name.slice(prefix().length)}
-                        </button>
-                      </td>
-                      <td>{formatSize(o.size)}</td>
-                      <td class="mono text-xs">{o.contentType}</td>
-                      <td class="mono text-xs">{o.updated}</td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
-          </Show>
-          <Show when={nextToken()}>
-            <AsyncButton class="btn mt-2" onClick={() => load(nextToken())}>
+          <table class="table" data-testid="object-table">
+            <thead>
+              <tr>
+                <th>{t("storage.name")}</th>
+                <th>{t("storage.size")}</th>
+                <th>{t("storage.contentType")}</th>
+                <th>{t("storage.updated")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={folders()}>
+                {(f) => (
+                  <tr>
+                    <td class="mono">
+                      <A href={link(f)} class="link">
+                        {f.slice(prefix().length)}
+                      </A>
+                    </td>
+                    <td class="text-xs text-zinc-500">{t("storage.folder")}</td>
+                    <td />
+                    <td />
+                  </tr>
+                )}
+              </For>
+              <For each={objects()}>
+                {(o) => (
+                  <tr data-testid={`object-row-${o.name}`}>
+                    <td class="mono">
+                      <button type="button" class="link" onClick={() => setSelected(o.name)}>
+                        {o.name.slice(prefix().length)}
+                      </button>
+                    </td>
+                    <td>{formatSize(o.size)}</td>
+                    <td class="mono text-xs">{o.contentType}</td>
+                    <td class="mono text-xs">{o.updated}</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+          <Show when={list.nextToken()}>
+            <AsyncButton class="btn mt-2" onClick={list.more}>
               {t("storage.more")}
             </AsyncButton>
           </Show>
-        </Show>
+        </FetchState>
       </div>
     </div>
   );

@@ -8,6 +8,8 @@ const store = createRoot(() => {
   const [clock, setClock] = createSignal<string>("");
   const [sessions, setSessions] = createSignal<Session[]>(initialConfig().sessions);
   const [session, setSession] = createSignal<string>("default");
+  /** Whether the last poll of the daemon answered (null until the first one). */
+  const [connected, setConnected] = createSignal<boolean | null>(null);
 
   /** The project of the selected session. */
   const project = (): string =>
@@ -19,6 +21,7 @@ const store = createRoot(() => {
     info.map((i) => setClock(i.clock.clock));
     const list = await listSessions();
     list.map((l) => setSessions(l.sessions));
+    setConnected(info.isOk() && list.isOk());
   };
 
   return {
@@ -31,6 +34,7 @@ const store = createRoot(() => {
     session,
     setSession,
     project,
+    connected,
     refreshClock,
   };
 });

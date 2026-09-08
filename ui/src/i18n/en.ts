@@ -18,6 +18,14 @@ export const en = {
   "app.no": "no",
   "app.copy": "Copy",
   "app.copied": "Copied",
+  "app.admin": "Admin",
+  "app.adminHint":
+    "This console acts as the project owner: Security Rules are bypassed. A write that succeeds here says nothing about what your client's rules allow.",
+  "app.fetchFailed": "Could not load:",
+  "app.fetchStale": "Showing the last successful read; the latest refresh failed:",
+  "app.unsaved": "{subject} has unsaved changes. Discard them?",
+  "app.discard": "Discard changes",
+  "app.keepEditing": "Keep editing",
   "app.notBundled":
     "This binary was built without the UI bundle; run pnpm -C ui build and rebuild the daemon.",
   "app.tokenMissing":
@@ -56,6 +64,16 @@ export const en = {
   "overview.sessions": "Sessions",
   "overview.session": "Session",
   "overview.envVars": "Environment for SDKs",
+  "overview.envVarsFor":
+    "For session {session} (project {project}). Switch the session in the header to target another project.",
+  "overview.envDotenv": ".env",
+  "overview.envShell": "Shell",
+  "overview.selectedSession": "Selected session",
+  "overview.daemonProject": "Daemon default project",
+  "header.local": "Local emulator",
+  "header.connected": "Connected",
+  "header.disconnected": "Daemon not answering",
+  "header.connecting": "Connecting",
   "overview.capabilities": "Capability manifest",
 
   "firestore.title": "Firestore",
@@ -97,6 +115,16 @@ export const en = {
   "firestore.liveOff": "Reconnecting",
   "firestore.more": "Load more",
   "firestore.deleted": "Deleted {count} documents",
+  "firestore.deleting": "Deleting: {count} documents removed so far",
+  "firestore.deletePartial":
+    "Stopped after deleting {count} documents; those deletions are not reverted. {message}",
+  "firestore.deleteCollectionDetails":
+    "Project {project}, database {db}. Every subcollection is deleted too. There is no undo unless a snapshot was captured first.",
+  "firestore.goTo": "Go",
+  "firestore.editorSubject": "The document editor for {path}",
+  "firestore.deleteDocumentDetails":
+    "Project {project}, database {db}. Fields are removed; subcollections stay. No undo.",
+  "firestore.goToPlaceholder": "Go to path, for example users/alice",
   "firestore.invalidValue": "{field}: {message}",
   "firestore.duplicateField": "Field {field} is declared twice",
   "firestore.emptyFieldName": "A field needs a name",
@@ -134,6 +162,8 @@ export const en = {
   "auth.photoUrl": "Photo URL",
   "auth.password": "Password",
   "auth.passwordKeep": "Leave empty to keep the current password",
+  "auth.saved": "Saved",
+  "auth.editorSubject": "The editor for {uid}",
   "auth.disabled": "Disabled",
   "auth.enabled": "Enabled",
   "auth.providers": "Providers",
@@ -190,6 +220,9 @@ export const en = {
   "storage.uploadPrefix": "Uploads go under the current prefix",
 
   "functions.title": "Functions",
+  "functions.logsFollowing": "Following new lines",
+  "functions.logsNewLines": "{count} new lines, jump to end",
+  "functions.logsJumpToEnd": "Jump to end",
   "functions.notConfigured":
     "No functions codebase is loaded. Start the daemon with --functions <dir> or functions.source.",
   "functions.registered": "Registered functions",
@@ -253,6 +286,7 @@ export const en = {
   "rules.dropConfirm": "Drop the loaded {which} rules? Every request will be allowed.",
   "rules.saved": "Rules replaced",
   "rules.source": "Source",
+  "rules.editorSubject": "The {which} rules editor",
   "rules.requests": "Requests",
   "rules.coverage": "Rules coverage",
   "rules.coverageNone": "No coverage yet: load a ruleset and let a request evaluate against it.",
@@ -374,6 +408,10 @@ export const en = {
   "runtime.action": "Action",
   "runtime.occurrence": "Occurrence",
   "runtime.resources": "Resources",
+  "runtime.restoreDetails":
+    "Session {session}: every product's data is replaced by the snapshot and the clock returns to {clock}. Unsaved data of this session is lost.",
+  "runtime.resetDetails":
+    "All Firestore, Auth, Storage and Functions state of this session is wiped, the clock restarts, and the fault plan is cleared. Snapshots remain.",
   "runtime.resourcesIntro":
     "What each service retains for this session: logical charges against their limits, refused admissions, and the roots that keep bytes alive. Logical, estimated and process measures are never added together.",
   "runtime.resourcesRefresh": "Refresh",

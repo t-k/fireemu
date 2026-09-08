@@ -5,6 +5,7 @@ import {
   AsyncButton,
   ConfirmButton,
   ErrorBanner,
+  FetchState,
   Notice,
   Section,
   Spinner,
@@ -18,7 +19,8 @@ import {
   type RulesExprValue,
 } from "../api/control";
 import { coverageRows, coverageSummary } from "../lib/coverage";
-import { settle } from "../api/client";
+import { createLeaveGuard, LeavePrompt } from "../lib/unsaved";
+import { errorOf, settle } from "../api/client";
 
 const RulesEditor: Component<{ which: "firestore" | "storage"; title: string }> = (props) => {
   const [info, { refetch }] = createResource(() => settle(getRules(props.which)));
@@ -35,6 +37,11 @@ const RulesEditor: Component<{ which: "firestore" | "storage"; title: string }> 
     info()
       ?.map((i) => i.loaded)
       .unwrapOr(false) ?? false;
+  const loadedSource = () =>
+    info()
+      ?.map((i) => i.source)
+      .unwrapOr("") ?? "";
+  const guard = createLeaveGuard(() => draft() !== null && draft() !== loadedSource());
   const save = async () => {
     setError(null);
     setNotice(null);
@@ -81,9 +88,16 @@ const RulesEditor: Component<{ which: "firestore" | "storage"; title: string }> 
         </>
       }
     >
+      <LeavePrompt guard={guard} subject={t("rules.editorSubject", { which: props.which })} />
       <ErrorBanner message={error()} />
       <Notice message={notice()} />
-      <Show when={!info.loading} fallback={<Spinner />}>
+      <FetchState
+        loading={info.loading && !info()}
+        error={errorOf(info())}
+        onRetry={async () => {
+          await refetch();
+        }}
+      >
         <label class="label" for={`rules-${props.which}`}>
           {t("rules.source")}
         </label>
@@ -94,7 +108,7 @@ const RulesEditor: Component<{ which: "firestore" | "storage"; title: string }> 
           value={source()}
           onInput={(e) => setDraft(e.currentTarget.value)}
         />
-      </Show>
+      </FetchState>
     </Section>
   );
 };

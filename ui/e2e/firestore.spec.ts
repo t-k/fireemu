@@ -267,11 +267,13 @@ test.describe("Firestore data browser", () => {
     });
     await page.getByTestId("document-reload-draft").click();
     await started;
-    await expect(page.getByRole("status")).toHaveText("Loading");
-    await expect(page.getByTestId("document-save")).toHaveCount(0);
-    await expect(page.getByLabel("Value")).toHaveCount(0);
+    // While the reload runs the draft stays on screen but nothing can be submitted.
+    await expect(page.getByTestId("document-save")).toBeDisabled();
+    await expect(page.getByLabel("Value")).toBeDisabled();
     await page.getByTestId("database-input").fill("scope-db");
     await page.getByTestId("database-input").press("Tab");
+    // Leaving the document with a draft asks first; the reader discards it.
+    await page.getByTestId("unsaved-discard").click();
     await expect(page).toHaveURL(/db=scope-db/);
     const staleResponse = page.waitForResponse(
       (response) =>

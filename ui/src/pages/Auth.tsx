@@ -1,11 +1,20 @@
-import { createResource, createSignal, For, Show, type Component } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+  type Component,
+} from "solid-js";
 import { t } from "../i18n";
+import { createLeaveGuard, LeavePrompt } from "../lib/unsaved";
 import { appState } from "../state";
 import {
   AsyncButton,
   ConfirmButton,
+  CopyField,
   ErrorBanner,
-  Field,
   Notice,
   Section,
   Spinner,
@@ -118,28 +127,54 @@ const NewUserForm: Component<{ project: string; onDone: () => void; onCancel: ()
   );
 };
 
+/**
+ * Edits one user. The parent keys this component by project and UID, so a different target
+ * always gets a fresh editor: the draft below belongs to `props.uid` alone. `props.user` is
+ * the latest record of that UID (it refreshes after a save); the inputs start from the
+ * record at mount and are never overwritten by a refresh.
+ */
 const UserEditor: Component<{
   project: string;
+  uid: string;
   user: UserInfo;
+  onDirty: (dirty: boolean) => void;
   onSaved: () => void;
   onClose: () => void;
 }> = (props) => {
-  const [email, setEmail] = createSignal(props.user.email ?? "");
+  const initial = {
+    email: props.user.email ?? "",
+    phone: props.user.phoneNumber ?? "",
+    displayName: props.user.displayName ?? "",
+    photoUrl: props.user.photoUrl ?? "",
+    verified: props.user.emailVerified ?? false,
+    claims: props.user.customAttributes ?? "{}",
+  };
+  const [email, setEmail] = createSignal(initial.email);
   const [password, setPassword] = createSignal("");
-  const [phone, setPhone] = createSignal(props.user.phoneNumber ?? "");
-  const [displayName, setDisplayName] = createSignal(props.user.displayName ?? "");
-  const [photoUrl, setPhotoUrl] = createSignal(props.user.photoUrl ?? "");
-  const [verified, setVerified] = createSignal(props.user.emailVerified ?? false);
-  const [claims, setClaims] = createSignal(props.user.customAttributes ?? "{}");
+  const [phone, setPhone] = createSignal(initial.phone);
+  const [displayName, setDisplayName] = createSignal(initial.displayName);
+  const [photoUrl, setPhotoUrl] = createSignal(initial.photoUrl);
+  const [verified, setVerified] = createSignal(initial.verified);
+  const [claims, setClaims] = createSignal(initial.claims);
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
+  const dirty = () =>
+    email() !== initial.email ||
+    password() !== "" ||
+    phone() !== initial.phone ||
+    displayName() !== initial.displayName ||
+    photoUrl() !== initial.photoUrl ||
+    verified() !== initial.verified ||
+    claims() !== initial.claims;
+  createEffect(() => props.onDirty(dirty()));
+  onCleanup(() => props.onDirty(false));
   const apply = async (update: Omit<UserUpdate, "localId">) => {
     setError(null);
     setNotice(null);
-    const r = await updateUser(props.project, { localId: props.user.localId, ...update });
+    const r = await updateUser(props.project, { localId: props.uid, ...update });
     r.match(
       () => {
-        setNotice(t("app.save"));
+        setNotice(t("auth.saved"));
         props.onSaved();
       },
       (e) => setError(e.message),
@@ -187,9 +222,24 @@ const UserEditor: Component<{
       </div>
       <ErrorBanner message={error()} />
       <Notice message={notice()} />
-      <Field label={t("auth.uid")} mono>
-        {props.user.localId}
-      </Field>
+      <CopyField label={t("auth.uid")} value={props.uid} testId="edit-uid" />
+      <div class="mb-2 flex flex-wrap gap-1">
+        <span
+          class={`badge ${props.user.disabled ? "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100"}`}
+        >
+          {props.user.disabled ? t("auth.disabled") : t("auth.enabled")}
+        </span>
+        <Show when={props.user.emailVerified}>
+          <span class="badge bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100">
+            {t("auth.emailVerified")}
+          </span>
+        </Show>
+        <Show when={(props.user.mfaInfo?.length ?? 0) > 0}>
+          <span class="badge bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-100">
+            {t("auth.mfa")}
+          </span>
+        </Show>
+      </div>
       <div class="grid gap-2 md:grid-cols-2">
         <label class="text-sm">
           <span class="label">{t("auth.email")}</span>
@@ -297,6 +347,10 @@ const Auth: Component = () => {
   const [notice, setNotice] = createSignal<string | null>(null);
   const [adding, setAdding] = createSignal(false);
   const [selected, setSelected] = createSignal<string | null>(null);
+  const [editorDirty, setEditorDirty] = createSignal(false);
+  const guard = createLeaveGuard(editorDirty);
+  /** Changes the edited user (or closes the editor) once any unsaved draft is settled. */
+  const select = (uid: string | null) => guard.request(() => setSelected(uid));
   const [codes, { refetch: refetchCodes }] = createResource(project, (p) =>
     settle(listOobCodes(p)),
   );
@@ -368,6 +422,7 @@ const Auth: Component = () => {
                 const r = await deleteAllUsers(project());
                 r.match(
                   () => {
+                    setEditorDirty(false);
                     setSelected(null);
                     void refreshAll();
                   },
@@ -391,13 +446,16 @@ const Auth: Component = () => {
             onCancel={() => setAdding(false)}
           />
         </Show>
-        <Show when={selectedUser()}>
-          {(u) => (
+        <LeavePrompt guard={guard} subject={t("auth.editorSubject", { uid: selected() ?? "" })} />
+        <Show when={selectedUser() ? `${project()}/${selected() ?? ""}` : null} keyed>
+          {(_key) => (
             <UserEditor
               project={project()}
-              user={u()}
+              uid={selected() ?? ""}
+              user={selectedUser() as UserInfo}
+              onDirty={setEditorDirty}
               onSaved={() => void refreshAll()}
-              onClose={() => setSelected(null)}
+              onClose={() => select(null)}
             />
           )}
         </Show>
@@ -430,7 +488,7 @@ const Auth: Component = () => {
                         <button
                           type="button"
                           class="text-amber-700 hover:underline dark:text-amber-300"
-                          onClick={() => setSelected(u.localId)}
+                          onClick={() => select(u.localId)}
                         >
                           {u.localId}
                         </button>

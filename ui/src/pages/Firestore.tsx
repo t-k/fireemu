@@ -2,6 +2,7 @@ import { A, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import {
   createEffect,
   createMemo,
+  on,
   createResource,
   createSignal,
   For,
@@ -9,10 +10,14 @@ import {
   Show,
   type Component,
 } from "solid-js";
+import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { t } from "../i18n";
 import { appState } from "../state";
-import { AsyncButton, ConfirmButton, ErrorBanner, Notice, Spinner } from "../components/common";
-import { errorOf, settle, subscribe } from "../api/client";
+import { AsyncButton, ConfirmButton, ErrorBanner, FetchState, Notice } from "../components/common";
+import { decodeSplat, firestoreHref } from "../lib/hrefs";
+import { createPagedList } from "../lib/pagedList";
+import { createLeaveGuard, LeavePrompt } from "../lib/unsaved";
+import { settle, subscribe } from "../api/client";
 import {
   createDocument,
   deleteCollection,
@@ -89,15 +94,23 @@ const hint = (type: FieldType): string => {
   }
 };
 
+/**
+ * The rows of a field editor as a store. A store keeps every row's identity across edits, so
+ * `<For>` updates the input in place instead of replacing the row (which would drop focus, the
+ * caret and any IME composition on every keystroke).
+ */
+export const createFieldsStore = (
+  initial: EditableField[],
+): [EditableField[], SetStoreFunction<EditableField[]>] => createStore<EditableField[]>(initial);
+
 /** The typed field editor: a name, a type and a value per row. */
-const FieldsEditor: Component<{
+export const FieldsEditor: Component<{
   fields: EditableField[];
-  onChange: (fields: EditableField[]) => void;
+  setFields: SetStoreFunction<EditableField[]>;
   disabled?: boolean;
 }> = (props) => {
-  const update = (index: number, patch: Partial<EditableField>) =>
-    props.onChange(props.fields.map((f, i) => (i === index ? { ...f, ...patch } : f)));
-  const remove = (index: number) => props.onChange(props.fields.filter((_, i) => i !== index));
+  const update = (index: number, patch: Partial<EditableField>) => props.setFields(index, patch);
+  const remove = (index: number) => props.setFields(produce((rows) => void rows.splice(index, 1)));
   return (
     <div>
       <table class="table">
@@ -188,7 +201,9 @@ const FieldsEditor: Component<{
         class="btn mt-2"
         data-testid="add-field"
         disabled={props.disabled}
-        onClick={() => props.onChange([...props.fields, { name: "", type: "string", text: "" }])}
+        onClick={() =>
+          props.setFields(produce((rows) => void rows.push({ name: "", type: "string", text: "" })))
+        }
       >
         {t("firestore.addField")}
       </button>
@@ -199,28 +214,87 @@ const FieldsEditor: Component<{
 const Breadcrumbs: Component<{ path: string; db: string }> = (props) => {
   const segments = () => props.path.split("/").filter(Boolean);
   const link = (index: number) =>
-    `/firestore/${segments()
-      .slice(0, index + 1)
-      .join("/")}?db=${encodeURIComponent(props.db)}`;
+    firestoreHref(
+      segments()
+        .slice(0, index + 1)
+        .join("/"),
+      props.db,
+    );
   return (
     <nav class="mono mb-3 flex flex-wrap items-center gap-1" aria-label={t("firestore.title")}>
-      <A
-        href={`/firestore?db=${encodeURIComponent(props.db)}`}
-        class="text-amber-700 hover:underline dark:text-amber-300"
-      >
+      <A href={firestoreHref("", props.db)} class="link">
         {t("firestore.root")}
       </A>
       <For each={segments()}>
         {(s, i) => (
           <>
             <span class="text-zinc-400">/</span>
-            <A href={link(i())} class="text-amber-700 hover:underline dark:text-amber-300">
+            <A href={link(i())} class="link">
               {s}
             </A>
           </>
         )}
       </For>
     </nav>
+  );
+};
+
+/** The collection IDs under a parent, paged (the API answers 300 at a time). */
+const CollectionList: Component<{
+  root: string;
+  parent: string;
+  db: string;
+  version: number;
+  testId: string;
+}> = (props) => {
+  const list = createPagedList((token) =>
+    listCollectionIds(props.root, props.parent, token).map((page) => ({
+      items: page.collectionIds ?? [],
+      nextToken: page.nextPageToken,
+    })),
+  );
+  createEffect(
+    on(
+      () => [props.root, props.parent] as const,
+      () => void list.load(),
+    ),
+  );
+  createEffect(
+    on(
+      () => props.version,
+      () => void list.refresh(),
+      { defer: true },
+    ),
+  );
+  return (
+    <FetchState
+      loading={list.loading()}
+      error={list.error()}
+      stale={list.stale()}
+      onRetry={list.refresh}
+      empty={list.items().length === 0}
+      emptyMessage={t("firestore.noCollections")}
+    >
+      <ul class="mono space-y-1" data-testid={props.testId}>
+        <For each={list.items()}>
+          {(id) => (
+            <li>
+              <A
+                href={firestoreHref(props.parent ? `${props.parent}/${id}` : id, props.db)}
+                class="link"
+              >
+                {id}
+              </A>
+            </li>
+          )}
+        </For>
+      </ul>
+      <Show when={list.nextToken()}>
+        <AsyncButton class="btn mt-2" onClick={list.more}>
+          {t("firestore.more")}
+        </AsyncButton>
+      </Show>
+    </FetchState>
   );
 };
 
@@ -232,14 +306,12 @@ const NewDocumentForm: Component<{
   onCancel: () => void;
 }> = (props) => {
   const [id, setId] = createSignal("");
-  const [fields, setFields] = createSignal<EditableField[]>([
-    { name: "", type: "string", text: "" },
-  ]);
+  const [fields, setFields] = createFieldsStore([{ name: "", type: "string", text: "" }]);
   const [error, setError] = createSignal<string | null>(null);
   const save = async () => {
     setError(null);
     const parsed = parseFields(
-      fields().filter((f) => f.name || f.text),
+      fields.filter((f) => f.name || f.text),
       props.root,
     );
     if (parsed.isErr()) {
@@ -268,7 +340,7 @@ const NewDocumentForm: Component<{
           onInput={(e) => setId(e.currentTarget.value)}
         />
       </label>
-      <FieldsEditor fields={fields()} onChange={setFields} />
+      <FieldsEditor fields={fields} setFields={setFields} />
       <div class="mt-3 flex gap-2">
         <AsyncButton class="btn btn-primary" onClick={save} testId="new-document-save">
           {t("app.save")}
@@ -290,9 +362,7 @@ const NewCollectionForm: Component<{
 }> = (props) => {
   const [collection, setCollection] = createSignal("");
   const [id, setId] = createSignal("");
-  const [fields, setFields] = createSignal<EditableField[]>([
-    { name: "", type: "string", text: "" },
-  ]);
+  const [fields, setFields] = createFieldsStore([{ name: "", type: "string", text: "" }]);
   const [error, setError] = createSignal<string | null>(null);
   const save = async () => {
     setError(null);
@@ -307,7 +377,7 @@ const NewCollectionForm: Component<{
       return;
     }
     const parsed = parseFields(
-      fields().filter((f) => f.name || f.text),
+      fields.filter((f) => f.name || f.text),
       props.root,
     );
     if (parsed.isErr()) {
@@ -346,7 +416,7 @@ const NewCollectionForm: Component<{
           onInput={(e) => setId(e.currentTarget.value)}
         />
       </label>
-      <FieldsEditor fields={fields()} onChange={setFields} />
+      <FieldsEditor fields={fields} setFields={setFields} />
       <div class="mt-3 flex gap-2">
         <AsyncButton class="btn btn-primary" onClick={save} testId="new-collection-save">
           {t("app.save")}
@@ -372,12 +442,8 @@ const DocumentView: Component<{
     () => [props.root, props.path, props.version] as const,
     ([root, path]) => settle(getDocument(root, path)),
   );
-  const [subs, { refetch: refetchSubs }] = createResource(
-    () => [props.root, props.path, props.version] as const,
-    ([root, path]) => settle(listCollectionIds(root, path)),
-  );
   const [editing, setEditing] = createSignal(false);
-  const [fields, setFields] = createSignal<EditableField[]>([]);
+  const [fields, setFields] = createFieldsStore([]);
   const [editSession, setEditSession] = createSignal<{
     root: string;
     path: string;
@@ -392,6 +458,12 @@ const DocumentView: Component<{
   const [showJson, setShowJson] = createSignal(false);
   const [newCollection, setNewCollection] = createSignal(false);
   const current = createMemo<FsDocument | null>(() => doc()?.unwrapOr(null) ?? null);
+  const loadError = () =>
+    doc()?.match(
+      () => null,
+      (e) => (e.status === 404 ? null : e.message),
+    ) ?? null;
+  const guard = createLeaveGuard(() => editing() && fields.some((f) => f.dirty));
   const missing = () =>
     doc()?.match(
       () => false,
@@ -431,7 +503,7 @@ const DocumentView: Component<{
     setError(null);
     const session = editSession();
     if (!session) return;
-    const parsed = parseFields(fields(), session.root);
+    const parsed = parseFields(fields, session.root);
     if (parsed.isErr()) {
       setError(
         t("firestore.invalidValue", { field: parsed.error.field, message: parsed.error.message }),
@@ -480,7 +552,7 @@ const DocumentView: Component<{
     if (editBusy()) return;
     const session = editSession();
     if (!session || props.root !== session.root || props.path !== session.path) return;
-    const draft = fields();
+    const draft = fields;
     const parsedDraft = parseFields(draft, session.root);
     if (parsedDraft.isErr()) return;
     const draftChanges = diffFields(session.fields, parsedDraft.value);
@@ -534,14 +606,25 @@ const DocumentView: Component<{
           <ConfirmButton
             label={t("firestore.deleteDocument")}
             question={t("firestore.deleteDocumentConfirm", { path: props.path })}
+            details={t("firestore.deleteDocumentDetails", {
+              project: appState.project(),
+              db: props.db,
+            })}
             onConfirm={remove}
             testId="document-delete"
           />
         </div>
       </div>
+      <LeavePrompt guard={guard} subject={t("firestore.editorSubject", { path: props.path })} />
       <ErrorBanner message={error()} />
       <Notice message={notice()} />
-      <Show when={!doc.loading} fallback={<Spinner />}>
+      <FetchState
+        loading={doc.loading && !current()}
+        error={loadError()}
+        onRetry={async () => {
+          await refetch();
+        }}
+      >
         <Show when={missing()}>
           <p class="mb-3 text-sm text-zinc-500">{t("firestore.missing")}</p>
         </Show>
@@ -585,7 +668,7 @@ const DocumentView: Component<{
             </Show>
           }
         >
-          <FieldsEditor fields={fields()} onChange={setFields} disabled={editBusy()} />
+          <FieldsEditor fields={fields} setFields={setFields} disabled={editBusy()} />
           <Show when={conflict()}>
             <button
               type="button"
@@ -627,7 +710,7 @@ const DocumentView: Component<{
             {JSON.stringify(current()?.fields ?? {}, null, 2)}
           </pre>
         </Show>
-      </Show>
+      </FetchState>
       <div class="mt-4">
         <div class="mb-2 flex items-center justify-between">
           <h3 class="font-semibold">{t("firestore.subcollections")}</h3>
@@ -647,33 +730,18 @@ const DocumentView: Component<{
             onDone={(path) => {
               setNewCollection(false);
               setNotice(null);
-              void refetchSubs();
-              navigate(`/firestore/${path}?db=${encodeURIComponent(props.db)}`);
+              navigate(firestoreHref(path, props.db));
             }}
             onCancel={() => setNewCollection(false)}
           />
         </Show>
-        <Show when={!subs.loading} fallback={<Spinner />}>
-          <Show
-            when={(subs()?.unwrapOr({ collectionIds: [] }).collectionIds?.length ?? 0) > 0}
-            fallback={<p class="text-sm text-zinc-500">{t("firestore.noCollections")}</p>}
-          >
-            <ul class="mono space-y-1">
-              <For each={subs()?.unwrapOr({ collectionIds: [] }).collectionIds ?? []}>
-                {(id) => (
-                  <li>
-                    <A
-                      href={`/firestore/${props.path}/${id}?db=${encodeURIComponent(props.db)}`}
-                      class="text-amber-700 hover:underline dark:text-amber-300"
-                    >
-                      {id}
-                    </A>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-        </Show>
+        <CollectionList
+          root={props.root}
+          parent={props.path}
+          db={props.db}
+          version={props.version}
+          testId="subcollection-list"
+        />
       </div>
     </div>
   );
@@ -688,37 +756,42 @@ const CollectionView: Component<{
   onDeleted: () => void;
 }> = (props) => {
   const navigate = useNavigate();
-  const [pages, setPages] = createSignal<FsDocument[]>([]);
-  const [nextToken, setNextToken] = createSignal<string | undefined>(undefined);
-  const [loading, setLoading] = createSignal(false);
+  const list = createPagedList((token) =>
+    listDocuments(props.root, props.path, token).map((page) => ({
+      items: page.documents ?? [],
+      nextToken: page.nextPageToken,
+    })),
+  );
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
   const [adding, setAdding] = createSignal(false);
-  const load = async (token?: string) => {
-    setLoading(true);
-    const r = await listDocuments(props.root, props.path, token);
-    setLoading(false);
-    r.match(
-      (page) => {
-        setPages(token ? [...pages(), ...(page.documents ?? [])] : (page.documents ?? []));
-        setNextToken(page.nextPageToken);
-      },
-      (e) => setError(e.message),
-    );
-  };
-  createEffect(() => {
-    void [props.root, props.path, props.version];
-    void load();
-  });
+  const [deleting, setDeleting] = createSignal<number | null>(null);
+  createEffect(
+    on(
+      () => [props.root, props.path] as const,
+      () => void list.load(),
+    ),
+  );
+  // A commit anywhere in the database re-reads what is shown, keeping the pages loaded so far.
+  createEffect(
+    on(
+      () => props.version,
+      () => void list.refresh(),
+      { defer: true },
+    ),
+  );
   const remove = async () => {
     setError(null);
-    const r = await deleteCollection(props.root, props.path);
+    setDeleting(0);
+    const r = await deleteCollection(props.root, props.path, setDeleting);
+    const done = deleting() ?? 0;
+    setDeleting(null);
     r.match(
       (count) => {
         setNotice(t("firestore.deleted", { count }));
         props.onDeleted();
       },
-      (e) => setError(e.message),
+      (e) => setError(t("firestore.deletePartial", { count: done, message: e.message })),
     );
   };
   return (
@@ -737,11 +810,20 @@ const CollectionView: Component<{
           <ConfirmButton
             label={t("firestore.deleteCollection")}
             question={t("firestore.deleteCollectionConfirm", { path: props.path })}
+            details={t("firestore.deleteCollectionDetails", {
+              project: appState.project(),
+              db: props.db,
+            })}
             onConfirm={remove}
             testId="collection-delete"
           />
         </div>
       </div>
+      <Show when={deleting() !== null}>
+        <p class="mb-3 text-sm" role="status" data-testid="collection-delete-progress">
+          {t("firestore.deleting", { count: deleting() ?? 0 })}
+        </p>
+      </Show>
       <ErrorBanner message={error()} />
       <Notice message={notice()} />
       <Show when={adding()}>
@@ -750,56 +832,55 @@ const CollectionView: Component<{
           collection={props.path}
           onDone={(path) => {
             setAdding(false);
-            navigate(`/firestore/${path}?db=${encodeURIComponent(props.db)}`);
+            navigate(firestoreHref(path, props.db));
           }}
           onCancel={() => setAdding(false)}
         />
       </Show>
-      <Show when={!loading() || pages().length > 0} fallback={<Spinner />}>
-        <Show
-          when={pages().length > 0}
-          fallback={<p class="text-sm text-zinc-500">{t("firestore.noDocuments")}</p>}
-        >
-          <table class="table" data-testid="document-list">
-            <thead>
-              <tr>
-                <th>{t("firestore.documentId")}</th>
-                <th>{t("firestore.fields")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={pages()}>
-                {(d) => (
-                  <tr>
-                    <td class="mono">
-                      <A
-                        href={`/firestore/${relativePath(d.name)}?db=${encodeURIComponent(props.db)}`}
-                        class="text-amber-700 hover:underline dark:text-amber-300"
-                      >
-                        {lastSegment(d.name)}
-                      </A>
-                      <Show when={!d.createTime && !d.fields}>
-                        <span class="ml-2 text-xs text-zinc-400">({t("firestore.missing")})</span>
-                      </Show>
-                    </td>
-                    <td class="mono break-all text-zinc-600 dark:text-zinc-400">
-                      {Object.entries(d.fields ?? {})
-                        .slice(0, 4)
-                        .map(([k, v]) => `${k}: ${summarize(v)}`)
-                        .join(", ")}
-                    </td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </Show>
-        <Show when={nextToken()}>
-          <AsyncButton class="btn mt-2" onClick={() => load(nextToken())}>
+      <FetchState
+        loading={list.loading()}
+        error={list.error()}
+        stale={list.stale()}
+        onRetry={list.refresh}
+        empty={list.items().length === 0}
+        emptyMessage={t("firestore.noDocuments")}
+      >
+        <table class="table" data-testid="document-list">
+          <thead>
+            <tr>
+              <th>{t("firestore.documentId")}</th>
+              <th>{t("firestore.fields")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={list.items()}>
+              {(d) => (
+                <tr>
+                  <td class="mono">
+                    <A href={firestoreHref(relativePath(d.name), props.db)} class="link">
+                      {lastSegment(d.name)}
+                    </A>
+                    <Show when={!d.createTime && !d.fields}>
+                      <span class="ml-2 text-xs text-zinc-400">({t("firestore.missing")})</span>
+                    </Show>
+                  </td>
+                  <td class="mono break-all text-zinc-600 dark:text-zinc-400">
+                    {Object.entries(d.fields ?? {})
+                      .slice(0, 4)
+                      .map(([k, v]) => `${k}: ${summarize(v)}`)
+                      .join(", ")}
+                  </td>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+        <Show when={list.nextToken()}>
+          <AsyncButton class="btn mt-2" onClick={list.more}>
             {t("firestore.more")}
           </AsyncButton>
         </Show>
-      </Show>
+      </FetchState>
     </div>
   );
 };
@@ -807,12 +888,7 @@ const CollectionView: Component<{
 /** The root: collections and "start collection". */
 const RootView: Component<{ root: string; db: string; version: number }> = (props) => {
   const navigate = useNavigate();
-  const [ids] = createResource(
-    () => [props.root, props.version] as const,
-    ([root]) => settle(listCollectionIds(root, "")),
-  );
   const [adding, setAdding] = createSignal(false);
-  const list = () => ids()?.unwrapOr({ collectionIds: [] }).collectionIds ?? [];
   return (
     <div data-testid="root-view">
       <div class="mb-3 flex items-center justify-between">
@@ -826,39 +902,24 @@ const RootView: Component<{ root: string; db: string; version: number }> = (prop
           {t("firestore.addCollection")}
         </button>
       </div>
-      <ErrorBanner message={errorOf(ids())} />
       <Show when={adding()}>
         <NewCollectionForm
           root={props.root}
           parent=""
           onDone={(path) => {
             setAdding(false);
-            navigate(`/firestore/${path}?db=${encodeURIComponent(props.db)}`);
+            navigate(firestoreHref(path, props.db));
           }}
           onCancel={() => setAdding(false)}
         />
       </Show>
-      <Show when={!ids.loading} fallback={<Spinner />}>
-        <Show
-          when={list().length > 0}
-          fallback={<p class="text-sm text-zinc-500">{t("firestore.noCollections")}</p>}
-        >
-          <ul class="mono space-y-1" data-testid="collection-list">
-            <For each={list()}>
-              {(id) => (
-                <li>
-                  <A
-                    href={`/firestore/${id}?db=${encodeURIComponent(props.db)}`}
-                    class="text-amber-700 hover:underline dark:text-amber-300"
-                  >
-                    {id}
-                  </A>
-                </li>
-              )}
-            </For>
-          </ul>
-        </Show>
-      </Show>
+      <CollectionList
+        root={props.root}
+        parent=""
+        db={props.db}
+        version={props.version}
+        testId="collection-list"
+      />
     </div>
   );
 };
@@ -868,7 +929,7 @@ const Firestore: Component = () => {
   const [search, setSearch] = useSearchParams<{ db?: string }>();
   const navigate = useNavigate();
   const db = () => (typeof search.db === "string" && search.db ? search.db : "(default)");
-  const path = () => (params.path ?? "").split("/").filter(Boolean).join("/");
+  const path = () => decodeSplat(params.path).join("/");
   const root = () => documentsRoot(appState.project(), db());
   const [version, setVersion] = createSignal(0);
   const [live, setLive] = createSignal(false);
@@ -907,7 +968,13 @@ const Firestore: Component = () => {
     });
   });
 
-  const up = () => navigate(`/firestore/${parentPath(path())}?db=${encodeURIComponent(db())}`);
+  const up = () => navigate(firestoreHref(parentPath(path()), db()));
+  const [jump, setJump] = createSignal("");
+  const goTo = () => {
+    const target = jump().split("/").filter(Boolean).join("/");
+    navigate(firestoreHref(target, db()));
+    setJump("");
+  };
   return (
     <div>
       <div class="mb-3 flex flex-wrap items-center gap-3">
@@ -926,13 +993,41 @@ const Firestore: Component = () => {
           {t("firestore.project")}: <span class="mono">{appState.project()}</span>
         </span>
         <span
+          class="badge bg-violet-100 text-violet-900 dark:bg-violet-900 dark:text-violet-100"
+          title={t("app.adminHint")}
+          data-testid="admin-badge"
+        >
+          {t("app.admin")}
+        </span>
+        <span
           class={`badge ${live() ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100" : "bg-zinc-200 text-zinc-600 dark:bg-zinc-800"}`}
           data-testid="live-badge"
         >
           {live() ? t("firestore.live") : t("firestore.liveOff")}
         </span>
       </div>
-      <Breadcrumbs path={path()} db={db()} />
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <Breadcrumbs path={path()} db={db()} />
+        <form
+          class="mb-3 flex items-center gap-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            goTo();
+          }}
+        >
+          <input
+            class="input mono w-72"
+            data-testid="path-jump"
+            placeholder={t("firestore.goToPlaceholder")}
+            aria-label={t("firestore.goTo")}
+            value={jump()}
+            onInput={(e) => setJump(e.currentTarget.value)}
+          />
+          <button type="submit" class="btn">
+            {t("firestore.goTo")}
+          </button>
+        </form>
+      </div>
       <div class="card">
         <Show
           when={path() !== ""}

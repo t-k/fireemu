@@ -1,7 +1,7 @@
-import { createResource, For, Show, type Component } from "solid-js";
+import { createResource, createSignal, For, Show, type Component } from "solid-js";
 import { t } from "../i18n";
 import { appState } from "../state";
-import { Field, Section, Spinner } from "../components/common";
+import { AsyncButton, Field, Section, Spinner } from "../components/common";
 import { getRules } from "../api/control";
 import { settle } from "../api/client";
 import { productScope, statusLabelKey, type ProductStatus } from "../lib/products";
@@ -24,20 +24,69 @@ const statusClass = (status: ProductStatus): string => {
   }
 };
 
+/** A block of text with a copy button (clipboard, or select-all when denied). */
+const CopyBlock: Component<{ text: string; testId: string }> = (props) => {
+  const [copied, setCopied] = createSignal(false);
+  const [pre, setPre] = createSignal<HTMLPreElement>();
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(props.text);
+    } catch {
+      const node = pre();
+      if (node) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        window.getSelection()?.removeAllRanges();
+        window.getSelection()?.addRange(range);
+      }
+    }
+    setCopied(true);
+  };
+  return (
+    <div class="relative">
+      <pre
+        ref={setPre}
+        class="mono whitespace-pre-wrap rounded-md bg-zinc-100 p-3 pr-20 text-xs dark:bg-zinc-800"
+        data-testid={props.testId}
+      >
+        {props.text}
+      </pre>
+      <AsyncButton
+        class="btn absolute top-2 right-2"
+        onClick={copy}
+        testId={`${props.testId}-copy`}
+      >
+        {copied() ? t("app.copied") : t("app.copy")}
+      </AsyncButton>
+    </div>
+  );
+};
+
 const Overview: Component = () => {
   const config = appState.config;
   const [firestoreRules] = createResource(() => settle(getRules("firestore")));
   const [storageRules] = createResource(() => settle(getRules("storage")));
-  const env = () =>
+  // The environment for the selected session's project: what the header shows is what
+  // an SDK pointed here talks to. The daemon's own default project is shown separately.
+  const hosts = () =>
     [
       `FIRESTORE_EMULATOR_HOST=${config().firestoreAddr}`,
       `FIREBASE_AUTH_EMULATOR_HOST=${config().httpAddr}`,
       `FIREBASE_STORAGE_EMULATOR_HOST=${config().storageAddr}`,
       `STORAGE_EMULATOR_HOST=http://${config().storageAddr}`,
-      `GOOGLE_CLOUD_PROJECT=${config().project}`,
-      `FIREEMU_CONTROL_URL=http://${config().httpAddr}/v1/`,
       ...(config().functionsAddr ? [`FIREEMU_FUNCTIONS_HOST=${config().functionsAddr}`] : []),
     ].join("\n");
+  const env = () =>
+    [
+      hosts(),
+      `GOOGLE_CLOUD_PROJECT=${appState.project()}`,
+      `FIREEMU_CONTROL_URL=http://${config().httpAddr}/v1/`,
+    ].join("\n");
+  const envExport = () =>
+    env()
+      .split("\n")
+      .map((line) => `export ${line}`)
+      .join("\n");
   return (
     <div>
       <h1 class="mb-4 text-xl font-bold">{t("overview.title")}</h1>
@@ -48,9 +97,17 @@ const Overview: Component = () => {
       </Show>
       <div class="grid gap-4 md:grid-cols-2">
         <Section title={t("overview.project")}>
-          <Field label={t("overview.project")} mono>
-            {config().project}
+          <Field label={t("overview.selectedSession")} mono>
+            {appState.session()}
           </Field>
+          <Field label={t("overview.project")} mono>
+            {appState.project()}
+          </Field>
+          <Show when={appState.project() !== config().project}>
+            <Field label={t("overview.daemonProject")} mono>
+              {config().project}
+            </Field>
+          </Show>
           <Field label={t("overview.edition")}>{config().edition}</Field>
           <Field label={t("overview.version")} mono>
             {config().version}
@@ -148,9 +205,19 @@ const Overview: Component = () => {
         </table>
       </Section>
       <Section title={t("overview.envVars")}>
-        <pre class="mono whitespace-pre-wrap rounded-md bg-zinc-100 p-3 dark:bg-zinc-800">
-          {env()}
-        </pre>
+        <p class="mb-2 text-sm text-zinc-500">
+          {t("overview.envVarsFor", { session: appState.session(), project: appState.project() })}
+        </p>
+        <div class="grid gap-3 lg:grid-cols-2">
+          <div>
+            <div class="label mb-1">{t("overview.envDotenv")}</div>
+            <CopyBlock text={env()} testId="env-dotenv" />
+          </div>
+          <div>
+            <div class="label mb-1">{t("overview.envShell")}</div>
+            <CopyBlock text={envExport()} testId="env-shell" />
+          </div>
+        </div>
       </Section>
     </div>
   );

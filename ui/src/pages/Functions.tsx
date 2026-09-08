@@ -9,9 +9,9 @@ import {
 } from "solid-js";
 import { t } from "../i18n";
 import { appState } from "../state";
-import { AsyncButton, ErrorBanner, Notice, Section, Spinner } from "../components/common";
+import { AsyncButton, ErrorBanner, FetchState, Notice, Section } from "../components/common";
 import { awaitIdle, functionsStatus, publishMessage, runSchedule } from "../api/control";
-import { settle } from "../api/client";
+import { errorOf, settle } from "../api/client";
 import {
   functionsOverview,
   subscribeLogs,
@@ -205,6 +205,16 @@ const Functions: Component = () => {
   const [notice, setNotice] = createSignal<string | null>(null);
   const configured = () => overview()?.unwrapOr(null)?.configured ?? false;
   const [logBox, setLogBox] = createSignal<HTMLPreElement>();
+  // Follow the tail only while the reader is at the tail; otherwise count what arrived.
+  const [following, setFollowing] = createSignal(true);
+  const [unseen, setUnseen] = createSignal(0);
+  const atBottom = (box: HTMLPreElement) => box.scrollHeight - box.scrollTop - box.clientHeight < 8;
+  const jumpToEnd = () => {
+    const box = logBox();
+    if (box) box.scrollTop = box.scrollHeight;
+    setFollowing(true);
+    setUnseen(0);
+  };
   const [logLevel, setLogLevel] = createSignal<LevelFilter>("all");
   const [logText, setLogText] = createSignal("");
   const [fnFilter, setFnFilter] = createSignal("");
@@ -237,6 +247,7 @@ const Functions: Component = () => {
           setInvocations(keepRecent(e.invocations));
         } else if (e.kind === "log") {
           setLines((l) => [...l, e.line].slice(-MAX_LINES));
+          if (!following()) setUnseen((n) => n + 1);
         } else if (e.kind === "resync") {
           // The server could not answer this connection's cursor (a reset, or records that
           // fell out of its retention window): replace the list rather than append a gap.
@@ -248,7 +259,7 @@ const Functions: Component = () => {
         }
         setConnected(true);
         const box = logBox();
-        if (box) box.scrollTop = box.scrollHeight;
+        if (box && following()) box.scrollTop = box.scrollHeight;
       },
       () => setConnected(false),
     );
@@ -266,7 +277,13 @@ const Functions: Component = () => {
       <h1 class="mb-4 text-xl font-bold">{t("functions.title")}</h1>
       <ErrorBanner message={error()} />
       <Notice message={notice()} />
-      <Show when={!overview.loading} fallback={<Spinner />}>
+      <FetchState
+        loading={overview.loading && !overview()}
+        error={errorOf(overview())}
+        onRetry={async () => {
+          await refetch();
+        }}
+      >
         <Show
           when={configured()}
           fallback={<p class="card text-sm text-zinc-500">{t("functions.notConfigured")}</p>}
@@ -333,27 +350,35 @@ const Functions: Component = () => {
                 </AsyncButton>
               }
             >
-              <Show when={s()} fallback={<Spinner />}>
-                {(st) => (
-                  <dl
-                    class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm"
-                    data-testid="function-status"
-                  >
-                    <dt class="label">{t("functions.pending")}</dt>
-                    <dd>{st().pending}</dd>
-                    <dt class="label">{t("functions.running")}</dt>
-                    <dd>{st().running}</dd>
-                    <dt class="label">{t("functions.retryWaiting")}</dt>
-                    <dd>{st().retryWaiting}</dd>
-                    <dt class="label">{t("functions.succeeded")}</dt>
-                    <dd data-testid="succeeded-count">{st().succeeded}</dd>
-                    <dt class="label">{t("functions.deadLettered")}</dt>
-                    <dd>{st().deadLettered}</dd>
-                    <dt class="label">{t("functions.runnerAlive")}</dt>
-                    <dd>{st().runnerAlive ? t("app.yes") : t("app.no")}</dd>
-                  </dl>
-                )}
-              </Show>
+              <FetchState
+                loading={status.loading && !status()}
+                error={errorOf(status())}
+                onRetry={async () => {
+                  await refetchStatus();
+                }}
+              >
+                <Show when={s()}>
+                  {(st) => (
+                    <dl
+                      class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm"
+                      data-testid="function-status"
+                    >
+                      <dt class="label">{t("functions.pending")}</dt>
+                      <dd>{st().pending}</dd>
+                      <dt class="label">{t("functions.running")}</dt>
+                      <dd>{st().running}</dd>
+                      <dt class="label">{t("functions.retryWaiting")}</dt>
+                      <dd>{st().retryWaiting}</dd>
+                      <dt class="label">{t("functions.succeeded")}</dt>
+                      <dd data-testid="succeeded-count">{st().succeeded}</dd>
+                      <dt class="label">{t("functions.deadLettered")}</dt>
+                      <dd>{st().deadLettered}</dd>
+                      <dt class="label">{t("functions.runnerAlive")}</dt>
+                      <dd>{st().runnerAlive ? t("app.yes") : t("app.no")}</dd>
+                    </dl>
+                  )}
+                </Show>
+              </FetchState>
             </Section>
             <Section
               title={t("functions.invocations")}
@@ -457,16 +482,39 @@ const Functions: Component = () => {
               </>
             }
           >
-            <div class="mb-1 text-xs text-zinc-500" data-testid="log-count">
-              {t("functions.logsFilteredCount", {
-                shown: filteredLines().length,
-                total: lines().length,
-              })}
+            <div class="mb-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+              <span data-testid="log-count">
+                {t("functions.logsFilteredCount", {
+                  shown: filteredLines().length,
+                  total: lines().length,
+                })}
+              </span>
+              <Show
+                when={following()}
+                fallback={
+                  <button type="button" class="btn" data-testid="log-jump" onClick={jumpToEnd}>
+                    {unseen() > 0
+                      ? t("functions.logsNewLines", { count: unseen() })
+                      : t("functions.logsJumpToEnd")}
+                  </button>
+                }
+              >
+                <span data-testid="log-following">{t("functions.logsFollowing")}</span>
+              </Show>
             </div>
             <pre
               ref={setLogBox}
-              class="mono h-72 overflow-auto whitespace-pre-wrap rounded-md bg-zinc-900 p-3 text-zinc-100"
+              class="mono h-72 overflow-auto whitespace-pre-wrap rounded-md bg-zinc-900 p-3 text-xs text-zinc-100"
               data-testid="function-logs"
+              onScroll={(e) => {
+                const box = e.currentTarget;
+                if (atBottom(box)) {
+                  setFollowing(true);
+                  setUnseen(0);
+                } else {
+                  setFollowing(false);
+                }
+              }}
             >
               <Show
                 when={filteredLines().length > 0}
@@ -479,7 +527,7 @@ const Functions: Component = () => {
             </pre>
           </Section>
         </Show>
-      </Show>
+      </FetchState>
     </div>
   );
 };

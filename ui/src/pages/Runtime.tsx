@@ -5,9 +5,9 @@ import {
   AsyncButton,
   ConfirmButton,
   ErrorBanner,
+  FetchState,
   Notice,
   Section,
-  Spinner,
 } from "../components/common";
 import {
   advanceClock,
@@ -25,7 +25,7 @@ import {
   sessionResources,
   setClock,
 } from "../api/control";
-import { settle } from "../api/client";
+import { errorOf, settle } from "../api/client";
 import {
   formatQuantity,
   parseAllowances,
@@ -161,7 +161,13 @@ const SnapshotsPanel: Component = () => {
           {t("runtime.capture")}
         </AsyncButton>
       </div>
-      <Show when={!list.loading} fallback={<Spinner />}>
+      <FetchState
+        loading={list.loading && !list()}
+        error={errorOf(list())}
+        onRetry={async () => {
+          await refetch();
+        }}
+      >
         <Show
           when={(list()?.unwrapOr({ snapshots: [] }).snapshots.length ?? 0) > 0}
           fallback={<p class="text-sm text-zinc-500">{t("runtime.noSnapshots")}</p>}
@@ -187,6 +193,10 @@ const SnapshotsPanel: Component = () => {
                         class="btn"
                         label={t("runtime.restore")}
                         question={t("runtime.restoreConfirm", { name: s.name })}
+                        details={t("runtime.restoreDetails", {
+                          session: session(),
+                          clock: s.clock,
+                        })}
                         testId={`snapshot-restore-${s.name}`}
                         onConfirm={async () => {
                           const r = await restoreSnapshot(session(), s.name);
@@ -217,7 +227,7 @@ const SnapshotsPanel: Component = () => {
             </tbody>
           </table>
         </Show>
-      </Show>
+      </FetchState>
     </Section>
   );
 };
@@ -290,7 +300,13 @@ const FaultPlanPanel: Component = () => {
         value={draft()}
         onInput={(e) => setDraft(e.currentTarget.value)}
       />
-      <Show when={!plan.loading} fallback={<Spinner />}>
+      <FetchState
+        loading={plan.loading && !plan()}
+        error={errorOf(plan())}
+        onRetry={async () => {
+          await refetch();
+        }}
+      >
         <Show
           when={current()?.plan}
           fallback={<p class="mt-3 text-sm text-zinc-500">{t("runtime.faultPlanNone")}</p>}
@@ -337,7 +353,7 @@ const FaultPlanPanel: Component = () => {
             </ul>
           </Show>
         </div>
-      </Show>
+      </FetchState>
     </Section>
   );
 };
@@ -403,6 +419,7 @@ const SessionsPanel: Component = () => {
                     class="btn"
                     label={t("runtime.reset")}
                     question={t("runtime.resetConfirm", { name: s.name, project: s.project })}
+                    details={t("runtime.resetDetails")}
                     testId={`session-reset-${s.name}`}
                     onConfirm={async () => {
                       const r = await resetSession(s.name);
@@ -638,16 +655,6 @@ const ResourcesPanel: Component = () => {
     >
       <p class="mb-3 text-sm text-zinc-600 dark:text-zinc-300">{t("runtime.resourcesIntro")}</p>
       <ErrorBanner message={error()} />
-      <Show when={report()?.isErr() ? report()?.unwrapOr(null) : null}>
-        <ErrorBanner
-          message={
-            report()?.match(
-              () => null,
-              (e) => e.message,
-            ) ?? null
-          }
-        />
-      </Show>
       <Show when={quiescence()}>{(result) => <QuiescenceView result={result()} />}</Show>
       <label class="text-sm">
         <span class="label">{t("runtime.allowances")}</span>
@@ -659,7 +666,13 @@ const ResourcesPanel: Component = () => {
           onInput={(e) => setAllowances(e.currentTarget.value)}
         />
       </label>
-      <Show when={!report.loading} fallback={<Spinner />}>
+      <FetchState
+        loading={report.loading && !current()}
+        error={errorOf(report())}
+        onRetry={async () => {
+          await refetch();
+        }}
+      >
         <Show when={current()}>
           {(r) => (
             <div class="mt-3" data-testid="resources-report">
@@ -678,7 +691,7 @@ const ResourcesPanel: Component = () => {
             </div>
           )}
         </Show>
-      </Show>
+      </FetchState>
     </Section>
   );
 };

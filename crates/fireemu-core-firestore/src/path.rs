@@ -207,6 +207,19 @@ impl DocumentPath {
         parts.join("/")
     }
 
+    /// Parses a full resource name `projects/{p}/databases/{d}/documents/{relative}`.
+    /// Returns `None` for anything that is not a document name, including a collection
+    /// name; such a name can never equal [`Self::resource_name`] of any document.
+    #[must_use]
+    pub fn from_resource_name(name: &str) -> Option<Self> {
+        let rest = name.strip_prefix("projects/")?;
+        let (project, rest) = rest.split_once("/databases/")?;
+        let (database, relative) = rest.split_once("/documents/")?;
+        let project = ProjectId::try_new(project).ok()?;
+        let database = DatabaseId::try_new(database).ok()?;
+        Self::parse(&project, &database, relative).ok()
+    }
+
     /// Full resource name `projects/{p}/databases/{d}/documents/{relative}`.
     #[must_use]
     pub fn resource_name(&self) -> String {

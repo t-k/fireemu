@@ -1814,3 +1814,153 @@ fn transactional_aggregation_records_conflicts_without_materializing_documents()
     ));
     db.rollback(&transaction).unwrap();
 }
+
+/// A filter that pins `__name__` with `==` or `in` names its candidates outright, so the
+/// selection looks those documents up instead of scanning the whole scope. Scope, snapshot
+/// version, the remaining filter, order and limit still apply exactly as for a scan, and a
+/// name condition under an `or` branch never narrows the scan.
+#[test]
+fn document_name_equality_looks_up_its_candidates_instead_of_scanning() {
+    let db = large_collection(1000);
+    let name = |p: &str| Value::Reference(path(p).resource_name());
+    let base = Query::new(QueryScope::collection(None, collection("items")));
+
+    let mut equal = base.clone();
+    equal.filter = Some(FilterExpr::Field {
+        field: FieldPath::document_name(),
+        op: FieldOp::Equal,
+        value: name("items/d0500"),
+    });
+    let (docs, stats) = db.run_query_with_stats(&equal, None).unwrap();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].fields.get("n"), Some(&Value::Integer(500)));
+    assert_eq!(stats.index_paths_visited, 1);
+    assert_eq!(stats.scanned, 1);
+
+    // `in`: a missing document, a document outside the scope, a duplicate and a malformed
+    // name contribute no result; the order follows the resource name, not the operand list.
+    let mut within = base.clone();
+    within.filter = Some(FilterExpr::Field {
+        field: FieldPath::document_name(),
+        op: FieldOp::In,
+        value: Value::Array(vec![
+            name("items/d0900"),
+            name("items/d0100"),
+            name("items/d9999"),
+            name("others/d0100"),
+            name("items/d0100"),
+            Value::Reference("projects/demo-app/databases/(default)/documents/items".into()),
+        ]),
+    });
+    let (docs, stats) = db.run_query_with_stats(&within, None).unwrap();
+    let ns: Vec<_> = docs.iter().map(|d| d.fields.get("n").cloned()).collect();
+    assert_eq!(
+        ns,
+        vec![Some(Value::Integer(100)), Some(Value::Integer(900))]
+    );
+    assert!(stats.index_paths_visited <= 4, "{stats:?}");
+    assert_eq!(
+        reference_run(&db.run_query(&base, None).unwrap(), &within),
+        docs
+    );
+
+    // The other conjuncts, a descending name order and a limit still apply.
+    let mut conjunction = within.clone();
+    conjunction.filter = Some(FilterExpr::And(vec![
+        conjunction.filter.take().unwrap(),
+        FilterExpr::Field {
+            field: fp("n"),
+            op: FieldOp::GreaterThan,
+            value: Value::Integer(500),
+        },
+    ]));
+    conjunction.order_by.push(OrderClause {
+        field: FieldPath::document_name(),
+        direction: Direction::Descending,
+    });
+    conjunction.limit = Some(5);
+    let (docs, stats) = db.run_query_with_stats(&conjunction, None).unwrap();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].fields.get("n"), Some(&Value::Integer(900)));
+    assert!(stats.index_paths_visited <= 4, "{stats:?}");
+    assert_eq!(
+        reference_run(&db.run_query(&base, None).unwrap(), &conjunction),
+        docs
+    );
+
+    // Under `or`, the sibling branch can match other documents: the whole scope is scanned.
+    let mut disjunction = base.clone();
+    disjunction.filter = Some(FilterExpr::Or(vec![
+        FilterExpr::Field {
+            field: FieldPath::document_name(),
+            op: FieldOp::Equal,
+            value: name("items/d0500"),
+        },
+        FilterExpr::Field {
+            field: fp("n"),
+            op: FieldOp::Equal,
+            value: Value::Integer(7),
+        },
+    ]));
+    let (docs, stats) = db.run_query_with_stats(&disjunction, None).unwrap();
+    assert_eq!(docs.len(), 2);
+    assert_eq!(stats.index_paths_visited, 1000);
+
+    // Aggregations narrow the same way.
+    let (counts, stats) = db
+        .run_aggregation_with_stats(&within, &[Aggregation::Count { up_to: None }], None)
+        .unwrap();
+    assert_eq!(counts, vec![Value::Integer(2)]);
+    assert!(stats.index_paths_visited <= 4, "{stats:?}");
+}
+
+#[test]
+fn document_name_lookups_honor_the_snapshot_version_and_the_scope() {
+    let mut db = large_collection(20);
+    let before = db.current_version();
+    db.commit(
+        &[delete("items/d0005")],
+        None,
+        LogicalInstant::from_unix_seconds(1_788_000_100),
+    )
+    .unwrap();
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.filter = Some(FilterExpr::Field {
+        field: FieldPath::document_name(),
+        op: FieldOp::Equal,
+        value: Value::Reference(path("items/d0005").resource_name()),
+    });
+    let (live, stats) = db.run_query_with_stats(&query, None).unwrap();
+    assert!(live.is_empty());
+    assert!(stats.index_paths_visited <= 1);
+    let (snapshot, stats) = db.run_query_with_stats(&query, Some(before)).unwrap();
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(stats.index_paths_visited, 1);
+
+    // A collection-group scope under a parent rejects a named document elsewhere.
+    db.commit(
+        &[
+            set("owners/m/items/x", BTreeMap::new()),
+            set("owners/z/items/x", BTreeMap::new()),
+        ],
+        None,
+        LogicalInstant::from_unix_seconds(1_788_000_200),
+    )
+    .unwrap();
+    let mut grouped = Query::new(QueryScope::collection_group_under(
+        Some(path("owners/m")),
+        collection("items"),
+    ));
+    grouped.filter = Some(FilterExpr::Field {
+        field: FieldPath::document_name(),
+        op: FieldOp::In,
+        value: Value::Array(vec![
+            Value::Reference(path("owners/z/items/x").resource_name()),
+            Value::Reference(path("owners/m/items/x").resource_name()),
+            Value::Reference(path("items/d0001").resource_name()),
+        ]),
+    });
+    let (docs, _) = db.run_query_with_stats(&grouped, None).unwrap();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].path, path("owners/m/items/x"));
+}

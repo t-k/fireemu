@@ -1814,3 +1814,23 @@ fn stored_timestamps_are_truncated_to_microseconds() {
         Some(&Value::Array(vec![nanos(123_456_000), nanos(7_000)]))
     );
 }
+
+#[test]
+fn resource_names_round_trip_and_non_document_names_are_rejected() {
+    let doc = path("users/jeff/tasks/t1");
+    assert_eq!(
+        DocumentPath::from_resource_name(&doc.resource_name()),
+        Some(doc.clone())
+    );
+    for name in [
+        "projects/demo-app/databases/(default)/documents/users",
+        "projects/demo-app/databases/(default)/documents/",
+        "projects/demo-app/databases/(default)/documents",
+        "projects/demo-app/documents/users/jeff",
+        "users/jeff",
+        "projects//databases/(default)/documents/users/jeff",
+        "projects/demo-app/databases/(default)/documents/users//tasks/t1",
+    ] {
+        assert_eq!(DocumentPath::from_resource_name(name), None, "{name}");
+    }
+}

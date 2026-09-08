@@ -4216,16 +4216,22 @@ impl FirestoreState {
             [order] if order.field.is_document_name() && order.direction == Direction::Descending
         );
         let visited = core::cell::Cell::new(0u64);
-        let documents = if descending_name {
-            self.scope_paths_descending(scope, version)
-        } else {
-            self.scope_paths(scope, version)
-        }
-        .inspect(|_| visited.set(visited.get() + 1))
-        .filter_map(|path| match version {
-            Some(version) => self.get_at(path, version),
-            None => self.get(path),
-        });
+        // A filter that pins `__name__` names its candidates: look them up instead of
+        // scanning the scope. `select_from` still applies the scope, the whole filter, the
+        // order, cursors and limits, so the candidates only need the right source order.
+        let named = query.filter.as_ref().and_then(pinned_document_names);
+        let paths: Box<dyn Iterator<Item = &DocumentPath> + '_> = match &named {
+            Some(candidates) if descending_name => Box::new(candidates.iter().rev()),
+            Some(candidates) => Box::new(candidates.iter()),
+            None if descending_name => self.scope_paths_descending(scope, version),
+            None => self.scope_paths(scope, version),
+        };
+        let documents = paths
+            .inspect(|_| visited.set(visited.get() + 1))
+            .filter_map(|path| match version {
+                Some(version) => self.get_at(path, version),
+                None => self.get(path),
+            });
         let mut stats = select_from(
             query,
             documents,
@@ -4535,6 +4541,44 @@ fn apply_write(
                 },
             ))
         }
+    }
+}
+
+/// The document paths a filter restricts `__name__` to, in ascending resource-name order
+/// without duplicates, when it does: a top-level `__name__ ==` or `__name__ in`, possibly
+/// as one conjunct of a top-level `and`. Any other shape (a name condition under `or`, a
+/// range, `not-in`) returns `None`, meaning the scope must be scanned. With several
+/// conjuncts the smallest set wins; the others are enforced by the filter evaluation. A
+/// reference that is not a document name can never equal a stored path and yields no
+/// candidate.
+fn pinned_document_names(filter: &FilterExpr) -> Option<Vec<DocumentPath>> {
+    fn conjunct(filter: &FilterExpr) -> Option<Vec<DocumentPath>> {
+        let FilterExpr::Field { field, op, value } = filter else {
+            return None;
+        };
+        if !field.is_document_name() {
+            return None;
+        }
+        let mut paths: Vec<DocumentPath> = match (op, value) {
+            (FieldOp::Equal, Value::Reference(name)) => {
+                DocumentPath::from_resource_name(name).into_iter().collect()
+            }
+            (FieldOp::In, Value::Array(names)) => names
+                .iter()
+                .filter_map(|name| match name {
+                    Value::Reference(name) => DocumentPath::from_resource_name(name),
+                    _ => None,
+                })
+                .collect(),
+            _ => return None,
+        };
+        paths.sort_unstable();
+        paths.dedup();
+        Some(paths)
+    }
+    match filter {
+        FilterExpr::And(children) => children.iter().filter_map(conjunct).min_by_key(Vec::len),
+        other => conjunct(other),
     }
 }
 

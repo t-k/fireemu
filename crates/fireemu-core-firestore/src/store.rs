@@ -629,6 +629,29 @@ pub struct QueryStats {
     pub filter_evaluations: u64,
 }
 
+impl QueryStats {
+    /// Folds one more stage or page into an accumulated total: counters add, the peak keeps
+    /// the maximum.
+    pub fn absorb(&mut self, other: &Self) {
+        self.scanned = self.scanned.saturating_add(other.scanned);
+        self.matched = self.matched.saturating_add(other.matched);
+        self.peak_candidates = self.peak_candidates.max(other.peak_candidates);
+        self.cloned_documents = self.cloned_documents.saturating_add(other.cloned_documents);
+        self.cloned_field_bytes = self
+            .cloned_field_bytes
+            .saturating_add(other.cloned_field_bytes);
+        self.visibility_checks = self
+            .visibility_checks
+            .saturating_add(other.visibility_checks);
+        self.index_paths_visited = self
+            .index_paths_visited
+            .saturating_add(other.index_paths_visited);
+        self.filter_evaluations = self
+            .filter_evaluations
+            .saturating_add(other.filter_evaluations);
+    }
+}
+
 /// Bounded transaction-ledger counters exposed for performance regression tests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TransactionBookkeepingStats {
@@ -2872,16 +2895,8 @@ impl FirestoreState {
         complete: bool,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let read_version = self.transaction(id)?.read_version;
-        let docs = self.documents_at_query_paths(query, paths, Some(read_version));
-        let mut stats = QueryStats {
-            matched: u64::try_from(paths.len()).unwrap_or(u64::MAX),
-            ..QueryStats::default()
-        };
-        stats.cloned_documents = u64::try_from(docs.len()).unwrap_or(u64::MAX);
-        stats.cloned_field_bytes = docs
-            .iter()
-            .map(|document| fields_retained_bytes(&document.fields))
-            .fold(0u64, u64::saturating_add);
+        let (docs, stats) =
+            self.documents_at_query_paths_with_stats(query, paths, Some(read_version));
         self.record_transaction_query_observation(
             id,
             execution_id,
@@ -4040,6 +4055,28 @@ impl FirestoreState {
             paths.push(document.path.clone());
         })?;
         Ok((paths, stats))
+    }
+
+    /// [`Self::documents_at_query_paths`] with the page-stage statistics: `matched` is the
+    /// selection size, `cloned_documents` and `cloned_field_bytes` cover the page's output, and
+    /// the scan counters stay zero because no candidate is visited again.
+    pub fn documents_at_query_paths_with_stats(
+        &self,
+        query: &Query,
+        paths: &[DocumentPath],
+        version: Option<CommitVersion>,
+    ) -> (Vec<Document>, QueryStats) {
+        let docs = self.documents_at_query_paths(query, paths, version);
+        let stats = QueryStats {
+            matched: u64::try_from(paths.len()).unwrap_or(u64::MAX),
+            cloned_documents: u64::try_from(docs.len()).unwrap_or(u64::MAX),
+            cloned_field_bytes: docs
+                .iter()
+                .map(|document| fields_retained_bytes(&document.fields))
+                .fold(0u64, u64::saturating_add),
+            ..QueryStats::default()
+        };
+        (docs, stats)
     }
 
     /// Materializes only the selected paths for a page, applying the query projection without

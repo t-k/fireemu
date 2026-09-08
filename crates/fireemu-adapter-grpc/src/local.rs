@@ -257,6 +257,10 @@ pub struct LocalBackend {
     query_execution_ids: std::sync::atomic::AtomicU64,
     /// Estimated bytes retained by execution-scoped value-order selections.
     query_selection_bytes: Arc<std::sync::atomic::AtomicU64>,
+    /// Statistics of the most recent streamed query executions, oldest first, bounded by
+    /// [`QUERY_EXECUTION_STATS_RETAINED`].
+    query_execution_stats:
+        Mutex<std::collections::VecDeque<(QueryExecutionId, QueryExecutionStats)>>,
     /// Keys the authenticator appended to every transaction token, so a client cannot name a
     /// transaction it was never handed (production tokens are opaque).
     token_key: [u8; 32],
@@ -883,6 +887,28 @@ struct QueryExecutionContext {
     complete: bool,
 }
 
+/// Executions whose statistics [`LocalBackend`] keeps for inspection.
+const QUERY_EXECUTION_STATS_RETAINED: usize = 64;
+
+/// Work done by one streamed query execution, split into the stage that selects and orders
+/// the candidates once and the stage that materializes each page. A general order builds a
+/// path selection up front, so its scan counters land in `selection` and every page only
+/// clones documents; a name order has no selection and each page scans from its cursor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QueryExecutionStats {
+    /// The selection stage: paths visited, filters evaluated and candidates held while the
+    /// ordered path selection was built. `None` when the execution pages without one.
+    pub selection: Option<QueryStats>,
+    /// Paths retained by the selection.
+    pub selection_paths: u64,
+    /// Estimated bytes retained by the selection.
+    pub selection_bytes: u64,
+    /// The page stage accumulated over every page: counters add, the peak keeps its maximum.
+    pub pages: QueryStats,
+    /// Pages materialized so far.
+    pub page_count: u64,
+}
+
 /// Ordered document paths retained for one streamed query execution. Keeping only paths makes
 /// the continuation cursor independent of document body size while avoiding a candidate rescan
 /// on every page.
@@ -1114,13 +1140,7 @@ impl SnapshotAccess<'_> {
                 )
                 .map_err(|error| status_from_error(&error)),
             (SnapshotState::Shared(db), None) => {
-                let docs = db.documents_at_query_paths(query, &selection.inner.paths, version);
-                let stats = QueryStats {
-                    matched: u64::try_from(selection.inner.paths.len()).unwrap_or(u64::MAX),
-                    cloned_documents: u64::try_from(docs.len()).unwrap_or(u64::MAX),
-                    ..QueryStats::default()
-                };
-                Ok((docs, stats))
+                Ok(db.documents_at_query_paths_with_stats(query, &selection.inner.paths, version))
             }
             _ => Err(Status::internal("invalid Firestore snapshot access mode")),
         }
@@ -1218,6 +1238,7 @@ impl LocalBackend {
             transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
             query_execution_ids: std::sync::atomic::AtomicU64::new(0),
             query_selection_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            query_execution_stats: Mutex::new(std::collections::VecDeque::new()),
             token_key: {
                 let mut key_source = SplitMix64::new(seed ^ 0x544f_4b45_4e4b_4559);
                 let mut key = [0_u8; 32];
@@ -3540,6 +3561,62 @@ impl LocalBackend {
         QueryExecutionId::from_value(sequence | ADAPTER_QUERY_EXECUTION_PREFIX)
     }
 
+    /// Folds one page (and, on the first page of a general order, the selection stage) into
+    /// the execution's statistics.
+    fn record_query_execution_page(
+        &self,
+        execution_id: QueryExecutionId,
+        selection: Option<(QueryStats, u64, u64)>,
+        page: &QueryStats,
+    ) {
+        let mut retained = self
+            .query_execution_stats
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let position = retained
+            .iter()
+            .position(|(id, _)| *id == execution_id)
+            .unwrap_or_else(|| {
+                while retained.len() >= QUERY_EXECUTION_STATS_RETAINED {
+                    retained.pop_front();
+                }
+                retained.push_back((execution_id, QueryExecutionStats::default()));
+                retained.len() - 1
+            });
+        let stats = &mut retained[position].1;
+        if let Some((selection_stats, paths, bytes)) = selection {
+            stats.selection = Some(selection_stats);
+            stats.selection_paths = paths;
+            stats.selection_bytes = bytes;
+        }
+        stats.pages.absorb(page);
+        stats.page_count = stats.page_count.saturating_add(1);
+    }
+
+    /// Statistics of one recent streamed query execution.
+    #[must_use]
+    pub fn query_execution_stats(
+        &self,
+        execution_id: QueryExecutionId,
+    ) -> Option<QueryExecutionStats> {
+        self.query_execution_stats
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|(id, _)| *id == execution_id)
+            .map(|(_, stats)| *stats)
+    }
+
+    /// The most recently started streamed query execution and its statistics.
+    #[must_use]
+    pub fn latest_query_execution_stats(&self) -> Option<(QueryExecutionId, QueryExecutionStats)> {
+        self.query_execution_stats
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .back()
+            .copied()
+    }
+
     /// Marks one streamed transaction query complete after its final response was accepted by
     /// the gRPC response channel.
     pub(crate) fn finish_query_execution(
@@ -3731,6 +3808,7 @@ impl LocalBackend {
                     query: &authorization.query,
                 },
             )?;
+            let mut selection_stage = None;
             let selection = match selection {
                 Some(selection) => Some(selection),
                 None if execution_present && accepted.query.effective_order_by().len() != 1 => {
@@ -3740,14 +3818,18 @@ impl LocalBackend {
                     selection_query.limit = selection_query
                         .limit
                         .map(|limit| limit.saturating_add(original_offset));
-                    let (paths, _) = access
+                    let (paths, stats) = access
                         .db()
                         .run_query_paths_with_stats(&selection_query, version)
                         .map_err(|error| status_from_error(&error))?;
-                    Some(Arc::new(QuerySelection::from_paths(
-                        paths,
-                        Arc::clone(&self.query_selection_bytes),
-                    )))
+                    let selection =
+                        QuerySelection::from_paths(paths, Arc::clone(&self.query_selection_bytes));
+                    selection_stage = Some((
+                        stats,
+                        u64::try_from(selection.inner.paths.len()).unwrap_or(u64::MAX),
+                        selection.inner.retained_bytes,
+                    ));
+                    Some(Arc::new(selection))
                 }
                 None => None,
             };
@@ -3776,6 +3858,9 @@ impl LocalBackend {
                     }
                 }
             };
+            if let Some(execution) = execution {
+                self.record_query_execution_page(execution.id, selection_stage, &stats);
+            }
             let read_time = Some(encode_instant(access.read_time(now)?));
             // The rows the offset skipped, reported on the first result as the backend does.
             let skipped = if after_document.is_some() {

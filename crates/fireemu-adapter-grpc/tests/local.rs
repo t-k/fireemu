@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::{
-    AtomicChangeSink, CommitPublication, HistoryBudgetLimits, LocalBackend,
+    AtomicChangeSink, CommitPublication, HistoryBudgetLimits, LocalBackend, QueryExecutionStats,
 };
 use fireemu_adapter_grpc::rules::ReadCheck;
 use fireemu_adapter_grpc::service::GatewayService;
@@ -5392,4 +5392,118 @@ fn resources_report_history_the_next_compaction_would_reclaim() {
         .find(|g| g.id == "history.session_versions")
         .unwrap();
     assert_eq!(retained.current, 3);
+}
+
+/// One streamed general-order execution records its selection stage once (paths visited,
+/// filter evaluations, retained selection) and accumulates the page stage across every
+/// page, so the whole stream's work is visible rather than only the last page's row count.
+#[tokio::test]
+async fn streamed_query_execution_records_selection_and_page_stats_separately() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(IndexDefinition {
+        collection_group: CollectionId::try_new("stats").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![
+            IndexField {
+                path: FieldPath::parse("keep").unwrap(),
+                mode: IndexFieldMode::Ascending,
+            },
+            IndexField {
+                path: FieldPath::parse("v").unwrap(),
+                mode: IndexFieldMode::Descending,
+            },
+        ],
+    });
+    backend.replace_indexes(indexes);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..70)
+                .map(|index| {
+                    update_write(
+                        &format!("stats/{index:03}"),
+                        &[("v", i(index)), ("keep", i(index % 2))],
+                    )
+                })
+                .chain(
+                    (0..1000).map(|index| {
+                        update_write(&format!("noise/{index:04}"), &[("v", i(index))])
+                    }),
+                )
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    for transactional in [false, true] {
+        let mut request = kept_stats_by_v_desc();
+        if transactional {
+            let transaction = client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: DB.to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction;
+            request.consistency_selector = Some(
+                pb::run_query_request::ConsistencySelector::Transaction(transaction),
+            );
+        }
+        let documents = collect_docs(&mut client, request).await;
+        assert_eq!(documents.len(), 35, "transactional {transactional}");
+
+        let (_, stats) = backend
+            .latest_query_execution_stats()
+            .expect("the streamed execution recorded its stats");
+        assert_selection_then_pages(&stats, &format!("transactional {transactional}"));
+    }
+    handle.abort();
+}
+
+/// `stats` where `keep == 1`, ordered by `v` descending.
+fn kept_stats_by_v_desc() -> pb::RunQueryRequest {
+    let mut request = query("stats", None);
+    let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        request.query_type.as_mut()
+    else {
+        unreachable!();
+    };
+    query.r#where = Some(sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "keep".to_owned(),
+            }),
+            op: sq::field_filter::Operator::Equal as i32,
+            value: Some(i(1)),
+        })),
+    });
+    query.order_by = vec![sq::Order {
+        field: Some(sq::FieldReference {
+            field_path: "v".to_owned(),
+        }),
+        direction: sq::Direction::Descending as i32,
+    }];
+    request
+}
+
+/// The selection stage walked the 70 in-scope paths once, never the 1,000 noise paths, and
+/// evaluated the filter on each; two pages (32 + 3) then materialized the 35 selected
+/// documents without rescanning.
+fn assert_selection_then_pages(stats: &QueryExecutionStats, context: &str) {
+    let selection = stats.selection.expect("a general order builds a selection");
+    assert_eq!(selection.index_paths_visited, 70, "{context}");
+    assert_eq!(selection.filter_evaluations, 70, "{context}");
+    assert_eq!(selection.matched, 35, "{context}");
+    assert_eq!(stats.selection_paths, 35, "{context}");
+    assert!(stats.selection_bytes > 0, "{context}");
+    assert_eq!(stats.page_count, 2, "{context}");
+    assert_eq!(stats.pages.index_paths_visited, 0, "{context}");
+    assert_eq!(stats.pages.filter_evaluations, 0, "{context}");
+    assert_eq!(stats.pages.cloned_documents, 35, "{context}");
+    assert!(stats.pages.cloned_field_bytes > 0, "{context}");
 }

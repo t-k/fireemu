@@ -186,7 +186,7 @@ PRODUCTION_ORACLE_PROJECT_ID=fireemu-35fe6 PRODUCTION_ORACLE_EXPECTED_PROJECT_NU
 
 The production path checks the actual project number before writing. The local path accepts only loopback endpoints. Each case exclusively creates a UUID document and deletes only that owned document in cleanup. Output retains request values, stored values, and precise update times. A failed remote create with an uncertain response can leave its uniquely named fixture behind.
 
-The core Verify benchmark varies payload size (1, 100, 900 KiB) and Verify count (1, 100, 500), excludes setup, and reports median commit time after warmup:
+The core Verify benchmark varies payload size (1, 100, 900 KiB) and Verify count (1, 100, 500) against the same stored document, excludes setup, and reports median commit time after warmup:
 
 ```sh
 cargo bench -p fireemu-core-firestore --bench verify

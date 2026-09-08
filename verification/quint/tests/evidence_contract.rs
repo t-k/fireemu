@@ -191,3 +191,40 @@ impl Drop for OwnedTestRepository {
         let _ = fs::remove_dir_all(&self.path);
     }
 }
+
+#[test]
+fn firestore_value_changes_invalidate_dependent_model_evidence() {
+    const TARGET: &str = "crates/fireemu-core-firestore/src/value.rs";
+    let root = repository_root();
+    for name in [
+        "AtomicCommitOutbox",
+        "FirestoreListenRefresh",
+        "TransactionConditionalLock",
+    ] {
+        let descriptor = model(name).expect("registered Firestore model");
+        let json =
+            fs::read_to_string(root.join(format!("verification/quint/evidence/{name}.json")))
+                .expect("checked-in evidence");
+        let evidence: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let inputs: Vec<_> = evidence["boundInputs"]
+            .as_array()
+            .expect("bound inputs")
+            .iter()
+            .map(|value| value.as_str().expect("bound path"))
+            .collect();
+        assert!(inputs.contains(&TARGET), "{name} must bind value semantics");
+        let fixture = OwnedTestRepository::copy_inputs(&inputs).expect("copy inputs");
+        validate_evidence_json(&json, descriptor, Some(&fixture.path))
+            .expect("untampered fixture must validate");
+        let path = fixture.path.join(TARGET);
+        let mut bytes = fs::read(&path).expect("read value source");
+        bytes.extend_from_slice(b"\n// Value-only mutation.\n");
+        fs::write(path, bytes).expect("mutate value source only");
+        let error = validate_evidence_json(&json, descriptor, Some(&fixture.path))
+            .expect_err("value-only change must stale evidence");
+        assert!(
+            error.contains(&format!("digest mismatch for {TARGET}")),
+            "unexpected evidence failure: {error}"
+        );
+    }
+}

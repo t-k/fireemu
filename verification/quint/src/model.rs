@@ -119,6 +119,7 @@ const MODELS: &[ModelDescriptor] = &[
         ],
         production_sources: &[
             "crates/fireemu-core-firestore/src/store.rs",
+            "crates/fireemu-core-firestore/src/value.rs",
             "crates/fireemu-adapter-grpc/src/local.rs",
             "crates/fireemu-adapter-functions/src/runtime.rs",
         ],
@@ -517,6 +518,7 @@ const MODELS: &[ModelDescriptor] = &[
             "crates/fireemu-adapter-grpc/src/local.rs",
             "crates/fireemu-adapter-grpc/src/streams.rs",
             "crates/fireemu-core-firestore/src/store.rs",
+            "crates/fireemu-core-firestore/src/value.rs",
         ],
         bounds: &[
             BoundDescriptor {
@@ -878,7 +880,10 @@ const MODELS: &[ModelDescriptor] = &[
             "RunProtectedAction",
             "Release",
         ],
-        production_sources: &["crates/fireemu-core-firestore/src/store.rs"],
+        production_sources: &[
+            "crates/fireemu-core-firestore/src/store.rs",
+            "crates/fireemu-core-firestore/src/value.rs",
+        ],
         bounds: &[BoundDescriptor {
             name: "Clients",
             value: "{c1,c2}",

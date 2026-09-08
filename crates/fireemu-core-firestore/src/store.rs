@@ -9,6 +9,7 @@
 
 use core::cmp::Ordering;
 use core::fmt;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use std::sync::Arc;
 
@@ -3270,7 +3271,7 @@ impl FirestoreState {
             let current = stage.current.as_deref();
             check_precondition(write.precondition.as_ref(), current, &path)?;
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
-            if let Some(doc) = &next {
+            if let Some(Cow::Owned(doc)) = &next {
                 validate_document(doc)?;
                 self.index_catalog
                     .document_index_usage(&doc.path, &doc.fields)?;
@@ -3295,7 +3296,7 @@ impl FirestoreState {
                     result.update_time = Some(c.update_time);
                 }
             } else {
-                stage.current = next.map(Arc::new);
+                stage.current = next.map(|doc| Arc::new(doc.into_owned()));
                 stage.changed = true;
             }
             results.push(result);
@@ -3577,7 +3578,7 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<Option<Document>, FirestoreError> {
         let (next, _) = apply_write(write, current, now, CommitVersion::default())?;
-        Ok(next)
+        Ok(next.map(Cow::into_owned))
     }
 
     /// Result of applying `write` to the current document without publishing anything (the
@@ -3594,7 +3595,7 @@ impl FirestoreState {
             now,
             CommitVersion(self.version.0 + 1),
         )?;
-        Ok(next)
+        Ok(next.map(Cow::into_owned))
     }
 
     /// Documents directly under `parent` (root when `None`) in `collection_id`, by name.
@@ -4460,12 +4461,12 @@ fn check_precondition(
     }
 }
 
-fn apply_write(
+fn apply_write<'a>(
     write: &Write,
-    current: Option<&Document>,
+    current: Option<&'a Document>,
     now: LogicalInstant,
     version: CommitVersion,
-) -> Result<(Option<Document>, WriteResult), FirestoreError> {
+) -> Result<(Option<Cow<'a, Document>>, WriteResult), FirestoreError> {
     match &write.op {
         WriteOp::Verify { .. } => {
             if !write.transforms.is_empty() {
@@ -4475,7 +4476,7 @@ fn apply_write(
             }
             // Precondition already checked by the caller; nothing changes.
             Ok((
-                current.cloned(),
+                current.map(Cow::Borrowed),
                 WriteResult {
                     update_time: None,
                     transform_results: vec![],
@@ -4518,6 +4519,9 @@ fn apply_write(
                     base
                 }
             };
+            // Production compares array transforms at storage precision, including values
+            // supplied by this same write. Ordinary arrays retain their duplicates.
+            normalize_fields_for_storage(&mut next_fields);
             let mut transform_results = Vec::with_capacity(write.transforms.len());
             for t in &write.transforms {
                 let produced = apply_transform(&mut next_fields, t, now)?;
@@ -4534,7 +4538,7 @@ fn apply_write(
                 version,
             };
             Ok((
-                Some(doc),
+                Some(Cow::Owned(doc)),
                 WriteResult {
                     update_time: Some(now),
                     transform_results,
@@ -4931,13 +4935,20 @@ fn apply_transform(
                 _ => Vec::new(),
             };
             for item in items {
-                if !arr.iter().any(|x| x.canonical_cmp(item) == Ordering::Equal) {
-                    arr.push(item.clone());
+                let mut item = item.clone();
+                item.normalize_for_storage();
+                if !arr
+                    .iter()
+                    .any(|x| x.canonical_cmp(&item) == Ordering::Equal)
+                {
+                    arr.push(item);
                 }
             }
             Value::Array(arr)
         }
         TransformKind::RemoveAllFromArray(items) => {
+            let mut items = items.clone();
+            items.iter_mut().for_each(Value::normalize_for_storage);
             let arr = match current {
                 Some(Value::Array(a)) => a,
                 _ => Vec::new(),
@@ -5652,5 +5663,32 @@ mod scope_index_tests {
             .expect("stored document");
         assert!(take_field_tree_clone_count() <= 2);
         assert!(Arc::ptr_eq(changed, stored));
+    }
+
+    #[test]
+    fn verify_borrows_the_current_document_field_tree() {
+        let mut state = FirestoreState::new();
+        state
+            .commit(&[set("items/verify")], None, LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+        let current = state.get(&path("items/verify")).unwrap();
+        let write = Write {
+            op: WriteOp::Verify {
+                path: current.path.clone(),
+            },
+            precondition: None,
+            transforms: vec![],
+        };
+        let (next, _) = apply_write(
+            &write,
+            Some(current),
+            LogicalInstant::UNIX_EPOCH,
+            CommitVersion::default(),
+        )
+        .unwrap();
+        assert!(std::ptr::eq(
+            &raw const next.as_ref().unwrap().fields,
+            &raw const current.fields
+        ));
     }
 }

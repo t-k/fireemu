@@ -1834,3 +1834,195 @@ fn resource_names_round_trip_and_non_document_names_are_rejected() {
         assert_eq!(DocumentPath::from_resource_name(name), None, "{name}");
     }
 }
+
+// Same REST inputs observed on production fireemu-35fe6 on 2026-09-08.
+#[test]
+fn timestamp_array_transforms_compare_storage_precision_recursively() {
+    use fireemu_core_firestore::value::Timestamp;
+    for shape in 0..3 {
+        let item = |nanos| {
+            let value = Value::Timestamp(Timestamp::new(1_788_220_800, nanos).unwrap());
+            match shape {
+                0 => value,
+                1 => Value::Map(fields(&[("at", value)])),
+                _ => Value::Map(fields(&[(
+                    "nested",
+                    Value::Array(vec![Value::Map(fields(&[("at", value)]))]),
+                )])),
+            }
+        };
+        for precision in [123_456_789, 123_456_000] {
+            let raw = item(precision);
+            let same_microsecond = item(123_456_001);
+            let stored = item(123_456_000);
+            let mut state = FirestoreState::new();
+            let array = |items| Value::Array(items);
+            let mut transform = set("timestamps/array", &[]);
+            if let WriteOp::Set { update_mask, .. } = &mut transform.op {
+                *update_mask = Some(vec![]);
+            }
+            transform.transforms.push(FieldTransform {
+                field: FieldPath::parse("values").unwrap(),
+                kind: TransformKind::AppendMissingElements(vec![
+                    raw.clone(),
+                    same_microsecond.clone(),
+                ]),
+            });
+            let first = state.commit(&[transform.clone()], None, t(0)).unwrap();
+            assert_eq!(
+                state.get(&path("timestamps/array")).unwrap().fields["values"],
+                array(vec![stored.clone()]),
+                "union deduplicates operands at storage precision: shape={shape}, precision={precision}"
+            );
+            for now in [1, 2] {
+                let repeated = state.commit(&[transform.clone()], None, t(now)).unwrap();
+                assert_eq!(repeated.version, first.version);
+                assert_eq!(
+                    repeated.write_results[0].update_time,
+                    first.write_results[0].update_time
+                );
+                assert_eq!(
+                    repeated.write_results[0].transform_results,
+                    vec![Value::Null]
+                );
+                assert!(repeated.changes.is_empty());
+            }
+            transform.transforms[0].kind = TransformKind::RemoveAllFromArray(vec![raw.clone()]);
+            let removed = state.commit(&[transform.clone()], None, t(3)).unwrap();
+            assert_eq!(removed.changes.len(), 1);
+            assert_eq!(
+                state.get(&path("timestamps/array")).unwrap().fields["values"],
+                array(vec![])
+            );
+            let repeated = state.commit(&[transform], None, t(4)).unwrap();
+            assert!(repeated.changes.is_empty());
+            assert_eq!(
+                repeated.write_results[0].update_time,
+                removed.write_results[0].update_time
+            );
+
+            // A normal set preserves user-supplied duplicates after normalization.
+            let duplicate = set(
+                "timestamps/array",
+                &[("values", array(vec![raw.clone(), same_microsecond.clone()]))],
+            );
+            state.commit(&[duplicate], None, t(5)).unwrap();
+            assert_eq!(
+                state.get(&path("timestamps/array")).unwrap().fields["values"],
+                array(vec![stored.clone(), stored.clone()])
+            );
+
+            // Both sides of the comparison originate in this write, before storage.
+            for remove in [false, true] {
+                let mut write = set("timestamps/array", &[("values", array(vec![raw.clone()]))]);
+                write.transforms.push(FieldTransform {
+                    field: FieldPath::parse("values").unwrap(),
+                    kind: if remove {
+                        TransformKind::RemoveAllFromArray(vec![same_microsecond.clone()])
+                    } else {
+                        TransformKind::AppendMissingElements(vec![same_microsecond.clone()])
+                    },
+                });
+                state
+                    .commit(&[write], None, t(6 + i64::from(remove)))
+                    .unwrap();
+                assert_eq!(
+                    state.get(&path("timestamps/array")).unwrap().fields["values"],
+                    array(if remove { vec![] } else { vec![stored.clone()] })
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn verify_observes_staged_writes_and_preserves_atomic_validation() {
+    let verify = |precondition| Write {
+        op: WriteOp::Verify {
+            path: path("verify/doc"),
+        },
+        precondition,
+        transforms: vec![],
+    };
+    let mut state = FirestoreState::new();
+    let absent = state
+        .commit(&[verify(Some(Precondition::Exists(false)))], None, t(0))
+        .unwrap();
+    assert!(absent.changes.is_empty());
+    assert_eq!(absent.write_results[0].update_time, None);
+    let created = state
+        .commit(
+            &[
+                set("verify/doc", &[("n", Value::Integer(1))]),
+                verify(Some(Precondition::Exists(true))),
+            ],
+            None,
+            t(1),
+        )
+        .unwrap();
+    assert_eq!(created.changes.len(), 1);
+    assert_eq!(
+        created.write_results[0].update_time,
+        created.write_results[1].update_time
+    );
+    let update_time = created.write_results[0].update_time.unwrap();
+    assert!(state
+        .commit(
+            &[verify(Some(Precondition::UpdateTime(update_time)))],
+            None,
+            t(2)
+        )
+        .unwrap()
+        .changes
+        .is_empty());
+    let changed = set("verify/doc", &[("n", Value::Integer(2))]);
+    assert!(state
+        .commit(
+            &[
+                changed.clone(),
+                verify(Some(Precondition::UpdateTime(update_time)))
+            ],
+            None,
+            t(3)
+        )
+        .is_err());
+    assert_eq!(
+        state.get(&path("verify/doc")).unwrap().fields["n"],
+        Value::Integer(1)
+    );
+    let mut invalid = verify(None);
+    invalid.transforms.push(FieldTransform {
+        field: FieldPath::parse("n").unwrap(),
+        kind: TransformKind::Increment(Value::Integer(1)),
+    });
+    assert!(matches!(
+        state.commit(&[changed, invalid], None, t(4)),
+        Err(FirestoreError::InvalidArgument(_))
+    ));
+    assert_eq!(
+        state.get(&path("verify/doc")).unwrap().fields["n"],
+        Value::Integer(1)
+    );
+    let removed = state
+        .commit(
+            &[
+                Write {
+                    op: WriteOp::Delete {
+                        path: path("verify/doc"),
+                    },
+                    precondition: None,
+                    transforms: vec![],
+                },
+                verify(Some(Precondition::Exists(false))),
+            ],
+            None,
+            t(5),
+        )
+        .unwrap();
+    assert_eq!(removed.changes.len(), 1);
+    assert_eq!(removed.write_results[1].update_time, None);
+    assert!(state.get(&path("verify/doc")).is_none());
+    assert!(state
+        .commit(&[verify(Some(Precondition::Exists(true)))], None, t(6))
+        .is_err());
+}

@@ -27,7 +27,9 @@ def finish_operation(token: str, receipt: dict, persist) -> dict:
         is not None,
         "unknown create outcome; exact operation identity required for recovery",
     )
-    deadline = time.monotonic() + 120
+    # Firebase documents a several-minute minimum, even for an empty database.
+    # This is an operational bound, not a claimed service SLA.
+    deadline = time.monotonic() + 15 * 60
     while time.monotonic() < deadline:
         status, operation = request(
             f"https://firestore.googleapis.com/v1/{name}", token
@@ -40,7 +42,7 @@ def finish_operation(token: str, receipt: dict, persist) -> dict:
         persist()
         if resolved_operation(operation, name):
             return operation
-        time.sleep(2)
+        time.sleep(5)
     raise ValueError("create operation remains unresolved")
 
 
@@ -72,7 +74,15 @@ def list_indexes(token: str, collection: str) -> list:
         isinstance(indexes, list) and all(isinstance(item, dict) for item in indexes),
         "invalid index listing",
     )
-    return indexes
+    return select_indexes(indexes, collection)
+
+
+def select_indexes(indexes: list, collection: str) -> list:
+    # Production may return indexes for other collection groups as well.
+    # Their definitions never enter our ownership/deletion candidate set.
+    parent = index_parent(collection) + "/"
+    require(all(isinstance(item.get("name"), str) for item in indexes), "unnamed index")
+    return [item for item in indexes if item["name"].startswith(parent)]
 
 
 def prepare_index(token: str, collection: str, receipt: dict, persist) -> None:

@@ -31,6 +31,8 @@ gRPC kinds: enum: 8; enum-value: 36; field: 290; message: 88; method: 17; oneof:
 
 ## Fresh observations
 
+The aggregation receipts retain the original 2026-09-09 harness, now [archived](../../spec/compatibility/observations/2026-09-09/harness/probe.py) with its original digest. That harness could discard malformed stream elements; the current probe rejects them. These historical receipts contain extracted values, not complete raw aggregation streams, so they cannot be retrospectively revalidated by the fixed parser. No new production run or evidence promotion is implied by this repair.
+
 The timestamp corpus is six programs with ten steps each, not sixty independent features. Both targets asserted the same bounded expectations. The focused aggregation corpus checks four aggregation combinations, a refused Commit, and unchanged document fields/times. Local binaries were built from this worktree; these are REST observations, not SDK or published npm-package validation.
 
 | Corpus | Target | Result | Receipt |
@@ -45,6 +47,7 @@ Runtime source revision: `52169935671f0cbb6dcf56cd732eb310029c1b27`. Local binar
 
 ## Remaining obligations
 
+- Local receipt binary hashes and strict profiles are operator assertions: the probe does not own or identify the contacted daemon. They do not establish that the daemon ran that artifact or profile. Before accepting execution evidence, own the process/configuration lifecycle and separate probe source, runtime source and artifact identities. Prioritize the compound-aggregation review-to-requirement-to-execution-to-approval path before acquiring more pages.
 - Review each discovered page and section, classify normative requirements versus examples and managed-service boundaries, and map them to stable requirements and tests. All extracted API items remain unknown until this happens.
 - Expand beyond the captured sitemap set: omitted/unlisted URLs, linked SDK variants, and upstream changes can remain undiscovered. An error-free sitemap traversal is not proof that all documentation is known.
 - Auth configuration readback returned PERMISSION_DENIED. No Auth cases or user mutations occurred. Resolve the least-privilege read access separately before attempting positive controls; no MFA/TOTP compatibility is inferred.
@@ -54,8 +57,8 @@ Runtime source revision: `52169935671f0cbb6dcf56cd732eb310029c1b27`. Local binar
 ## Reproduce without production access
 
 ```sh
-uv run --with pytest --with protobuf pytest tools/compat-inventory -q
-uv run tools/compat-inventory/publish.py --check
+uv run --project tools/compat-inventory --locked -m pytest tools/compat-inventory -q
+uv run --project tools/compat-inventory --locked tools/compat-inventory/publish.py --check
 ```
 
 CI performs these offline integrity checks, not fresh upstream capture or production requests. For explicit acquisition/probe commands and cleanup limitations, see [the tool guide](../../tools/compat-inventory/README.md).

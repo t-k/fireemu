@@ -36,6 +36,18 @@ def test_local_receipt_cannot_be_published_as_production():
         },
     }
     validate_identity(row, value, index)
+    # An immutable old receipt is bound to its archived harness, not today's tool.
+    archived = {
+        **index,
+        "files": {
+            "tools/compat-inventory/probe.py": "new-tool",
+            "archive/probe.py": "tool",
+        },
+        "historicalTools": {"tools/compat-inventory/probe.py": "archive/probe.py"},
+    }
+    validate_identity(row, value, archived)
+    with pytest.raises(ValueError):
+        validate_identity(row, {**value, "probeSha256": "new-tool"}, archived)
     for key, wrong in [
         ("kind", "live-fireemu"),
         ("projectNumberVerified", False),

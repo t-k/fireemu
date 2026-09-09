@@ -2,6 +2,7 @@
 
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import product
 from threading import Thread
 
 import pytest
@@ -62,6 +63,84 @@ def test_aggregation_summary_preserves_wire_types_and_consumes_all_results():
     ]:
         with pytest.raises(ValueError):
             summarize_aggregation(body)
+
+
+@pytest.mark.parametrize("position", [0, 1])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"error": {"code": 13, "status": "INTERNAL", "message": "stream failed"}},
+        None,
+        False,
+        42,
+        "unexpected",
+        [],
+        {},
+        {"readTime": None},
+        {"readTime": "now"},
+        {"readTime": "2026-02-30T00:00:00Z"},
+        {"readTime": "2026-09-09T00:00:00+00:60"},
+        {"readTime": "2026-09-09T00:00:00+01:99"},
+        {"readTime": "2026-09-09T00:00:00-00:60"},
+        {"readTime": "2026-09-09T00:00:00+24:00"},
+        {"result": None},
+        {"result": []},
+        {"result": {}},
+        {"result": {"aggregateFields": None}},
+        {"result": {"aggregateFields": []}},
+        {"result": {"aggregateFields": {"count": {"integerValue": "4"}}, "error": {}}},
+        {"readTime": "2026-09-09T00:00:00Z", "error": {}},
+        {"transaction": "dHg="},
+        {"explainMetrics": {}},
+    ],
+)
+def test_aggregation_rejects_invalid_elements_anywhere_in_the_response(
+    invalid, position
+):
+    body = [{"result": {"aggregateFields": {"count": {"integerValue": "4"}}}}]
+    body.insert(position, invalid)
+    with pytest.raises((TypeError, ValueError)):
+        summarize_aggregation(body)
+
+
+def test_aggregation_allows_only_read_time_progress_for_this_nontransactional_corpus():
+    fields = {"count": {"integerValue": "4"}}
+    assert (
+        summarize_aggregation(
+            [
+                {"readTime": "2026-09-09T00:00:00.123456789Z"},
+                {
+                    "result": {"aggregateFields": fields},
+                    "readTime": "2026-09-09T00:00:01Z",
+                },
+                {"readTime": "2026-09-09T00:00:02+00:00"},
+            ]
+        )
+        == fields
+    )
+    with pytest.raises(ValueError):
+        summarize_aggregation([{"readTime": "2026-09-09T00:00:00Z"}])
+
+
+def test_bounded_response_model_never_discards_an_invalid_element():
+    # Exhaust every stream of length 0..3 over five row classes (156 streams).
+    fields = {"count": {"integerValue": "4"}}
+    alphabet = [
+        {"result": {"aggregateFields": fields}},
+        {"readTime": "2026-09-09T00:00:00Z"},
+        {"error": {"status": "INTERNAL"}},
+        None,
+        {},
+    ]
+    for length in range(4):
+        for sequence in product(range(len(alphabet)), repeat=length):
+            body = [alphabet[i] for i in sequence]
+            valid = sequence.count(0) == 1 and all(i < 2 for i in sequence)
+            if valid:
+                assert summarize_aggregation(body) == fields
+            else:
+                with pytest.raises((TypeError, ValueError)):
+                    summarize_aggregation(body)
 
 
 def test_uncertain_creates_need_exact_persisted_ownership_marker():

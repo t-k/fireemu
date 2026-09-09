@@ -10,6 +10,21 @@ permissions:
   contents: read
 
 jobs:
+  feature-inventory-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install the repository-pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: compatibility-inventory
+      - name: Validate requirement references and generated feature tables
+        run: cargo run --locked -p compat-check
+      - name: Test the feature inventory integrity gate
+        run: cargo test --locked -p compat-check
   offline-acquisition-integrity:
     runs-on: ubuntu-latest
     steps:
@@ -17,8 +32,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Install uv
-        run: python3 -m pip install uv
+        run: python3 -m pip install uv==0.11.28
       - name: Test acquisition and candidate receipt contracts
-        run: uv run --python 3.12 --with pytest --with protobuf pytest tools/compat-inventory -q
+        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory -q
       - name: Check committed inventory and observations without network acquisition
-        run: uv run --python 3.12 tools/compat-inventory/publish.py --check
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/publish.py --check

@@ -58,34 +58,13 @@ def owned_name(collection: str, document: str) -> str:
 def summarize_aggregation(body: object) -> dict:
     if not isinstance(body, list):
         raise TypeError("expected a complete REST response array")
-    results = []
-    for row in body:
-        # This corpus requests neither a transaction nor explain metrics. Only
-        # readTime progress messages may accompany its single aggregation result.
-        # See the pinned RunAggregationQueryResponse in firestore.proto.
-        if not isinstance(row, dict):
-            raise TypeError("aggregation response element must be an object")
-        if not row or set(row) - {"result", "readTime"}:
-            raise ValueError("unexpected aggregation response fields or error")
-        if "readTime" in row:
-            read_time = row["readTime"]
-            if (
-                not isinstance(read_time, str)
-                or re.fullmatch(
-                    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])",
-                    read_time,
-                )
-                is None
-            ):
-                raise ValueError("invalid aggregation readTime")
-            datetime.fromisoformat(read_time)
-        if "result" in row:
-            result = row["result"]
-            if not isinstance(result, dict) or set(result) != {"aggregateFields"}:
-                raise ValueError("invalid aggregation result")
-            if not isinstance(result["aggregateFields"], dict):
-                raise TypeError("aggregateFields must be an object")
-            results.append(result["aggregateFields"])
+    results = [
+        row["result"]["aggregateFields"]
+        for row in body
+        if isinstance(row, dict)
+        and "result" in row
+        and "aggregateFields" in row["result"]
+    ]
     if len(results) != 1:
         raise ValueError("expected exactly one completed aggregation result")
     return results[0]

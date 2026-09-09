@@ -5,11 +5,15 @@ These explicit tools enumerate official sources and record bounded, candidate-on
 ## Offline checks
 
 ```sh
-uv run --with pytest --with protobuf pytest tools/compat-inventory -q
-uv run tools/compat-inventory/publish.py --check
+uv run --project tools/compat-inventory --locked -m pytest tools/compat-inventory -q
+uv run --project tools/compat-inventory --locked tools/compat-inventory/publish.py --check
 ```
 
 The gate checks snapshot component hashes, the pinned protobuf sources, candidate receipt assertions and cleanup, and deterministic Markdown. Checks do not contact Google or start fireemu. A deliberately edited manifest can still redefine the baseline: hashes are integrity checks, not signed authenticity or approval. Code review is required for baseline changes.
+
+The automatic compatibility workflow also runs `cargo run --locked -p compat-check` and `cargo test --locked -p compat-check` to protect requirement/capability references and all generated feature tables. Python dependencies are resolved by the committed `uv.lock`; the workflow pins uv itself. These checks run on PRs, main pushes and manual dispatch, not on feature-branch pushes alone.
+
+Historical receipts retain their original harness bytes and digest through the index's `historicalTools` mapping. The 2026-09-09 aggregation harness had an incomplete stream validator; its stored extracted values cannot prove the original full response was well-formed. It is archived solely as provenance, not as a recommended executable. The fixed probe inspects every response element and permits only a result and valid `readTime` progress metadata for this corpus, which requests neither transactions nor explain metrics. Historical observations are not relabeled as executions of the new validator.
 
 ## Explicit source acquisition
 
@@ -34,6 +38,8 @@ uv run tools/compat-inventory/auth_probe.py --target production --output /absolu
 The Auth probe requires project-bound API key lookup and configuration readback before four rejection-only requests. It creates no accounts and sends no email or SMS. Missing configuration access produces an inconclusive receipt before cases; it is not an Auth failure or pass. Positive controls and actual MFA/IdP flows require separate corpus design and review.
 
 For local runs, start the worktree's built binary using `fireemu exec` and an available port managed by the local port registry. The child commands accept `FIRESTORE_EMULATOR_HOST` or `FIREBASE_AUTH_EMULATOR_HOST` from that runner. End the runner when finished; do not leave a development server behind.
+
+The current probe does not establish that this daemon is the supplied `--binary`, or that its profile is strict. Its binary/profile fields are operator assertions, not process identity evidence. Likewise, `sourceCommit` identifies the probe working directory's HEAD, not a proved runtime build. Before any formal evidence promotion, a runner must own the artifact launch and configuration, verify the instance, record separate probe/runtime/artifact identities, and stop its owned process. Attaching to an external daemon must remain an explicitly unverified observation path.
 
 ```sh
 uv run tools/compat-inventory/probe.py --target local --origin http://127.0.0.1:PORT --output /absolute/new-local-candidate.json --binary target/debug/fireemu

@@ -6,6 +6,8 @@ Target: this source tree; not a release attestation. No feature-level execution 
 
 This inventory is **incomplete**. Its denominator is the explicitly listed seed set, not all Firebase documentation, APIs, inputs or execution schedules. Unknown and deferred items remain visible. A mapped implementation, a reviewed document and a successful run are separate facts.
 
+The [expanded official-source acquisition and fresh candidate observations](acquisition.md) are tracked separately from this seed mapping. URL enumeration and candidate runs do not promote these feature labels.
+
 Declared profiles: strict; emulator. These are scope dimensions, not a claim that each feature was tested in each profile.
 
 | Goal | Mapped feature groups | Details |

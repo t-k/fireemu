@@ -135,6 +135,7 @@ pub(super) fn documents(inv: &Inventory) -> BTreeMap<String, String> {
 fn overview(inv: &Inventory) -> String {
     let mut out = page("Compatibility inventory");
     out.push_str("This inventory is **incomplete**. Its denominator is the explicitly listed seed set, not all Firebase documentation, APIs, inputs or execution schedules. Unknown and deferred items remain visible. A mapped implementation, a reviewed document and a successful run are separate facts.\n\n");
+    out.push_str("The [expanded official-source acquisition and fresh candidate observations](acquisition.md) are tracked separately from this seed mapping. URL enumeration and candidate runs do not promote these feature labels.\n\n");
     writeln!(out, "Declared profiles: {}. These are scope dimensions, not a claim that each feature was tested in each profile.\n", list(&strings(&inv.meta, "profiles"))).unwrap();
     out.push_str("| Goal | Mapped feature groups | Details |\n| --- | --- | --- |\n");
     for goal in GOALS {

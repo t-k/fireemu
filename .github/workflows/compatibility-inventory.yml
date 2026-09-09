@@ -1,0 +1,24 @@
+name: compatibility-inventory
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-acquisition-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        run: python3 -m pip install uv
+      - name: Test acquisition and candidate receipt contracts
+        run: uv run --python 3.12 --with pytest --with protobuf pytest tools/compat-inventory -q
+      - name: Check committed inventory and observations without network acquisition
+        run: uv run --python 3.12 tools/compat-inventory/publish.py --check

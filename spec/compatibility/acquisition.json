@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "candidate",
+  "snapshot": "spec/compatibility/upstream/2026-09-09-retry",
+  "protobuf": "spec/compatibility/upstream/firestore-protobuf.json",
+  "runtimeSourceCommit": "52169935671f0cbb6dcf56cd732eb310029c1b27",
+  "binarySha256": "3b86ac12c6a1d97c520169cc06a141e65feef001abf2c23a86e856a495306c2a",
+  "observations": [
+    {
+      "path": "spec/compatibility/observations/2026-09-09/timestamps-production.json",
+      "corpus": "timestamps",
+      "target": "production",
+      "acceptance": "candidate"
+    },
+    {
+      "path": "spec/compatibility/observations/2026-09-09/timestamps-fireemu.json",
+      "corpus": "timestamps",
+      "target": "fireemu",
+      "acceptance": "candidate"
+    },
+    {
+      "path": "spec/compatibility/observations/2026-09-09/aggregation-production-final.json",
+      "corpus": "aggregation",
+      "target": "production",
+      "acceptance": "candidate"
+    },
+    {
+      "path": "spec/compatibility/observations/2026-09-09/aggregation-fireemu-final.json",
+      "corpus": "aggregation",
+      "target": "fireemu",
+      "acceptance": "candidate"
+    },
+    {
+      "path": "spec/compatibility/observations/2026-09-09/auth-production-final.json",
+      "corpus": "auth",
+      "target": "production",
+      "acceptance": "candidate"
+    }
+  ],
+  "files": {
+    "spec/compatibility/observations/2026-09-09/timestamps-production.json": "5d5a74e0f16daf009ff3a33f7a71b076967ef4c47a815640c0fab387e4bcc55d",
+    "spec/compatibility/observations/2026-09-09/timestamps-fireemu.json": "2abae0c69ccac78b7469a15919802567893b6b0edc52dec2f81b02b10b8f7243",
+    "spec/compatibility/observations/2026-09-09/aggregation-production-final.json": "0e9cd56a4a7a9359809d62db32ac866e00006b27e1cbebcdc72085ce3ee97e24",
+    "spec/compatibility/observations/2026-09-09/aggregation-fireemu-final.json": "ffc2485e0800f577c3395c7d6575f05a04035e78987e8513bad6fce8a7222efc",
+    "spec/compatibility/observations/2026-09-09/auth-production-final.json": "560294a2d3a2ce786ebb851be2e9893eb1d918a1dd6edcba182e801133789866",
+    "spec/compatibility/upstream/2026-09-09-retry/manifest.json": "674535c0f1394fec1eb5a81930919c00700de995bc405d4554fb8039dcc33877",
+    "spec/compatibility/upstream/firestore-protobuf.json": "0e4a9f8bbc8cf782f73fb3266960cd9ff09f8267d4614fbba997d107f29f0fd9",
+    "tools/sdk-smoke/timestamp-array-oracle.mjs": "1118ca9d0a4164279ef54f9832968e085cf72ac48ccdf363e78f5937642f8aa4",
+    "tools/compat-inventory/probe.py": "ed363f8319d26a75461298b9de9bfb5e13c9a286b13ed0b64fd97d0fde8fb28d",
+    "tools/compat-inventory/auth_probe.py": "097ead80880d23fe74902601578ee8250efcc06218b7cd0588e54004ad027122",
+    "tools/compat-inventory/capture.py": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
+    "tools/compat-inventory/protobuf_inventory.py": "d1218f5a411770f98b3d87c7c308af887b65cc2385db931e2f77389a0f5ce76b"
+  }
+}

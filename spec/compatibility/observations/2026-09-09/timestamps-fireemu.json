@@ -1,0 +1,4027 @@
+{
+  "project": "demo-app",
+  "results": [
+    {
+      "shape": "timestamp",
+      "precision": "123456789",
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.923148Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.923148Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.923148Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.925100Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.923148Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.923148Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.926170Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.923148Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.923148Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.927078Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.927078Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.927078Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.928118Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.927078Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.927078Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      },
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.928837Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.928837Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.928837Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.929491Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.928837Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.928837Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.930139Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.930139Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.930139Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      },
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.930760Z",
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:20.930760Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    },
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.930760Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.931631Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.931631Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.916785Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+            "updateTime": "2026-09-09T14:07:20.931631Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "timestamp",
+      "precision": "123456",
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.932946Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.932946Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.932946Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.933725Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.932946Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.932946Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.934452Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.932946Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.932946Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.934924Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.934924Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.934924Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.935469Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.934924Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.934924Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      },
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.935944Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.935944Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.935944Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.936469Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.935944Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.935944Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.936957Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.936957Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.936957Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      },
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.937440Z",
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:20.937440Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    },
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.937440Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.937936Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.937936Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.932251Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+            "updateTime": "2026-09-09T14:07:20.937936Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "map",
+      "precision": "123456789",
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.938857Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.938857Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.938857Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.939684Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.938857Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.938857Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.940409Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.938857Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.938857Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.940929Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.940929Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.940929Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.941441Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.940929Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.940929Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.941960Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.941960Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.941960Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.942475Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.941960Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.941960Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.942976Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.942976Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.942976Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.943445Z",
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:20.943445Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.943445Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.943877Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.943877Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.938461Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+            "updateTime": "2026-09-09T14:07:20.943877Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "map",
+      "precision": "123456",
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.944843Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.944843Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.944843Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.945294Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.944843Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.944843Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.945749Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.944843Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.944843Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.946207Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.946207Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.946207Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.946631Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.946207Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.946207Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.947075Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.947075Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.947075Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.947508Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.947075Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.947075Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.947938Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.947938Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.947938Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.948374Z",
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:20.948374Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.948374Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.948799Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.948799Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.944526Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+            "updateTime": "2026-09-09T14:07:20.948799Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "nested",
+      "precision": "123456789",
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.949471Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.949471Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.949471Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.949932Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.949471Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.949471Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.950425Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.949471Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.949471Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.950999Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.950999Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.950999Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.951466Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.950999Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.950999Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.951892Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.951892Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.951892Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.952349Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.951892Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.951892Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.952812Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.952812Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.952812Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.953219Z",
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:20.953219Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.953219Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.953686Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.953686Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.949211Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+            "updateTime": "2026-09-09T14:07:20.953686Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "nested",
+      "precision": "123456",
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.954350Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.954350Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.954350Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.954802Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.954350Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.954350Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.955250Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.954350Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.954350Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.955888Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.955888Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.955888Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.956316Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.955888Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.955888Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.956729Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.956729Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.956729Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.957178Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.956729Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.956729Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.957647Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.957647Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.957647Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.958073Z",
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:20.958073Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.958073Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "commitTime": "2026-09-09T14:07:20.958601Z",
+            "writeResults": [
+              {
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ],
+                "updateTime": "2026-09-09T14:07:20.958601Z"
+              }
+            ]
+          },
+          "document": {
+            "createTime": "2026-09-09T14:07:20.954090Z",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+            "updateTime": "2026-09-09T14:07:20.958601Z"
+          }
+        }
+      ]
+    }
+  ],
+  "cleanup": [
+    {
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1506c459-1bde-4b61-a347-79503bf6605a",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/b5caa2fa-87a6-4f6a-a611-506fc46b9b82",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d41612f9-526d-49df-819c-e494e7f1cb6b",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/1c3dd69d-cf10-4254-b77b-64050204eea7",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/d04e98c4-2833-40d0-a524-d1f787340b13",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/demo-app/databases/(default)/documents/timestamp_array_review/89fe060c-2ff4-4fc2-902b-1aac6f234026",
+      "status": "fulfilled"
+    }
+  ]
+}

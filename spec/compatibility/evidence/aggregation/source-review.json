@@ -1,0 +1,66 @@
+{
+  "url": "https://firebase.google.com/docs/firestore/query-data/aggregation-queries",
+  "rawSha256": "989ff51cba98e3baf92b239fa68986980f122ebef56511d1c98a40335d34a559",
+  "bodySha256": "34d6218b480f20501cd8456c11958d005503a41d5a66879e1fe9958228e9c9f4",
+  "extractor": "article-text-v1",
+  "extractorSha256": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
+  "fetchedAt": "2026-09-09T14:21:24.817821+00:00",
+  "reviewedAt": "2026-09-09",
+  "reviewer": "Codex (agent-authored interpretation, not execution approval)",
+  "extent": "selected-sections-only",
+  "locators": [
+    "use_the_count_aggregation",
+    "use_the_sum_aggregation",
+    "use_the_average_aggregation",
+    "calculate_multiple_aggregations_in_a_query",
+    "limitations"
+  ],
+  "obligations": [
+    {
+      "id": "AGG-COUNT",
+      "locator": "use_the_count_aggregation",
+      "condition": "Count alone includes all four query documents.",
+      "cases": [
+        "count-alone",
+        "bounded-count"
+      ]
+    },
+    {
+      "id": "AGG-NUMERIC",
+      "locator": "limitations",
+      "condition": "Sum and average ignore strings; count still includes present nonnumeric fields.",
+      "cases": [
+        "count-sum",
+        "count-average",
+        "sum-average"
+      ]
+    },
+    {
+      "id": "AGG-INTERSECTION",
+      "locator": "limitations",
+      "condition": "Multiple fields use the intersection of field existence, with a composite index.",
+      "cases": [
+        "multiple-fields"
+      ]
+    },
+    {
+      "id": "AGG-BOUNDARY",
+      "locator": "limitations",
+      "condition": "Derived boundary controls: empty results and missing fields before a limit.",
+      "cases": [
+        "empty-result",
+        "missing-before-limit"
+      ]
+    },
+    {
+      "id": "AGG-STATE",
+      "locator": "calculate_multiple_aggregations_in_a_query",
+      "condition": "Harness control, not a claim from this section: refused Commit leaves all fixture documents unchanged.",
+      "cases": [
+        "refused-commit",
+        "unchanged-state"
+      ]
+    }
+  ],
+  "parentRequirement": "REQ-FS-PARITY-01"
+}

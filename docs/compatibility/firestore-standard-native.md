@@ -18,6 +18,8 @@ Labels summarize only linked capability declarations. They do not establish that
 
 All links below are mappings. Test names and corpus paths must be reviewed for their actual assertions before a feature-level execution claim can be made.
 
+[Bounded compound-aggregation source review and execution evidence](aggregation-evidence.md). This separate slice does not promote the broad feature labels.
+
 ### Count, sum and average
 
 Sources: FS-AGGREGATIONS; FS-RPC. API surfaces: FS-AGGREGATE; FS-AGGREGATE-REST; FS-AGGREGATION-REQUEST; FS-AGGREGATION-RESPONSE; FS-AGGREGATION-FIELD; FS-AGGREGATION-ONEOF.

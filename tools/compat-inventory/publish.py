@@ -457,6 +457,9 @@ def record(directory: Path, snapshot: str) -> None:
 
 
 def main() -> None:
+    from aggregation_evidence import PAGE
+    from aggregation_evidence import render as render_aggregation
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--record", type=Path)
     parser.add_argument("--snapshot")
@@ -467,10 +470,15 @@ def main() -> None:
         require(bool(args.snapshot), "snapshot required")
         record(args.record, args.snapshot)
     generated = render()
+    aggregation = render_aggregation()
     if args.write:
         REPORT.write_text(generated)
+        PAGE.write_text(aggregation)
     else:
         require(REPORT.read_text() == generated, "generated acquisition page drift")
+        require(
+            PAGE.read_text() == aggregation, "generated aggregation evidence page drift"
+        )
     print("Candidate acquisition/observation integrity checks passed (offline)")
 
 

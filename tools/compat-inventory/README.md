@@ -28,6 +28,28 @@ Raw response bodies and extracted article text remain in the caller-selected ign
 
 ## Explicit production observations
 
+### Bounded compound-aggregation evidence
+
+The newer [bounded evidence page](../../docs/compatibility/aggregation-evidence.md) is independent of the historical probes below. Its corpus fixes eight typed query expectations and two refusal/state controls before measurement. `owned_runner.py --build` invokes Cargo, copies its exact artifact and strict configuration into a private directory, launches only Firestore on OS-assigned ports, checks the inherited process/control-token/profile identity, and verifies shutdown. `--binary` remains useful for diagnostics, but without a recorder-owned build its observation cannot pass the evidence validator. External-daemon observations cannot acquire artifact identity.
+
+```sh
+uv run --project tools/compat-inventory --locked tools/compat-inventory/owned_runner.py --build --output /absolute/new-owned-run
+uv run --project tools/compat-inventory --locked tools/compat-inventory/aggregation_probe.py --target production --output /absolute/new-production.json
+uv run --project tools/compat-inventory --locked tools/compat-inventory/publish.py --check
+```
+
+The production corpus additionally owns one composite index in its fresh UUID collection group. It requires an empty baseline for that exact namespace, journals the create before sending it, waits for the exact long-running operation and READY index, deletes only matching owned indexes, and confirms absence only after creation has resolved. The operation wait is bounded at 15 minutes, with five-second polls; this is not a service SLA. Firebase documents a [several-minute minimum index build time even for empty databases](https://firebase.google.com/docs/firestore/query-data/indexing#index_build_time). Broader Admin API list results are filtered by the exact parent path; pagination is rejected. A lost create response with no operation identity remains unresolved, never certified clean. No existing documents or foreign indexes are deleted.
+
+`aggregation_package.py` stages and validates the selected source capsule, separate source-review record, corpus and two full-response candidates before publishing the bundle. It refuses replacement of an existing bundle and always starts with empty approvals. The source capsule is the exception to the private-cache policy above: its original raw bytes are preserved compressed for offline body-hash/extractor verification. Only selected sections are reviewed; derived boundary and state controls are explicitly distinguished from source claims.
+
+Approval is repository-reviewed metadata, not a signature. A reviewer must inspect the exact subject and explicitly approve case IDs. The offline publisher rechecks all bound source/tool/runtime inputs, raw cases and identities before generating labels. Editing an input invalidates the bundle and any approval; refresh candidates deliberately rather than rewriting historical receipts. Broad schema1 feature labels remain unverified. Run the real-process integration test with `FIREEMU_EVIDENCE_BINARY=/absolute/fireemu`; without that opt-in, offline CI reports it as skipped.
+
+The source `commit` fields record checkout HEAD at measurement time; the per-file manifests are the measured identities and can include not-yet-committed additions. Do not infer the complete measured tree from HEAD alone. The validator compares those complete manifests with the current inputs, and the build receipt binds runtime inputs to the copied artifact separately from probe sources.
+
+A complete, structurally valid query mismatch may be published as a mismatch, not a success. The validator checks every response element, expected alias and typed aggregate Value before comparing values, then recomputes the case and summary verdicts. Only the intersection of cases matching on both targets can be approved. Malformed responses, incomplete execution, failed ownership/state controls or failed cleanup reject the entire bundle. Keep unexpected values and original expectations unchanged while investigating divergence.
+
+### Historical candidate probes
+
 Production access is restricted to `fireemu-35fe6`, project number `592603257417`. The focused Firestore probe verifies the live project number and Standard/Native database configuration before exclusively creating four documents in a random root collection. It never enumerates or clears existing collections. Tokens remain in memory; redirects are refused. Each attempted create is journaled and flushed before the request. Cleanup checks uncertain-create ownership markers, deletes only owned fixture paths, and confirms absence. A cleanup failure prevents success and leaves an exact-path recovery receipt. A hard process kill can still interrupt cleanup: inspect that receipt and verify ownership before recovering its named resources; never clear the database.
 
 ```sh

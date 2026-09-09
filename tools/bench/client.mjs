@@ -332,11 +332,14 @@ async function main() {
       else if(req.action==='close') {
         if(webDb) await webSdk.terminate(webDb);
         await db.terminate();await requireSdk('firebase-admin/app').deleteApp(adminApp);
-        process.stdout.write(JSON.stringify({id:req.id,ok:true,data:{closed:true}})+'\n');return;
+        // SDK channels and the resumed stdin reader can keep the event loop alive after
+        // terminate(); exit explicitly once the answer is flushed so the harness never has to
+        // SIGKILL the client (a forced kill invalidates the trial).
+        process.stdout.write(JSON.stringify({id:req.id,ok:true,data:{closed:true}})+'\n',()=>process.exit(0));return;
       } else throw new Error(`Unknown action ${req.action}`);
       process.stdout.write(JSON.stringify({id:req.id,ok:true,data:response})+'\n');
     } catch(e) {process.stdout.write(JSON.stringify({id:req.id,ok:false,error:{code:e.code??e.name,message:e.message}})+'\n');}
   }
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)
-  main().catch(e=>{console.error(e);process.exitCode=1;});
+  main().then(()=>process.exit(process.exitCode??0),e=>{console.error(e);process.exit(1);});

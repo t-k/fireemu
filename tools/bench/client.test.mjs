@@ -46,3 +46,22 @@ test('zero-test and invalid concurrency cannot accidentally pass',async()=>{
   await assert.rejects(closedLoop(0,1,async()=>{}));
   await assert.rejects(closedLoop(10,0,async()=>{}));
 });
+test('close answers, then the process exits on its own so the harness never has to kill it',async()=>{
+  const {spawn}=await import('node:child_process');
+  const {fileURLToPath}=await import('node:url');
+  const {dirname,resolve:resolvePath}=await import('node:path');
+  const here=dirname(fileURLToPath(import.meta.url));
+  const config={project:'demo-bench-test',host:'127.0.0.1:1',nonce:'test',
+                sdkRoot:resolvePath(here,'../../conformance'),documents:1,payloadBytes:1};
+  const child=spawn(process.execPath,[resolvePath(here,'client.mjs')],
+                    {env:{...process.env,BENCH_CLIENT_CONFIG:JSON.stringify(config)},stdio:['pipe','pipe','inherit']});
+  let out='';child.stdout.on('data',d=>{out+=d;});
+  const exit=new Promise(r=>child.on('exit',(code,signal)=>r({code,signal})));
+  await new Promise(r=>child.stdout.once('data',r));
+  assert.equal(JSON.parse(out.split('\n')[0]).type,'boot');
+  child.stdin.write(JSON.stringify({id:1,action:'close'})+'\n');
+  const timeout=new Promise((_,reject)=>setTimeout(()=>{child.kill('SIGKILL');reject(new Error('client did not exit after close'));},8000));
+  const result=await Promise.race([exit,timeout]);
+  assert.deepEqual(result,{code:0,signal:null});
+  assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)),{id:1,ok:true,data:{closed:true}});
+});

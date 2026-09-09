@@ -68,7 +68,7 @@ use crate::config::{RuntimeConfig, Selection};
 const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
+    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version");
     ExitCode::from(2)
 }
 
@@ -246,6 +246,13 @@ fn runtime_thread_counts(
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        // Version is answered before anything else so tooling that records which build it
+        // drove (benchmarks, packaging) never has to start a daemon to find out.
+        Some("--version" | "-V" | "version") if args.len() == 1 => {
+            println!("fireemu {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Some("--version" | "-V" | "version") => fail(&CliError::usage("usage: fireemu --version")),
         Some("init") => match init::run(&args[1..]) {
             Ok(path) => {
                 println!("created {}", diagnostic_path(&path));

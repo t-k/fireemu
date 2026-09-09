@@ -33,3 +33,6 @@ npm/fireemu/LICENSE
 npm/fireemu/THIRD_PARTY_LICENSES.txt
 # node_modules directories and the symlinks the smokes use for them
 node_modules
+__pycache__/
+tools/bench/exec_engine
+.bench-output/

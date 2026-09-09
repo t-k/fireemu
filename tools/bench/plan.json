@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "seed": 20260909,
+  "tiers": {
+    "smoke": {"pairs": 2, "discardPairs": 1, "documents": 1000, "payloadBytes": 1024, "pointOps": 100, "queryOps": 3, "scanOps": 1, "transactionOps": 10, "idleSeconds": 2},
+    "standard": {"pairs": 5, "discardPairs": 1, "documents": 10000, "payloadBytes": 1024, "pointOps": 1000, "queryOps": 30, "scanOps": 3, "transactionOps": 50, "idleSeconds": 5},
+    "extended": {"pairs": 10, "discardPairs": 1, "documents": 100000, "payloadBytes": 1024, "pointOps": 5000, "queryOps": 100, "scanOps": 5, "transactionOps": 100, "idleSeconds": 10}
+  }
+}

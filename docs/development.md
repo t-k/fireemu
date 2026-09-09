@@ -86,3 +86,18 @@ pnpm -C ui size --out .runs/size-report.json --baseline .runs/previous.json
 
 The report records the commit (with a `-dirty` suffix when `ui/` has uncommitted changes), the Node and Vite versions and the host platform, and never an absolute path or environment variable. Record a release binary next to the bundle with `--binary <path> --target <triple> --profile <name> [--features a,b]`; a comparison refuses reports whose compression settings, binary target, profile or features differ, so a number measured on another platform is never shown as a trend. `ui/.runs/` is ignored by git; keep baselines you want to compare against under `docs.local/`.
 
+
+## Paired benchmark against the official emulator
+
+`.github/workflows/benchmark.yml` measures fireemu against the official Firestore emulator on one Linux runner, sequentially, with startup-to-SDK-usable time, cgroup memory (PSS/RSS/USS), CPU and per-workload throughput recorded as paired ratios with confidence intervals. It runs weekly on `main` and on demand from the Actions tab; it is deliberately not part of the pull-request gate. Start with the `smoke` tier, which checks the wiring rather than statistical significance, then `standard` or `extended`.
+
+The harness lives in `tools/bench/`. `bench.py` drives both emulators under `systemd-run` scopes (or plain process groups with `--supervisor process`), `client.mjs` runs the workloads through the SDKs installed under `conformance/`, and `report.py` renders `summary.md`, `summary.json` and `summary.csv` plus the Actions job summary. The report renders on failed or incomplete series too; a missing measurement invalidates a pair instead of counting as zero.
+
+Measurement is Linux only, but the self-tests run anywhere with Python 3.10+ and Node:
+
+```sh
+python3 -m unittest discover -s tools/bench -p 'test_*.py'
+node --test tools/bench/client.test.mjs
+```
+
+Both emulators are started with `--project demo-bench-NN` and loopback endpoints only; the harness refuses anything else, and no cloud credentials are involved.

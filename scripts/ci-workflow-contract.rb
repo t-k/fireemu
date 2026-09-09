@@ -91,4 +91,28 @@ end
   assert(heavy_trigger.keys == ["workflow_dispatch"], "#{name} must be manual-only before publication")
 end
 
+# The paired benchmark is scheduled weekly and otherwise manual: it must never join the PR gate,
+# must run the emulators from an immutable action set, and must build with the pinned compiler.
+benchmark = load_workflow("benchmark.yml")
+benchmark_trigger = benchmark["on"] || benchmark[true]
+assert(benchmark_trigger.keys.sort == %w[schedule workflow_dispatch], "benchmark.yml must only run on schedule or manually")
+benchmark_source = File.read(File.join(ROOT, ".github", "workflows", "benchmark.yml"))
+assert(!benchmark_source.match?(/uses:\s+[^\s]+@(v\d+|stable)\b/), "benchmark actions must be pinned to immutable commits")
+assert(benchmark.dig("concurrency", "cancel-in-progress") == false, "a benchmark series must never be cancelled in progress")
+benchmark.fetch("jobs").each do |job, definition|
+  assert(definition["timeout-minutes"], "benchmark #{job} must declare a timeout")
+  definition.fetch("steps", []).select { |step| step["uses"]&.start_with?("dtolnay/rust-toolchain@") }.each do |step|
+    assert(step.dig("with", "toolchain") == toolchain_channel, "benchmark #{job} must build with #{toolchain_channel}")
+  end
+  definition.fetch("steps", []).select { |step| step["uses"]&.start_with?("pnpm/action-setup@") }.each do |step|
+    assert(step.dig("with", "version"), "benchmark #{job} must pin the pnpm version")
+  end
+end
+measure_runs = benchmark.dig("jobs", "measure", "steps").map { |step| step["run"] }.compact.join("\n")
+assert(measure_runs.include?("python3 -m unittest discover -s tools/bench"), "benchmark measure must run the harness self-tests first")
+assert(measure_runs.include?("node --test tools/bench/client.test.mjs"), "benchmark measure must run the client self-tests first")
+assert(measure_runs.include?("tools/bench/report.py"), "benchmark measure must render the report")
+benchmark_report = benchmark.dig("jobs", "measure", "steps").find { |step| step["run"]&.include?("tools/bench/report.py") }
+assert(benchmark_report["if"] == "always()", "benchmark report must run on failed trials too")
+
 puts "CI workflow contract passed"

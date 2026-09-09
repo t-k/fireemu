@@ -8,6 +8,21 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-09
+
+### Added
+
+- `fireemu --version` (also `-V` and `version`) prints the build's version without starting a daemon, so packaging and benchmark tooling can record which build it drove.
+- A paired benchmark against the official Firestore emulator (`.github/workflows/benchmark.yml`, harness in `tools/bench/`): both emulators run sequentially on the same GitHub Actions Linux runner under the `firebase` profile and the same SDK workloads, and startup, cgroup memory, CPU and throughput are reported as paired ratios with confidence intervals. The workflow is manual-only and its results are summarized in the README.
+- Emulator UI: the Auth user list shows each user's enrolled second factors (TOTP, phone).
+- Emulator UI: Functions rows describe task queue, Eventarc and blocking Auth triggers instead of leaving those triggers without a description.
+
+### Fixed
+
+- Emulator UI: Auth and Functions console drafts survive the background session refresh; a new Auth user draft survives a cancelled scope switch, and a scope switch asks every mounted editor before the header target changes, with focus returned to the draft when the user keeps it.
+- Emulator UI: a late Auth read for the previous project can no longer replace the newly selected project's rows, and a scope switch clears the old rows and armed confirmations.
+- Emulator UI: an Auth user deleted outside the console keeps its draft and reports the save failure; saving a Firestore field rename preserves the original numeric wire value; Auth actions fit narrow viewports with long identifiers.
+
 ## [0.4.0] - 2026-09-09
 
 ### Added
@@ -93,7 +108,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/t-k/fireemu/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/t-k/fireemu/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/t-k/fireemu/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/t-k/fireemu/compare/v0.1.0...v0.2.0

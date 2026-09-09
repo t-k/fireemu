@@ -1,6 +1,7 @@
 import { A, type RouteSectionProps } from "@solidjs/router";
-import { For, Show, onCleanup, onMount, type Component } from "solid-js";
+import { For, Show, createSignal, onCleanup, onMount, type Component } from "solid-js";
 import { t, type MessageKey } from "./i18n";
+import { requestScopeChange } from "./lib/unsaved";
 import { appState } from "./state";
 
 type NavItem = { href: string; key: MessageKey };
@@ -21,6 +22,7 @@ const RUNTIME_NAV: NavItem[] = [{ href: "/runtime", key: "nav.runtime" }];
 
 /** The frame: sidebar navigation, a status bar with the clock, the routed page. */
 export const App: Component<RouteSectionProps> = (props) => {
+  const [navigationOpen, setNavigationOpen] = createSignal(false);
   onMount(() => {
     void appState.refreshClock();
     const timer = window.setInterval(() => void appState.refreshClock(), 5000);
@@ -47,8 +49,20 @@ export const App: Component<RouteSectionProps> = (props) => {
     }
   };
   return (
-    <div class="flex min-h-screen">
-      <aside class="w-44 shrink-0 border-r border-zinc-200 bg-zinc-100 p-3 lg:w-56 dark:border-zinc-800 dark:bg-zinc-900">
+    <div class="flex min-h-screen flex-col md:flex-row">
+      <button
+        type="button"
+        class="btn m-3 self-start md:hidden"
+        aria-controls="console-navigation"
+        aria-expanded={navigationOpen()}
+        onClick={() => setNavigationOpen(!navigationOpen())}
+      >
+        {t("nav.toggle")}
+      </button>
+      <aside
+        id="console-navigation"
+        class={`${navigationOpen() ? "block" : "hidden"} shrink-0 border-r border-zinc-200 bg-zinc-100 p-3 md:block md:w-44 lg:w-56 dark:border-zinc-800 dark:bg-zinc-900`}
+      >
         <div class="mb-4 px-3">
           <div class="text-lg font-bold">{t("app.title")}</div>
           <div class="text-xs text-zinc-500">{t("app.subtitle")}</div>
@@ -56,7 +70,12 @@ export const App: Component<RouteSectionProps> = (props) => {
         <nav class="space-y-0.5" aria-label={t("nav.sectionOfficial")}>
           <For each={OFFICIAL_NAV}>
             {(item) => (
-              <A href={item.href} class="nav-link" end={item.href === "/"}>
+              <A
+                href={item.href}
+                class="nav-link"
+                onClick={() => setNavigationOpen(false)}
+                end={item.href === "/"}
+              >
                 {t(item.key)}
               </A>
             )}
@@ -68,7 +87,12 @@ export const App: Component<RouteSectionProps> = (props) => {
         <nav class="space-y-0.5" aria-label={t("nav.sectionRuntime")}>
           <For each={RUNTIME_NAV}>
             {(item) => (
-              <A href={item.href} class="nav-link" end={false}>
+              <A
+                href={item.href}
+                class="nav-link"
+                onClick={() => setNavigationOpen(false)}
+                end={false}
+              >
                 {t(item.key)}
               </A>
             )}
@@ -82,15 +106,19 @@ export const App: Component<RouteSectionProps> = (props) => {
           data-testid="context-bar"
         >
           <span class="font-semibold text-zinc-600 dark:text-zinc-300">{t("header.local")}</span>
-          <label class="flex items-center gap-1">
+          <label class="flex min-w-0 max-w-full flex-wrap items-center gap-1">
             <span class="label">{t("overview.session")}</span>
             <select
-              class="input mono w-auto py-0.5"
+              class="input mono min-w-0 max-w-full w-auto py-0.5"
               data-testid="session-select"
               value={appState.session()}
               onChange={(e) => {
-                appState.setSession(e.currentTarget.value);
-                void appState.refreshClock();
+                const next = e.currentTarget.value;
+                e.currentTarget.value = appState.session();
+                requestScopeChange(() => {
+                  appState.setSession(next);
+                  void appState.refreshClock();
+                });
               }}
             >
               <For each={appState.sessions().map((s) => s.name)}>
@@ -102,13 +130,13 @@ export const App: Component<RouteSectionProps> = (props) => {
               </For>
             </select>
           </label>
-          <span class="flex items-center gap-1">
+          <span class="flex min-w-0 max-w-full flex-wrap items-center gap-1">
             <span class="label">{t("overview.project")}</span>
             <span class="mono break-all" data-testid="header-project">
               {appState.project()}
             </span>
           </span>
-          <span class="flex items-center gap-1">
+          <span class="flex min-w-0 max-w-full flex-wrap items-center gap-1">
             <span class="label">{t("overview.clock")}</span>
             <span class="mono" data-testid="clock">
               {appState.clock()}

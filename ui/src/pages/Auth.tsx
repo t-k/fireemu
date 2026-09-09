@@ -47,6 +47,9 @@ const NewUserForm: Component<{ project: string; onDone: () => void; onCancel: ()
   const [phone, setPhone] = createSignal("");
   const [displayName, setDisplayName] = createSignal("");
   const [uid, setUid] = createSignal("");
+  const guard = createLeaveGuard(() =>
+    Boolean(email() || password() || phone() || displayName() || uid()),
+  );
   const [error, setError] = createSignal<string | null>(null);
   const save = async () => {
     setError(null);
@@ -66,6 +69,7 @@ const NewUserForm: Component<{ project: string; onDone: () => void; onCancel: ()
   return (
     <div class="card mb-4" data-testid="new-user">
       <h3 class="mb-2 font-semibold">{t("auth.addUser")}</h3>
+      <LeavePrompt guard={guard} subject={t("auth.addUser")} />
       <ErrorBanner message={error()} />
       <div class="grid gap-2 md:grid-cols-2">
         <label class="text-sm">
@@ -119,7 +123,7 @@ const NewUserForm: Component<{ project: string; onDone: () => void; onCancel: ()
         <AsyncButton class="btn btn-primary" onClick={save} testId="new-user-save">
           {t("app.save")}
         </AsyncButton>
-        <button type="button" class="btn" onClick={props.onCancel}>
+        <button type="button" class="btn" onClick={() => guard.request(props.onCancel)}>
           {t("app.cancel")}
         </button>
       </div>
@@ -354,8 +358,17 @@ export const MfaSummary: Component<{ enrollments?: UserInfo["mfaInfo"] }> = (pro
   </>
 );
 
-const Auth: Component = () => {
-  const project = appState.project;
+const AuthScope: Component<{ project: string }> = (props) => {
+  // Capture the target once. A different session/project mounts a new scope, so pending
+  // mutations and reads can never pick up the new header's project.
+  const targetProject = props.project;
+  const project = () => targetProject;
+  let active = true;
+  let loadGeneration = 0;
+  onCleanup(() => {
+    active = false;
+    loadGeneration += 1;
+  });
   const [query, setQuery] = createSignal("");
   const [users, setUsers] = createSignal<UserInfo[]>([]);
   const [nextToken, setNextToken] = createSignal<string | undefined>(undefined);
@@ -363,7 +376,10 @@ const Auth: Component = () => {
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
   const [adding, setAdding] = createSignal(false);
-  const [selected, setSelected] = createSignal<string | null>(null);
+  const [selectedRecord, setSelectedRecord] = createSignal<UserInfo | null>(null);
+  const selected = () => selectedRecord()?.localId ?? null;
+  const setSelected = (uid: string | null) =>
+    setSelectedRecord(users().find((user) => user.localId === uid) ?? null);
   const [editorDirty, setEditorDirty] = createSignal(false);
   const guard = createLeaveGuard(editorDirty);
   /** Changes the edited user (or closes the editor) once any unsaved draft is settled. */
@@ -376,13 +392,18 @@ const Auth: Component = () => {
   );
 
   const load = async (token?: string) => {
+    if (!active) return;
+    const generation = ++loadGeneration;
     setLoading(true);
     setError(null);
     const q = query().trim();
     const r = q && !token ? await lookupUser(project(), q) : await listUsers(project(), token);
+    if (!active || generation !== loadGeneration) return;
     setLoading(false);
     r.match(
       (page) => {
+        const updated = page.users?.find((user) => user.localId === selected());
+        if (updated) setSelectedRecord(updated);
         setUsers(token ? [...users(), ...(page.users ?? [])] : (page.users ?? []));
         setNextToken(q ? undefined : page.nextPageToken);
       },
@@ -398,11 +419,12 @@ const Auth: Component = () => {
   };
   const refreshAll = async () => {
     await load();
+    if (!active) return;
     void refetchCodes();
     void refetchPhoneCodes();
   };
   void load();
-  const selectedUser = () => users().find((u) => u.localId === selected()) ?? null;
+  const selectedUser = selectedRecord;
   return (
     <div>
       <h1 class="mb-4 text-xl font-bold">{t("auth.title")}</h1>
@@ -411,7 +433,7 @@ const Auth: Component = () => {
         actions={
           <>
             <input
-              class="input w-64"
+              class="input min-w-0 w-full sm:w-64"
               data-testid="user-search"
               placeholder={t("auth.search")}
               value={query()}
@@ -481,81 +503,88 @@ const Auth: Component = () => {
             when={users().length > 0}
             fallback={<p class="text-sm text-zinc-500">{t("auth.noUsers")}</p>}
           >
-            <table class="table" data-testid="user-table">
-              <thead>
-                <tr>
-                  <th>{t("auth.uid")}</th>
-                  <th>{t("auth.email")}</th>
-                  <th>{t("auth.phone")}</th>
-                  <th>{t("auth.displayName")}</th>
-                  <th>{t("auth.providers")}</th>
-                  <th>{t("auth.mfa")}</th>
-                  <th>{t("auth.created")}</th>
-                  <th>{t("auth.lastSignIn")}</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                <For each={users()}>
-                  {(u) => (
-                    <tr
-                      class={u.disabled ? "opacity-60" : ""}
-                      data-testid={`user-row-${u.localId}`}
-                    >
-                      <td class="mono">
-                        <button
-                          type="button"
-                          class="text-amber-700 hover:underline dark:text-amber-300"
-                          onClick={() => select(u.localId)}
-                        >
-                          {u.localId}
-                        </button>
-                      </td>
-                      <td>
-                        {u.email}
-                        <Show when={u.emailVerified}>
-                          <span class="ml-1 text-xs text-emerald-600">
-                            ({t("auth.emailVerified")})
-                          </span>
-                        </Show>
-                      </td>
-                      <td class="mono">{u.phoneNumber}</td>
-                      <td>{u.displayName}</td>
-                      <td class="text-xs">
-                        {(u.providerUserInfo ?? []).map((p) => p.providerId).join(", ")}
-                      </td>
-                      <td class="text-xs">
-                        <MfaSummary enrollments={u.mfaInfo} />
-                      </td>
-                      <td class="mono text-xs">{formatMillis(u.createdAt)}</td>
-                      <td class="mono text-xs">{formatMillis(u.lastLoginAt)}</td>
-                      <td class="text-right">
-                        <Show when={u.disabled}>
-                          <span class="badge bg-zinc-200 dark:bg-zinc-800">
-                            {t("auth.disabled")}
-                          </span>
-                        </Show>
-                        <ConfirmButton
-                          label={t("app.delete")}
-                          question={t("auth.deleteUserConfirm", { uid: u.localId })}
-                          testId={`delete-user-${u.localId}`}
-                          onConfirm={async () => {
-                            const r = await deleteUser(project(), u.localId);
-                            r.match(
-                              () => {
-                                if (selected() === u.localId) setSelected(null);
-                                void refreshAll();
-                              },
-                              (e) => setError(e.message),
-                            );
-                          }}
-                        />
-                      </td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
+            <div
+              class="max-w-full overflow-x-auto"
+              role="region"
+              aria-label={t("auth.users")}
+              tabindex="0"
+            >
+              <table class="table" data-testid="user-table">
+                <thead>
+                  <tr>
+                    <th>{t("auth.uid")}</th>
+                    <th>{t("auth.email")}</th>
+                    <th>{t("auth.phone")}</th>
+                    <th>{t("auth.displayName")}</th>
+                    <th>{t("auth.providers")}</th>
+                    <th>{t("auth.mfa")}</th>
+                    <th>{t("auth.created")}</th>
+                    <th>{t("auth.lastSignIn")}</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  <For each={users()}>
+                    {(u) => (
+                      <tr
+                        class={u.disabled ? "opacity-60" : ""}
+                        data-testid={`user-row-${u.localId}`}
+                      >
+                        <td class="mono">
+                          <button
+                            type="button"
+                            class="text-amber-700 hover:underline dark:text-amber-300"
+                            onClick={() => select(u.localId)}
+                          >
+                            {u.localId}
+                          </button>
+                        </td>
+                        <td>
+                          {u.email}
+                          <Show when={u.emailVerified}>
+                            <span class="ml-1 text-xs text-emerald-600">
+                              ({t("auth.emailVerified")})
+                            </span>
+                          </Show>
+                        </td>
+                        <td class="mono">{u.phoneNumber}</td>
+                        <td>{u.displayName}</td>
+                        <td class="text-xs">
+                          {(u.providerUserInfo ?? []).map((p) => p.providerId).join(", ")}
+                        </td>
+                        <td class="text-xs">
+                          <MfaSummary enrollments={u.mfaInfo} />
+                        </td>
+                        <td class="mono text-xs">{formatMillis(u.createdAt)}</td>
+                        <td class="mono text-xs">{formatMillis(u.lastLoginAt)}</td>
+                        <td class="text-right">
+                          <Show when={u.disabled}>
+                            <span class="badge bg-zinc-200 dark:bg-zinc-800">
+                              {t("auth.disabled")}
+                            </span>
+                          </Show>
+                          <ConfirmButton
+                            label={t("app.delete")}
+                            question={t("auth.deleteUserConfirm", { uid: u.localId })}
+                            testId={`delete-user-${u.localId}`}
+                            onConfirm={async () => {
+                              const r = await deleteUser(project(), u.localId);
+                              r.match(
+                                () => {
+                                  if (selected() === u.localId) setSelected(null);
+                                  void refreshAll();
+                                },
+                                (e) => setError(e.message),
+                              );
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </For>
+                </tbody>
+              </table>
+            </div>
           </Show>
           <Show when={nextToken()}>
             <AsyncButton class="btn mt-2" onClick={() => load(nextToken())}>
@@ -641,5 +670,11 @@ const Auth: Component = () => {
     </div>
   );
 };
+
+const Auth: Component = () => (
+  <Show when={JSON.stringify([appState.session(), appState.project()])} keyed>
+    {(_scope) => <AuthScope project={appState.project()} />}
+  </Show>
+);
 
 export default Auth;

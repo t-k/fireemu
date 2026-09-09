@@ -49,6 +49,19 @@ const describeTrigger = (trigger: TriggerInfo): string => {
       });
     case "firestore":
       return `${t("functions.triggerFirestore", { event: trigger.event.split(".").at(-1) ?? trigger.event, document: trigger.document })}${trigger.withAuthContext ? ` (${t("functions.withAuthContext")})` : ""}`;
+    case "tasks":
+      return t("functions.triggerTasks", {
+        attempts: trigger.maxAttempts,
+        concurrency: trigger.maxConcurrentDispatches,
+      });
+    case "eventarc":
+      return t("functions.triggerEventarc", {
+        event: trigger.event,
+        channel: trigger.channel ?? t("functions.defaultChannel"),
+        filters: JSON.stringify(trigger.filters),
+      });
+    case "blockingAuth":
+      return t("functions.triggerBlockingAuth", { event: trigger.event });
     case "pubsub":
       return t("functions.triggerPubsub", { topic: trigger.topic });
     case "auth":
@@ -65,6 +78,8 @@ const describeTrigger = (trigger: TriggerInfo): string => {
         schedule: trigger.schedule,
         timeZone: trigger.timeZone ?? t("functions.utc"),
       });
+    default:
+      return t("functions.triggerUnknown", { kind: (trigger as { kind: string }).kind });
   }
 };
 
@@ -145,6 +160,26 @@ const FunctionRow: Component<{
       <td class="mono text-xs">{props.f.region}</td>
       <td class="text-xs">
         {describeTrigger(trigger())}
+        <Show
+          when={
+            ![
+              "http",
+              "firestore",
+              "pubsub",
+              "auth",
+              "storage",
+              "schedule",
+              "tasks",
+              "eventarc",
+              "blockingAuth",
+            ].includes(trigger().kind)
+          }
+        >
+          <details>
+            <summary>{t("functions.triggerDetails")}</summary>
+            <pre class="whitespace-pre-wrap break-all">{JSON.stringify(trigger(), null, 2)}</pre>
+          </details>
+        </Show>
         <Show when={trigger().kind === "http" && appState.config().functionsAddr}>
           <div class="mono text-zinc-500">
             http://{appState.config().functionsAddr}/{props.project}/{props.f.region}/{props.f.name}

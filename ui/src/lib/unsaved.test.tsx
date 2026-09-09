@@ -8,7 +8,7 @@ import {
   createMemoryHistory,
 } from "@solidjs/router";
 import { createSignal, type Component } from "solid-js";
-import { createLeaveGuard, LeavePrompt } from "./unsaved";
+import { createLeaveGuard, LeavePrompt, requestScopeChange } from "./unsaved";
 
 /** A page with a draft flag, a guarded in-page action and a route link away. */
 const harness = () => {
@@ -110,4 +110,69 @@ describe("createLeaveGuard", () => {
     h.unmount();
     expect(fire()).toBe(false);
   });
+});
+
+it("scope requests respect dirty guards and remove disposed registrations", () => {
+  const h = harness();
+  h.setDirty(true);
+  let changes = 0;
+  requestScopeChange(() => {
+    changes += 1;
+  });
+  expect(changes).toBe(0);
+  fireEvent.click(h.getByTestId("unsaved-keep"));
+  expect(changes).toBe(0);
+  requestScopeChange(() => {
+    changes += 1;
+  });
+  fireEvent.click(h.getByTestId("unsaved-discard"));
+  expect(changes).toBe(1);
+  h.unmount();
+  requestScopeChange(() => {
+    changes += 1;
+  });
+  expect(changes).toBe(2);
+});
+
+it("Keep editing returns focus to the last draft input", () => {
+  const h = harness();
+  const input = document.createElement("input");
+  h.container.append(input);
+  input.focus();
+  h.setDirty(true);
+  fireEvent.click(h.getByTestId("act"));
+  h.getByTestId("unsaved-keep").focus();
+  fireEvent.click(h.getByTestId("unsaved-keep"));
+  expect(document.activeElement).toBe(input);
+  h.unmount();
+});
+
+it.each([
+  [false, false],
+  [false, true],
+  [true, false],
+  [true, true],
+])("scope transitions ask every mounted dirty editor (%s, %s)", (firstDirty, secondDirty) => {
+  const first = harness();
+  const second = harness();
+  first.setDirty(firstDirty);
+  second.setDirty(secondDirty);
+  let changed = false;
+  requestScopeChange(() => {
+    changed = true;
+  });
+  for (const [h, dirty] of [
+    [first, firstDirty],
+    [second, secondDirty],
+  ] as const) {
+    if (dirty) {
+      expect(changed).toBe(false);
+      const discard = h.container.querySelector('[data-testid="unsaved-discard"]');
+      expect(discard).not.toBeNull();
+      fireEvent.click(discard as HTMLElement);
+    }
+  }
+  expect(changed).toBe(true);
+  first.unmount();
+  second.unmount();
 });

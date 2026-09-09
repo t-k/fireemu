@@ -11,6 +11,13 @@ export type TriggerInfo =
       document: string;
       withAuthContext: boolean;
     }
+  | { kind: "tasks"; maxAttempts: number; maxConcurrentDispatches: number }
+  | { kind: "eventarc"; event: string; channel: string | null; filters: Record<string, string> }
+  | {
+      kind: "blockingAuth";
+      event: string;
+      tokenPolicy: { accessToken: boolean; idToken: boolean; refreshToken: boolean };
+    }
   | { kind: "pubsub"; topic: string }
   | { kind: "auth"; event: string }
   | { kind: "storage"; event: string; bucket: string | null }

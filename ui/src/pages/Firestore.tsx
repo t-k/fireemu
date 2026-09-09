@@ -463,7 +463,12 @@ const DocumentView: Component<{
       () => null,
       (e) => (e.status === 404 ? null : e.message),
     ) ?? null;
-  const guard = createLeaveGuard(() => editing() && fields.some((f) => f.dirty));
+  const guard = createLeaveGuard(() => {
+    const session = editSession();
+    if (!editing() || !session) return false;
+    const parsed = parseFields(fields, session.root);
+    return parsed.isErr() || diffFields(session.fields, parsed.value).fieldPaths.length > 0;
+  });
   const missing = () =>
     doc()?.match(
       () => false,

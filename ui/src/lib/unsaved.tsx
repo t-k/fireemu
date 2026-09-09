@@ -19,6 +19,19 @@ export type LeaveGuard = {
   keep: () => void;
 };
 
+// Scope changes do not pass through the router. Ask each mounted editor before changing
+// the header target, using the same prompt as route navigation.
+const scopeGuards = new Set<LeaveGuard>();
+export const requestScopeChange = (action: () => void): void => {
+  const guards = [...scopeGuards];
+  const next = (index: number): void => {
+    const guard = guards[index];
+    if (guard) guard.request(() => next(index + 1));
+    else action();
+  };
+  next(0);
+};
+
 export const createLeaveGuard = (dirty: Accessor<boolean>): LeaveGuard => {
   const [pending, setPending] = createSignal<(() => void) | null>(null);
   useBeforeLeave((e) => {
@@ -27,7 +40,15 @@ export const createLeaveGuard = (dirty: Accessor<boolean>): LeaveGuard => {
       setPending(() => () => e.retry(true));
     }
   });
+  let draftInput: HTMLInputElement | HTMLTextAreaElement | null = null;
   onMount(() => {
+    const rememberInput = (event: FocusEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        draftInput = event.target;
+      }
+    };
+    document.addEventListener("focusin", rememberInput);
+    onCleanup(() => document.removeEventListener("focusin", rememberInput));
     const onUnload = (event: BeforeUnloadEvent) => {
       if (dirty()) {
         event.preventDefault();
@@ -36,7 +57,7 @@ export const createLeaveGuard = (dirty: Accessor<boolean>): LeaveGuard => {
     window.addEventListener("beforeunload", onUnload);
     onCleanup(() => window.removeEventListener("beforeunload", onUnload));
   });
-  return {
+  const guard: LeaveGuard = {
     pending,
     request: (action) => {
       if (dirty()) {
@@ -50,8 +71,14 @@ export const createLeaveGuard = (dirty: Accessor<boolean>): LeaveGuard => {
       setPending(null);
       action?.();
     },
-    keep: () => setPending(null),
+    keep: () => {
+      setPending(null);
+      if (draftInput?.isConnected) draftInput.focus();
+    },
   };
+  scopeGuards.add(guard);
+  onCleanup(() => scopeGuards.delete(guard));
+  return guard;
 };
 
 /** The inline question a guard asks: what is unsaved, discard it, or keep editing. */

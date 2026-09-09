@@ -31,6 +31,13 @@ export const en = {
   "app.tokenMissing":
     "No control token: open the UI from the daemon (http://127.0.0.1:4000/ui) or append ?token=<FIREEMU_CONTROL_TOKEN> to this URL.",
 
+  "nav.toggle": "Navigation",
+  "functions.triggerTasks": "Task queue: {attempts} attempts, {concurrency} concurrent dispatches",
+  "functions.triggerEventarc": "Eventarc: {event}; channel: {channel}; filters: {filters}",
+  "functions.defaultChannel": "default channel",
+  "functions.triggerBlockingAuth": "Blocking Auth: {event}",
+  "functions.triggerUnknown": "Unknown trigger: {kind}",
+  "functions.triggerDetails": "Trigger details",
   "nav.overview": "Overview",
   "nav.firestore": "Firestore",
   "nav.auth": "Authentication",

@@ -52,3 +52,62 @@ it("preserves a publish draft and focus on refresh but resets it when its target
   setFunctions([]);
   expect(ui.queryByTestId("function-row-consume")).toBeNull();
 });
+
+it.each([
+  [{ kind: "tasks", maxAttempts: 3, maxConcurrentDispatches: 5 }, "Task queue"],
+  [
+    {
+      kind: "eventarc",
+      event: "custom.done",
+      channel: "projects/demo/locations/us/channels/custom",
+      filters: { region: "emea" },
+    },
+    "emea",
+  ],
+  [
+    {
+      kind: "eventarc",
+      event: "google.firebase.firebasealerts.alerts.v1.published",
+      channel: null,
+      filters: {},
+    },
+    "firebasealerts",
+  ],
+  [
+    {
+      kind: "blockingAuth",
+      event: "beforeCreate",
+      tokenPolicy: { accessToken: false, idToken: false, refreshToken: false },
+    },
+    "beforeCreate",
+  ],
+  [{ kind: "future", target: "<script>bad()</script>" }, "Unknown trigger"],
+])("renders trigger metadata and safe unknown details for %j", (trigger, expected) => {
+  const ui = render(() => (
+    <table>
+      <tbody>
+        <FunctionRows
+          functions={[
+            {
+              name: "test",
+              region: "us-central1",
+              entryPoint: "test",
+              trigger: trigger as FunctionInfo["trigger"],
+              timeoutSeconds: 60,
+              retry: false,
+              concurrency: 1,
+            },
+          ]}
+          project="demo"
+          onNotice={() => {}}
+          onError={() => {}}
+        />
+      </tbody>
+    </table>
+  ));
+  expect(ui.getByTestId("function-row-test").textContent).toContain(expected);
+  if (trigger.kind === "future") {
+    expect(ui.container.querySelector("details")?.textContent).toContain("<script>bad()</script>");
+    expect(ui.container.querySelector("script")).toBeNull();
+  }
+});

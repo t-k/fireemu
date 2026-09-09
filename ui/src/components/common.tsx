@@ -30,9 +30,9 @@ export const Section: Component<{ title: string; actions?: JSX.Element; children
   props,
 ) => (
   <section class="card mb-4">
-    <div class="mb-3 flex items-center justify-between gap-2">
+    <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
       <h2 class="text-base font-semibold">{props.title}</h2>
-      <div class="flex items-center gap-2">{props.actions}</div>
+      <div class="flex min-w-0 max-w-full flex-wrap items-center gap-2">{props.actions}</div>
     </div>
     {props.children}
   </section>

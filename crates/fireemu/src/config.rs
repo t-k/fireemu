@@ -24,12 +24,14 @@ use serde_json::{Map, Value};
 pub enum CompatibilityProfile {
     /// Reproduce the behaviour the pinned Local Emulator Suite ships, including its
     /// documented limitations. This is the profile the README's compatibility claim is made
-    /// under, so it is the default: a project that installs fireemu instead of the official
-    /// suite gets the official suite's behaviour without configuring anything.
-    #[default]
+    /// under; choose it explicitly when matching the official suite matters more than
+    /// matching production.
     Firebase,
     /// Add fireemu's own validation on top. Every difference it makes may only refuse more
-    /// than the official emulator, never less.
+    /// than the official emulator, never less. This is the default: fireemu exists to expose
+    /// locally what production Firebase would refuse, so a configuration that names no
+    /// profile runs under the validation, and `fireemu init` writes the same choice down.
+    #[default]
     Strict,
 }
 
@@ -2415,12 +2417,11 @@ mod tests {
     }
 
     #[test]
-    fn the_profile_sets_the_defaults_it_owns_and_firebase_is_the_default_profile() {
-        // The claim in README.md is made under the firebase profile, so a configuration that
-        // names no profile at all runs under it: installing fireemu instead of the official
-        // suite reproduces the official suite.
+    fn the_profile_sets_the_defaults_it_owns_and_strict_is_the_default_profile() {
+        // fireemu exists to match production, so a configuration that names no profile at
+        // all runs under the strict validation, the same profile `fireemu init` recommends.
         let default = with_profile(json!({})).unwrap();
-        assert_eq!(default.profile, CompatibilityProfile::Firebase);
+        assert_eq!(default.profile, CompatibilityProfile::Strict);
         assert_eq!(RuntimeConfig::default().profile, default.profile);
 
         // firebase: the pinned official Firestore emulator checks no composite index, does

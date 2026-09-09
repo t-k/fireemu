@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- The default compatibility profile is now `strict`. A `fireemu.json` that names no `profile` runs under the same validation `fireemu init` recommends: missing composite indexes are refused with production's `FAILED_PRECONDITION`, Standard query limit violations refuse the query, and ID tokens on the Security Rules surfaces are verified. Set `"profile": "firebase"` explicitly to keep reproducing the pinned official emulator. `spec/config/fireemu.schema.json` records the new default.
+
 ## [0.5.0] - 2026-09-09
 
 ### Added

@@ -56,7 +56,7 @@ async function main() {
   check("initializeTestEnvironment discovered the suite through the hub", true);
 
   // Nothing below prepares the tokens `authenticatedContext` mints. Under the `firebase`
-  // compatibility profile -- the one this smoke's config selects, and the daemon's default --
+  // compatibility profile -- the one this smoke's config selects; the daemon's default is strict --
   // fireemu accepts the mock tokens `@firebase/util`'s createMockUserToken produces exactly
   // as the official emulators do: `iat` defaults to 0, so `exp` is an hour after the epoch
   // and nobody reads it, and `sub` names a user the Auth emulator has never seen. Under

@@ -391,7 +391,7 @@
   "FS-GW-1": {
     "notes": [
       "firestore.indexValidationPolicy = emulator serves queries whose composite index is not configured (FS_EMULATOR_INDEX_ASSUMED warning), like the Firebase Emulator Suite; firebase / conservative keep rejecting them with FAILED_PRECONDITION",
-      "the compatibility profile sets that policy: firebase (the default) selects emulator, so the gateway admits what the pinned official emulator admits, and strict selects conservative; an explicit firestore.indexValidationPolicy wins over both",
+      "the compatibility profile sets that policy: strict (the default) selects conservative, and firebase selects emulator, so the gateway admits what the pinned official emulator admits; an explicit firestore.indexValidationPolicy wins over both",
       "firestore.enforceLimits follows the profile the same way: under strict a Standard query limit violation refuses the query with INVALID_ARGUMENT, under firebase it is reported as an FS_LIMIT_OBSERVED:<limit id> warning and the query runs",
       "conformance: firestore/missing-composite-index (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
       "the query limits the pinned official emulator refuses as well -- more than 30 DNF disjunctions ('IN' over 30 values) and a second array-contains clause (FAILED_PRECONDITION) -- stay refused under the firebase profile (fireemu_adapter_grpc::gateway::OFFICIAL_EMULATOR_REFUSES)"

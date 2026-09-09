@@ -114,7 +114,7 @@ disabled -- asserting both that the trigger did not run and that re-enabling rep
 ```
 
 The script does nothing the official emulator does not require: `fireemu.rules-unit-testing.json`
-selects the `firebase` compatibility profile (also the default), under which fireemu admits the
+selects the `firebase` compatibility profile (the default is `strict`), under which fireemu admits the
 unsigned mock tokens `createMockUserToken` mints -- `iat: 0`, so `exp` is an hour after the
 epoch, and a `sub` naming a user nobody created -- exactly as the official Firestore and
 Storage emulators do. Running the same script under `"profile": "strict"` fails at the first

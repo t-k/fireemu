@@ -231,12 +231,12 @@ fn the_capabilities_command_reports_the_profile_it_would_run_under() {
         assert_eq!(manifest["profile"], profile);
         assert!(manifest["capabilities"]["FS-GW-1"].is_object());
     }
-    // Without a configuration the command reports the default, which is the profile the
-    // public compatibility claim is made under.
+    // Without a configuration the command reports the default, which is the strict profile
+    // `fireemu init` recommends.
     let out = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .arg("capabilities")
         .output()
         .unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(manifest["profile"], "firebase");
+    assert_eq!(manifest["profile"], "strict");
 }

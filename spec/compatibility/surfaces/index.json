@@ -1,0 +1,225 @@
+{
+  "schemaVersion": 1,
+  "surfaces": [
+    {
+      "id": "AUTH-ENROLL-START",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "accounts.mfaEnrollment.start",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "LIVE-AUTH-001"
+      ]
+    },
+    {
+      "id": "AUTH-ENROLL-FINALIZE",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "accounts.mfaEnrollment.finalize",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "INV-AUTH-001",
+        "INV-AUTH-006",
+        "INV-AUTH-007"
+      ]
+    },
+    {
+      "id": "AUTH-SIGNIN-FINALIZE",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "accounts.mfaSignIn.finalize",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "INV-AUTH-002"
+      ]
+    },
+    {
+      "id": "AUTH-SIGNUP",
+      "source": "AUTH-DISCOVERY-V1",
+      "locator": "accounts.signUp",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "INV-AUTH-005"
+      ]
+    },
+    {
+      "id": "AUTH-PASSWORD",
+      "source": "AUTH-DISCOVERY-V1",
+      "locator": "accounts.signInWithPassword",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "AUTH-PRIVACY-001"
+      ]
+    },
+    {
+      "id": "AUTH-REFRESH",
+      "source": "AUTH-REST",
+      "locator": "POST https://securetoken.googleapis.com/v1/token",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-COMMIT",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.Commit",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
+    },
+    {
+      "id": "FS-BATCHWRITE",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.BatchWrite",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-AGGREGATE",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.RunAggregationQuery",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
+    },
+    {
+      "id": "FS-AGGREGATE-REST",
+      "source": "FS-DISCOVERY-V1",
+      "locator": "projects.databases.documents.runAggregationQuery",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
+    },
+    {
+      "id": "FS-AGGREGATION-REQUEST",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.RunAggregationQueryRequest",
+      "kind": "request",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-AGGREGATION-RESPONSE",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.RunAggregationQueryResponse",
+      "kind": "response",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-AGGREGATION-FIELD",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.StructuredAggregationQuery.aggregations",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-AGGREGATION-ONEOF",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.operator",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-FILTER-ENUM",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-LISTEN",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.Listen",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-WRITE",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.Write",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-WEBCHANNEL",
+      "source": "FS-SDK",
+      "locator": "SDK WebChannel Listen/Write transport; SDK source revision pending",
+      "kind": "transport",
+      "transport": "WebChannel",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "FS-WEB-BOUND-001"
+      ]
+    },
+    {
+      "id": "FS-PIPELINE",
+      "source": "FS-PROTO",
+      "locator": "google.firestore.v1.Firestore.ExecutePipeline",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    },
+    {
+      "id": "FS-DATABASES",
+      "source": "FS-ADMIN",
+      "locator": "projects.databases.get",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "unknown",
+      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "requirements": []
+    }
+  ]
+}

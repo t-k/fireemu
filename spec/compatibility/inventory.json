@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "target": "source-tree",
+  "inventoryStatus": "incomplete",
+  "goals": [
+    "AUTH-CORE",
+    "AUTH-IP-MAIN",
+    "FS-STD-NATIVE",
+    "FS-ENT-NATIVE",
+    "FS-MONGODB",
+    "FS-ADMIN",
+    "FS-SDK",
+    "MANAGED-SERVICE-BOUNDARY"
+  ],
+  "profiles": [
+    "strict",
+    "emulator"
+  ],
+  "evidence": [],
+  "debt": [
+    "Enumerate the complete known official guide/reference graph; preserve unknown, unavailable, duplicate, deferred and external-service sections.",
+    "Import pinned Discovery documents and protobuf descriptors, including every method, request/response, field, oneof, enum and transport; current surfaces are a representative seed.",
+    "Store and verify retrieved source bodies, semantic hashes, extraction revisions, stable section locators, reviewer identity and review date before enabling reviewed states.",
+    "Decompose broad existing invariants into source-derived atomic behavior requirements without losing existing formal, mutation, property or regression coverage.",
+    "Bind exact production, official-emulator, replay and SDK cases to artifact/configuration/corpus/comparator identities; historical corpus reports remain separate.",
+    "Expand Auth and Firestore vertical cases, Enterprise/Native, MongoDB, administration and SDK/platform inventories without copying evidence across scopes.",
+    "Add upstream change monitoring, receipt staleness checks and release-artifact snapshots before making release-specific compatibility claims."
+  ]
+}

@@ -1,0 +1,445 @@
+{
+  "schemaVersion": 1,
+  "features": [
+    {
+      "id": "AUTH-USERS",
+      "title": "User lifecycle and email/password",
+      "goal": "AUTH-CORE",
+      "appliesTo": "Authentication / Identity Platform; client and Admin REST; configured project",
+      "sources": [
+        "AUTH-OVERVIEW",
+        "AUTH-REST",
+        "AUTH-DISCOVERY-V1"
+      ],
+      "surfaces": [
+        "AUTH-SIGNUP",
+        "AUTH-PASSWORD"
+      ],
+      "requirements": [
+        "INV-AUTH-004",
+        "INV-AUTH-005",
+        "AUTH-PRIVACY-001"
+      ],
+      "capabilities": [
+        "AUTH-CORE-1"
+      ],
+      "claims": [
+        "AUTH-CLAIM-IDENTITY-TOOLKIT"
+      ],
+      "limitations": [
+        "Broad route and lifetime invariants only; atomic per-operation source mappings and target-version observations remain open. Real email/SMS delivery and anti-abuse are separate boundaries."
+      ]
+    },
+    {
+      "id": "AUTH-TOKENS",
+      "title": "Tokens and sessions",
+      "goal": "AUTH-CORE",
+      "appliesTo": "Authentication; Secure Token and Admin verification paths; project/tenant binding",
+      "sources": [
+        "AUTH-SESSIONS",
+        "AUTH-REST"
+      ],
+      "surfaces": [
+        "AUTH-REFRESH"
+      ],
+      "requirements": [],
+      "capabilities": [
+        "AUTH-TOKEN-1"
+      ],
+      "claims": [
+        "AUTH-CLAIM-TOKENS"
+      ],
+      "limitations": [
+        "Revocation behavior must be checked separately for each verifier and service; no release-specific evidence is attached."
+      ]
+    },
+    {
+      "id": "AUTH-TOTP",
+      "title": "TOTP enrollment and sign-in",
+      "goal": "AUTH-IP-MAIN",
+      "appliesTo": "Identity Platform; explicit auth.totp configuration; supported verified first factor; tenant-specific settings",
+      "sources": [
+        "AUTH-TOTP",
+        "AUTH-DISCOVERY-V2"
+      ],
+      "surfaces": [
+        "AUTH-ENROLL-START",
+        "AUTH-ENROLL-FINALIZE",
+        "AUTH-SIGNIN-FINALIZE"
+      ],
+      "requirements": [
+        "INV-AUTH-001",
+        "INV-AUTH-002",
+        "INV-AUTH-003",
+        "LIVE-AUTH-001",
+        "INV-AUTH-006",
+        "INV-AUTH-007"
+      ],
+      "capabilities": [
+        "AUTH-MFA-TOTP-1"
+      ],
+      "claims": [
+        "AUTH-CLAIM-MFA"
+      ],
+      "limitations": [
+        "The existing Auth production corpus has no TOTP program. Linked invariants do not yet cover all eligibility, unenrollment and provider constraints."
+      ]
+    },
+    {
+      "id": "AUTH-SMS-MFA",
+      "title": "SMS multi-factor authentication",
+      "goal": "AUTH-IP-MAIN",
+      "appliesTo": "Identity Platform; configured MFA and first-factor eligibility",
+      "sources": [
+        "AUTH-V2"
+      ],
+      "surfaces": [],
+      "requirements": [],
+      "capabilities": [
+        "AUTH-MFA-SMS-0"
+      ],
+      "claims": [
+        "AUTH-CLAIM-MFA"
+      ],
+      "limitations": [
+        "Local verification codes do not attest real SMS delivery, retries, anti-abuse or production MFA configuration."
+      ]
+    },
+    {
+      "id": "AUTH-TENANTS",
+      "title": "Tenant isolation and configuration",
+      "goal": "AUTH-IP-MAIN",
+      "appliesTo": "Identity Platform; project and tenant client/Admin REST routes",
+      "sources": [
+        "AUTH-V1",
+        "AUTH-V2"
+      ],
+      "surfaces": [],
+      "requirements": [
+        "AUTH-TENANT-001"
+      ],
+      "capabilities": [
+        "AUTH-CORE-1"
+      ],
+      "claims": [
+        "AUTH-CLAIM-IDENTITY-TOOLKIT"
+      ],
+      "limitations": [
+        "Per-tenant provider, MFA and policy combinations need additional source and oracle mappings."
+      ]
+    },
+    {
+      "id": "AUTH-IDP",
+      "title": "Federated identity-provider fixtures",
+      "goal": "AUTH-IP-MAIN",
+      "appliesTo": "Local fixture assertion handling; OAuth/OIDC/SAML protocol and real provider verification are distinct",
+      "sources": [
+        "AUTH-REST",
+        "AUTH-EMULATOR"
+      ],
+      "surfaces": [],
+      "requirements": [],
+      "capabilities": [
+        "AUTH-OAUTH-0"
+      ],
+      "claims": [
+        "AUTH-CLAIM-IDENTITY-TOOLKIT"
+      ],
+      "limitations": [
+        "A fake JWT or JSON SAML assertion is not a real provider credential exchange."
+      ]
+    },
+    {
+      "id": "AUTH-BLOCKING",
+      "title": "Blocking authentication functions",
+      "goal": "AUTH-IP-MAIN",
+      "appliesTo": "Identity Platform; configured before-create and before-sign-in hooks",
+      "sources": [
+        "AUTH-OVERVIEW",
+        "AUTH-V2"
+      ],
+      "surfaces": [],
+      "requirements": [
+        "AUTH-BLOCKING-001"
+      ],
+      "capabilities": [
+        "FN-EVT-1"
+      ],
+      "claims": [
+        "AUTH-CLAIM-BLOCKING-FUNCTIONS"
+      ],
+      "limitations": [
+        "Hook ordering, rollback and configuration need source-section and live-oracle review."
+      ]
+    },
+    {
+      "id": "FS-DATA",
+      "title": "Document reads, writes and queries",
+      "goal": "FS-STD-NATIVE",
+      "appliesTo": "Firestore Standard / Native; per-database rules, indexes and profile; REST and gRPC considered separately",
+      "sources": [
+        "FS-RPC",
+        "FS-DISCOVERY-V1",
+        "FS-LIMITS"
+      ],
+      "surfaces": [
+        "FS-COMMIT",
+        "FS-BATCHWRITE",
+        "FS-WRITE",
+        "FS-FILTER-ENUM"
+      ],
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ],
+      "capabilities": [
+        "FS-RPC-1",
+        "FS-QRY-1",
+        "FS-REST-1",
+        "FS-LIM-1"
+      ],
+      "claims": [
+        "FS-CLAIM-RPC",
+        "FS-CLAIM-REST",
+        "FS-CLAIM-LIMITS"
+      ],
+      "limitations": [
+        "The broad parity requirement is not full method/field/enum coverage. Commit atomicity and BatchWrite partial outcomes must not be conflated."
+      ]
+    },
+    {
+      "id": "FS-AGGREGATIONS",
+      "title": "Count, sum and average",
+      "goal": "FS-STD-NATIVE",
+      "appliesTo": "Firestore Standard / Native; query/index configuration; REST and gRPC",
+      "sources": [
+        "FS-AGGREGATIONS",
+        "FS-RPC"
+      ],
+      "surfaces": [
+        "FS-AGGREGATE",
+        "FS-AGGREGATE-REST",
+        "FS-AGGREGATION-REQUEST",
+        "FS-AGGREGATION-RESPONSE",
+        "FS-AGGREGATION-FIELD",
+        "FS-AGGREGATION-ONEOF"
+      ],
+      "requirements": [
+        "REQ-FS-PARITY-01",
+        "REQ-FS-AGG-STREAM-01"
+      ],
+      "capabilities": [
+        "FS-QRY-1"
+      ],
+      "claims": [
+        "FS-CLAIM-RPC"
+      ],
+      "limitations": [
+        "Historical queries/aggregations corpus observations exist but are not accepted for this source tree. Streaming equivalence is not a substitute for production semantics."
+      ]
+    },
+    {
+      "id": "FS-TRANSACTIONS",
+      "title": "Transactions and contention",
+      "goal": "FS-STD-NATIVE",
+      "appliesTo": "Standard / Native; configured concurrency mode must be read back; transaction tokens and retry paths",
+      "sources": [
+        "FS-TRANSACTIONS",
+        "FS-RPC"
+      ],
+      "surfaces": [],
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ],
+      "capabilities": [
+        "FS-TXN-1"
+      ],
+      "claims": [
+        "FS-CLAIM-RPC"
+      ],
+      "limitations": [
+        "Edition does not determine the observed database concurrency mode. Exact timeout, retry and ordering assertions remain to be mapped."
+      ]
+    },
+    {
+      "id": "FS-LISTEN",
+      "title": "Listen and stream lifecycle",
+      "goal": "FS-STD-NATIVE",
+      "appliesTo": "Standard / Native; gRPC Listen and SDK WebChannel; reconnect/resume behavior",
+      "sources": [
+        "FS-RPC",
+        "FS-SDK"
+      ],
+      "surfaces": [
+        "FS-LISTEN",
+        "FS-WEBCHANNEL"
+      ],
+      "requirements": [
+        "FS-WEB-BOUND-001"
+      ],
+      "capabilities": [
+        "FS-LSN-1",
+        "FS-WEB-1"
+      ],
+      "claims": [
+        "FS-CLAIM-RPC",
+        "FS-CLAIM-WEBCHANNEL"
+      ],
+      "limitations": [
+        "Resource bounds do not establish event completeness, order or all resume histories. REST availability must not be inferred from stream support."
+      ]
+    },
+    {
+      "id": "FS-RULES-INDEXES",
+      "title": "Rules and index configuration",
+      "goal": "FS-STD-NATIVE",
+      "appliesTo": "Standard / Native; per-database rules/index catalog; request authentication and budgets",
+      "sources": [
+        "FS-RULES",
+        "FS-INDEXES"
+      ],
+      "surfaces": [],
+      "requirements": [
+        "INV-RULES-001",
+        "INV-RULES-002",
+        "INV-RULES-003",
+        "REQ-RULES-PARITY-01",
+        "REQ-RULES-PARITY-02",
+        "REQ-RULES-PARITY-03",
+        "FS-CONFIG-RELOAD-001"
+      ],
+      "capabilities": [
+        "RULES-1",
+        "RULES-BUDGET-1",
+        "AUTH-RULES-1",
+        "FS-GW-1"
+      ],
+      "claims": [
+        "FS-CLAIM-RULES",
+        "FS-CLAIM-INDEX-POLICY"
+      ],
+      "limitations": [
+        "Standard index requirements cannot be transferred unconditionally to Enterprise. Refusal assertions must inspect unchanged state."
+      ]
+    },
+    {
+      "id": "FS-PIPELINE",
+      "title": "Pipeline decoding and validation",
+      "goal": "FS-ENT-NATIVE",
+      "appliesTo": "Enterprise / Native; validation-only pipeline configuration and owner authorization as declared by the capability",
+      "sources": [
+        "FS-EDITIONS",
+        "FS-PROTO"
+      ],
+      "surfaces": [
+        "FS-PIPELINE"
+      ],
+      "requirements": [],
+      "capabilities": [
+        "FS-PIPE-RPC-1"
+      ],
+      "claims": [
+        "FS-CLAIM-PIPELINE"
+      ],
+      "limitations": [
+        "Valid pipelines return an unimplemented execution response. Parser acceptance is not local query execution."
+      ]
+    },
+    {
+      "id": "FS-TEXT",
+      "title": "Text index definition validation",
+      "goal": "FS-ENT-NATIVE",
+      "appliesTo": "Enterprise / Native; local text-index definition/control configuration",
+      "sources": [
+        "FS-EDITIONS",
+        "FS-INDEXES"
+      ],
+      "surfaces": [],
+      "requirements": [],
+      "capabilities": [
+        "FS-TEXT-VAL-1"
+      ],
+      "claims": [
+        "FS-CLAIM-TEXT-INDEX"
+      ],
+      "limitations": [
+        "Backfill, posting data, search scoring and local search execution are not established by definition validation."
+      ]
+    },
+    {
+      "id": "FS-MONGO-INVENTORY",
+      "title": "MongoDB-compatible API and drivers",
+      "goal": "FS-MONGODB",
+      "appliesTo": "Firestore with MongoDB compatibility; published supported API/type/driver set still to inventory",
+      "sources": [
+        "FS-EDITIONS"
+      ],
+      "surfaces": [],
+      "requirements": [],
+      "capabilities": [],
+      "claims": [],
+      "limitations": [
+        "Unmapped: no Standard/Native or generic MongoDB compatibility result transfers to this goal."
+      ]
+    },
+    {
+      "id": "FS-ADMIN-INVENTORY",
+      "title": "Database, index and retention administration",
+      "goal": "FS-ADMIN",
+      "appliesTo": "Database/index administration; TTL, backup/restore, PITR, import/export and operation lifecycle",
+      "sources": [
+        "FS-ADMIN",
+        "FS-DISCOVERY-V1"
+      ],
+      "surfaces": [
+        "FS-DATABASES"
+      ],
+      "requirements": [],
+      "capabilities": [],
+      "claims": [],
+      "limitations": [
+        "Admin discovery fields and long-running operation semantics remain unclassified; configuration acceptance does not imply managed-service execution."
+      ]
+    },
+    {
+      "id": "SDK-INTEGRATION",
+      "title": "Client and Admin SDK behavior",
+      "goal": "FS-SDK",
+      "appliesTo": "Web/Node client and Admin SDKs; offline/cache/listeners and auth handoff; mobile platforms separately inventoried",
+      "sources": [
+        "FS-SDK",
+        "FS-OFFLINE",
+        "AUTH-SDK"
+      ],
+      "surfaces": [
+        "FS-WEBCHANNEL"
+      ],
+      "requirements": [
+        "REQ-RULES-PARITY-05"
+      ],
+      "capabilities": [],
+      "claims": [],
+      "limitations": [
+        "The linked rules-unit-testing requirement covers one integration path only. Offline, pending writes, mobile SDKs and target-version runs remain unmapped."
+      ]
+    },
+    {
+      "id": "MANAGED-BOUNDARIES",
+      "title": "Managed cloud operations and external providers",
+      "goal": "MANAGED-SERVICE-BOUNDARY",
+      "appliesTo": "Real IAM, billing, regions, CMEK, email/SMS, IdPs, network and anti-abuse services",
+      "sources": [
+        "AUTH-LIMITS",
+        "AUTH-EMULATOR",
+        "FS-EMULATOR",
+        "FS-LIMITS"
+      ],
+      "surfaces": [],
+      "requirements": [],
+      "capabilities": [],
+      "claims": [],
+      "limitations": [
+        "Local response/configuration simulation does not reproduce cloud operations. External dependencies remain visible and must be verified separately."
+      ]
+    }
+  ]
+}

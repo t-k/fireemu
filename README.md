@@ -166,6 +166,8 @@ In practical terms:
 
 This list reflects differences known to the project at the current compatibility baseline. It may be incomplete. The [Compatibility Contract](spec/compatibility/contract.json) is the authoritative machine-readable scope, and [the compatibility contract guide](docs/compatibility-contract.md) explains how claims are tied to tests and conformance evidence.
 
+The generated [Auth and Firestore compatibility inventory](docs/compatibility/README.md) connects official source pointers, API surfaces, existing requirements and capability declarations. It keeps implementation status separate from execution evidence and exposes incomplete mappings. It describes the source tree, not a verified npm release.
+
 ## Why use both profiles?
 
 The two profiles answer different questions:

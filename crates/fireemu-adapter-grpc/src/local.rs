@@ -2429,7 +2429,7 @@ impl LocalBackend {
     pub fn database_handle(&self, parent: &Parent) -> Result<DatabaseHandle, Status> {
         let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
         // A new database refuses production's limits only when the gateway enforces limits
-        // (the `strict` profile); under `firebase` it admits what the official emulator
+        // (the `strict` profile); under `emulator` it admits what the official emulator
         // admits.
         let scope = if self.gateway.enforce_limits {
             fireemu_core_firestore::store::LimitScope::Production
@@ -4681,7 +4681,7 @@ mod lock_tests {
                 ctx: PlanningContext {
                     edition: FirestoreEdition::Standard,
                     api_mode: FirestoreApiMode::Native,
-                    policy: IndexValidationPolicy::Conservative,
+                    policy: IndexValidationPolicy::Production,
                 },
                 indexes: IndexSet::default(),
             },

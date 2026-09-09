@@ -8,8 +8,7 @@
   },
   "firestore": {
     "edition": "standard",
-    "apiMode": "native",
-    "indexValidationPolicy": "conservative"
+    "apiMode": "native"
   },
   "rules": {
     "executionMode": "admin-bypass"

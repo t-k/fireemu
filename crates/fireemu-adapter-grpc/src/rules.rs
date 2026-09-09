@@ -8,7 +8,7 @@
 //! runtime prints a warning at start).
 //!
 //! How much of that verification a caller's token has to survive is the compatibility
-//! profile's decision, carried here as [`TokenAcceptance`]: the `firebase` profile also
+//! profile's decision, carried here as [`TokenAcceptance`]: the `emulator` profile also
 //! admits the unsigned mock tokens the official emulators admit (an unknown `sub`, an `exp`
 //! nobody reads), while `strict` keeps the full verification.
 //!

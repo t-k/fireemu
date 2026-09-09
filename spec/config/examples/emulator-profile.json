@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "profile": "firebase",
+  "profile": "emulator",
   "limits": {
     "catalog": "firestore-standard-2026-08-25",
     "queryCatalog": "firestore-standard-query-2026-08-25",

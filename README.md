@@ -26,7 +26,7 @@ npx fireemu exec -- npm test
 
 `npx fireemu init` creates `fireemu.json` in the current directory. In a terminal, a short wizard asks which compatibility profile to use and whether to reuse an existing `firebase.json`.
 
-The `strict` profile, the default and the one `init` recommends, enables additional validation, including checks intended to expose some failures that the official emulator does not report. Choose the `firebase` profile when matching the pinned official emulator is more important.
+The `strict` profile, the default and the one `init` recommends, behaves like production Firebase where the official emulator does not: composite indexes are checked with production's rules, production query limits are enforced, and ID tokens are verified. Choose the `emulator` profile when matching the pinned official emulator is more important.
 
 If `firebase.json` exists, `init` references it instead of copying its settings. Rules, indexes, Functions codebases, and emulator ports are loaded from that file each time fireemu starts. `firebase-tools@15.28.2` does not impose a Functions codebase-count limit, but fireemu applies a documented local safety budget of 32 simultaneously selected codebases because each starts a Node runner; `--only functions:<codebase>` selects one from a larger project.
 
@@ -40,7 +40,7 @@ For CI or scripted setup, use the non-interactive form:
 npx fireemu init --yes
 ```
 
-An existing `fireemu.json` is left untouched unless `--force` is supplied. Other useful options are `--profile strict|firebase`, `--firebase-json <path>`, `--interactive`, and `--no-interactive`.
+An existing `fireemu.json` is left untouched unless `--force` is supplied. Other useful options are `--profile strict|emulator`, `--firebase-json <path>`, `--interactive`, and `--no-interactive`.
 
 The generated configuration uses Standard edition Firestore with the Native API:
 
@@ -153,11 +153,11 @@ These are the gaps currently known and documented by the project, not an exhaust
 
 ## Gap from the official Firebase Emulator Suite
 
-fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
+fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
 
 In practical terms:
 
-- the `firebase` profile targets the behavior of the pinned Firebase Emulator Suite release, while `strict` deliberately adds refusals and validation;
+- the `emulator` profile targets the behavior of the pinned Firebase Emulator Suite release, while `strict` follows production Firebase and refuses what production refuses;
 - where production and the official emulator disagree, fireemu follows production and records the difference in `conformance/divergences.json`. Two examples: an equality filter combined with an inequality on another field is refused without a composite index, as production does, and a REST `runQuery` response omits the `done` flag that the official emulator adds;
 - fireemu serves its own UI with the supported Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts workflows. The official UI Logs browser boundary is also tested; Android, Apple and Unity SDK matrices plus optional accessibility and visual snapshots remain outside the current scope;
 - Eventarc publication and trigger-management workflows, Cloud Tasks queue inspection, Pub/Sub snapshots, and loopback push delivery are supported through the Functions and Pub/Sub runtimes. Local safety limits and reload semantics are recorded in the compatibility contract;
@@ -172,14 +172,14 @@ The two profiles answer different questions:
 
 | Profile | Question it helps answer |
 | --- | --- |
-| `strict` | Can this test expose selected production-facing mistakes earlier? |
-| `firebase` | Does this behavior match the pinned official emulator closely enough for the declared capability? |
+| `strict` | Would production Firebase accept what this test does? |
+| `emulator` | Does this behavior match the pinned official emulator closely enough for the declared capability? |
 
 `npx fireemu init` recommends `strict`. Use both profiles in CI when both questions matter.
 
 ## Performance
 
-fireemu is measured against the official Firestore emulator by a paired benchmark ([benchmark.yml](.github/workflows/benchmark.yml), harness in [`tools/bench/`](tools/bench/)). Both emulators run sequentially on the same GitHub Actions Linux runner, under the `firebase` profile, driven by the same SDK workloads with result validation. The figures below are from one `standard` run (5 measured pairs, commit f3b942c) and are paired ratios with 95% confidence intervals; absolute values depend on the runner.
+fireemu is measured against the official Firestore emulator by a paired benchmark ([benchmark.yml](.github/workflows/benchmark.yml), harness in [`tools/bench/`](tools/bench/)). Both emulators run sequentially on the same GitHub Actions Linux runner, under the `emulator` profile, driven by the same SDK workloads with result validation. The figures below are from one `standard` run (5 measured pairs, commit f3b942c) and are paired ratios with 95% confidence intervals; absolute values depend on the runner.
 
 | Area | Official | fireemu | Ratio |
 | --- | ---: | ---: | ---: |

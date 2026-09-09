@@ -158,7 +158,7 @@ async fn start(
         ctx: PlanningContext {
             edition,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes,
     };
@@ -232,13 +232,15 @@ fn run_query(filter: sq::Filter) -> pb::RunQueryRequest {
 async fn standard_query_without_composite_index_is_failed_precondition_with_fragment() {
     let (url, handle) = start(FirestoreEdition::Standard, IndexSet::default()).await;
     let mut client = connect(&url).await;
+    // An equality plus an inequality on another field needs a composite index in production
+    // (two equalities would merge the automatic single-field indexes).
     let req = run_query(and(vec![
         field_filter("owner", sq::field_filter::Operator::Equal, string("u")),
         field_filter(
-            "done",
-            sq::field_filter::Operator::Equal,
+            "priority",
+            sq::field_filter::Operator::GreaterThan,
             pb::Value {
-                value_type: Some(pb::value::ValueType::BooleanValue(false)),
+                value_type: Some(pb::value::ValueType::IntegerValue(3)),
             },
         ),
     ]));
@@ -482,7 +484,7 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
     };
     let accepted = firebase
         .validate_query(&query)
-        .expect("the firebase profile may add no rejection the official emulator does not make");
+        .expect("the emulator profile may add no rejection the official emulator does not make");
     assert!(
         accepted
             .warnings

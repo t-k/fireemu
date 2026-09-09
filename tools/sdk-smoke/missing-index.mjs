@@ -1,4 +1,4 @@
-// Missing-index smoke: the real `firebase` client SDK against a conservative
+// Missing-index smoke: the real `firebase` client SDK against a strict-profile
 // fireemu that declares exactly one composite index
 // (`tasks`: ownerId ASCENDING, createdAt DESCENDING).
 //

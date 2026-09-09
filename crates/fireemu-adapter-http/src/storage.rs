@@ -503,7 +503,7 @@ pub struct StorageState {
     /// `exec` child. It is distinct from the owner and control credentials.
     pub admin_capability: Option<String>,
     /// How a caller's ID token is verified before Storage Rules see it: the compatibility
-    /// profile decides (`firebase` admits the official emulator's mock tokens, `strict`
+    /// profile decides (`emulator` admits the official emulator's mock tokens, `strict`
     /// does not).
     pub token_acceptance: TokenAcceptance,
 }
@@ -1603,7 +1603,7 @@ impl StorageState {
     /// bucket owner's store. The Firebase profile also admits a mock audience for an
     /// eligible default-owned bare project bucket without changing that ownership.
     ///
-    /// Under the `firebase` profile a value that does not even decode as a JWT is an
+    /// Under the `emulator` profile a value that does not even decode as a JWT is an
     /// anonymous caller, as the official emulator's `jwt.decode` answers; a token that
     /// decodes but names another project's audience, or carries a signature that does not
     /// verify, is still refused — the published divergence from the official emulator's

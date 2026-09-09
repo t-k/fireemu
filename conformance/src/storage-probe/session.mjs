@@ -262,7 +262,7 @@ const b64url = (s) => Buffer.from(s).toString("base64url");
 
 /**
  * An unsigned ID token of the shape @firebase/rules-unit-testing mints. The official Storage
- * emulator decodes it without verifying; fireemu's firebase profile admits it when the
+ * emulator decodes it without verifying; fireemu's emulator profile admits it when the
  * audience names the project.
  */
 function mockToken(uid, claims = {}) {

@@ -1,4 +1,4 @@
-//! Conservative index validator (spec 8.6, 8.7, 8.8.1): never accept a query whose supporting
+//! Production-rule index validator (spec 8.6, 8.7, 8.8.1): never accept a query whose supporting
 //! index is missing; Enterprise turns missing composite indexes into full-scan plans.
 
 use fireemu_core_firestore::field_path::FieldPath;
@@ -168,21 +168,14 @@ fn standard() -> PlanningContext {
     PlanningContext {
         edition: FirestoreEdition::Standard,
         api_mode: FirestoreApiMode::Native,
-        policy: IndexValidationPolicy::Conservative,
-    }
-}
-fn firebase() -> PlanningContext {
-    PlanningContext {
-        edition: FirestoreEdition::Standard,
-        api_mode: FirestoreApiMode::Native,
-        policy: IndexValidationPolicy::Firebase,
+        policy: IndexValidationPolicy::Production,
     }
 }
 fn enterprise() -> PlanningContext {
     PlanningContext {
         edition: FirestoreEdition::Enterprise,
         api_mode: FirestoreApiMode::Native,
-        policy: IndexValidationPolicy::Conservative,
+        policy: IndexValidationPolicy::Production,
     }
 }
 fn composite(fields: &[(&str, IndexFieldMode)]) -> IndexDefinition {
@@ -236,10 +229,13 @@ fn single_field_queries_use_automatic_indexes() {
 }
 
 #[test]
-fn equality_on_two_fields_needs_a_composite_index() {
+fn equality_plus_inequality_needs_a_composite_index() {
+    // Production merges the automatic single-field indexes of two equality filters, so the
+    // query that needs a composite index is an equality combined with an inequality on
+    // another field (conformance: firestore/missing-composite-index).
     let q = tasks().with_filter(FilterExpr::And(vec![
         field("done", FieldOp::Equal, Value::Boolean(false)),
-        field("owner", FieldOp::Equal, Value::String("u".to_owned())),
+        field("owner", FieldOp::GreaterThan, Value::String("u".to_owned())),
     ]));
     match decide(&q, &IndexSet::default(), standard()) {
         IndexDecision::MissingRequired { requirement } => {
@@ -257,10 +253,10 @@ fn equality_on_two_fields_needs_a_composite_index() {
     }
     let mut idx = IndexSet::default();
     idx.add_composite(composite(&[
-        ("owner", IndexFieldMode::Ascending),
         ("done", IndexFieldMode::Ascending),
+        ("owner", IndexFieldMode::Ascending),
     ]));
-    // Equality fields may appear in any order in the index.
+    // The equality field first, the inequality field after it: the index serves the query.
     assert!(matches!(
         decide(&q, &idx, standard()),
         IndexDecision::UseIndex { .. }
@@ -456,9 +452,9 @@ fn automatic_index_name_direction_follows_the_ordered_field() {
         ),
         IndexDecision::MissingRequired { .. }
     ));
-    // Production behaves the same way; this is not a Conservative-only rejection.
+    // Production behaves the same way; this is not a fireemu-only rejection.
     assert!(matches!(
-        decide(&reversed_name, &idx, firebase()),
+        decide(&reversed_name, &idx, standard()),
         IndexDecision::MissingRequired { .. }
     ));
 
@@ -612,7 +608,7 @@ fn bare_descending_name_order_needs_an_explicit_index() {
         IndexDecision::UseIndex { index } => assert_eq!(index, name_desc),
         other => panic!("{other:?}"),
     }
-    match decide(&desc, &explicit, firebase()) {
+    match decide(&desc, &explicit, standard()) {
         IndexDecision::UseIndex { index } => assert_eq!(index, name_desc),
         other => panic!("{other:?}"),
     }
@@ -684,21 +680,16 @@ fn descending_name_order_ignores_field_overrides_but_rides_equality_prefixes() {
 }
 
 #[test]
-fn firebase_policy_merges_single_field_indexes_for_scalar_equality_queries() {
+fn production_merges_single_field_indexes_for_scalar_equality_queries() {
     let collection = CollectionId::try_new("tasks").unwrap();
     let q = tasks().with_filter(FilterExpr::And(vec![
         field("state", FieldOp::Equal, Value::String("open".to_owned())),
         field("owner", FieldOp::Equal, Value::String("u1".to_owned())),
     ]));
 
-    // Conservative keeps demanding one composite index (see
-    // `equality_on_two_fields_needs_a_composite_index`); production merges the automatic
-    // single-field indexes.
-    assert!(matches!(
-        decide(&q, &IndexSet::default(), standard()),
-        IndexDecision::MissingRequired { .. }
-    ));
-    match decide(&q, &IndexSet::default(), firebase()) {
+    // Production merges the automatic single-field indexes (verified against a real project
+    // on 2026-09-08), so no composite index is demanded.
+    match decide(&q, &IndexSet::default(), standard()) {
         IndexDecision::MergeIndexes { indexes } => {
             let merged: Vec<_> = indexes.iter().map(index_modes).collect();
             assert_eq!(
@@ -725,7 +716,7 @@ fn firebase_policy_merges_single_field_indexes_for_scalar_equality_queries() {
         ("state", IndexFieldMode::Ascending),
     ]);
     explicit.add_composite(composite_index.clone());
-    match decide(&q, &explicit, firebase()) {
+    match decide(&q, &explicit, standard()) {
         IndexDecision::UseIndex { index } => assert_eq!(index, composite_index),
         other => panic!("{other:?}"),
     }
@@ -738,14 +729,14 @@ fn firebase_policy_merges_single_field_indexes_for_scalar_equality_queries() {
         query_scope: IndexQueryScope::Collection,
     });
     assert!(matches!(
-        decide(&q, &exempt, firebase()),
+        decide(&q, &exempt, standard()),
         IndexDecision::MissingRequired { .. }
     ));
 
     // A descending name order merges the descending automatic indexes only when enabled.
     let descending_names = q.clone().with_order(name_order(Direction::Descending));
     assert!(matches!(
-        decide(&descending_names, &IndexSet::default(), firebase()),
+        decide(&descending_names, &IndexSet::default(), standard()),
         IndexDecision::MergeIndexes { .. }
     ));
     let mut ascending_only = IndexSet::default();
@@ -755,7 +746,7 @@ fn firebase_policy_merges_single_field_indexes_for_scalar_equality_queries() {
         vec![(IndexQueryScope::Collection, IndexFieldMode::Ascending)],
     );
     assert!(matches!(
-        decide(&descending_names, &ascending_only, firebase()),
+        decide(&descending_names, &ascending_only, standard()),
         IndexDecision::MissingRequired { .. }
     ));
 }
@@ -774,7 +765,7 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
                 direction: Direction::Ascending,
             }),
             &IndexSet::default(),
-            firebase(),
+            standard(),
         ),
         IndexDecision::MissingRequired { .. }
     ));
@@ -789,7 +780,7 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
                 ),
             ])),
             &IndexSet::default(),
-            firebase(),
+            standard(),
         ),
         IndexDecision::MissingRequired { .. }
     ));
@@ -800,7 +791,7 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
                 field("priority", FieldOp::GreaterThan, Value::Integer(1)),
             ])),
             &IndexSet::default(),
-            firebase(),
+            standard(),
         ),
         IndexDecision::MissingRequired { .. }
     ));
@@ -820,7 +811,7 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
                 field("owner", FieldOp::Equal, Value::String("u1".to_owned())),
             ])),
             &IndexSet::default(),
-            firebase(),
+            standard(),
         ),
         IndexDecision::MergeIndexes { .. }
     ));
@@ -1030,7 +1021,7 @@ fn or_queries_require_every_disjunction_to_be_servable() {
 fn enterprise_missing_index_is_a_full_scan_not_an_error() {
     let q = tasks().with_filter(FilterExpr::And(vec![
         field("done", FieldOp::Equal, Value::Boolean(false)),
-        field("owner", FieldOp::Equal, Value::String("u".to_owned())),
+        field("owner", FieldOp::GreaterThan, Value::String("u".to_owned())),
     ]));
     match decide(&q, &IndexSet::default(), enterprise()) {
         IndexDecision::FullScanAllowed { plan } => {
@@ -1051,7 +1042,7 @@ fn enterprise_missing_index_is_a_full_scan_not_an_error() {
 }
 
 #[test]
-fn conservative_accept_implies_reference_support() {
+fn an_accepted_query_carries_the_index_that_serves_it() {
     // Every UseIndex decision must be backed by a concrete index or the automatic single-field
     // index; the decision carries that evidence.
     let q = tasks().with_filter(field("done", FieldOp::Equal, Value::Boolean(true)));
@@ -1106,7 +1097,7 @@ fn emulator() -> PlanningContext {
 fn the_emulator_policy_serves_queries_without_their_composite_index() {
     let q = tasks().with_filter(FilterExpr::And(vec![
         field("done", FieldOp::Equal, Value::Boolean(false)),
-        field("owner", FieldOp::Equal, Value::String("u".to_owned())),
+        field("owner", FieldOp::GreaterThan, Value::String("u".to_owned())),
     ]));
     let required = match decide(&q, &IndexSet::default(), standard()) {
         IndexDecision::MissingRequired { requirement } => requirement,
@@ -1148,7 +1139,7 @@ fn restaurant_composite(fields: &[(&str, IndexFieldMode)]) -> IndexDefinition {
 /// `editors_pick` equality clauses sorted by `star_rating` are served by merging one composite
 /// index per equality field, each ending in `star_rating ASC`.
 #[test]
-fn firebase_policy_merges_composite_indexes_sharing_the_order_suffix() {
+fn production_merges_composite_indexes_sharing_the_order_suffix() {
     let star_rating = OrderClause {
         field: fp("star_rating"),
         direction: Direction::Ascending,
@@ -1191,13 +1182,13 @@ fn firebase_policy_merges_composite_indexes_sharing_the_order_suffix() {
     indexes.add_composite(category.clone());
     indexes.add_composite(city.clone());
     indexes.add_composite(editors_pick.clone());
-    match decide(&two, &indexes, firebase()) {
+    match decide(&two, &indexes, standard()) {
         IndexDecision::MergeIndexes { indexes } => {
             assert_eq!(indexes, vec![category.clone(), city.clone()]);
         }
         other => panic!("{other:?}"),
     }
-    match decide(&three, &indexes, firebase()) {
+    match decide(&three, &indexes, standard()) {
         IndexDecision::MergeIndexes { indexes } => {
             assert_eq!(
                 indexes,
@@ -1206,17 +1197,11 @@ fn firebase_policy_merges_composite_indexes_sharing_the_order_suffix() {
         }
         other => panic!("{other:?}"),
     }
-    // Conservative still asks for the one composite index that serves the query.
-    assert!(matches!(
-        decide(&two, &indexes, standard()),
-        IndexDecision::MissingRequired { .. }
-    ));
-
     // One index short: nothing covers `city`.
     let mut only_category = IndexSet::default();
     only_category.add_composite(category.clone());
     assert!(matches!(
-        decide(&two, &only_category, firebase()),
+        decide(&two, &only_category, standard()),
         IndexDecision::MissingRequired { .. }
     ));
 
@@ -1228,13 +1213,13 @@ fn firebase_policy_merges_composite_indexes_sharing_the_order_suffix() {
         ("star_rating", IndexFieldMode::Descending),
     ]));
     assert!(matches!(
-        decide(&two, &mismatched, firebase()),
+        decide(&two, &mismatched, standard()),
         IndexDecision::MissingRequired { .. }
     ));
 
     // An automatic index on `city` does not end in `star_rating`, so it cannot fill the gap.
     assert!(matches!(
-        decide(&two, &only_category, firebase()),
+        decide(&two, &only_category, standard()),
         IndexDecision::MissingRequired { .. }
     ));
 }
@@ -1242,7 +1227,7 @@ fn firebase_policy_merges_composite_indexes_sharing_the_order_suffix() {
 /// A composite covering several equality fields merges with the automatic index of the rest
 /// when nothing but `__name__` is ordered.
 #[test]
-fn firebase_policy_merges_a_composite_index_with_automatic_indexes() {
+fn production_merges_a_composite_index_with_automatic_indexes() {
     let mut pair = IndexSet::default();
     let category_city = restaurant_composite(&[
         ("category", IndexFieldMode::Ascending),
@@ -1258,7 +1243,7 @@ fn firebase_policy_merges_a_composite_index_with_automatic_indexes() {
         field("city", FieldOp::Equal, Value::String("SF".to_owned())),
         field("editors_pick", FieldOp::Equal, Value::Boolean(true)),
     ]));
-    match decide(&unordered_three, &pair, firebase()) {
+    match decide(&unordered_three, &pair, standard()) {
         IndexDecision::MergeIndexes { indexes } => {
             assert_eq!(indexes.len(), 2);
             assert_eq!(indexes[0], category_city);

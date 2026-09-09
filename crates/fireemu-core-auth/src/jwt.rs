@@ -76,7 +76,7 @@ pub enum TokenAcceptance {
     /// its issuer, audience, expiry on the virtual clock, subject and revocation checked.
     #[default]
     Verified,
-    /// The `firebase` profile: a token this store cannot verify is still accepted when it is
+    /// The `emulator` profile: a token this store cannot verify is still accepted when it is
     /// *unsigned* and minted for this project, and `request.auth` is then built from its
     /// claims as given. Two checks the official emulators skip are kept deliberately: a
     /// signed token must still verify against the session key, so a forged `RS256` token is

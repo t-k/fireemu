@@ -1,6 +1,6 @@
 //! std-only Firestore core: field paths, document paths, value ordering, the official
 //! storage-size formula, the canonical query AST with Standard query limits, and the
-//! conservative index validator (Milestone B, spec 8.5 - 8.10).
+//! production-rule index validator (Milestone B, spec 8.5 - 8.10).
 
 pub mod field_path;
 pub mod index;

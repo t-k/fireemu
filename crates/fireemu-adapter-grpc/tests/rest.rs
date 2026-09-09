@@ -32,7 +32,7 @@ fn state_with(rules: Option<&str>, acceptance: TokenAcceptance) -> RestState {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -1038,7 +1038,7 @@ fn contended_rest_commit_waits(query_lock: bool) {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -1164,7 +1164,7 @@ async fn a_rest_request_does_not_wait_for_locks_on_the_blocking_pool_thread() {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };

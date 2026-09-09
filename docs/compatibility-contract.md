@@ -86,7 +86,7 @@ Each claim under a surface names, separately:
   `issue` is the issue that owns the mismatch. The exclusion is a scope statement, not evidence,
   and it becomes an error the moment the step stops being debt, so it cannot outlive the fix;
 - `officialLimitations`: what the official emulator documents or ships as a limitation and which
-  the `firebase` profile must therefore reproduce rather than "fix";
+  the `emulator` profile must therefore reproduce rather than "fix";
 - `fireemuOnly`: behaviour that has no official counterpart, each with its precision;
 - `productionOnly`: real-service behaviour that is out of scope for any local emulator;
 - `preview`: surfaces whose compatibility is scoped more narrowly because upstream is preview.
@@ -98,36 +98,37 @@ Keeping those five lists apart is what stops extra strictness from reading as pa
 Two profiles are declared as configuration key sets, and the canonical schema's top-level
 `profile` key selects one at runtime:
 
-- **`firebase`** (the default) reproduces what the pinned suite ships and Firebase documents,
-  including its documented limitations. Nothing in this profile may refuse a request the
-  official emulator admits.
-- **`strict`** adds fireemu's own validation. Every key here may only refuse more than the
-  official emulator, and every refusal it adds must be published as a capability precision or as
-  a documented divergence in `conformance/divergences.json`.
+- **`strict`** (the default) behaves like production Firebase where the official emulator does
+  not: composite indexes are checked with production's rules, Standard query limits refuse the
+  query, and ID tokens are verified. Every key here may only refuse more than the official
+  emulator, and every refusal it adds must be published as a capability precision or as a
+  documented divergence in `conformance/divergences.json`.
+- **`emulator`** reproduces what the pinned suite ships and Firebase documents, including its
+  documented limitations. Nothing in this profile may refuse a request the official emulator
+  admits.
 
-A profile's `sets` lists exactly what the daemon derives from it — `firestore.indexValidationPolicy`
-and `firestore.enforceLimits`; the third derived setting, how a caller's ID token is verified on
-the Firestore and Storage Security Rules surfaces, has no key of its own — and an explicit
-configuration key always wins over the profile's default for it. A unit test in
+A profile's `sets` lists exactly what the daemon derives from it — `firestore.enforceLimits`,
+which an explicit key may still override; the other derived settings, how composite indexes are
+validated and how a caller's ID token is verified on the Firestore and Storage Security Rules
+surfaces, have no key of their own and follow the profile. A unit test in
 `crates/fireemu/src/config.rs` reads the contract and fails when `sets` and what `set_profile`
 derives disagree. Every other key a profile names is under `declared`, each with a `status`:
 `hand-written` means the loader reads the key but does not derive it from the profile, and
 `not-implemented` means the loader refuses the value or reads nothing of the section, so the
 value is a statement of intent and not a switch (`events.delivery = at-least-once` and
-`scheduler.clock = wall` of the `firebase` profile are of that kind, as are the `limits.*` and
+`scheduler.clock = wall` of the `emulator` profile are of that kind, as are the `limits.*` and
 `rules.staticLimitChecks` / `rules.runtimeBudgets` keys of both). `fireemu capabilities` and
 `GET /v1/capabilities` publish the active profile and the start banner prints it.
 
-Where the `firebase` profile cannot reproduce the official emulator exactly, the difference is
+Where the `emulator` profile cannot reproduce the official emulator exactly, the difference is
 recorded in that profile's `officialEmulatorDivergences`, whose `key` names either a
 configuration key or the profile-derived behaviour. Two are recorded today:
 
-- `firestore.indexValidationPolicy = emulator` is what the profile sets, because the pinned
-  official Firestore emulator does not check composite indexes at all. The `firebase` *value* of
-  that key reproduces the Firebase *backend*, which refuses the same query; a run whose oracle is
-  production rather than the emulator names it explicitly. `conservative` is neither, and belongs
-  to the `strict` profile.
-- ID token verification on the Rules surfaces: the official emulators verify nothing at all — the Storage emulator runs `jwt.decode` and the Firestore emulator was measured to admit an unknown subject, a 1970 expiry, a missing issuer, another project's audience and a garbage `RS256` signature. The `firebase` profile reproduces the part `@firebase/rules-unit-testing` depends on and keeps two refusals the official emulators do not make: the audience must name the routed Firestore resource project or Storage bucket project, and a signed token must verify. Both are refusals of requests the official emulator admits, which is why they are recorded rather than left implicit. In that profile, an unregistered Firestore project owned by the default session and a valid bare Storage bucket routed through it can use a rules-unit-testing mock token whose audience names the routed project. The configured default Auth project is not substituted for the resource namespace. Storage continues to use the owning session for tenancy, App Check, fault injection, resumable-upload state and object storage; a tenant-qualified request cannot use this fallback, and no session or bucket registry entry is created.
+- `firestore.indexValidation`: the `emulator` profile assumes every composite index a query
+  needs, because the pinned official Firestore emulator does not check composite indexes at all,
+  and reports each assumption. The `strict` profile applies production's rules instead, verified
+  against a real project, including the index merges production performs.
+- ID token verification on the Rules surfaces: the official emulators verify nothing at all — the Storage emulator runs `jwt.decode` and the Firestore emulator was measured to admit an unknown subject, a 1970 expiry, a missing issuer, another project's audience and a garbage `RS256` signature. The `emulator` profile reproduces the part `@firebase/rules-unit-testing` depends on and keeps two refusals the official emulators do not make: the audience must name the routed Firestore resource project or Storage bucket project, and a signed token must verify. Both are refusals of requests the official emulator admits, which is why they are recorded rather than left implicit. In that profile, an unregistered Firestore project owned by the default session and a valid bare Storage bucket routed through it can use a rules-unit-testing mock token whose audience names the routed project. The configured default Auth project is not substituted for the resource namespace. Storage continues to use the owning session for tenancy, App Check, fault injection, resumable-upload state and object storage; a tenant-qualified request cannot use this fallback, and no session or bucket registry entry is created.
 
 `compat-check` checks every key and value both profiles name against
 `spec/config/fireemu.schema.json`, and checks that the profile names the contract declares are

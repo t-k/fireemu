@@ -42,7 +42,7 @@ impl Fixture {
             "conformance/package.json",
             &json!({"dependencies": {"firebase-tools": "15.28.2"}}).to_string(),
         );
-        fixture.write_config_schema(&json!(["firebase"]));
+        fixture.write_config_schema(&json!(["emulator"]));
         fixture.write_divergences(&json!({
             "schemaVersion": 2,
             "divergences": {},
@@ -67,7 +67,7 @@ impl Fixture {
                     "firestore": {
                         "type": "object",
                         "properties": {
-                            "indexValidationPolicy": {"enum": ["firebase", "conservative", "emulator"]},
+                            "apiMode": {"enum": ["native", "mongodb-compatible"]},
                             "enforceLimits": {"type": "boolean"},
                         },
                     },
@@ -143,9 +143,9 @@ fn contract() -> Value {
         },
         "claim": {"sentence": CLAIM, "documents": ["README.md"]},
         "profiles": {
-            "firebase": {
+            "emulator": {
                 "intent": "reproduce the official emulator",
-                "sets": {"firestore.indexValidationPolicy": "firebase", "firestore.enforceLimits": false},
+                "sets": {"firestore.enforceLimits": false},
             },
         },
         "vocabulary": {
@@ -494,7 +494,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "profile-unknown-key",
             mutate: |contract, _, _| {
-                set(contract, "profiles/firebase/sets", json!({"firestore.pretendMode": "on"}));
+                set(contract, "profiles/emulator/sets", json!({"firestore.pretendMode": "on"}));
             },
             expect: Some("sets firestore.pretendMode, which spec/config/fireemu.schema.json does not define"),
         },
@@ -502,15 +502,15 @@ fn cases() -> Vec<Case> {
         Case {
             name: "profile-bad-enum",
             mutate: |contract, _, _| {
-                set(contract, "profiles/firebase/sets", json!({"firestore.indexValidationPolicy": "lenient"}));
+                set(contract, "profiles/emulator/sets", json!({"firestore.apiMode": "lenient"}));
             },
-            expect: Some("sets firestore.indexValidationPolicy = \"lenient\", which is not one of"),
+            expect: Some("sets firestore.apiMode = \"lenient\", which is not one of"),
         },
         // CC-08: a profile setting a boolean key to something else.
         Case {
             name: "profile-bad-type",
             mutate: |contract, _, _| {
-                set(contract, "profiles/firebase/sets", json!({"firestore.enforceLimits": "yes"}));
+                set(contract, "profiles/emulator/sets", json!({"firestore.enforceLimits": "yes"}));
             },
             expect: Some("but the schema declares a boolean"),
         },
@@ -520,7 +520,7 @@ fn cases() -> Vec<Case> {
             mutate: |contract, _, _| {
                 set(
                     contract,
-                    "profiles/firebase/declared",
+                    "profiles/emulator/declared",
                     json!({"firestore.enforceLimits": {"value": false, "note": "by hand"}}),
                 );
             },
@@ -531,34 +531,34 @@ fn cases() -> Vec<Case> {
             mutate: |contract, _, _| {
                 set(
                     contract,
-                    "profiles/firebase/declared",
-                    json!({"firestore.indexValidationPolicy": {"value": "firebase", "status": "someday", "note": "x"}}),
+                    "profiles/emulator/declared",
+                    json!({"firestore.apiMode": {"value": "native", "status": "someday", "note": "x"}}),
                 );
-                set(contract, "profiles/firebase/sets", json!({"firestore.enforceLimits": false}));
+                set(contract, "profiles/emulator/sets", json!({"firestore.enforceLimits": false}));
             },
-            expect: Some("declares firestore.indexValidationPolicy with status Some(\"someday\")"),
+            expect: Some("declares firestore.apiMode with status Some(\"someday\")"),
         },
         Case {
             name: "profile-declared-value-the-schema-refuses",
             mutate: |contract, _, _| {
                 set(
                     contract,
-                    "profiles/firebase/declared",
-                    json!({"firestore.indexValidationPolicy": {"value": "lenient", "status": "hand-written", "note": "x"}}),
+                    "profiles/emulator/declared",
+                    json!({"firestore.apiMode": {"value": "lenient", "status": "hand-written", "note": "x"}}),
                 );
-                set(contract, "profiles/firebase/sets", json!({"firestore.enforceLimits": false}));
+                set(contract, "profiles/emulator/sets", json!({"firestore.enforceLimits": false}));
             },
-            expect: Some("sets firestore.indexValidationPolicy = \"lenient\", which is not one of"),
+            expect: Some("sets firestore.apiMode = \"lenient\", which is not one of"),
         },
         Case {
             name: "profile-declared-is-accepted",
             mutate: |contract, _, _| {
                 set(
                     contract,
-                    "profiles/firebase/declared",
-                    json!({"firestore.indexValidationPolicy": {"value": "firebase", "status": "hand-written", "note": "read by the loader"}}),
+                    "profiles/emulator/declared",
+                    json!({"firestore.apiMode": {"value": "native", "status": "hand-written", "note": "read by the loader"}}),
                 );
-                set(contract, "profiles/firebase/sets", json!({"firestore.enforceLimits": false}));
+                set(contract, "profiles/emulator/sets", json!({"firestore.enforceLimits": false}));
             },
             expect: None,
         },
@@ -567,9 +567,9 @@ fn cases() -> Vec<Case> {
         Case {
             name: "profile-name-the-schema-refuses",
             mutate: |contract, _, fixture| {
-                let profile = contract["profiles"]["firebase"].clone();
+                let profile = contract["profiles"]["emulator"].clone();
                 set(contract, "profiles", json!({"lenient": profile}));
-                fixture.write_config_schema(&json!(["firebase"]));
+                fixture.write_config_schema(&json!(["emulator"]));
             },
             expect: Some("profile lenient is declared but"),
         },
@@ -578,7 +578,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "profile-name-the-contract-omits",
             mutate: |_, _, fixture| {
-                fixture.write_config_schema(&json!(["firebase", "strict"]));
+                fixture.write_config_schema(&json!(["emulator", "strict"]));
             },
             expect: Some("accepts profile strict, which"),
         },
@@ -1040,7 +1040,7 @@ fn cases() -> Vec<Case> {
             name: "contract-divergence-needs-structured-authority",
             mutate: |contract, _, _| {
                 contract
-                    .pointer_mut("/profiles/firebase")
+                    .pointer_mut("/profiles/emulator")
                     .unwrap()
                     .as_object_mut()
                     .unwrap()

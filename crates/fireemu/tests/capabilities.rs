@@ -368,12 +368,12 @@ fn firestore_transaction_metadata_matches_the_pessimistic_runtime() {
     let contract: Value =
         serde_json::from_str(include_str!("../../../spec/compatibility/contract.json"))
             .expect("the compatibility contract is JSON");
-    let semantics = contract["profiles"]["firebase"]["officialEmulatorDivergences"]
+    let semantics = contract["profiles"]["emulator"]["officialEmulatorDivergences"]
         .as_array()
-        .expect("the firebase profile lists official-emulator divergences")
+        .expect("the emulator profile lists official-emulator divergences")
         .iter()
         .find(|entry| entry["key"] == "firestore.semantics")
-        .expect("the firebase profile publishes the Firestore semantics matrix");
+        .expect("the emulator profile publishes the Firestore semantics matrix");
     assert!(
         semantics["profileValue"]
             .as_str()

@@ -203,7 +203,7 @@ fn observed(out: &Output) -> serde_json::Value {
 }
 
 #[test]
-fn the_firebase_profile_inherits_the_parent_environment_but_strict_stays_isolated() {
+fn the_emulator_profile_inherits_the_parent_environment_but_strict_stays_isolated() {
     if !have_sdk() {
         return;
     }
@@ -214,7 +214,7 @@ fn the_firebase_profile_inherits_the_parent_environment_but_strict_stays_isolate
         "FX_FROM_DOTENV=fixture\nFX_INT=1\nFX_BOOL=true\nFX_LIST=[\"fixture\"]\n",
     );
 
-    let firebase = exec_with_profile(&dir, "demo-parent-env", "firebase");
+    let firebase = exec_with_profile(&dir, "demo-parent-env", "emulator");
     assert_eq!(
         firebase.status.code(),
         Some(0),

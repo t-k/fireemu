@@ -14,23 +14,26 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{Map, Value};
 
 /// The compatibility profile (`profile`), the one switch that decides whether fireemu
-/// reproduces the pinned official emulators or adds its own validation.
+/// reproduces the pinned official emulators or production Firebase.
 ///
 /// The two profiles are declared in `spec/compatibility/contract.json`; this enum is the
 /// half the daemon executes. The keys a profile only *declares* stay declared: what the
 /// runtime derives from it is [`Self::index_policy`], [`Self::enforce_limits`] and
-/// [`Self::token_acceptance`], and an explicit configuration key always wins over all three.
+/// [`Self::token_acceptance`]. The index policy has no configuration key of its own and
+/// follows the profile; `firestore.enforceLimits` may still override its default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CompatibilityProfile {
     /// Reproduce the behaviour the pinned Local Emulator Suite ships, including its
     /// documented limitations. This is the profile the README's compatibility claim is made
     /// under; choose it explicitly when matching the official suite matters more than
     /// matching production.
-    Firebase,
-    /// Add fireemu's own validation on top. Every difference it makes may only refuse more
-    /// than the official emulator, never less. This is the default: fireemu exists to expose
-    /// locally what production Firebase would refuse, so a configuration that names no
-    /// profile runs under the validation, and `fireemu init` writes the same choice down.
+    Emulator,
+    /// Behave like production Firebase where the official emulator does not: composite
+    /// indexes are checked with production's rules, Standard query limits refuse the query,
+    /// and ID tokens are verified. Every difference it makes may only refuse more than the
+    /// official emulator, never less. This is the default: fireemu exists to expose locally
+    /// what production would refuse, so a configuration that names no profile runs under it,
+    /// and `fireemu init` writes the same choice down.
     #[default]
     Strict,
 }
@@ -49,7 +52,7 @@ impl CompatibilityProfile {
     #[must_use]
     pub fn parse_config(text: &str) -> Option<Self> {
         match text {
-            "firebase" => Some(Self::Firebase),
+            "emulator" => Some(Self::Emulator),
             "strict" => Some(Self::Strict),
             _ => None,
         }
@@ -59,23 +62,23 @@ impl CompatibilityProfile {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Firebase => "firebase",
+            Self::Emulator => "emulator",
             Self::Strict => "strict",
         }
     }
 
-    /// The default of `firestore.indexValidationPolicy`.
+    /// The index validation policy; it has no configuration key of its own.
     ///
     /// The pinned official Firestore emulator does not check composite indexes at all, so
-    /// the profile that reproduces it assumes them (`emulator`) and reports each one it
-    /// assumed. `strict` refuses the query instead, with the `firestore.indexes.json`
-    /// fragment production would need. `firebase` remains available as an explicit value for
-    /// a run whose oracle is the Firebase backend rather than the emulator.
+    /// the profile that reproduces it assumes them and reports each one it assumed. `strict`
+    /// applies production's rules, verified against a real project: a query without a
+    /// supporting index is refused with the `firestore.indexes.json` fragment production
+    /// would need, and the index merges production performs are accepted.
     #[must_use]
     pub const fn index_policy(self) -> IndexValidationPolicy {
         match self {
-            Self::Firebase => IndexValidationPolicy::Emulator,
-            Self::Strict => IndexValidationPolicy::Conservative,
+            Self::Emulator => IndexValidationPolicy::Emulator,
+            Self::Strict => IndexValidationPolicy::Production,
         }
     }
 
@@ -90,7 +93,7 @@ impl CompatibilityProfile {
     #[must_use]
     pub const fn token_acceptance(self) -> TokenAcceptance {
         match self {
-            Self::Firebase => TokenAcceptance::EmulatorMock,
+            Self::Emulator => TokenAcceptance::EmulatorMock,
             Self::Strict => TokenAcceptance::Verified,
         }
     }
@@ -147,7 +150,7 @@ pub struct RuntimeConfig {
     pub edition: FirestoreEdition,
     /// API mode.
     pub api_mode: FirestoreApiMode,
-    /// Index validation policy (`firestore.indexValidationPolicy`; profile default).
+    /// Index validation policy, derived from the profile (no key of its own).
     pub index_policy: IndexValidationPolicy,
     /// Whether a Standard query limit violation refuses the query
     /// (`firestore.enforceLimits`; profile default). When it does not, each violation is
@@ -2190,10 +2193,18 @@ impl RuntimeConfig {
             let p = p
                 .as_str()
                 .ok_or_else(|| ConfigError("profile must be a string".to_owned()))?;
-            cfg.set_profile(
-                CompatibilityProfile::parse_config(p)
-                    .ok_or_else(|| ConfigError(format!("unknown profile {p:?}")))?,
-            );
+            cfg.set_profile(CompatibilityProfile::parse_config(p).ok_or_else(|| {
+                if p == "firebase" {
+                    ConfigError(
+                        "profile \"firebase\" was renamed to \"emulator\" in fireemu 0.7.0; \
+                         the profiles are \"strict\" (production behaviour, the default) and \
+                         \"emulator\" (the pinned official emulators)"
+                            .to_owned(),
+                    )
+                } else {
+                    ConfigError(format!("unknown profile {p:?}"))
+                }
+            })?);
         }
         if let Some(limits) = obj.get("limits") {
             Self::parse_limits(limits)?;
@@ -2210,17 +2221,13 @@ impl RuntimeConfig {
                 cfg.api_mode = FirestoreApiMode::parse_config_str(m)
                     .ok_or_else(|| ConfigError(format!("unknown firestore.apiMode {m:?}")))?;
             }
-            if let Some(p) = fs.get("indexValidationPolicy").and_then(Value::as_str) {
-                cfg.index_policy = match p {
-                    "firebase" => IndexValidationPolicy::Firebase,
-                    "conservative" => IndexValidationPolicy::Conservative,
-                    "emulator" => IndexValidationPolicy::Emulator,
-                    other => {
-                        return Err(ConfigError(format!(
-                            "unknown firestore.indexValidationPolicy {other:?}"
-                        )))
-                    }
-                };
+            if fs.get("indexValidationPolicy").is_some() {
+                return Err(ConfigError(
+                    "firestore.indexValidationPolicy was removed in fireemu 0.7.0: the index \
+                     policy follows the profile (strict checks composite indexes with \
+                     production's rules, emulator assumes them)"
+                        .to_owned(),
+                ));
             }
             if let Some(f) = fs.get("textIndexDefinitionFile").and_then(Value::as_str) {
                 cfg.text_index_file = Some(f.to_owned());
@@ -2424,19 +2431,44 @@ mod tests {
         assert_eq!(default.profile, CompatibilityProfile::Strict);
         assert_eq!(RuntimeConfig::default().profile, default.profile);
 
-        // firebase: the pinned official Firestore emulator checks no composite index, does
+        // emulator: the pinned official Firestore emulator checks no composite index, does
         // not refuse a query over a Standard limit, and admits the mock tokens
         // @firebase/rules-unit-testing mints.
-        let firebase = with_profile(json!({"profile": "firebase"})).unwrap();
-        assert_eq!(firebase.index_policy, IndexValidationPolicy::Emulator);
-        assert!(!firebase.enforce_limits);
-        assert_eq!(firebase.token_acceptance, TokenAcceptance::EmulatorMock);
+        let emulator = with_profile(json!({"profile": "emulator"})).unwrap();
+        assert_eq!(emulator.profile, CompatibilityProfile::Emulator);
+        assert_eq!(emulator.index_policy, IndexValidationPolicy::Emulator);
+        assert!(!emulator.enforce_limits);
+        assert_eq!(emulator.token_acceptance, TokenAcceptance::EmulatorMock);
 
-        // strict: every one of those becomes a refusal.
+        // strict: every one of those becomes production's refusal.
         let strict = with_profile(json!({"profile": "strict"})).unwrap();
-        assert_eq!(strict.index_policy, IndexValidationPolicy::Conservative);
+        assert_eq!(strict.index_policy, IndexValidationPolicy::Production);
         assert!(strict.enforce_limits);
         assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
+    }
+
+    #[test]
+    fn the_renamed_profile_and_the_removed_index_policy_key_are_refused_with_guidance() {
+        // A 0.6 configuration must not start under a profile it did not ask for: the old
+        // name and the removed key are refused with the new spelling in the message.
+        let err = with_profile(json!({"profile": "firebase"})).unwrap_err();
+        assert!(err.to_string().contains("renamed to \"emulator\""), "{err}");
+        let err = with_profile(json!({
+            "profile": "strict",
+            "firestore": {
+                "edition": "standard",
+                "apiMode": "native",
+                "indexValidationPolicy": "conservative",
+            },
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("indexValidationPolicy was removed"),
+            "{err}"
+        );
+        let err = with_profile(json!({"profile": "lenient"})).unwrap_err();
+        assert!(err.to_string().contains("unknown profile"), "{err}");
     }
 
     #[test]
@@ -2465,18 +2497,8 @@ mod tests {
             keys.sort_unstable();
             assert_eq!(
                 keys,
-                ["firestore.enforceLimits", "firestore.indexValidationPolicy"],
+                ["firestore.enforceLimits"],
                 "profile {name} sets a key the loader does not derive, or misses one it does"
-            );
-            let policy = match parsed.index_policy() {
-                IndexValidationPolicy::Firebase => "firebase",
-                IndexValidationPolicy::Conservative => "conservative",
-                IndexValidationPolicy::Emulator => "emulator",
-            };
-            assert_eq!(
-                sets["firestore.indexValidationPolicy"],
-                json!(policy),
-                "profile {name}: firestore.indexValidationPolicy"
             );
             assert_eq!(
                 sets["firestore.enforceLimits"],
@@ -2504,17 +2526,16 @@ mod tests {
         // sit in sections parsed after the profile and one (firestore) is parsed before the
         // profile appears in the file, which is why the loader reads the profile first.
         let cfg = with_profile(json!({
-            "profile": "firebase",
+            "profile": "emulator",
             "firestore": {
                 "edition": "standard",
                 "apiMode": "native",
-                "indexValidationPolicy": "conservative",
                 "enforceLimits": true,
             },
         }))
         .unwrap();
-        assert_eq!(cfg.profile, CompatibilityProfile::Firebase);
-        assert_eq!(cfg.index_policy, IndexValidationPolicy::Conservative);
+        assert_eq!(cfg.profile, CompatibilityProfile::Emulator);
+        assert_eq!(cfg.index_policy, IndexValidationPolicy::Emulator);
         assert!(cfg.enforce_limits);
 
         let cfg = with_profile(json!({
@@ -2522,16 +2543,15 @@ mod tests {
             "firestore": {
                 "edition": "standard",
                 "apiMode": "native",
-                "indexValidationPolicy": "emulator",
                 "enforceLimits": false,
             },
         }))
         .unwrap();
         assert_eq!(cfg.profile, CompatibilityProfile::Strict);
-        assert_eq!(cfg.index_policy, IndexValidationPolicy::Emulator);
+        assert_eq!(cfg.index_policy, IndexValidationPolicy::Production);
         assert!(!cfg.enforce_limits);
-        // The token semantics have no key of their own: the profile is the only way to ask
-        // for them, so an explicit index policy never quietly loosens them.
+        // The token semantics and the index policy have no key of their own: the profile is
+        // the only way to ask for them, so an explicit limit switch never quietly loosens them.
         assert_eq!(cfg.token_acceptance, TokenAcceptance::Verified);
     }
 

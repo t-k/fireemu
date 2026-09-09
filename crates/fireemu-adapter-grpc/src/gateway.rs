@@ -95,7 +95,7 @@ pub struct AcceptedQuery {
 /// measured by `conformance/src/firestore-probe` (`errors/rest-shapes`): more than 30
 /// disjunctions (`'IN' supports up to 30 comparison values.`) and a second `array-contains`
 /// clause (`Only a single array-contains clause is allowed in a query`). They are refused
-/// whatever `enforce_limits` says, so the `firebase` profile answers what the official
+/// whatever `enforce_limits` says, so the `emulator` profile answers what the official
 /// emulator answers.
 pub const OFFICIAL_EMULATOR_REFUSES: &[&str] = &[
     "FS-QUERY-LIMIT-DNF-DISJUNCTIONS",
@@ -247,7 +247,7 @@ fn note_assumed_index(fragment: &str) {
         .unwrap_or(false);
     if first {
         eprintln!(
-            "[firestore] served without a configured composite index (indexValidationPolicy = emulator); production needs: {fragment}"
+            "[firestore] served without a configured composite index (emulator profile); production needs: {fragment}"
         );
     }
 }

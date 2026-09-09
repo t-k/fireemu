@@ -2121,11 +2121,11 @@ async fn start_codebase(
         );
     }
     // The official Functions emulator inherits the Firebase CLI process environment before
-    // applying dotenv, system and emulator values. The firebase profile preserves that
+    // applying dotenv, system and emulator values. The emulator profile preserves that
     // behavior so wrappers such as `dotenv -- firebase emulators:exec` reach function code.
     // The strict profile keeps the runner isolated and receives only the explicit values
     // below. In both profiles, later entries override parent values in the official order.
-    let mut env: Vec<(String, String)> = if cfg.profile == CompatibilityProfile::Firebase {
+    let mut env: Vec<(String, String)> = if cfg.profile == CompatibilityProfile::Emulator {
         inheritable_parent_environment()
     } else {
         Vec::new()

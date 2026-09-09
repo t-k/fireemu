@@ -1,10 +1,9 @@
 {
   "schemaVersion": 1,
-  "profile": "firebase",
+  "profile": "emulator",
   "firestore": {
     "edition": "standard",
     "apiMode": "native",
-    "indexValidationPolicy": "firebase",
     "rules": "storage-probe.firestore.rules"
   },
   "storage": { "rules": "storage-probe.rules" },

@@ -215,11 +215,11 @@ fn init_wizard_explains_profiles_and_the_live_firebase_reference() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("strict (recommended)"), "{stdout}");
     assert!(
-        stdout.contains("additional validation and production limit checks"),
+        stdout.contains("behaves like production Firebase, including index and limit checks"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("firebase: reproduces the pinned official emulator behavior"),
+        stdout.contains("emulator: reproduces the pinned official emulator behavior"),
         "{stdout}"
     );
     assert!(
@@ -232,12 +232,12 @@ fn init_wizard_explains_profiles_and_the_live_firebase_reference() {
     assert_eq!(generated["profile"], "strict");
     assert_eq!(generated["firebaseJson"], "firebase.json");
 
-    let dir = scratch("init-wizard-firebase-without-detected-config");
-    let out = run_in(&dir, &["init", "--interactive"], Some("firebase\n\ny\n"));
+    let dir = scratch("init-wizard-emulator-without-detected-config");
+    let out = run_in(&dir, &["init", "--interactive"], Some("emulator\n\ny\n"));
     assert!(out.status.success(), "{}", stderr(&out));
     let generated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("fireemu.json")).unwrap()).unwrap();
-    assert_eq!(generated["profile"], "firebase");
+    assert_eq!(generated["profile"], "emulator");
     assert!(generated.get("firebaseJson").is_none());
 }
 
@@ -251,7 +251,7 @@ fn init_options_select_values_and_non_tty_input_never_opens_the_wizard() {
             "init",
             "--yes",
             "--profile",
-            "firebase",
+            "emulator",
             "--firebase-json",
             "project.json",
         ],
@@ -261,7 +261,7 @@ fn init_options_select_values_and_non_tty_input_never_opens_the_wizard() {
     let generated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(explicit.join("fireemu.json")).unwrap())
             .unwrap();
-    assert_eq!(generated["profile"], "firebase");
+    assert_eq!(generated["profile"], "emulator");
     assert_eq!(generated["firebaseJson"], "project.json");
     assert!(!String::from_utf8_lossy(&out.stdout).contains("Profiles:"));
 
@@ -274,7 +274,7 @@ fn init_options_select_values_and_non_tty_input_never_opens_the_wizard() {
     assert_eq!(generated["profile"], "strict");
 
     let redirected = scratch("init-redirected");
-    let out = run_in(&redirected, &["init"], Some("firebase\nmissing.json\nn\n"));
+    let out = run_in(&redirected, &["init"], Some("emulator\nmissing.json\nn\n"));
     assert!(out.status.success(), "{}", stderr(&out));
     let generated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(redirected.join("fireemu.json")).unwrap())
@@ -290,7 +290,7 @@ fn init_option_conflicts_duplicates_and_missing_values_are_usage_errors() {
         ("conflicting modes", vec!["init", "--interactive", "--yes"]),
         (
             "duplicate profile",
-            vec!["init", "--profile", "strict", "--profile", "firebase"],
+            vec!["init", "--profile", "strict", "--profile", "emulator"],
         ),
         (
             "duplicate source",

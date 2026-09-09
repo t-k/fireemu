@@ -162,7 +162,7 @@ fn check_divergence_authorities(root: &Path, contract: &Value, problems: &mut Ve
         validate_authority_entry(root, key, entry, baseline_version, true, problems);
     }
     for divergence in contract
-        .pointer("/profiles/firebase/officialEmulatorDivergences")
+        .pointer("/profiles/emulator/officialEmulatorDivergences")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default()

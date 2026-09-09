@@ -3823,7 +3823,7 @@ fn update(
     }
     // A password change, an email change, an explicit `validSince` and a disablement all
     // move `validSince`, so ID tokens issued before this second are refused (what the
-    // official emulator does). Under the firebase profile, refresh tokens remain stateless
+    // official emulator does). Under the emulator profile, refresh tokens remain stateless
     // and usable after these mutations, matching the official emulator. The strict profile
     // revokes them after privileged revocation, disablement and privileged credential changes.
     // Self-service credential changes keep the current refresh token in both profiles.

@@ -19,7 +19,7 @@ const completeEvidence = () => ({
   },
   artifact: { sha256: "binary-digest", platform: "darwin-arm64" },
   runtime: {
-    profile: "firebase",
+    profile: "emulator",
     configDigest: "config-digest",
     rulesDigest: "rules-digest",
   },

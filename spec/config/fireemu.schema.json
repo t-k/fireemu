@@ -18,8 +18,8 @@
       "description": "Firebase project configuration loaded relative to this canonical file."
     },
     "profile": {
-      "description": "Compatibility profile (spec/compatibility/contract.json). firebase reproduces the pinned official emulators, including their documented limitations; strict adds fireemu's own validation. The profile sets the defaults of firestore.indexValidationPolicy, firestore.enforceLimits and the ID-token semantics of the Security Rules surfaces; any explicit key wins over it.",
-      "enum": ["firebase", "strict"],
+      "description": "Compatibility profile (spec/compatibility/contract.json). strict behaves like production Firebase where the official emulators do not (composite index validation with production's rules, Standard query limits, ID-token verification); emulator reproduces the pinned official emulators, including their documented limitations. The profile decides the index validation and the ID-token semantics of the Security Rules surfaces and sets the default of firestore.enforceLimits; an explicit enforceLimits wins over it.",
+      "enum": ["strict", "emulator"],
       "default": "strict"
     },
     "bind": { "type": "string", "default": "127.0.0.1" },
@@ -74,7 +74,6 @@
       "properties": {
         "edition": { "enum": ["standard", "enterprise"] },
         "apiMode": { "enum": ["native", "mongodb-compatible"] },
-        "indexValidationPolicy": { "enum": ["firebase", "conservative", "emulator"] },
         "indexFile": { "type": "string" },
         "textIndexDefinitionFile": { "type": "string" },
         "enforceLimits": { "type": "boolean" },

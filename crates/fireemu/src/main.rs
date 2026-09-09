@@ -68,7 +68,7 @@ use crate::config::{RuntimeConfig, Selection};
 const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version");
+    eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version");
     ExitCode::from(2)
 }
 
@@ -2016,10 +2016,10 @@ fn print_banner(
         "  profile: {} ({})",
         cfg.profile.as_str(),
         match cfg.profile {
-            config::CompatibilityProfile::Firebase =>
+            config::CompatibilityProfile::Emulator =>
                 "reproduces the official emulators, including their documented limitations",
             config::CompatibilityProfile::Strict =>
-                "adds fireemu's own validation on top of the official behaviour",
+                "behaves like production Firebase where the official emulators do not",
         }
     );
     println!(
@@ -2523,7 +2523,7 @@ mod config_reload_tests {
                     ctx: PlanningContext {
                         edition: FirestoreEdition::Standard,
                         api_mode: FirestoreApiMode::Native,
-                        policy: IndexValidationPolicy::Conservative,
+                        policy: IndexValidationPolicy::Production,
                     },
                     indexes: IndexSet::default(),
                 },
@@ -2621,7 +2621,7 @@ mod config_reload_tests {
             ctx: PlanningContext {
                 edition: FirestoreEdition::Standard,
                 api_mode: FirestoreApiMode::Native,
-                policy: IndexValidationPolicy::Conservative,
+                policy: IndexValidationPolicy::Production,
             },
             indexes: IndexSet::default(),
         };

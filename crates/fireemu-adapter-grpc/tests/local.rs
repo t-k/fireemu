@@ -69,7 +69,7 @@ fn observing_transaction_expiry_releases_aggregate_history_capacity() {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -139,7 +139,7 @@ fn history_budget_backend(session_versions: u64, global_versions: u64) -> LocalB
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -348,7 +348,7 @@ async fn start_with_write_time(
     Arc<Mutex<VirtualClock>>,
     tokio::task::JoinHandle<()>,
 ) {
-    start_with_write_time_and_policy(wall_clock, IndexValidationPolicy::Conservative).await
+    start_with_write_time_and_policy(wall_clock, IndexValidationPolicy::Production).await
 }
 
 async fn start_with_write_time_and_policy(
@@ -433,7 +433,7 @@ async fn start_with_contention_wait_and_lease(
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -938,7 +938,7 @@ async fn start() -> (
 #[tokio::test]
 async fn event_admission_refusal_prevents_firestore_publication() {
     let (mut client, _clock, backend, server) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     backend.set_atomic_change_sink(Arc::new(RejectEveryCommit));
     let name = format!("{DOCS}/admission/refused");
     let error = client
@@ -993,7 +993,7 @@ async fn event_admission_refusal_prevents_firestore_publication() {
             ctx: PlanningContext {
                 edition: FirestoreEdition::Standard,
                 api_mode: FirestoreApiMode::Native,
-                policy: IndexValidationPolicy::Conservative,
+                policy: IndexValidationPolicy::Production,
             },
             indexes: IndexSet::default(),
         },
@@ -1026,7 +1026,7 @@ fn routed_projects_can_use_isolated_index_catalogs() {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -1038,11 +1038,11 @@ fn routed_projects_can_use_isolated_index_catalogs() {
         query_scope: IndexQueryScope::Collection,
         fields: vec![
             IndexField {
-                path: FieldPath::parse("done").unwrap(),
+                path: FieldPath::parse("owner").unwrap(),
                 mode: IndexFieldMode::Ascending,
             },
             IndexField {
-                path: FieldPath::parse("owner").unwrap(),
+                path: FieldPath::parse("done").unwrap(),
                 mode: IndexFieldMode::Ascending,
             },
         ],
@@ -1052,15 +1052,16 @@ fn routed_projects_can_use_isolated_index_catalogs() {
         fireemu_core_types::ids::DatabaseId::DEFAULT,
         indexes,
     );
-    let field = |name: &str| sq::Filter {
+    let field = |name: &str, op: sq::field_filter::Operator| sq::Filter {
         filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
             field: Some(sq::FieldReference {
                 field_path: name.to_owned(),
             }),
-            op: sq::field_filter::Operator::Equal as i32,
+            op: op as i32,
             value: Some(i(1)),
         })),
     };
+    // Equality plus inequality: the shape production refuses without a composite index.
     let query = pb::StructuredQuery {
         from: vec![sq::CollectionSelector {
             collection_id: "tasks".to_owned(),
@@ -1070,7 +1071,10 @@ fn routed_projects_can_use_isolated_index_catalogs() {
             filter_type: Some(sq::filter::FilterType::CompositeFilter(
                 sq::CompositeFilter {
                     op: sq::composite_filter::Operator::And as i32,
-                    filters: vec![field("owner"), field("done")],
+                    filters: vec![
+                        field("owner", sq::field_filter::Operator::Equal),
+                        field("done", sq::field_filter::Operator::GreaterThan),
+                    ],
                 },
             )),
         }),
@@ -1096,7 +1100,7 @@ fn project_index_exemptions_apply_to_writes_and_import_catalog_snapshots_only_in
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -1162,7 +1166,7 @@ async fn start_with_edition(
         ctx: PlanningContext {
             edition,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -1269,12 +1273,18 @@ fn query(collection: &str, filter: Option<sq::Filter>) -> pb::RunQueryRequest {
     }
 }
 fn field_eq(path: &str, value: pb::Value) -> sq::Filter {
+    field_op(path, sq::field_filter::Operator::Equal, value)
+}
+fn field_gt(path: &str, value: pb::Value) -> sq::Filter {
+    field_op(path, sq::field_filter::Operator::GreaterThan, value)
+}
+fn field_op(path: &str, op: sq::field_filter::Operator, value: pb::Value) -> sq::Filter {
     sq::Filter {
         filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
             field: Some(sq::FieldReference {
                 field_path: path.to_owned(),
             }),
-            op: sq::field_filter::Operator::Equal as i32,
+            op: op as i32,
             value: Some(value),
         })),
     }
@@ -2045,14 +2055,15 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
     assert_eq!(result.aggregate_fields.get("count"), Some(&i(2)));
     assert_eq!(result.aggregate_fields.get("sum"), Some(&i(3)));
 
-    // The strict gateway still applies in local mode: a two-field equality query needs an index.
+    // The strict gateway still applies in local mode: an equality plus an inequality on
+    // another field needs a composite index, as in production.
     let needs_index = query(
         "n",
         Some(sq::Filter {
             filter_type: Some(sq::filter::FilterType::CompositeFilter(
                 sq::CompositeFilter {
                     op: sq::composite_filter::Operator::And as i32,
-                    filters: vec![field_eq("v", i(1)), field_eq("w", i(2))],
+                    filters: vec![field_eq("v", i(1)), field_gt("w", i(2))],
                 },
             )),
         }),
@@ -2065,7 +2076,7 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
 #[tokio::test]
 async fn aggregation_index_validation_rejects_unindexed_fields_before_transaction_observation() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     let collection = CollectionId::try_new("orders").unwrap();
     let mut indexes = IndexSet::default();
     indexes.set_single_field_indexes(&collection, &FieldPath::parse("amount").unwrap(), vec![]);
@@ -2417,7 +2428,7 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
 #[tokio::test]
 async fn run_query_streams_bounded_batches_and_releases_its_snapshot_pin() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -2470,7 +2481,7 @@ async fn run_query_streams_bounded_batches_and_releases_its_snapshot_pin() {
 #[tokio::test]
 async fn run_query_pages_seek_value_and_descending_name_orders() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     // A bare descending name order needs an explicit index, as in production.
     let mut indexes = IndexSet::default();
     indexes.add_composite(IndexDefinition {
@@ -2599,7 +2610,7 @@ async fn value_ordered_transaction_query_commits_after_all_pages() {
 #[tokio::test]
 async fn run_query_logical_completion_covers_every_page_and_limit() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     for count in [0, 1, 31, 32, 33, 63, 64, 65, 200] {
         let collection = format!("completion-{count}");
         if count > 0 {
@@ -2677,7 +2688,7 @@ async fn run_query_logical_completion_covers_every_page_and_limit() {
 #[tokio::test]
 async fn paged_query_preserves_offset_and_read_time_metadata() {
     let (mut client, _clock, _backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -2759,7 +2770,7 @@ async fn seed_large_query_documents(
 #[tokio::test]
 async fn large_read_only_query_pages_preserve_snapshot_completion_and_cleanup() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     let payload = "x".repeat(192 * 1024);
     let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
     for count in [64, 65] {
@@ -2862,7 +2873,7 @@ async fn later_query_page_failure_never_announces_success_and_releases_pin() {
         FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
     };
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     seed_large_query_documents(&mut client, "failed-page", 65, &"x".repeat(192 * 1024)).await;
     let registry = Arc::new(FaultRegistry::new());
     registry.default_state().lock().unwrap().install(FaultPlan {
@@ -2915,7 +2926,7 @@ async fn later_query_page_failure_never_announces_success_and_releases_pin() {
 #[tokio::test]
 async fn dropping_a_slow_query_stream_releases_the_internal_snapshot_pin() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -3033,7 +3044,7 @@ async fn aggregation_transaction_locks_the_aggregated_range() {
 #[tokio::test]
 async fn refused_new_transaction_is_abandoned_for_every_shared_selector_surface() {
     let (_client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
     let assert_no_transaction = || {
         let stats = backend
@@ -3245,7 +3256,7 @@ async fn commit_notifications_are_compact_and_the_ring_is_bounded() {
     use fireemu_adapter_grpc::local::{CommitChangeKind, COMMIT_NOTIFICATION_CAPACITY};
 
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     let mut notifications = backend.subscribe();
     for write in [
         update_write("events/a", &[("v", i(1))]),
@@ -3413,7 +3424,7 @@ async fn repeated_transaction_queries_keep_observations_separate() {
 #[tokio::test]
 async fn direct_authorized_query_continuation_reuses_public_transaction_execution() {
     let (_client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     backend
         .commit(&pb::CommitRequest {
             database: DB.to_owned(),
@@ -3617,7 +3628,7 @@ async fn cancelled_transaction_query_can_be_retried_before_commit() {
 #[tokio::test]
 async fn large_transaction_queries_keep_one_observation_across_all_pages() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
 
     for (collection, count) in [
         ("large-8191", 8_191),
@@ -3695,7 +3706,7 @@ async fn large_transaction_queries_keep_one_observation_across_all_pages() {
 #[tokio::test]
 async fn list_document_tokens_bind_result_shape_and_session() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -3981,7 +3992,7 @@ async fn every_read_time_surface_refuses_a_capacity_compacted_snapshot() {
 #[tokio::test]
 async fn clock_maintenance_compacts_an_idle_database_without_another_commit() {
     let (mut client, clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -4032,7 +4043,7 @@ async fn clock_maintenance_compacts_an_idle_database_without_another_commit() {
 #[tokio::test]
 async fn wall_clock_restores_keep_the_time_window_without_the_pinned_clock_cap() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(true, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(true, IndexValidationPolicy::Production).await;
     backend
         .restore_databases(std::collections::BTreeMap::from([(
             (
@@ -4340,7 +4351,7 @@ async fn database_snapshots_restore_documents_and_start_a_new_epoch() {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -4403,7 +4414,7 @@ async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -4677,7 +4688,7 @@ async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -4866,7 +4877,7 @@ fn lock_test_backend() -> Arc<LocalBackend> {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -5342,7 +5353,7 @@ fn resources_report_history_the_next_compaction_would_reclaim() {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -5400,7 +5411,7 @@ fn resources_report_history_the_next_compaction_would_reclaim() {
 #[tokio::test]
 async fn streamed_query_execution_records_selection_and_page_stats_separately() {
     let (mut client, _clock, backend, handle) =
-        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     let mut indexes = IndexSet::default();
     indexes.add_composite(IndexDefinition {
         collection_group: CollectionId::try_new("stats").unwrap(),

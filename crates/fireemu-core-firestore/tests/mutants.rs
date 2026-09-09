@@ -181,7 +181,7 @@ fn standard() -> PlanningContext {
     PlanningContext {
         edition: FirestoreEdition::Standard,
         api_mode: FirestoreApiMode::Native,
-        policy: IndexValidationPolicy::Conservative,
+        policy: IndexValidationPolicy::Production,
     }
 }
 

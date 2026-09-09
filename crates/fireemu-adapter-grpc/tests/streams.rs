@@ -73,7 +73,7 @@ async fn start_with_rules_source(
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -1390,7 +1390,7 @@ async fn start_with_clock() -> (
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -1597,7 +1597,7 @@ async fn start_with_indexes(
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes,
     };

@@ -47,7 +47,7 @@ suite) needs, and what leaves the other smokes working without attaching a token
   guards its `indexedDB` token cache. The SDK never dials the local exchange endpoint itself
   (`@firebase/app-check` hard-codes the production base URL), which is why the provider calls
   the daemon and hands the JWT back.
-- `missing-index.mjs`: the `firebase` client SDK against a conservative gateway that declares
+- `missing-index.mjs`: the `firebase` client SDK against a strict-profile gateway that declares
   exactly one composite index (`missing-index.indexes.json`, reached through
   `missing-index.firebase.json`). An undeclared `getDocsFromServer()` must reject with
   `failed-precondition` and the actionable diagnostic, the covered query must still succeed on
@@ -114,7 +114,7 @@ disabled -- asserting both that the trigger did not run and that re-enabling rep
 ```
 
 The script does nothing the official emulator does not require: `fireemu.rules-unit-testing.json`
-selects the `firebase` compatibility profile (the default is `strict`), under which fireemu admits the
+selects the `emulator` compatibility profile (the default is `strict`), under which fireemu admits the
 unsigned mock tokens `createMockUserToken` mints -- `iat: 0`, so `exp` is an hour after the
 epoch, and a `sub` naming a user nobody created -- exactly as the official Firestore and
 Storage emulators do. Running the same script under `"profile": "strict"` fails at the first

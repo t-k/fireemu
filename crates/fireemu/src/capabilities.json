@@ -182,7 +182,7 @@
       "one route table (crates/fireemu-adapter-http/src/identity_toolkit/routes.rs) drives dispatch, the App Check bypass classification and the bounded operation labels; a route cannot be dispatched without a label",
       "transient credentials are bounded: email action codes expire after an hour and phone codes after ten minutes of virtual time, pending second-factor sign-ins after an hour, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; expired entries are swept before every request and never observable; refresh tokens are not swept",
       "Admin batchCreate (importUsers) verifies a rawPassword or the emulator's fakeHash form; any other passwordHash is kept out and the account is created without a password credential, which is observably what the official emulator does with a hash it cannot compare",
-      "Admin accounts:query preserves the official emulator's unbounded, ignored-limit behavior under the firebase profile; strict applies the documented Identity Platform default and maximum page size of 500, offset ordering, count semantics and field validation as an explicit production-oriented boundary",
+      "Admin accounts:query preserves the official emulator's unbounded, ignored-limit behavior under the emulator profile; strict applies the documented Identity Platform default and maximum page size of 500, offset ordering, count semantics and field validation as an explicit production-oriented boundary",
       "conformance: auth/sign-up-and-sign-in-errors, auth/identity-toolkit-error-shapes, auth/oob-code-shapes, auth/admin-account-lifecycle, auth/client-account-flows (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "status": "implemented"
@@ -238,8 +238,8 @@
     "notes": [
       "request.auth from verified ID tokens on every Firestore surface; Bearer owner bypasses",
       "the compatibility profile decides how much verification a caller's token must survive: under firebase the unsigned mock tokens the official emulators admit are admitted too (an unknown sub, an exp nobody reads), so @firebase/rules-unit-testing works unchanged; under strict the issuer, audience, virtual-clock expiry, subject and revocation are all checked",
-      "two checks stay on in both profiles, and spec/compatibility/contract.json records them as deliberate divergences of the firebase profile: the audience must name the routed Firestore resource project or Storage bucket project, and a token that claims to be signed must verify against the session key",
-      "a valid bare Storage bucket routed through the default session binds firebase-profile mock tokens to that bucket's project namespace without changing object ownership, tenancy, App Check, fault injection or resumable-upload routing, and without registering a session"
+      "two checks stay on in both profiles, and spec/compatibility/contract.json records them as deliberate divergences of the emulator profile: the audience must name the routed Firestore resource project or Storage bucket project, and a token that claims to be signed must verify against the session key",
+      "a valid bare Storage bucket routed through the default session binds emulator-profile mock tokens to that bucket's project namespace without changing object ownership, tenancy, App Check, fault injection or resumable-upload routing, and without registering a session"
     ],
     "status": "implemented"
   },
@@ -390,11 +390,11 @@
   },
   "FS-GW-1": {
     "notes": [
-      "firestore.indexValidationPolicy = emulator serves queries whose composite index is not configured (FS_EMULATOR_INDEX_ASSUMED warning), like the Firebase Emulator Suite; firebase / conservative keep rejecting them with FAILED_PRECONDITION",
-      "the compatibility profile sets that policy: strict (the default) selects conservative, and firebase selects emulator, so the gateway admits what the pinned official emulator admits; an explicit firestore.indexValidationPolicy wins over both",
-      "firestore.enforceLimits follows the profile the same way: under strict a Standard query limit violation refuses the query with INVALID_ARGUMENT, under firebase it is reported as an FS_LIMIT_OBSERVED:<limit id> warning and the query runs",
+      "under the emulator profile, queries whose composite index is not configured are served with an FS_EMULATOR_INDEX_ASSUMED warning, like the Firebase Emulator Suite; under strict (the default) they are refused with FAILED_PRECONDITION and the firestore.indexes.json fragment, and the index merges production performs (equality filters served by several composite indexes that share the order suffix, verified against a real project on 2026-09-08) are accepted",
+      "the index policy has no configuration key of its own: it follows the profile",
+      "firestore.enforceLimits follows the profile with an explicit override: under strict a Standard query limit violation refuses the query with INVALID_ARGUMENT, under emulator it is reported as an FS_LIMIT_OBSERVED:<limit id> warning and the query runs",
       "conformance: firestore/missing-composite-index (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
-      "the query limits the pinned official emulator refuses as well -- more than 30 DNF disjunctions ('IN' over 30 values) and a second array-contains clause (FAILED_PRECONDITION) -- stay refused under the firebase profile (fireemu_adapter_grpc::gateway::OFFICIAL_EMULATOR_REFUSES)"
+      "the query limits the pinned official emulator refuses as well -- more than 30 DNF disjunctions ('IN' over 30 values) and a second array-contains clause (FAILED_PRECONDITION) -- stay refused under the emulator profile (fireemu_adapter_grpc::gateway::OFFICIAL_EMULATOR_REFUSES)"
     ],
     "precision": "conservative",
     "status": "implemented"
@@ -426,7 +426,7 @@
     "status": "partial",
     "notes": [
       "this list is derived from the runtime, not maintained beside it: fireemu_core_firestore::limits names every enforced limit, tests/enforced_limits.rs fails when it and the catalogs' implemented sets differ in either direction, and the daemon test the_limit_metadata_agrees_with_the_enforcement holds this entry and /v1/limits to the same set",
-      "the Standard document and transaction limits are refused under both profiles; the transforms-per-document budget and the query limits are production-only refusals that the firebase profile observes as warnings instead (LimitScope / firestore.enforceLimits), except the two query limits the official emulator refuses as well (more than 30 disjunctions, a second array-contains), which stay refused under both"
+      "the Standard document and transaction limits are refused under both profiles; the transforms-per-document budget and the query limits are production-only refusals that the emulator profile observes as warnings instead (LimitScope / firestore.enforceLimits), except the two query limits the official emulator refuses as well (more than 30 disjunctions, a second array-contains), which stay refused under both"
     ]
   },
   "FS-LSN-1": {
@@ -643,7 +643,7 @@
     "notes": [
       "an upload over an existing object evaluates the update method, as production evaluates it; the official emulator evaluates every upload as create, and the difference is pinned in conformance/storage-matrix.json",
       "resource.cacheControl and resource.contentLanguage are production rules fields fireemu keeps; the official emulator's rules resource omits them, so a rule reading them raises there (pinned in conformance/storage-matrix.json)",
-      "under the firebase profile a bearer value that does not decode as a JWT is an anonymous caller, as the official emulator's jwt.decode treats it; a decoded token still has to name the project's audience and verify its signature (the rules.idTokenVerification divergence of the compatibility contract)",
+      "under the emulator profile a bearer value that does not decode as a JWT is an anonymous caller, as the official emulator's jwt.decode treats it; a decoded token still has to name the project's audience and verify its signature (the rules.idTokenVerification divergence of the compatibility contract)",
       "conformance: storage/client-protocol-and-rules (conformance/README.md) and the rules-request-model program of the storage probe (conformance/storage-matrix.json); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "status": "implemented"
@@ -835,7 +835,7 @@
   "FN-ENV-1": {
     "status": "implemented",
     "implemented": [
-      "under the firebase profile, the runner inherits ordinary SCREAMING_SNAKE variables from the daemon process before dotenv, system and emulator overrides, matching wrappers such as dotenv -- firebase emulators:exec while emulator-owned names and ambient Google credentials stay isolated; the strict profile keeps the entire parent environment isolated",
+      "under the emulator profile, the runner inherits ordinary SCREAMING_SNAKE variables from the daemon process before dotenv, system and emulator overrides, matching wrappers such as dotenv -- firebase emulators:exec while emulator-owned names and ambient Google credentials stay isolated; the strict profile keeps the entire parent environment isolated",
       "the dotenv chain in the official order and dialect (firebase-tools lib/functions/env.js): .env, .env.<projectId>, .env.<alias>, and emulator-only .env.local, later files overriding earlier ones",
       "the official refusals, with their sentences: both a projectId and an alias file present, a line that is not an assignment, a reserved key, a key that is not SCREAMING_SNAKE, a key under a reserved prefix",
       "the official quoting: single-quoted literal, double-quoted expanding \\n \\r \\t \\v \\\\ \\' \\\", unquoted ending at the first #, and a quoted value allowed to cross lines",

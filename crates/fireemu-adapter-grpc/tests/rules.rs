@@ -77,7 +77,7 @@ fn named_databases_select_their_own_ruleset() {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -222,7 +222,7 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -1743,7 +1743,7 @@ fn profile_write(uid: &str) -> pb::CommitRequest {
 }
 
 #[tokio::test]
-async fn the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admits() {
+async fn the_emulator_profile_admits_the_mock_tokens_the_official_emulator_admits() {
     // Measured against the pinned suite: the official Firestore emulator serves this write,
     // because it never checks the subject against the Auth emulator and never reads `exp`.
     // Nobody creates `alice` here, and the clock is far past the token's 1970 expiry.
@@ -1768,7 +1768,7 @@ async fn the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admit
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn the_firebase_profile_binds_unknown_mock_tokens_to_the_requested_project() {
+async fn the_emulator_profile_binds_unknown_mock_tokens_to_the_requested_project() {
     let worker = "demo-app-w0";
     let worker_db = format!("projects/{worker}/databases/(default)");
     let worker_docs = format!("{worker_db}/documents");
@@ -1971,10 +1971,10 @@ async fn the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify() 
 }
 
 #[tokio::test]
-async fn the_firebase_profile_keeps_the_project_binding_and_the_signature_it_can_check() {
+async fn the_emulator_profile_keeps_the_project_binding_and_the_signature_it_can_check() {
     let mut h = start_with(TokenAcceptance::EmulatorMock).await;
     // The official emulator admits a token minted for another project; fireemu does not, and
-    // the contract records that as a deliberate divergence of the firebase profile: a token
+    // the contract records that as a deliberate divergence of the emulator profile: a token
     // must never cross a session or a project boundary.
     let err = h
         .client

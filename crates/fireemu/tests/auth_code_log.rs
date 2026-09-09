@@ -64,7 +64,7 @@ impl Daemon {
         let config = dir.join("fireemu.json");
         std::fs::write(
             &config,
-            json!({"schemaVersion": 1, "profile": "firebase", "auth": auth}).to_string(),
+            json!({"schemaVersion": 1, "profile": "emulator", "auth": auth}).to_string(),
         )
         .unwrap();
         let hub_port = free_port();

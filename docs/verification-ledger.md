@@ -47,7 +47,7 @@ An artifact that is decided but not written yet is marked with the `pending:` pr
 the intended name visible:
 
 ```json
-"kani": "pending:conservative_index_never_false_accepts"
+"kani": "pending:production_index_never_false_accepts"
 ```
 
 A pending artifact:

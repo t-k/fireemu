@@ -1,10 +1,9 @@
 {
   "schemaVersion": 1,
-  "profile": "firebase",
+  "profile": "emulator",
   "firestore": {
     "edition": "standard",
     "apiMode": "native",
-    "indexValidationPolicy": "firebase",
     "rules": "rules-probe.rules"
   },
   "daemon": { "clockStart": "2026-01-02T03:04:05Z" }

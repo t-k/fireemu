@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "profile": "firebase",
+  "profile": "emulator",
   "daemon": {
     "clockStart": "2026-01-02T03:04:05Z"
   }

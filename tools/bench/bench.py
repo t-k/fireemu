@@ -390,7 +390,7 @@ def metadata(args,c):
     data={'schemaVersion':1,'createdAt':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
           'commit':git('rev-parse','HEAD'),'dirty_tracked':bool(git('status','--porcelain','--untracked-files=no')),
           'tier':args.tier,'config':c,'profile':args.profile,'startup_only':args.startup_only,
-          'excluded_by_plan':([] if args.profile=='firebase' else [
+          'excluded_by_plan':([] if args.profile=='emulator' else [
               {'cases':['rules-allow','rules-deny'], 'reason':'strict requires verified tokens; these cases use EmulatorMock and are not comparable without an Auth fixture'}]),
           'supervisor':args.supervisor,'cache_state':'assets-preinstalled; process-cold, OS-cache-uncontrolled',
           'node':capture([shutil.which('node'),'--version']), 'java':capture(['java','-version']),
@@ -416,7 +416,7 @@ def main():
     p.add_argument('--repo',default='.');p.add_argument('--fireemu',required=True)
     p.add_argument('--sdk-root',default='conformance');p.add_argument('--firebase-cli')
     p.add_argument('--tier',choices=['smoke','standard','extended'],default='standard')
-    p.add_argument('--profile',choices=['firebase','strict'],default='firebase')
+    p.add_argument('--profile',choices=['emulator','strict'],default='emulator')
     p.add_argument('--out',default='.bench-output');p.add_argument('--supervisor',choices=['systemd','process'],default='systemd')
     p.add_argument('--sample-ms',type=int,default=250);p.add_argument('--start-timeout',type=int,default=180)
     p.add_argument('--recovery-seconds',type=int,default=15);p.add_argument('--startup-only',action='store_true')

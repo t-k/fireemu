@@ -73,7 +73,7 @@ pub const ENFORCED_LIMIT_IDS: &[&str] = &[
 
 /// Every Standard query limit `Query::check_standard_limits` evaluates
 /// (`firestore-standard-query-2026-08-25`). The strict profile refuses a violation, the
-/// firebase profile observes it as an `FS_LIMIT_OBSERVED` warning -- except the limits the
+/// emulator profile observes it as an `FS_LIMIT_OBSERVED` warning -- except the limits the
 /// official emulator refuses as well, which the gateway refuses under both
 /// (`fireemu_adapter_grpc::gateway::OFFICIAL_EMULATOR_REFUSES`).
 pub const ENFORCED_QUERY_LIMIT_IDS: &[&str] = &[

@@ -2381,7 +2381,7 @@ mod tests {
             ctx: PlanningContext {
                 edition: FirestoreEdition::Standard,
                 api_mode: FirestoreApiMode::Native,
-                policy: IndexValidationPolicy::Conservative,
+                policy: IndexValidationPolicy::Production,
             },
             indexes: IndexSet::default(),
         };

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "profile": "firebase",
+  "profile": "emulator",
   "bind": "0.0.0.0",
   "limits": {
     "catalog": "firestore-standard-2026-08-25",

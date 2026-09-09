@@ -33,7 +33,7 @@ async fn firestore_root_is_ready_without_capturing_rest_or_grpc() {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };

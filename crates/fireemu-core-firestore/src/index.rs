@@ -1,4 +1,4 @@
-//! Index definitions and the conservative index validator (spec 8.6, 8.7, 8.8).
+//! Index definitions and the production-rule index validator (spec 8.6, 8.7, 8.8).
 //!
 //! Soundness rule (`INV-INDEX-001`): a `UseIndex` decision always names a concrete supporting
 //! index, either an explicit composite index or the automatic single-field index. Anything the
@@ -206,10 +206,10 @@ impl IndexSet {
 /// Index validation policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexValidationPolicy {
-    /// Production-compatible rules verified by conformance.
-    Firebase,
-    /// Sound: never accepts a query without a proven supporting index.
-    Conservative,
+    /// Production Firestore's rules, verified against a real project by conformance: a query
+    /// needs a configured composite index, the automatic single-field index, or a merge of
+    /// configured indexes production performs itself. Nothing is assumed.
+    Production,
     /// Firebase Emulator Suite parity: every composite index a query needs is assumed to
     /// exist (`AssumedIndex`), so a project without `firestore.indexes.json` runs the same
     /// queries it runs against the Emulator. Structural validation and the Standard query
@@ -247,7 +247,7 @@ pub enum IndexDecision {
         /// Supporting index.
         index: IndexDefinition,
     },
-    /// `IndexValidationPolicy::Firebase`: no single index serves the query, but production
+    /// `IndexValidationPolicy::Production`: no single index serves the query, but production
     /// merges these indexes (scalar equality filters, optionally ordered): each member serves
     /// some of the equality fields followed by the same order suffix.
     MergeIndexes {
@@ -762,7 +762,7 @@ fn decide_with_requirements(
             .find(|i| composite_serves(i, &req, collection, group))
         {
             chosen.get_or_insert(i.clone());
-        } else if let Some(indexes) = (ctx.policy == IndexValidationPolicy::Firebase)
+        } else if let Some(indexes) = (ctx.policy == IndexValidationPolicy::Production)
             .then(|| merged_indexes_for(&req, indexes, collection, group))
             .flatten()
         {

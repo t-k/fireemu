@@ -88,7 +88,7 @@ class ReportingTests(unittest.TestCase):
         dump(p/'run-status.json',{'failures':int(failed),'asset_hashes_unchanged':True})
         for name in ['official','fireemu']:
             q=p/f'block-00-{name}';q.mkdir()
-            dump(q/'trial.json',dict(block=0,engine=name,discard=False,profile='firebase',ok=not(failed and name=='fireemu'),
+            dump(q/'trial.json',dict(block=0,engine=name,discard=False,profile='emulator',ok=not(failed and name=='fireemu'),
                  usable_ready_ms=10 if name=='official' else 5,cases=[],phases=[],pre_stop={}))
             (q/'samples.jsonl').write_text('')
     def test_valid_pair(self):

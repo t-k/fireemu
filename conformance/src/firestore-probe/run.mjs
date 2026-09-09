@@ -547,7 +547,7 @@ async function recordProduction() {
   const fireemuEvidence = await collectEvidence({
     side: "fireemu",
     mode: "live",
-    profile: "firebase",
+    profile: "emulator",
     configPath: join(CONFORMANCE_DIR, "firestore-probe.fireemu.json"),
     rulesPath: join(CONFORMANCE_DIR, "firestore-probe.rules"),
     corpusPath: inPath,

@@ -11,16 +11,16 @@ static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 #[derive(Clone, Copy)]
 enum Profile {
     Strict,
-    Firebase,
+    Emulator,
 }
 
 impl Profile {
     fn parse(value: &str) -> Result<Self, CliError> {
         match value {
             "strict" => Ok(Self::Strict),
-            "firebase" => Ok(Self::Firebase),
+            "emulator" => Ok(Self::Emulator),
             _ => Err(CliError::usage(format!(
-                "--profile {value:?} is not one of strict, firebase"
+                "--profile {value:?} is not one of strict, emulator"
             ))),
         }
     }
@@ -28,7 +28,7 @@ impl Profile {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Strict => "strict",
-            Self::Firebase => "firebase",
+            Self::Emulator => "emulator",
         }
     }
 }
@@ -182,7 +182,7 @@ fn complete_options(
     if options.profile.is_none() {
         writeln!(
             output,
-            "Profiles:\n  strict (recommended): additional validation and production limit checks.\n  firebase: reproduces the pinned official emulator behavior, including its limitations."
+            "Profiles:\n  strict (recommended): behaves like production Firebase, including index and limit checks.\n  emulator: reproduces the pinned official emulator behavior, including its limitations."
         )
         .map_err(|error| output_error(&error))?;
         loop {
@@ -192,11 +192,11 @@ fn complete_options(
                     options.profile = Some(Profile::Strict);
                     break;
                 }
-                "firebase" => {
-                    options.profile = Some(Profile::Firebase);
+                "emulator" => {
+                    options.profile = Some(Profile::Emulator);
                     break;
                 }
-                _ => writeln!(output, "Enter strict or firebase.")
+                _ => writeln!(output, "Enter strict or emulator.")
                     .map_err(|error| output_error(&error))?,
             }
         }

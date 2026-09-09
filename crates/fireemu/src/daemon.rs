@@ -241,10 +241,10 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         operation_gate: Arc::new(Mutex::new(())),
         control_token: Some(control_token.clone()),
         registry: Some(registry.clone()),
-        allow_routed_projects: cfg.profile == crate::config::CompatibilityProfile::Firebase,
-        stateless_refresh_tokens: cfg.profile == crate::config::CompatibilityProfile::Firebase,
+        allow_routed_projects: cfg.profile == crate::config::CompatibilityProfile::Emulator,
+        stateless_refresh_tokens: cfg.profile == crate::config::CompatibilityProfile::Emulator,
         query_limits: match cfg.profile {
-            crate::config::CompatibilityProfile::Firebase => {
+            crate::config::CompatibilityProfile::Emulator => {
                 fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded
             }
             crate::config::CompatibilityProfile::Strict => {
@@ -252,7 +252,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             }
         },
         fake_custom_token_expiry: match cfg.profile {
-            crate::config::CompatibilityProfile::Firebase => {
+            crate::config::CompatibilityProfile::Emulator => {
                 fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore
             }
             crate::config::CompatibilityProfile::Strict => {

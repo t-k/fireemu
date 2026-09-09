@@ -2661,7 +2661,7 @@ fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
     assert_eq!(
         upload_as(&firebase, "owned/alice/x.txt", &bearer),
         200,
-        "the firebase profile builds request.auth from the mock token, as the official emulator does"
+        "the emulator profile builds request.auth from the mock token, as the official emulator does"
     );
     assert_eq!(
         upload_as(&firebase, "owned/bob/x.txt", &bearer),

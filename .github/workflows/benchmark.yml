@@ -114,7 +114,7 @@ jobs:
       - name: Paired measurements, sequential on this single runner
         env:
           TIER: ${{ inputs.tier || 'standard' }}
-          PROFILE: ${{ inputs.profile || 'firebase' }}
+          PROFILE: ${{ inputs.profile || 'emulator' }}
           STARTUP_ONLY: ${{ inputs.startup_only || 'false' }}
         run: |
           extra=()

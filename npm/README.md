@@ -33,9 +33,9 @@ An install that resolved from a cache or a private registry is a complete, offli
 
 ## Initialize
 
-`npx fireemu init` creates `fireemu.json` with the recommended `strict` profile. In a terminal, its wizard explains the extra validation supplied by `strict`, the pinned official behavior selected by `firebase`, and how a referenced Firebase project configuration stays live. In CI or with redirected input it uses the strict defaults without prompting; use `--interactive` to force the wizard or `--yes`/`--no-interactive` to suppress it.
+`npx fireemu init` creates `fireemu.json` with the recommended `strict` profile. In a terminal, its wizard explains the production behavior supplied by `strict`, the pinned official emulator behavior selected by `emulator`, and how a referenced Firebase project configuration stays live. In CI or with redirected input it uses the strict defaults without prompting; use `--interactive` to force the wizard or `--yes`/`--no-interactive` to suppress it.
 
-If the project already has `firebase.json`, init records it as a live `firebaseJson` reference so rules, indexes, Functions codebases and emulator ports are loaded again on every start. `--profile firebase` and `--firebase-json <file>` choose alternatives explicitly. Existing `fireemu.json` files are preserved unless `--force` is supplied, and a symbolic link is never overwritten.
+If the project already has `firebase.json`, init records it as a live `firebaseJson` reference so rules, indexes, Functions codebases and emulator ports are loaded again on every start. `--profile emulator` and `--firebase-json <file>` choose alternatives explicitly. Existing `fireemu.json` files are preserved unless `--force` is supplied, and a symbolic link is never overwritten.
 
 ```sh
 npx fireemu init --yes

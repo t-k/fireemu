@@ -675,14 +675,14 @@ pub struct TransactionBookkeepingStats {
 ///
 /// Every limit the pinned official Firestore emulator refuses is refused under either
 /// scope. The difference is the limits only production enforces: the `strict` profile
-/// refuses them too, the `firebase` profile admits the request the way the official
+/// refuses them too, the `emulator` profile admits the request the way the official
 /// emulator does, so a suite written against the official emulator sees the same answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LimitScope {
     /// Every enforced limit, production's set (the `strict` profile).
     #[default]
     Production,
-    /// Only the limits the official emulator refuses too (the `firebase` profile).
+    /// Only the limits the official emulator refuses too (the `emulator` profile).
     OfficialEmulator,
 }
 

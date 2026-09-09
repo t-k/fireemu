@@ -1196,7 +1196,7 @@ mod tests {
             ctx: PlanningContext {
                 edition: FirestoreEdition::Standard,
                 api_mode: FirestoreApiMode::Native,
-                policy: fireemu_core_firestore::index::IndexValidationPolicy::Conservative,
+                policy: fireemu_core_firestore::index::IndexValidationPolicy::Production,
             },
             indexes: IndexSet::default(),
         }
@@ -1236,7 +1236,7 @@ mod tests {
             ctx: PlanningContext {
                 edition: FirestoreEdition::Standard,
                 api_mode: FirestoreApiMode::Native,
-                policy: fireemu_core_firestore::index::IndexValidationPolicy::Conservative,
+                policy: fireemu_core_firestore::index::IndexValidationPolicy::Production,
             },
             indexes,
         };
@@ -1247,7 +1247,7 @@ mod tests {
             ctx: PlanningContext {
                 edition: FirestoreEdition::Standard,
                 api_mode: FirestoreApiMode::Native,
-                policy: fireemu_core_firestore::index::IndexValidationPolicy::Conservative,
+                policy: fireemu_core_firestore::index::IndexValidationPolicy::Production,
             },
             indexes: IndexSet::default(),
         };
@@ -1315,7 +1315,7 @@ mod tests {
             ctx: PlanningContext {
                 edition: FirestoreEdition::Standard,
                 api_mode: FirestoreApiMode::Native,
-                policy: fireemu_core_firestore::index::IndexValidationPolicy::Conservative,
+                policy: fireemu_core_firestore::index::IndexValidationPolicy::Production,
             },
             indexes: IndexSet::default(),
         };

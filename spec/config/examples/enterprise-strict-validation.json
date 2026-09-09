@@ -24,7 +24,6 @@
   "firestore": {
     "edition": "enterprise",
     "apiMode": "native",
-    "indexValidationPolicy": "conservative",
     "indexFile": "firestore.indexes.json",
     "textIndexDefinitionFile": "firestore.text-indexes.json",
     "enforceLimits": true,

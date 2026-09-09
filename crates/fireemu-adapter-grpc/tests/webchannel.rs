@@ -44,7 +44,7 @@ fn hub_and_local(rules: Option<&str>, acceptance: TokenAcceptance) -> (Hub, Arc<
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
     };
@@ -1132,7 +1132,7 @@ fn indexed_hub() -> Hub {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy: IndexValidationPolicy::Production,
         },
         indexes,
     };

@@ -3,7 +3,7 @@
 //!
 //! The scenario the compatibility contract asks for is one official limitation run under both
 //! profiles: the pinned official Firestore emulator does not check composite indexes at all,
-//! so a query whose index is not configured is served there. The `firebase` profile has to
+//! so a query whose index is not configured is served there. The `emulator` profile has to
 //! serve it too -- that profile may add no rejection the official emulator does not make --
 //! and only `strict` may refuse it, with the `firestore.indexes.json` fragment production
 //! would need.
@@ -176,19 +176,19 @@ impl Drop for Daemon {
 }
 
 #[test]
-fn the_same_official_limitation_is_served_under_firebase_and_refused_under_strict() {
-    let firebase = Daemon::start("firebase");
-    let (status, body) = firebase.unindexed_query();
+fn the_same_official_limitation_is_served_under_emulator_and_refused_under_strict() {
+    let emulator = Daemon::start("emulator");
+    let (status, body) = emulator.unindexed_query();
     assert_eq!(
         status, 200,
-        "the pinned official Firestore emulator serves this query, so the firebase profile must: {body}"
+        "the pinned official Firestore emulator serves this query, so the emulator profile must: {body}"
     );
     assert!(
-        firebase.banner().contains("profile: firebase"),
+        emulator.banner().contains("profile: emulator"),
         "the banner names the profile the run is under:\n{}",
-        firebase.banner()
+        emulator.banner()
     );
-    firebase.stop();
+    emulator.stop();
 
     let strict = Daemon::start("strict");
     let (status, body) = strict.unindexed_query();
@@ -209,7 +209,7 @@ fn the_same_official_limitation_is_served_under_firebase_and_refused_under_stric
 #[test]
 fn the_capabilities_command_reports_the_profile_it_would_run_under() {
     let dir = scratch("capabilities");
-    for profile in ["firebase", "strict"] {
+    for profile in ["emulator", "strict"] {
         let config = dir.join(format!("{profile}.json"));
         std::fs::write(
             &config,

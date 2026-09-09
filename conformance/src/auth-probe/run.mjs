@@ -317,7 +317,7 @@ async function recordProduction() {
   const fireemuEvidence = await collectEvidence({
     side: "fireemu",
     mode: "live",
-    profile: "firebase",
+    profile: "emulator",
     configPath: join(CONFORMANCE_DIR, "auth-probe.fireemu.production.json"),
     corpusPath: inPath,
     database: { target: "fireemu local Auth" },

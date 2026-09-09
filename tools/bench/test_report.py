@@ -15,7 +15,7 @@ def fixture(root, pairs=3):
     def dump(path, value):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value) + '\n', encoding='utf-8')
-    dump(root/'manifest.json', dict(commit='a'*40, profile='firebase', tier='example',
+    dump(root/'manifest.json', dict(commit='a'*40, profile='emulator', tier='example',
         supervisor='systemd', synthetic=True, config=dict(pairs=pairs)))
     dump(root/'run-status.json', dict(failures=0, asset_hashes_unchanged=True))
     for block in range(pairs):
@@ -30,7 +30,7 @@ def fixture(root, pairs=3):
                 latency_ms=[1.0]*1000)
             location=root/f'block-{block:02}-{engine}'
             dump(location/'trial.json', dict(block=block, engine=engine, discard=False,
-                profile='firebase', ok=True, usable_ready_ms=(2000 if official else 200)*factor,
+                profile='emulator', ok=True, usable_ready_ms=(2000 if official else 200)*factor,
                 tcp_ready_ms=(1800 if official else 180)*factor, stop_ms=(100 if official else 50)*factor,
                 pre_stop=dict(cgroup_memory_peak_bytes=(512 if official else 64)*1024**2*factor),
                 phases=[dict(name='seed-and-verify', data=dict(dataset_sha256='same-fixture'))],

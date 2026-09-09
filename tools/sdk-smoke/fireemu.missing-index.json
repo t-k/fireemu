@@ -3,8 +3,7 @@
   "profile": "strict",
   "firestore": {
     "edition": "standard",
-    "apiMode": "native",
-    "indexValidationPolicy": "conservative"
+    "apiMode": "native"
   },
   "daemon": { "clockStart": "2026-08-29T12:01:00Z" }
 }

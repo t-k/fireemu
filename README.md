@@ -177,6 +177,17 @@ The two profiles answer different questions:
 
 `npx fireemu init` recommends `strict`. Use both profiles in CI when both questions matter.
 
+## Performance
+
+fireemu is measured against the official Firestore emulator by a paired benchmark ([benchmark.yml](.github/workflows/benchmark.yml), harness in [`tools/bench/`](tools/bench/)). Both emulators run sequentially on the same GitHub Actions Linux runner, under the `firebase` profile, driven by the same SDK workloads with result validation. The figures below are from one `standard` run (5 measured pairs, commit f3b942c) and are paired ratios with 95% confidence intervals; absolute values depend on the runner.
+
+| Area | Official | fireemu | Ratio |
+| --- | ---: | ---: | ---: |
+| Startup until the SDK can use Firestore | 3,043 ms | 140 ms | 21.6x faster [21.4, 21.8] |
+| Idle memory, empty database (PSS) | 390 MiB | 11 MiB | 34x smaller |
+| Peak memory over a trial (cgroup) | 849 MiB | 79 MiB | 10.7x smaller [10.2, 11.1] |
+| Firestore throughput, 22 workloads | -- | -- | 1.1x to 5.2x higher |
+
 ## Project status
 
 fireemu is under active development and has not reached a stable compatibility promise. Configuration, unsupported behavior, and edge-case semantics may change between releases.

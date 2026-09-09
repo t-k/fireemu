@@ -89,7 +89,7 @@ The report records the commit (with a `-dirty` suffix when `ui/` has uncommitted
 
 ## Paired benchmark against the official emulator
 
-`.github/workflows/benchmark.yml` measures fireemu against the official Firestore emulator on one Linux runner, sequentially, with startup-to-SDK-usable time, cgroup memory (PSS/RSS/USS), CPU and per-workload throughput recorded as paired ratios with confidence intervals. It runs weekly on `main` and on demand from the Actions tab; it is deliberately not part of the pull-request gate. Start with the `smoke` tier, which checks the wiring rather than statistical significance, then `standard` or `extended`.
+`.github/workflows/benchmark.yml` measures fireemu against the official Firestore emulator on one Linux runner, sequentially, with startup-to-SDK-usable time, cgroup memory (PSS/RSS/USS), CPU and per-workload throughput recorded as paired ratios with confidence intervals. It runs only on demand from the Actions tab (`workflow_dispatch`); it is deliberately not scheduled and not part of the pull-request gate. Start with the `smoke` tier, which checks the wiring rather than statistical significance, then `standard` or `extended`.
 
 The harness lives in `tools/bench/`. `bench.py` drives both emulators under `systemd-run` scopes (or plain process groups with `--supervisor process`), `client.mjs` runs the workloads through the SDKs installed under `conformance/`, and `report.py` renders `summary.md`, `summary.json` and `summary.csv` plus the Actions job summary. The report renders on failed or incomplete series too; a missing measurement invalidates a pair instead of counting as zero.
 

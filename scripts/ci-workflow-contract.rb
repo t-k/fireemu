@@ -91,11 +91,11 @@ end
   assert(heavy_trigger.keys == ["workflow_dispatch"], "#{name} must be manual-only before publication")
 end
 
-# The paired benchmark is scheduled weekly and otherwise manual: it must never join the PR gate,
+# The paired benchmark is manual-only: it must never join the PR gate,
 # must run the emulators from an immutable action set, and must build with the pinned compiler.
 benchmark = load_workflow("benchmark.yml")
 benchmark_trigger = benchmark["on"] || benchmark[true]
-assert(benchmark_trigger.keys.sort == %w[schedule workflow_dispatch], "benchmark.yml must only run on schedule or manually")
+assert(benchmark_trigger.keys == ["workflow_dispatch"], "benchmark.yml must be manual-only: no schedule, no PR trigger")
 benchmark_source = File.read(File.join(ROOT, ".github", "workflows", "benchmark.yml"))
 assert(!benchmark_source.match?(/uses:\s+[^\s]+@(v\d+|stable)\b/), "benchmark actions must be pinned to immutable commits")
 assert(benchmark.dig("concurrency", "cancel-in-progress") == false, "a benchmark series must never be cancelled in progress")

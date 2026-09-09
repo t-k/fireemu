@@ -18,8 +18,6 @@ on:
         type: boolean
         default: false
         description: 12 measured startup pairs; no data workload
-  schedule:
-    - cron: '17 18 * * 0' # Monday 03:17 JST. Weekly, not every PR.
 
 permissions:
   contents: read

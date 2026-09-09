@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { gotoApp } from "./helpers";
+import { PORTS } from "./global-setup";
 
 test.describe("Overview", () => {
   test("shows the project, services and the virtual clock", async ({ page }) => {
@@ -7,7 +8,7 @@ test.describe("Overview", () => {
     await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
     await expect(page.getByText("demo-app").first()).toBeVisible();
     await expect(page.getByTestId("overview-clock")).toHaveText(/2026-08-29T12:0/);
-    await expect(page.getByText("127.0.0.1:18080").first()).toBeVisible();
+    await expect(page.getByText(`127.0.0.1:${PORTS.firestore}`).first()).toBeVisible();
   });
 
   test("navigates between the panels", async ({ page }) => {

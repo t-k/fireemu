@@ -8,6 +8,17 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-09
+
+### Changed
+
+- The compatibility profiles are now `strict` (the default) and `emulator`; `firebase` was renamed to `emulator` because it reproduces the pinned Firebase Emulator Suite, not Firebase itself. A `fireemu.json` or `fireemu init --profile` that still says `firebase` is refused with a message naming the new spelling.
+- `strict` follows production Firestore's index rules instead of a stricter local approximation: the index merges production performs for equality filters (verified against a real project on 2026-09-08) are accepted, and a query is refused only when production would refuse it.
+
+### Removed
+
+- `firestore.indexValidationPolicy` and its `conservative` value. The index policy has no configuration key any more and follows the profile: `strict` applies production's rules, `emulator` assumes every index the official emulator would. A configuration that still sets the key is refused with a message saying so. `firestore.enforceLimits` remains as an explicit override.
+
 ## [0.6.0] - 2026-09-09
 
 ### Changed
@@ -114,7 +125,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/t-k/fireemu/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/t-k/fireemu/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/t-k/fireemu/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/t-k/fireemu/compare/v0.3.0...v0.4.0

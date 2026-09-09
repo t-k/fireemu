@@ -4,23 +4,23 @@
   "target": "x86_64-unknown-linux-gnu",
   "packages": [
     {
-      "id": "path+crates/fireemu-adapter-functions/Cargo.toml#fireemu-adapter-functions@0.5.0",
+      "id": "path+crates/fireemu-adapter-functions/Cargo.toml#fireemu-adapter-functions@0.6.0",
       "name": "fireemu-adapter-functions",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-adapter-functions/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-adapter-grpc/Cargo.toml#fireemu-adapter-grpc@0.5.0",
-        "path+crates/fireemu-adapter-support/Cargo.toml#fireemu-adapter-support@0.5.0",
-        "path+crates/fireemu-core-app-check/Cargo.toml#fireemu-core-app-check@0.5.0",
-        "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.5.0",
-        "path+crates/fireemu-core-events/Cargo.toml#fireemu-core-events@0.5.0",
-        "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.5.0",
-        "path+crates/fireemu-core-functions/Cargo.toml#fireemu-core-functions@0.5.0",
-        "path+crates/fireemu-core-session/Cargo.toml#fireemu-core-session@0.5.0",
-        "path+crates/fireemu-core-storage/Cargo.toml#fireemu-core-storage@0.5.0",
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0",
+        "path+crates/fireemu-adapter-grpc/Cargo.toml#fireemu-adapter-grpc@0.6.0",
+        "path+crates/fireemu-adapter-support/Cargo.toml#fireemu-adapter-support@0.6.0",
+        "path+crates/fireemu-core-app-check/Cargo.toml#fireemu-core-app-check@0.6.0",
+        "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.6.0",
+        "path+crates/fireemu-core-events/Cargo.toml#fireemu-core-events@0.6.0",
+        "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.6.0",
+        "path+crates/fireemu-core-functions/Cargo.toml#fireemu-core-functions@0.6.0",
+        "path+crates/fireemu-core-session/Cargo.toml#fireemu-core-session@0.6.0",
+        "path+crates/fireemu-core-storage/Cargo.toml#fireemu-core-storage@0.6.0",
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
         "registry+https://github.com/rust-lang/crates.io-index#chrono-tz@0.10.4",
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.45",
@@ -34,22 +34,22 @@
       ]
     },
     {
-      "id": "path+crates/fireemu-adapter-grpc/Cargo.toml#fireemu-adapter-grpc@0.5.0",
+      "id": "path+crates/fireemu-adapter-grpc/Cargo.toml#fireemu-adapter-grpc@0.6.0",
       "name": "fireemu-adapter-grpc",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-adapter-grpc/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-adapter-support/Cargo.toml#fireemu-adapter-support@0.5.0",
-        "path+crates/fireemu-core-app-check/Cargo.toml#fireemu-core-app-check@0.5.0",
-        "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.5.0",
-        "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.5.0",
-        "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.5.0",
-        "path+crates/fireemu-core-rules/Cargo.toml#fireemu-core-rules@0.5.0",
-        "path+crates/fireemu-core-session/Cargo.toml#fireemu-core-session@0.5.0",
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0",
-        "path+crates/fireemu-proto-firestore/Cargo.toml#fireemu-proto-firestore@0.5.0",
+        "path+crates/fireemu-adapter-support/Cargo.toml#fireemu-adapter-support@0.6.0",
+        "path+crates/fireemu-core-app-check/Cargo.toml#fireemu-core-app-check@0.6.0",
+        "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.6.0",
+        "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.6.0",
+        "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.6.0",
+        "path+crates/fireemu-core-rules/Cargo.toml#fireemu-core-rules@0.6.0",
+        "path+crates/fireemu-core-session/Cargo.toml#fireemu-core-session@0.6.0",
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0",
+        "path+crates/fireemu-proto-firestore/Cargo.toml#fireemu-proto-firestore@0.6.0",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
         "registry+https://github.com/rust-lang/crates.io-index#hyper-util@0.1.20",
@@ -62,9 +62,9 @@
       ]
     },
     {
-      "id": "path+crates/fireemu-adapter-support/Cargo.toml#fireemu-adapter-support@0.5.0",
+      "id": "path+crates/fireemu-adapter-support/Cargo.toml#fireemu-adapter-support@0.6.0",
       "name": "fireemu-adapter-support",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-adapter-support/Cargo.toml",
       "features": [],
@@ -77,133 +77,133 @@
       ]
     },
     {
-      "id": "path+crates/fireemu-core-app-check/Cargo.toml#fireemu-core-app-check@0.5.0",
+      "id": "path+crates/fireemu-core-app-check/Cargo.toml#fireemu-core-app-check@0.6.0",
       "name": "fireemu-core-app-check",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-app-check/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.5.0",
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.6.0",
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.5.0",
+      "id": "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.6.0",
       "name": "fireemu-core-auth",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-auth/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.5.0",
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.6.0",
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-events/Cargo.toml#fireemu-core-events@0.5.0",
+      "id": "path+crates/fireemu-core-events/Cargo.toml#fireemu-core-events@0.6.0",
       "name": "fireemu-core-events",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-events/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-export/Cargo.toml#fireemu-core-export@0.5.0",
+      "id": "path+crates/fireemu-core-export/Cargo.toml#fireemu-core-export@0.6.0",
       "name": "fireemu-core-export",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-export/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.5.0",
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.6.0",
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.5.0",
+      "id": "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.6.0",
       "name": "fireemu-core-firestore",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-firestore/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.5.0",
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.6.0",
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-functions/Cargo.toml#fireemu-core-functions@0.5.0",
+      "id": "path+crates/fireemu-core-functions/Cargo.toml#fireemu-core-functions@0.6.0",
       "name": "fireemu-core-functions",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-functions/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.5.0",
+      "id": "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.6.0",
       "name": "fireemu-core-limits",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-limits/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-rules/Cargo.toml#fireemu-core-rules@0.5.0",
+      "id": "path+crates/fireemu-core-rules/Cargo.toml#fireemu-core-rules@0.6.0",
       "name": "fireemu-core-rules",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-rules/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.5.0",
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.6.0",
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-session/Cargo.toml#fireemu-core-session@0.5.0",
+      "id": "path+crates/fireemu-core-session/Cargo.toml#fireemu-core-session@0.6.0",
       "name": "fireemu-core-session",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-session/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-storage/Cargo.toml#fireemu-core-storage@0.5.0",
+      "id": "path+crates/fireemu-core-storage/Cargo.toml#fireemu-core-storage@0.6.0",
       "name": "fireemu-core-storage",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-storage/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0"
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0"
       ]
     },
     {
-      "id": "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0",
+      "id": "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0",
       "name": "fireemu-core-types",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-core-types/Cargo.toml",
       "features": [],
       "dependencies": []
     },
     {
-      "id": "path+crates/fireemu-export-publication/Cargo.toml#fireemu-export-publication@0.5.0",
+      "id": "path+crates/fireemu-export-publication/Cargo.toml#fireemu-export-publication@0.6.0",
       "name": "fireemu-export-publication",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-export-publication/Cargo.toml",
       "features": [],
@@ -212,9 +212,9 @@
       ]
     },
     {
-      "id": "path+crates/fireemu-proto-firestore/Cargo.toml#fireemu-proto-firestore@0.5.0",
+      "id": "path+crates/fireemu-proto-firestore/Cargo.toml#fireemu-proto-firestore@0.6.0",
       "name": "fireemu-proto-firestore",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "crates/fireemu-proto-firestore/Cargo.toml",
       "features": [],
@@ -225,25 +225,25 @@
       ]
     },
     {
-      "id": "path+verification/quint/Cargo.toml#fireemu-verification-quint@0.5.0",
+      "id": "path+verification/quint/Cargo.toml#fireemu-verification-quint@0.6.0",
       "name": "fireemu-verification-quint",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": null,
       "manifest": "verification/quint/Cargo.toml",
       "features": [],
       "dependencies": [
-        "path+crates/fireemu-adapter-functions/Cargo.toml#fireemu-adapter-functions@0.5.0",
-        "path+crates/fireemu-adapter-grpc/Cargo.toml#fireemu-adapter-grpc@0.5.0",
-        "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.5.0",
-        "path+crates/fireemu-core-events/Cargo.toml#fireemu-core-events@0.5.0",
-        "path+crates/fireemu-core-export/Cargo.toml#fireemu-core-export@0.5.0",
-        "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.5.0",
-        "path+crates/fireemu-core-rules/Cargo.toml#fireemu-core-rules@0.5.0",
-        "path+crates/fireemu-core-session/Cargo.toml#fireemu-core-session@0.5.0",
-        "path+crates/fireemu-core-storage/Cargo.toml#fireemu-core-storage@0.5.0",
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.5.0",
-        "path+crates/fireemu-export-publication/Cargo.toml#fireemu-export-publication@0.5.0",
-        "path+crates/fireemu-proto-firestore/Cargo.toml#fireemu-proto-firestore@0.5.0",
+        "path+crates/fireemu-adapter-functions/Cargo.toml#fireemu-adapter-functions@0.6.0",
+        "path+crates/fireemu-adapter-grpc/Cargo.toml#fireemu-adapter-grpc@0.6.0",
+        "path+crates/fireemu-core-auth/Cargo.toml#fireemu-core-auth@0.6.0",
+        "path+crates/fireemu-core-events/Cargo.toml#fireemu-core-events@0.6.0",
+        "path+crates/fireemu-core-export/Cargo.toml#fireemu-core-export@0.6.0",
+        "path+crates/fireemu-core-firestore/Cargo.toml#fireemu-core-firestore@0.6.0",
+        "path+crates/fireemu-core-rules/Cargo.toml#fireemu-core-rules@0.6.0",
+        "path+crates/fireemu-core-session/Cargo.toml#fireemu-core-session@0.6.0",
+        "path+crates/fireemu-core-storage/Cargo.toml#fireemu-core-storage@0.6.0",
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.6.0",
+        "path+crates/fireemu-export-publication/Cargo.toml#fireemu-export-publication@0.6.0",
+        "path+crates/fireemu-proto-firestore/Cargo.toml#fireemu-proto-firestore@0.6.0",
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#quint-connect@0.1.2",
         "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4",

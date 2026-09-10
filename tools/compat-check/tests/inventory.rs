@@ -101,6 +101,7 @@ fn auth_observation_link_does_not_promote_broad_labels() {
     let page = fs::read_to_string(f.0.join("docs/compatibility/authentication.md")).unwrap();
     assert!(page.contains("(auth-basic-evidence.md)"));
     assert!(page.contains("(auth-basic-v2.md)"));
+    assert!(page.contains("(auth-basic-v2-approval.md)"));
     assert!(page.contains("Not attested | Not attested | Not attested"));
 }
 

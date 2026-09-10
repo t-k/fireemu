@@ -41,3 +41,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-basic.py --check
       - name: Check Auth revision 2 expiry and redacted provenance
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-v2.py --check
+      - name: Check subject-bound Auth revision 2 human approval
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-v2-approval.py --check

@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent-authored-source-review",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-10",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "rawSha256": "c3454bcf8f4e565422657ba8d55ea0d23bb3d82a2bfbc0a3c6aaabdcfc888af8",
+      "bodySha256": "a9b8129d0d42db1aa1b7eed2121ac7dc2be6d5b53c3976502ecf6b753b09c0c9",
+      "fetchedAt": "2026-09-10T04:04:29.598062+00:00",
+      "locators": [
+        "section-create-email-password",
+        "section-update-profile",
+        "section-get-account-info",
+        "section-delete-account"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "id": "AUTH-PHOTO-SIGNUP",
+      "case": "signup",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-create-email-password",
+      "condition": "Fresh dedicated email/password signup returns same-account credentials. Signup expiry shape and 3600-second expectation are separate checks.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-INITIAL-LOOKUP",
+      "case": "initial-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "The signup token retrieves the owned account; photoUrl is initially omitted. Exact omission is a wire-shape hypothesis to compare with production, not an explicit normative guarantee.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-SET-PHOTO",
+      "case": "set-photo",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-update-profile",
+      "condition": "Set photoUrl to https://example.invalid/fireemu-profile-first.png using the original signup ID token; response reports the same UID, email and displayName marker.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-SET-PHOTO-LOOKUP",
+      "case": "set-photo-lookup",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Lookup reports the first URL and preserves localId, email, displayName, emailVerified and disabled.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-REPLACE-PHOTO",
+      "case": "replace-photo",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-update-profile",
+      "condition": "Replace photoUrl with https://example.invalid/fireemu-profile-second.png; response reports the same UID, email and displayName marker.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-REPLACE-PHOTO-LOOKUP",
+      "case": "replace-photo-lookup",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Lookup reports the second URL and preserves the selected identity fields.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-INVALID-TOKEN-UPDATE",
+      "case": "invalid-token-update",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-update-profile",
+      "condition": "Attempt photoUrl https://example.invalid/fireemu-profile-refused.png with the fixed malformed token not-a-valid-id-token. Expect HTTP400 and INVALID_ID_TOKEN; this is not expired-token enforcement or independent signature verification.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-UNCHANGED-STATE",
+      "case": "unchanged-state",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "After refusal, lookup with the original valid token preserves localId, email, displayName, emailVerified, disabled, providerUserInfo and photoUrl compared with the pre-refusal lookup. Not a full-state immutability guarantee.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-DELETE-PHOTO",
+      "case": "delete-photo",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-update-profile",
+      "condition": "Send deleteAttribute [PHOTO_URL] using the original ID token. Expect same UID, email and displayName with omitted photoUrl. Attribute clearing is documented; precise omission is an explicit wire-shape hypothesis.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-DELETED-PHOTO-LOOKUP",
+      "case": "deleted-photo-lookup",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Lookup confirms omitted photoUrl and selected identity fields unchanged; null and empty strings are distinct mismatches.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-DELETE",
+      "case": "delete",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Use the original signup ID token to delete the dedicated account; success requires HTTP200 without an error.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PHOTO-DELETED-ACCOUNT-ABSENT",
+      "case": "deleted-account-absent",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Separate exact UID and email Admin lookups find no account after deletion. This is a cleanup control, not an additional profile-update guarantee.",
+      "existingRequirement": null
+    }
+  ],
+  "limitations": [
+    "No human approval. Scope is twelve cases of photoUrl-only REST behavior with no tenant and the recorded configuration.",
+    "ReturnSecureToken is omitted on photo updates; profile-update token issuance and refresh behavior are not checked.",
+    "Source describes clearing but does not promise exact omission versus null. This corpus records an explicit omission hypothesis before production measurement.",
+    "No URL syntax validation, fetching/upload, null or empty-string writes, simultaneous set-and-clear, other profile/credential changes, provider synchronization, SDK, MFA, Rules, expiry enforcement, signature validation or public npm claim.",
+    "Raw source bytes remain in the private operator cache. Auth secrets and raw account responses are not published."
+  ]
+}

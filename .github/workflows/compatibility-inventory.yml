@@ -48,3 +48,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-session-continuity-approval.py --check
       - name: Check weak-password rejection candidate
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-rejection.py --check
+      - name: Check subject-bound weak-password rejection approval
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-rejection-approval.py --check

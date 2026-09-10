@@ -114,6 +114,7 @@ fn auth_observation_link_does_not_promote_broad_labels() {
     assert!(page.contains("(auth-session-continuity.md)"));
     assert!(page.contains("(auth-session-continuity-approval.md)"));
     assert!(page.contains("(auth-password-rejection.md)"));
+    assert!(page.contains("(auth-password-rejection-approval.md)"));
     assert!(page.contains("acquisition-time candidate status"));
     assert!(page.contains("Not attested | Not attested | Not attested"));
 }

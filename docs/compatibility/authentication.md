@@ -82,7 +82,9 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [No-password-change session continuity: scoped human approval](auth-session-continuity-approval.md). The recorded 34 redacted REST observations are verified and approved for fixed A/B and reference-exchange credentials at finite 0/10/30-second targets, including successful refresh-issued ID lookup and recorded invalid-input, deletion and termination checks. This does not establish permanent validity, actual elapsed expiry, whole token lineage, SDK, Rules, strict causality or exact revocation propagation timing.
 
-[Weak-password rejection and preserved credentials](auth-password-rejection.md). Unapproved candidate: one five-character ASCII update refusal under recorded policy, original credentials and selected state after refusal, followed by a successful strong update. This is not all password-policy boundaries, token revocation timing, SDK or Rules compatibility.
+[Weak-password rejection: scoped human approval](auth-password-rejection-approval.md). The recorded 16 redacted REST cases are verified and approved: five-character ASCII update refusal under the minimum-six policy, preserved original credentials and selected account fields, final valid change and recorded deletion/termination. This does not establish all policy boundaries, invariance of all internal state, long-term validity, revocation timing, SDK, Rules or fault-injected recovery.
+
+[Original weak-password rejection observations](auth-password-rejection.md). The acquisition-time candidate status is superseded only for the subject and 16 cases in the separate approval above. Prior observations and approvals remain unchanged.
 
 [Original no-password-change session continuity control](auth-session-continuity.md). Its acquisition-time candidate status is superseded only for the subject and 34 observations in the separate approval above. Continuity requires accepted primary and derived-token requests, not matching rejections.
 

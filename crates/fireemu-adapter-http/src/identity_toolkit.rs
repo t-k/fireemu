@@ -3684,6 +3684,20 @@ fn update(
     stateless_refresh_tokens: bool,
     privileged: bool,
 ) -> JsonResponse {
+    // Account ownership does not authorize administrative field changes. Check presence,
+    // including false/empty/null, before applying or consuming any OOB action as well.
+    if !privileged
+        && [
+            "customAttributes",
+            "emailVerified",
+            "mfa",
+            "linkProviderUserInfo",
+        ]
+        .iter()
+        .any(|field| body.get(*field).is_some())
+    {
+        return error(400, "OPERATION_NOT_ALLOWED");
+    }
     // `applyActionCode`: an email verification / change code instead of a session.
     if let Some(code) = str_field(body, "oobCode") {
         return apply_oob_code(store, code, at);

@@ -2242,6 +2242,144 @@ fn end_user_update_cannot_select_an_account_by_local_id() {
 }
 
 #[test]
+fn end_user_update_rejects_admin_fields_atomically_by_presence() {
+    for s in [state(), strict_state()] {
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({
+                "email": "field-owner@example.com", "password": "password1", "returnSecureToken": true
+            }),
+        );
+        let uid = &signed["localId"];
+        let (status, seeded) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": uid, "displayName": "original", "customAttributes": "{\"role\":\"member\"}",
+                "emailVerified": true, "mfa": {"enrollments": [{"phoneInfo": "+16505550101"}]},
+                "linkProviderUserInfo": {"providerId": "google.com", "rawId": "field-owner-google"}
+            }),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let (_, before) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        assert_eq!(
+            before["users"][0]["customAttributes"],
+            "{\"role\":\"member\"}"
+        );
+        assert_eq!(before["users"][0]["emailVerified"], true);
+        assert_eq!(
+            before["users"][0]["mfaInfo"][0]["phoneInfo"],
+            "+16505550101"
+        );
+        assert!(before["users"][0]["providerUserInfo"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| {
+                provider["providerId"] == "google.com" && provider["rawId"] == "field-owner-google"
+            }));
+        let attempts = [
+            ("customAttributes", json!("{\"role\":\"admin\"}")),
+            ("customAttributes", json!("{}")),
+            ("customAttributes", json!("")),
+            ("emailVerified", json!(true)),
+            ("emailVerified", json!(false)),
+            ("mfa", json!({"enrollments": []})),
+            ("mfa", json!({})),
+            (
+                "linkProviderUserInfo",
+                json!({"providerId": "google.com", "rawId": "attacker"}),
+            ),
+            ("linkProviderUserInfo", json!({})),
+            ("customAttributes", Value::Null),
+            ("emailVerified", Value::Null),
+            ("mfa", Value::Null),
+            ("linkProviderUserInfo", Value::Null),
+        ];
+        for (field, value) in attempts {
+            let mut request =
+                json!({"idToken": signed["idToken"], "displayName": "must-not-apply"});
+            request[field] = value;
+            let (status, rejected) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400, "{field}: {rejected}");
+            assert_eq!(
+                rejected["error"]["message"], "OPERATION_NOT_ALLOWED",
+                "{field}"
+            );
+            let (_, after) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            );
+            assert_eq!(
+                before, after,
+                "{field} rejection must preserve the entire lookup projection"
+            );
+        }
+        let (status, normal) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"], "displayName": "allowed"
+            }),
+        );
+        assert_eq!(status, 200, "{normal}");
+        assert_eq!(normal["displayName"], "allowed");
+    }
+}
+
+#[test]
+fn admin_fields_rejection_does_not_consume_an_oob_code() {
+    let s = state();
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "oob-field@example.com", "password": "password1", "returnSecureToken": true
+        }),
+    );
+    let (status, link) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({
+            "requestType": "VERIFY_EMAIL", "idToken": signed["idToken"], "returnOobLink": true
+        }),
+    );
+    assert_eq!(status, 200, "{link}");
+    for field in [
+        "customAttributes",
+        "emailVerified",
+        "mfa",
+        "linkProviderUserInfo",
+    ] {
+        let mut request = json!({"oobCode": link["oobCode"], "displayName": "must-not-apply"});
+        request[field] = Value::Null;
+        assert_eq!(post(&s, &format!("{V1}/accounts:update"), &request).0, 400);
+    }
+    let (_, before) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_eq!(before["users"][0]["emailVerified"], false);
+    let (status, applied) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": link["oobCode"]}),
+    );
+    assert_eq!(status, 200, "{applied}");
+    assert_eq!(applied["emailVerified"], true);
+}
+
+#[test]
 fn strict_password_change_distinguishes_revoked_refresh() {
     let s = strict_state();
     let (status, a) = post(

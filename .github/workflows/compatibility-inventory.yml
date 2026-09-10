@@ -25,6 +25,10 @@ jobs:
         run: cargo run --locked -p compat-check
       - name: Test the feature inventory integrity gate
         run: cargo test --locked -p compat-check
+      - name: Test current update field authorization and maximum boundary
+        run: |
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit admin_fields
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit password_maximum_update
   offline-acquisition-integrity:
     runs-on: ubuntu-latest
     steps:
@@ -38,9 +42,7 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check
       - name: Check later approved observations at their fixed historical source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/password_history.py --check
-      - name: Test current historical isolation and maximum password contracts
-        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history tools/auth-password-maximum -q
-      - name: Check maximum password boundary candidate
-        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-maximum.py --check
-      - name: Check subject-bound maximum password approval
-        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-maximum-approval.py --check
+      - name: Test current historical isolation
+        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history -q
+      - name: Check immutable maximum observations and approval at their recorded source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/maximum_history.py --check

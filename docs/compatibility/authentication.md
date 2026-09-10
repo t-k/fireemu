@@ -80,7 +80,9 @@ Contract claims: AUTH-CLAIM-MFA.
 
 - AUTH-MFA-TOTP-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
-[Auth session token revision 2 observations](auth-session-v2.md). A new artifact and subject repeat the bounded A/B experiment with two invalid-refresh controls after separating known revoked sessions from unknown input. This remains unapproved redacted evidence; prior approvals do not transfer to this artifact. [Historical integrity checks](../../tools/compat-history/README.md) preserve the original source-bound records.
+[Auth session token revision 2: scoped human approval](auth-session-v2-approval.md). The recorded 34 redacted REST observations are verified and approved for fixed A/B tokens, changed-response controls, finite 0/10/30-second targets and two invalid-refresh controls. This does not establish universal immediate revocation, exact propagation latency, whole-session lineage, SDK checkRevoked, Rules or actual elapsed expiry. Historical integrity checks are not current-runtime regression evidence.
+
+[Auth session token revision 2 observations](auth-session-v2.md). This page preserves its acquisition-time candidate status; the separate approval above supersedes that status only for the pinned subject and 34 observations. The artifact repeats the bounded A/B experiment with two invalid-refresh controls after separating known revoked sessions from unknown input. Earlier approvals do not transfer to this artifact. [Historical integrity checks](../../tools/compat-history/README.md) preserve the original source-bound records.
 
 [Auth session token diagnostic observations](auth-session-token.md). Fixed pre-change A/B ID and refresh credentials are observed at bounded offsets after password replacement, with fresh-token controls. This unapproved diagnostic distinguishes REST lookup from refresh exchange; it does not establish universal immediate revocation, SDK checkRevoked, Rules or elapsed-expiry compatibility.
 

@@ -40,3 +40,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history tools/auth-session-v2 -q
       - name: Check session revision 2 candidate observations
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-session-v2.py --check
+      - name: Check subject-bound session revision 2 human approval
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-session-v2-approval.py --check

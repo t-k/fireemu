@@ -3735,13 +3735,13 @@ fn update(
         Ok(p) => p,
         Err(r) => return r,
     };
-    // The recorded end-user password policy caps updates at 4096 characters.
-    // Keep Admin/import/reset semantics separate; Unicode counting is not oracle-verified.
+    // The eight-input production diagnostic fits a 4096 UTF-16-unit update cap.
+    // Keep Admin/import/reset and minimum-length semantics separate.
     if !privileged
         && plan
             .password
             .as_ref()
-            .is_some_and(|p| p.chars().count() > 4096)
+            .is_some_and(|p| p.encode_utf16().count() > 4096)
     {
         return error(400, "PASSWORD_DOES_NOT_MEET_REQUIREMENTS");
     }

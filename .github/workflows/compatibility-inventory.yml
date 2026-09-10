@@ -46,7 +46,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history -q
       - name: Check immutable maximum observations and approval at their recorded source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/maximum_history.py --check
-      - name: Check current Unicode boundary diagnostic
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-password-unicode -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-unicode.py --check
+      - name: Check original Unicode mismatch at its fixed historical source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/unicode_history.py --check

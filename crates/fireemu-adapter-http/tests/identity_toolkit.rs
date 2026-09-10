@@ -2117,6 +2117,94 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
 }
 
 #[test]
+fn password_maximum_update_counts_utf16_units_and_preserves_rejected_state() {
+    for (suffix, count, accepted) in [
+        ("a", 4064, true),
+        ("a", 4065, false),
+        ("é", 2032, true),
+        ("é", 2033, true),
+        ("\u{10400}", 2032, true),
+        ("\u{10400}", 2033, false),
+        ("é", 4064, true),
+        ("é", 4065, false),
+    ] {
+        let s = strict_state();
+        let email = "unicode-maximum@example.com";
+        let original = "original-password";
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({
+                "email": email, "password": original, "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200);
+        let (_, before) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        let password = format!("{}{}", "a".repeat(32), suffix.repeat(count));
+        advance(&s, 2);
+        let (status, changed) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"], "password": password,
+                "displayName": "changed", "returnSecureToken": true
+            }),
+        );
+        assert_eq!(
+            status,
+            if accepted { 200 } else { 400 },
+            "suffix={suffix:?}, count={count}"
+        );
+        let credentials = if accepted { &changed } else { &signed };
+        if !accepted {
+            assert_eq!(
+                changed["error"]["message"],
+                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+            );
+        }
+        let (status, after) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": credentials["idToken"]}),
+        );
+        assert_eq!(status, 200);
+        if accepted {
+            assert_eq!(after["users"][0]["displayName"], "changed");
+        } else {
+            assert_eq!(after, before);
+        }
+        let (status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({
+                "grant_type": "refresh_token", "refresh_token": credentials["refreshToken"]
+            }),
+        );
+        assert_eq!(status, 200);
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": refreshed["id_token"]}),
+        );
+        assert_eq!(status, 200);
+        assert_eq!(looked["users"][0]["localId"], signed["localId"]);
+        let (status, logged) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({
+                "email": email, "password": if accepted { password.as_str() } else { original }, "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200);
+        assert_eq!(logged["localId"], signed["localId"]);
+    }
+}
+
+#[test]
 fn password_maximum_update_preserves_credentials_and_full_suffix() {
     let s = strict_state();
     let (_, signed) = post(

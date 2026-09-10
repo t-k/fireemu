@@ -200,6 +200,35 @@ def control_get(origin: str, path: str, token: str) -> tuple[int, dict]:
         return response.status, value
 
 
+def observation_complete(report: dict) -> bool:
+    """Completion is separate from agreement with the immutable corpus expectations."""
+    from aggregation_corpus import corpus
+
+    template = corpus()
+    ids = [case["id"] for case in template["queries"]] + template["stateCases"]
+    cases = report.get("cases", [])
+    cleanup = report.get("cleanup", [])
+    if (
+        "failure" in report
+        or not isinstance(cases, list)
+        or not all(
+            isinstance(case, dict) and type(case.get("passed")) is bool
+            for case in cases
+        )
+        or [case.get("id") for case in cases] != ids
+        or not isinstance(cleanup, list)
+        or len(cleanup) != 4
+        or not all(
+            isinstance(row, dict) and row.get("confirmedMissing") is True
+            for row in cleanup
+        )
+    ):
+        return False
+    return report.get("status") == (
+        "passed" if all(case["passed"] for case in cases) else "failed"
+    )
+
+
 def owned_child(directory: Path, nonce: str) -> None:
     instance = {"parentPid": os.getppid(), "childPid": os.getpid(), "nonce": nonce}
     save(directory / "instance.json", instance)
@@ -235,7 +264,7 @@ def owned_child(directory: Path, nonce: str) -> None:
     report = observe(
         "local", directory / "observation.json", firestore, "compat_" + nonce
     )
-    if report["status"] != "passed":
+    if not observation_complete(report):
         raise SystemExit(2)
 
 
@@ -400,8 +429,8 @@ def run_owned(binary: Path, output: Path, build: dict | None = None) -> dict:
                 }
             )
             require(
-                code == 0 and result.get("status") == "passed",
-                "owned corpus did not pass",
+                code == 0 and observation_complete(result),
+                "owned corpus did not complete",
             )
         except Exception as error:  # noqa: BLE001 -- preserve sanitized failure and stop the owned process.
             result["status"] = "owned-run-failed"

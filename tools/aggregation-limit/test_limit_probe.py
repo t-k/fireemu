@@ -6,6 +6,18 @@ import pytest
 from probe_limit import cases, corpus, document_ids
 
 
+def test_extended_controls_preserve_baseline_and_cover_cursor_and_field_order():
+    rows = cases("compat_" + "a" * 32, extended=True)
+    assert rows[:15] == cases("compat_" + "a" * 32)
+    assert len(rows) == 27
+    assert len({row["id"] for row in rows}) == 27
+    by_id = {row["id"]: row["body"]["structuredAggregationQuery"] for row in rows[15:]}
+    assert len(by_id["cursor-value-name"]["structuredQuery"]["startAt"]["values"]) == 2
+    assert (
+        by_id["multi-reversed"]["aggregations"][0]["avg"]["field"]["fieldPath"] == "y"
+    )
+
+
 def test_offset_metadata_has_a_bounded_integer_and_read_time():
     metadata = {"readTime": "2026-09-09T00:00:00Z", "skippedResults": 2}
     assert document_ids([metadata], "unused") == []

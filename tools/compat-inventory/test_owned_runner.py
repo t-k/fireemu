@@ -8,11 +8,36 @@ from aggregation_corpus import CONFIG
 from owned_runner import (
     child_identity_matches,
     local_addresses,
+    observation_complete,
     run_owned,
     sanitized_environment,
     validate_build,
     validate_config,
 )
+
+
+def test_completed_mismatch_is_not_a_failed_launch():
+    from aggregation_corpus import corpus
+
+    ids = [case["id"] for case in corpus()["queries"]] + corpus()["stateCases"]
+    report = {
+        "status": "failed",
+        "cases": [{"id": key, "passed": key != "missing-before-limit"} for key in ids],
+        "cleanup": [{"confirmedMissing": True}] * 4,
+    }
+    assert observation_complete(report)
+    assert report["status"] == "failed"
+    for changed in [
+        {"failure": "ValueError"},
+        {"status": "inconclusive"},
+        {"cases": report["cases"][:-1]},
+        {"cleanup": []},
+        {"cleanup": [{"confirmedMissing": True}] * 3 + [{"confirmedMissing": False}]},
+        {"cases": list(reversed(report["cases"]))},
+        {"cases": [{**report["cases"][0], "passed": 1}] + report["cases"][1:]},
+        {"status": "passed"},
+    ]:
+        assert not observation_complete({**report, **changed})
 
 
 def test_cleanup_only_matches_the_exact_owned_child_command():

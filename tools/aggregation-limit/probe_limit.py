@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "compat-inventory")
 
 from aggregation_corpus import corpus
 from aggregation_evidence import validate_aggregate_fields
+from aggregation_index import cleanup_index, prepare_index
 from evidence_common import ROOT, fingerprint, require, save, sha
 from owned_runner import control_get, local_addresses
 from probe import (
@@ -32,7 +33,7 @@ from probe import (
 )
 
 
-def cases(collection: str) -> list[dict]:
+def cases(collection: str, extended: bool = False) -> list[dict]:
     rows = []
     for label, field in [
         ("omitted", None),
@@ -72,6 +73,95 @@ def cases(collection: str) -> list[dict]:
                     if kind == "documents"
                     else "runAggregationQuery",
                     "body": deepcopy(body),
+                }
+            )
+    if extended:
+
+        def order(field, direction="ASCENDING"):
+            return {"field": {"fieldPath": field}, "direction": direction}
+
+        reference = {"referenceValue": f"{DATABASE}/documents/{collection}/B"}
+        number = {"integerValue": "10"}
+        specifications = [
+            (
+                "cursor-reference",
+                {"startAt": {"values": [reference], "before": False}},
+                False,
+            ),
+            ("cursor-value", {"startAt": {"values": [number], "before": False}}, False),
+            (
+                "cursor-value-name",
+                {"startAt": {"values": [number, reference], "before": False}},
+                False,
+            ),
+            (
+                "cursor-explicit-x",
+                {
+                    "orderBy": [order("x")],
+                    "startAt": {"values": [number], "before": False},
+                },
+                False,
+            ),
+            (
+                "equality-name",
+                {
+                    "orderBy": [order("__name__")],
+                    "where": {
+                        "fieldFilter": {
+                            "field": {"fieldPath": "x"},
+                            "op": "EQUAL",
+                            "value": number,
+                        }
+                    },
+                },
+                False,
+            ),
+            ("multi-omitted", {}, True),
+            ("multi-reversed", {}, True),
+            ("multi-x-desc", {"orderBy": [order("x", "DESCENDING")]}, True),
+            ("multi-y-asc", {"orderBy": [order("y")]}, True),
+            ("name-then-x", {"orderBy": [order("__name__"), order("x")]}, False),
+            ("x-then-name", {"orderBy": [order("x"), order("__name__")]}, False),
+            (
+                "inequality-x-desc",
+                {
+                    "orderBy": [order("x", "DESCENDING")],
+                    "where": {
+                        "fieldFilter": {
+                            "field": {"fieldPath": "x"},
+                            "op": "GREATER_THAN",
+                            "value": number,
+                        }
+                    },
+                },
+                False,
+            ),
+        ]
+        for label, clauses, multiple in specifications:
+            aggregations = [
+                {"alias": "count", "count": {}},
+                {"alias": "sum", "sum": {"field": {"fieldPath": "x"}}},
+            ]
+            if multiple:
+                aggregations.append(
+                    {"alias": "avg", "avg": {"field": {"fieldPath": "y"}}}
+                )
+            if label == "multi-reversed":
+                aggregations.reverse()
+            rows.append(
+                {
+                    "id": label,
+                    "method": "runAggregationQuery",
+                    "body": {
+                        "structuredAggregationQuery": {
+                            "structuredQuery": {
+                                "from": [{"collectionId": collection}],
+                                "limit": 1,
+                                **clauses,
+                            },
+                            "aggregations": aggregations,
+                        }
+                    },
                 }
             )
     return rows
@@ -149,7 +239,7 @@ def document_ids(raw: object, prefix: str) -> list[str]:
     return result
 
 
-def observe(target: str, output: Path) -> dict:
+def observe(target: str, output: Path, extended: bool = False) -> dict:
     output.touch(exist_ok=False)
     origin = (
         None
@@ -167,7 +257,7 @@ def observe(target: str, output: Path) -> dict:
         "collection": collection,
         "recordedAt": datetime.now(UTC).isoformat(),
         "toolSha256": sha(Path(__file__).read_bytes()),
-        "caseSha256": fingerprint(cases("COLLECTION")),
+        "caseSha256": fingerprint(cases("COLLECTION", extended)),
         "sourceCommit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
@@ -177,6 +267,8 @@ def observe(target: str, output: Path) -> dict:
     }
     token = "owner"
     attempted, confirmed = [], []
+    index_receipt = {}
+    report["index"] = index_receipt
     try:
         if target == "production":
             token = subprocess.check_output(
@@ -206,6 +298,10 @@ def observe(target: str, output: Path) -> dict:
             )
             report["database"] = database
             report["verifiedProjectNumber"] = NUMBER
+            if extended:
+                prepare_index(
+                    token, collection, index_receipt, lambda: save(output, report)
+                )
         else:
             firestore, control = local_addresses(
                 os.environ["FIRESTORE_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
@@ -272,7 +368,7 @@ def observe(target: str, output: Path) -> dict:
             "fixture owner mismatch",
         )
         report["before"] = before
-        for case in cases(collection):
+        for case in cases(collection, extended):
             status, raw = request(
                 f"{base}/v1/{DATABASE}/documents:{case['method']}", token, case["body"]
             )
@@ -314,10 +410,19 @@ def observe(target: str, output: Path) -> dict:
         report["failure"] = type(error).__name__
     finally:
         report["cleanup"] = cleanup_resources(base, token, attempted, confirmed, marker)
+        if target == "production" and extended:
+            cleanup_index(
+                token, collection, index_receipt, lambda: save(output, report)
+            )
         if (
             len(confirmed) != 4
             or len(report["cleanup"]) != 4
             or not all(row["confirmedMissing"] for row in report["cleanup"])
+            or (
+                target == "production"
+                and extended
+                and not index_receipt.get("confirmedMissing")
+            )
         ):
             report["status"] = "cleanup-incomplete"
         save(output, report)
@@ -328,8 +433,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=["production", "local"], required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--extended",
+        action="store_true",
+        help="Add cursor/multifield controls; production owns one temporary composite index",
+    )
     args = parser.parse_args()
-    result = observe(args.target, args.output)
+    result = observe(args.target, args.output, args.extended)
     print(
         json.dumps(
             {

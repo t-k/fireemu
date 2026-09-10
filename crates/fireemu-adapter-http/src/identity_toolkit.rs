@@ -724,6 +724,7 @@ fn jwt_error(e: &JwtError) -> JsonResponse {
     match e {
         JwtError::Expired => error(400, "TOKEN_EXPIRED"),
         JwtError::Revoked => error(400, "TOKEN_EXPIRED : credentials revoked"),
+        JwtError::UserDisabled => error(400, "USER_DISABLED"),
         _ => error(400, "INVALID_ID_TOKEN"),
     }
 }
@@ -3854,21 +3855,16 @@ fn update(
             u.disabled = disable;
         }
     }
-    // A password change, an email change, an explicit `validSince` and a disablement all
-    // move `validSince`, so ID tokens issued before this second are refused (what the
-    // official emulator does). Under the emulator profile, refresh tokens remain stateless
-    // and usable after these mutations, matching the official emulator. The strict profile
-    // revokes them after privileged revocation, disablement and privileged credential changes.
-    // Self-service credential changes keep the current refresh token in both profiles.
+    // Disable-only strict updates suspend use without destroying existing credentials,
+    // matching the recorded disable/re-enable flow. Preserve the emulator's validSince
+    // behavior, and keep credential changes and explicit revocation independent of disablement.
     let credentials_changed = plan.password.is_some() || email_changed || plan.revoke_at.is_some();
-    if credentials_changed || plan.disable == Some(true) {
+    if credentials_changed || (stateless_refresh_tokens && plan.disable == Some(true)) {
         let _ = store.revoke_tokens(&uid, plan.revoke_at.unwrap_or(at));
     }
     let self_service = local_id.is_none();
     if !stateless_refresh_tokens
-        && (plan.revoke_at.is_some()
-            || plan.disable == Some(true)
-            || (credentials_changed && !self_service))
+        && (plan.revoke_at.is_some() || (credentials_changed && !self_service))
     {
         store.revoke_refresh_tokens(&uid);
     }

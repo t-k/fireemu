@@ -1040,10 +1040,7 @@ fn expired_enrollment_session_and_disabled_user() {
         &json!({"idToken": id_token}),
     );
     assert_eq!(status, 400);
-    assert!(revoked["error"]["message"]
-        .as_str()
-        .unwrap()
-        .starts_with("TOKEN_EXPIRED"));
+    assert_eq!(revoked["error"]["message"], "USER_DISABLED");
 }
 
 #[test]
@@ -2114,6 +2111,134 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
     );
     assert_eq!(status, 400, "{deleted}");
     assert_eq!(deleted["error"]["message"], "INVALID_REFRESH_TOKEN");
+}
+
+#[test]
+fn disabled_account_preserves_fixed_credentials_for_reenable_in_strict_profile() {
+    let s = strict_state();
+    let mut accounts = Vec::new();
+    for email in [
+        "disabled-target@example.com",
+        "disabled-control@example.com",
+    ] {
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({
+                "email": email, "password": "original-password", "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200);
+        accounts.push((email, signed));
+    }
+    for disabled in [false, true, false] {
+        advance(&s, 2);
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": accounts[0].1["localId"], "disableUser": disabled
+            }),
+        );
+        assert_eq!(status, 200);
+        for (index, (email, fixed)) in accounts.iter().enumerate() {
+            for (path, request) in [
+                (
+                    format!("{V1}/accounts:signInWithPassword"),
+                    json!({"email": email, "password": "original-password", "returnSecureToken": true}),
+                ),
+                (
+                    format!("{V1}/accounts:lookup"),
+                    json!({"idToken": fixed["idToken"]}),
+                ),
+                (
+                    "/securetoken.googleapis.com/v1/token".to_owned(),
+                    json!({"grant_type":"refresh_token", "refresh_token": fixed["refreshToken"]}),
+                ),
+            ] {
+                let (status, response) = post(&s, &path, &request);
+                if disabled && index == 0 {
+                    assert_eq!(status, 400, "{path}");
+                    assert_eq!(response["error"]["message"], "USER_DISABLED", "{path}");
+                } else {
+                    assert_eq!(status, 200, "{path}: {response}");
+                    if path.ends_with("/token") {
+                        let (status, looked) = post(
+                            &s,
+                            &format!("{V1}/accounts:lookup"),
+                            &json!({"idToken": response["id_token"]}),
+                        );
+                        assert_eq!(status, 200);
+                        assert_eq!(looked["users"][0]["localId"], fixed["localId"]);
+                    }
+                }
+            }
+        }
+    }
+    // Re-enabling must not undo a simultaneous password change.
+    advance(&s, 2);
+    for request in [
+        json!({"localId": accounts[1].1["localId"], "disableUser": true, "password": "replacement-password"}),
+        json!({"localId": accounts[1].1["localId"], "disableUser": false}),
+    ] {
+        assert_eq!(
+            admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &request).0,
+            200
+        );
+    }
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": accounts[1].1["idToken"]})
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": accounts[1].1["refreshToken"]})
+        )
+        .0,
+        400
+    );
+    assert_eq!(post(&s, &format!("{V1}/accounts:signInWithPassword"), &json!({"email": accounts[1].0, "password": "replacement-password", "returnSecureToken": true})).0, 200);
+    // Re-enabling must not undo a separate explicit revocation.
+    advance(&s, 2);
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": accounts[0].1["localId"], "validSince": "9999999999", "disableUser": true
+        }),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": accounts[0].1["localId"], "disableUser": false}),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": accounts[0].1["idToken"]}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": accounts[0].1["refreshToken"]})
+        )
+        .0,
+        400
+    );
 }
 
 #[test]

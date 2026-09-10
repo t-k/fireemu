@@ -145,7 +145,9 @@ pub enum JwtError {
     },
     /// `sub` is not a known user.
     UnknownUser,
-    /// Tokens for this user were revoked after `auth_time`, or the user is disabled.
+    /// The authenticated token belongs to a disabled user.
+    UserDisabled,
+    /// Tokens for this user were revoked after `auth_time`.
     Revoked,
     /// The signing mode cannot be used by this binary.
     SigningUnsupported(SigningMode),
@@ -170,6 +172,7 @@ impl fmt::Display for JwtError {
             }
             Self::UnknownUser => f.write_str("token subject is not a known user"),
             Self::Revoked => f.write_str("token revoked"),
+            Self::UserDisabled => f.write_str("user is disabled"),
             Self::SigningUnsupported(m) => write!(f, "signing mode {m:?} is not implemented"),
             Self::BadSignature => f.write_str("token signature does not verify"),
             Self::UnknownKeyId => f.write_str("token kid does not name the session key"),
@@ -503,7 +506,10 @@ pub fn verify_id_token_decoded(
         .get("auth_time")
         .and_then(JsonValue::as_i64)
         .ok_or(JwtError::Malformed)?;
-    if user.disabled || LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after {
+    if user.disabled {
+        return Err(JwtError::UserDisabled);
+    }
+    if LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after {
         return Err(JwtError::Revoked);
     }
     let second_factor = decoded

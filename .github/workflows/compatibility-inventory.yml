@@ -29,6 +29,8 @@ jobs:
         run: |
           cargo test --locked -p fireemu-adapter-http --test identity_toolkit admin_fields
           cargo test --locked -p fireemu-adapter-http --test identity_toolkit password_maximum_update
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit disabled_account_preserves
+          cargo test --locked -p fireemu-core-auth --test jwt disabled_user
   offline-acquisition-integrity:
     runs-on: ubuntu-latest
     steps:
@@ -48,23 +50,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/maximum_history.py --check
       - name: Check original Unicode mismatch at its fixed historical source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/unicode_history.py --check
-      - name: Check corrected Unicode artifact observation
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_unicode_recheck.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-unicode-recheck.py --check
-      - name: Check scoped Unicode recheck approval
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_unicode_approval.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-unicode-recheck-approval.py --check
-      - name: Check supplementary-character boundary candidate
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-password-unicode-boundary -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-unicode-boundary.py --check
-      - name: Check supplementary-character boundary approval
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_boundary_approval.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-unicode-boundary-approval.py --check
-      - name: Check account disable and re-enable diagnostic
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-disabled -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-disabled.py --check
+      - name: Check pre-disable-fix observations and approvals at their fixed source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/disabled_history.py --check

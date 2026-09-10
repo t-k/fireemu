@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent-authored-source-review",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-10",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "rawSha256": "c3454bcf8f4e565422657ba8d55ea0d23bb3d82a2bfbc0a3c6aaabdcfc888af8",
+      "bodySha256": "a9b8129d0d42db1aa1b7eed2121ac7dc2be6d5b53c3976502ecf6b753b09c0c9",
+      "fetchedAt": "2026-09-10T04:04:29.598062+00:00",
+      "locators": [
+        "section-create-email-password",
+        "section-update-profile",
+        "section-get-account-info",
+        "section-delete-account"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "id": "AUTH-DISPLAY-NAME-SIGNUP",
+      "case": "signup",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-create-email-password",
+      "condition": "Fresh dedicated email/password signup returns same-account credentials. Bootstrap marker and independent UID lookup establish ownership before private identity persistence. Expiry shape and 3600-second expectation are separate checks.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-INITIAL-LOOKUP",
+      "case": "initial-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "The signup token retrieves the account with its original marker. Verified UID persistence and readback are harness prerequisites before any displayName mutation.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-SET-NAME",
+      "case": "set-name",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-update-profile",
+      "condition": "Set displayName to Fireemu display first using the original signup ID token; response reports the same UID/email and unchanged photoUrl.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-SET-NAME-LOOKUP",
+      "case": "set-name-lookup",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Lookup reports the first name and preserves localId, email, photoUrl, emailVerified and disabled.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-REPLACE-NAME",
+      "case": "replace-name",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-update-profile",
+      "condition": "Replace displayName with Fireemu display second; response reports the same UID/email and unchanged photoUrl.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-REPLACE-NAME-LOOKUP",
+      "case": "replace-name-lookup",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Lookup reports the second name and preserves selected identity fields.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-INVALID-TOKEN-UPDATE",
+      "case": "invalid-token-update",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-update-profile",
+      "condition": "Attempt displayName Fireemu display refused with the fixed malformed token not-a-valid-id-token. Expect HTTP400 INVALID_ID_TOKEN; not expired-token enforcement or independent signature verification.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-UNCHANGED-STATE",
+      "case": "unchanged-state",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "After refusal, valid-token lookup preserves localId, email, displayName, emailVerified, disabled, providerUserInfo and photoUrl compared with pre-refusal lookup. Not full-state immutability.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-DELETE-NAME",
+      "case": "delete-name",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-update-profile",
+      "condition": "Send deleteAttribute [DISPLAY_NAME] using the original ID token. Expect unchanged UID/email/photoUrl and omitted displayName. Clearing is documented; exact omission is a wire-shape hypothesis for production comparison.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-DELETED-NAME-LOOKUP",
+      "case": "deleted-name-lookup",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Lookup confirms omitted displayName and selected identity fields unchanged; null and empty strings remain distinct mismatches.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-DELETE",
+      "case": "delete",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Use the original signup token to delete the dedicated account. Private saved UID/email, not the modified displayName, identify the account for ownership checks.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-DISPLAY-NAME-DELETED-ACCOUNT-ABSENT",
+      "case": "deleted-account-absent",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Exact UID and email Admin lookups find no account. Repeated recovery uses persisted identity to recheck absence; unknown absent signup never counts as cleanup success.",
+      "existingRequirement": null
+    }
+  ],
+  "limitations": [
+    "No human approval. Twelve cases of displayName-only REST behavior after bootstrap, no tenant, strict local artifact and recorded production configuration.",
+    "Uses the previously fetched immutable official REST snapshot whose raw/body hashes and fetchedAt are preserved above; selected sections reviewed for this slice on 2026-09-10.",
+    "ReturnSecureToken is omitted on profile updates. Update token issuance, refresh, Unicode/length boundaries, null/empty writes and simultaneous set/clear are not checked.",
+    "Exact omission is an explicit wire-shape hypothesis; the documentation establishes clearing, not omission versus null.",
+    "Private identity persistence is a recorder control, not cryptographic provenance. No displayName value may be mutated until verified UID is saved and read back. Recovery without saved UID still requires bootstrap marker.",
+    "No credential change, URL/image operation, provider synchronization, SDK, MFA, Rules, expiry enforcement, independent signature verification or public npm/full Auth claim.",
+    "Raw source bytes remain in the private operator cache; raw account responses and reusable credentials are not published."
+  ]
+}

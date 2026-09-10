@@ -86,7 +86,9 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Original weak-password rejection observations](auth-password-rejection.md). The acquisition-time candidate status is superseded only for the subject and 16 cases in the separate approval above. Prior observations and approvals remain unchanged.
 
-[Exactly-six-character password change](auth-password-minimum.md). Unapproved candidate for one generated six-character URL-safe ASCII password under the recorded minimum-six policy, including new-password signin and update-issued ID/refresh use. Not all six-character combinations, other policy boundaries, SDK, Rules or elapsed expiry.
+[Exactly-six-character password change: scoped human approval](auth-password-minimum-approval.md). The recorded 12 redacted REST cases are verified and approved for one generated six-character URL-safe ASCII password under the recorded policy, including old-password rejection, new-password signin, update-issued ID/refresh use, selected account fields and recorded deletion/termination. Not all six-character combinations, Unicode, other policy boundaries, expiry/revocation timing, SDK, Rules or fault-injected recovery.
+
+[Original exactly-six-character password observations](auth-password-minimum.md). The acquisition-time candidate status is superseded only for the pinned subject and 12 cases in the separate approval above.
 
 [Original no-password-change session continuity control](auth-session-continuity.md). Its acquisition-time candidate status is superseded only for the subject and 34 observations in the separate approval above. Continuity requires accepted primary and derived-token requests, not matching rejections.
 

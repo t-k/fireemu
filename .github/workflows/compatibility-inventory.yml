@@ -52,3 +52,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-rejection-approval.py --check
       - name: Check exactly-six-character password candidate
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-minimum.py --check
+      - name: Check subject-bound exactly-six-character password approval
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-minimum-approval.py --check

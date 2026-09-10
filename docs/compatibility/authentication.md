@@ -86,6 +86,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Original weak-password rejection observations](auth-password-rejection.md). The acquisition-time candidate status is superseded only for the subject and 16 cases in the separate approval above. Prior observations and approvals remain unchanged.
 
+[Exactly-six-character password change](auth-password-minimum.md). Unapproved candidate for one generated six-character URL-safe ASCII password under the recorded minimum-six policy, including new-password signin and update-issued ID/refresh use. Not all six-character combinations, other policy boundaries, SDK, Rules or elapsed expiry.
+
 [Original no-password-change session continuity control](auth-session-continuity.md). Its acquisition-time candidate status is superseded only for the subject and 34 observations in the separate approval above. Continuity requires accepted primary and derived-token requests, not matching rejections.
 
 [Auth session token revision 2: scoped human approval](auth-session-v2-approval.md). The recorded 34 redacted REST observations are verified and approved for fixed A/B tokens, changed-response controls, finite 0/10/30-second targets and two invalid-refresh controls. This does not establish universal immediate revocation, exact propagation latency, whole-session lineage, SDK checkRevoked, Rules or actual elapsed expiry. Historical integrity checks are not current-runtime regression evidence.

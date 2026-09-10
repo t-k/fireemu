@@ -37,7 +37,7 @@ jobs:
       - name: Check immutable historical tools, observations and approvals
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check
       - name: Test current historical isolation and session revision 2 contracts
-        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history tools/auth-session-v2 tools/auth-session-continuity tools/auth-password-rejection -q
+        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history tools/auth-session-v2 tools/auth-session-continuity tools/auth-password-rejection tools/auth-password-minimum -q
       - name: Check session revision 2 candidate observations
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-session-v2.py --check
       - name: Check subject-bound session revision 2 human approval
@@ -50,3 +50,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-rejection.py --check
       - name: Check subject-bound weak-password rejection approval
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-rejection-approval.py --check
+      - name: Check exactly-six-character password candidate
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-minimum.py --check

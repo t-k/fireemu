@@ -75,14 +75,11 @@ fn explicit_local_ids_are_validated_and_unique() {
         .map(|user| user.local_id.as_str())
         .collect();
     assert_eq!(page, [longest.as_str(), e.as_str()]);
-    // Deleting removes the user and its refresh tokens; unknown users are an error.
+    // Deleting removes live credentials but retains their rejection-only identity.
     let token = s.issue_refresh_token(&e, t(2)).unwrap();
     assert!(s.redeem_refresh_token(&token).is_ok());
     s.delete_user_by_id(e.as_str()).unwrap();
-    assert_eq!(
-        s.redeem_refresh_token(&token),
-        Err(AuthError::InvalidRefreshToken)
-    );
+    assert_eq!(s.redeem_refresh_token(&token), Err(AuthError::UserNotFound));
     assert_eq!(s.delete_user_by_id("nobody"), Err(AuthError::UserNotFound));
     assert_eq!(s.all_user_ids().len(), 3);
     assert!(s
@@ -537,7 +534,7 @@ fn refresh_ownership_index_removes_all_and_only_the_target_users_sessions() {
     for token in &a_tokens {
         assert_eq!(
             restored.redeem_refresh_token(token),
-            Err(AuthError::InvalidRefreshToken)
+            Err(AuthError::UserNotFound)
         );
     }
     for token in &b_tokens {

@@ -883,13 +883,22 @@ fn verify_session(
     body: &Value,
     at: LogicalInstant,
 ) -> Result<Session, JsonResponse> {
+    verify_session_with_error(store, body, at, jwt_error)
+}
+
+fn verify_session_with_error(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
+) -> Result<Session, JsonResponse> {
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return Err(error(400, "MISSING_ID_TOKEN")),
         Some(Value::String(t)) => t.as_str(),
         Some(_) => return Err(error(400, "INVALID_ID_TOKEN")),
     };
     let (v, decoded) = fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at)
-        .map_err(|e| jwt_error(&e))?;
+        .map_err(|e| map_error(&e))?;
     let provider = decoded
         .payload
         .get("firebase")
@@ -3337,7 +3346,17 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
                 "MISSING_IDENTIFIER : localId, email, phoneNumber or federatedUserId",
             );
         }
-        return match verify(store, body, at) {
+        // Only lookup has a production observation for this error mapping.
+        // Token validation still precedes the user lookup inside the verifier.
+        return match verify_session_with_error(store, body, at, |e| {
+            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                error(400, "USER_NOT_FOUND")
+            } else {
+                jwt_error(e)
+            }
+        })
+        .map(|session| session.uid)
+        {
             Ok(uid) => JsonResponse {
                 status: 200,
                 body: json!({"kind": "identitytoolkit#GetAccountInfoResponse", "users": [user_json(store, &uid)]}),

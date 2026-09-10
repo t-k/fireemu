@@ -12,6 +12,7 @@ use fireemu_core_limits::evaluate::{
 };
 use fireemu_core_limits::plan::FirestorePlanProfile;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+use fireemu_core_types::hash::sha256;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::claims::{CustomClaims, FirebaseClaims, IdTokenClaims};
@@ -598,6 +599,10 @@ pub struct AuthStore {
     /// Refresh sessions are copy-on-write so speculative blocking-function stores and session
     /// snapshots share the unchanged registry in O(1).
     refresh_tokens: Arc<BTreeMap<String, RefreshSession>>,
+    /// Rejection-only identities of refresh credentials retired by user deletion. No raw
+    /// tokens, user IDs or claims. Retained until reset (no TTL or silent eviction); memory
+    /// grows with deleted issued credentials and is included in snapshot byte accounting.
+    deleted_refresh_digests: Arc<BTreeSet<[u8; 32]>>,
     /// Refresh-token values owned by each user. Revocation and deletion touch one user's
     /// sessions instead of scanning every live session.
     tokens_by_user: Arc<BTreeMap<LocalId, BTreeSet<String>>>,
@@ -789,6 +794,7 @@ impl AuthStore {
             by_sequence: BTreeMap::new(),
             counter: 0,
             refresh_tokens: Arc::new(BTreeMap::new()),
+            deleted_refresh_digests: Arc::new(BTreeSet::new()),
             tokens_by_user: Arc::new(BTreeMap::new()),
             next_id_override: None,
             next_sequence: 0,
@@ -993,7 +999,7 @@ impl AuthStore {
         }
     }
 
-    /// Deletes a user and its refresh tokens, pending sign-ins and phone codes.
+    /// Deletes a user and live refresh sessions, retaining only rejection digests.
     pub fn delete_user_by_id(&mut self, uid: &str) -> Result<(), AuthError> {
         let key = LocalId(uid.to_owned());
         let user = self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
@@ -1008,6 +1014,12 @@ impl AuthStore {
             Self::remove_index_owner(&mut self.local_ids_for_federated, &identity_key, &key);
         }
         self.by_sequence.remove(&user.sequence);
+        if let Some(tokens) = self.tokens_by_user.get(&key) {
+            let deleted = Arc::make_mut(&mut self.deleted_refresh_digests);
+            for token in tokens {
+                deleted.insert(sha256(token.as_bytes()));
+            }
+        }
         self.remove_refresh_tokens_for(&key);
         Arc::make_mut(&mut self.pending_sign_in_owners).retain(|_, owner| *owner != key);
         self.pending_user_ids.remove(&key);
@@ -1030,6 +1042,7 @@ impl AuthStore {
         self.local_ids_for_federated.clear();
         self.by_sequence.clear();
         self.refresh_tokens = Arc::new(BTreeMap::new());
+        self.deleted_refresh_digests = Arc::new(BTreeSet::new());
         self.tokens_by_user = Arc::new(BTreeMap::new());
         self.oob_codes = Arc::new(BTreeMap::new());
         self.verification_codes = Arc::new(BTreeMap::new());
@@ -1438,6 +1451,7 @@ impl AuthStore {
                 total.saturating_add(owner).saturating_add(entries)
             });
         refresh
+            .saturating_add((self.deleted_refresh_digests.len() as u64).saturating_mul(96))
             .saturating_add(oob)
             .saturating_add(verification)
             .saturating_add(refresh_owners)
@@ -1463,12 +1477,16 @@ impl AuthStore {
 
     /// Number of copy-on-write transient registries this store shares with `other`.
     ///
-    /// The five registries are refresh sessions, their per-user index, email action codes,
-    /// phone verification codes, and pending-sign-in owners. A speculative Auth operation
-    /// that only issues a refresh session must leave the other three allocations shared.
+    /// The six registries are refresh sessions, deletion digests, their per-user index,
+    /// email action codes, phone verification codes, and pending-sign-in owners. Issuing
+    /// a refresh session leaves the other four allocations shared.
     #[must_use]
     pub fn transient_registries_shared_with(&self, other: &Self) -> usize {
         usize::from(Arc::ptr_eq(&self.refresh_tokens, &other.refresh_tokens))
+            + usize::from(Arc::ptr_eq(
+                &self.deleted_refresh_digests,
+                &other.deleted_refresh_digests,
+            ))
             + usize::from(Arc::ptr_eq(&self.tokens_by_user, &other.tokens_by_user))
             + usize::from(Arc::ptr_eq(&self.oob_codes, &other.oob_codes))
             + usize::from(Arc::ptr_eq(
@@ -2385,10 +2403,13 @@ impl AuthStore {
     }
 
     /// Whether this project issued a refresh token. Routing uses ownership without treating
-    /// revocation or disablement as absence; the selected project returns the precise error.
+    /// disablement or user deletion as absence; ownership never implies acceptance.
     #[must_use]
     pub fn owns_refresh_token(&self, token: &str) -> bool {
         self.refresh_tokens.contains_key(token)
+            || self
+                .deleted_refresh_digests
+                .contains(&sha256(token.as_bytes()))
     }
 
     /// ID token claims for a refreshed session.
@@ -2421,6 +2442,13 @@ impl AuthStore {
         token: &str,
         enforce_revocation: bool,
     ) -> Result<LocalId, AuthError> {
+        // A deletion record is terminal, even if an administrator reuses the same UID.
+        if self
+            .deleted_refresh_digests
+            .contains(&sha256(token.as_bytes()))
+        {
+            return Err(AuthError::UserNotFound);
+        }
         let session = self
             .refresh_tokens
             .get(token)
@@ -2933,6 +2961,7 @@ impl AuthSnapshot {
             restored.project_id == live.project_id && restored.tenant_id == live.tenant_id;
         if !namespace_matches {
             restored.refresh_tokens = Arc::new(BTreeMap::new());
+            restored.deleted_refresh_digests = Arc::new(BTreeSet::new());
             restored.tokens_by_user = Arc::new(BTreeMap::new());
         }
         live.project_id.clone_into(&mut restored.project_id);
@@ -4545,6 +4574,48 @@ mod compatibility_routing_tests {
         assert!(matches!(
             registry.store_for_refresh_token(&token),
             RefreshTokenStoreMatch::Unavailable
+        ));
+    }
+
+    #[test]
+    fn deleted_refresh_routing_retains_exact_namespace_and_legacy_ambiguity() {
+        let default = store("demo-app", 1);
+        let registry = AuthRegistry::new("demo-app", default.clone());
+        let routed = store("worker-alpha", 2);
+        assert!(matches!(
+            registry.install_routed("worker-alpha", routed.clone()),
+            RoutedStoreInstall::Installed(_)
+        ));
+        let tenant = registry.ensure_tenant("demo-app", "customer").unwrap();
+        for owned in [&default, &routed, &tenant] {
+            let token = issue_token(owned, "deleted@example.test");
+            {
+                let mut source = owned.lock().unwrap();
+                let uid = source.redeem_refresh_token(&token).unwrap();
+                source.delete_user_by_id(uid.as_str()).unwrap();
+                assert!(!source.refresh_tokens.contains_key(&token));
+                assert!(!source.tokens_by_user.contains_key(&uid));
+                assert_eq!(source.deleted_refresh_digests.len(), 1);
+                assert_eq!(
+                    source.redeem_refresh_token(&token),
+                    Err(super::AuthError::UserNotFound)
+                );
+            }
+            assert!(
+                matches!(registry.store_for_refresh_token(&token), RefreshTokenStoreMatch::Unique(found) if Arc::ptr_eq(&found, owned))
+            );
+        }
+        assert_eq!(registry.refresh_token_scan_count(), 0);
+        install_legacy_refresh_token(&default, "legacy-a@example.test", "legacy-duplicate");
+        install_legacy_refresh_token(&routed, "legacy-b@example.test", "legacy-duplicate");
+        {
+            let mut source = default.lock().unwrap();
+            let uid = source.redeem_refresh_token("legacy-duplicate").unwrap();
+            source.delete_user_by_id(uid.as_str()).unwrap();
+        }
+        assert!(matches!(
+            registry.store_for_refresh_token("legacy-duplicate"),
+            RefreshTokenStoreMatch::Ambiguous
         ));
     }
 

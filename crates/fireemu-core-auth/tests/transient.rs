@@ -373,13 +373,13 @@ fn speculative_clones_share_every_unchanged_transient_registry() {
     }
 
     let untouched = live.clone();
-    assert_eq!(untouched.transient_registries_shared_with(&live), 5);
+    assert_eq!(untouched.transient_registries_shared_with(&live), 6);
 
     let mut swept = live.clone();
     swept.sweep_transient_credentials(t0());
     assert_eq!(
         swept.transient_registries_shared_with(&live),
-        5,
+        6,
         "a no-op sweep must not copy any transient registry"
     );
 
@@ -387,7 +387,7 @@ fn speculative_clones_share_every_unchanged_transient_registry() {
     candidate.issue_refresh_token(&uid, after(1)).unwrap();
     assert_eq!(
         candidate.transient_registries_shared_with(&live),
-        3,
+        4,
         "issuing a refresh session detaches only the session map and its ownership index"
     );
 }

@@ -274,7 +274,7 @@ fn blocking_auth_with_fifty_thousand_sessions_copies_only_changed_registries() {
             .lock()
             .unwrap()
             .transient_registries_shared_with(&before),
-        3,
+        4,
         "the blocking request may detach only refresh sessions and their owner index"
     );
 }

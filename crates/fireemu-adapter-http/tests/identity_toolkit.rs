@@ -2110,7 +2110,93 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
     assert_eq!(status, 400, "{deleted}");
-    assert_eq!(deleted["error"]["message"], "INVALID_REFRESH_TOKEN");
+    assert_eq!(deleted["error"]["message"], "USER_NOT_FOUND");
+}
+
+#[test]
+fn deleted_account_credentials_are_distinct_from_unknown_inputs() {
+    let s = strict_state();
+    let mut accounts = Vec::new();
+    for email in ["deleted-target@example.com", "deleted-control@example.com"] {
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "original-password", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200);
+        accounts.push(signed);
+    }
+    for deleted in [false, true] {
+        if deleted {
+            assert_eq!(
+                post(
+                    &s,
+                    &format!("{V1}/accounts:delete"),
+                    &json!({"idToken": accounts[0]["idToken"]})
+                )
+                .0,
+                200
+            );
+        }
+        for (index, fixed) in accounts.iter().enumerate() {
+            for (path, request) in [
+                (
+                    format!("{V1}/accounts:lookup"),
+                    json!({"idToken": fixed["idToken"]}),
+                ),
+                (
+                    "/securetoken.googleapis.com/v1/token".to_owned(),
+                    json!({"grant_type": "refresh_token", "refresh_token": fixed["refreshToken"]}),
+                ),
+            ] {
+                let (status, response) = post(&s, &path, &request);
+                if deleted && index == 0 {
+                    assert_eq!(status, 400);
+                    assert_eq!(response["error"]["message"], "USER_NOT_FOUND", "{path}");
+                } else {
+                    assert_eq!(status, 200);
+                    if path.ends_with("/token") {
+                        assert_eq!(
+                            post(
+                                &s,
+                                &format!("{V1}/accounts:lookup"),
+                                &json!({"idToken": response["id_token"]})
+                            )
+                            .0,
+                            200
+                        );
+                    }
+                }
+            }
+        }
+    }
+    for token in [
+        "unknown-token".to_owned(),
+        format!("{}x", accounts[0]["refreshToken"].as_str().unwrap()),
+    ] {
+        let (status, response) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": token}),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(response["error"]["message"], "INVALID_REFRESH_TOKEN");
+    }
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": "malformed"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(response["error"]["message"], "INVALID_ID_TOKEN");
+    advance(&s, 3601);
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": accounts[0]["idToken"]}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(response["error"]["message"], "TOKEN_EXPIRED");
 }
 
 #[test]

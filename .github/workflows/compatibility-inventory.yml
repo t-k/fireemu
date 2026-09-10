@@ -31,6 +31,8 @@ jobs:
           cargo test --locked -p fireemu-adapter-http --test identity_toolkit password_maximum_update
           cargo test --locked -p fireemu-adapter-http --test identity_toolkit disabled_account_preserves
           cargo test --locked -p fireemu-core-auth --test jwt disabled_user
+          cargo test --locked -p fireemu-core-auth deleted_refresh
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit deleted_account_credentials
   offline-acquisition-integrity:
     runs-on: ubuntu-latest
     steps:
@@ -52,15 +54,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/unicode_history.py --check
       - name: Check pre-disable-fix observations and approvals at their fixed source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/disabled_history.py --check
-      - name: Check corrected disable and re-enable artifact observation
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_disabled_recheck.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-disabled-recheck.py --check
-      - name: Check scoped disable and re-enable recheck approval
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_disabled_approval.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-disabled-recheck-approval.py --check
-      - name: Check deleted-account credential candidate
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-deleted -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-deleted.py --check
+      - name: Check original deletion mismatch and prior approval at their fixed source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/deleted_history.py --check

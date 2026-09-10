@@ -44,3 +44,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-session-v2-approval.py --check
       - name: Check no-password-change session continuity candidate
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-session-continuity.py --check
+      - name: Check subject-bound session continuity human approval
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-session-continuity-approval.py --check

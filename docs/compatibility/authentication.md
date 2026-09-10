@@ -80,6 +80,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 - AUTH-MFA-TOTP-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
+[No-password-change session continuity control](auth-session-continuity.md). Independent, unapproved candidate observations of fixed A/B and reference-exchange credentials at finite 0/10/30-second targets. Continuity requires accepted primary and derived-token requests, not matching rejections. This does not establish permanent validity, whole-session lineage, SDK behavior or actual elapsed expiry.
+
 [Auth session token revision 2: scoped human approval](auth-session-v2-approval.md). The recorded 34 redacted REST observations are verified and approved for fixed A/B tokens, changed-response controls, finite 0/10/30-second targets and two invalid-refresh controls. This does not establish universal immediate revocation, exact propagation latency, whole-session lineage, SDK checkRevoked, Rules or actual elapsed expiry. Historical integrity checks are not current-runtime regression evidence.
 
 [Auth session token revision 2 observations](auth-session-v2.md). This page preserves its acquisition-time candidate status; the separate approval above supersedes that status only for the pinned subject and 34 observations. The artifact repeats the bounded A/B experiment with two invalid-refresh controls after separating known revoked sessions from unknown input. Earlier approvals do not transfer to this artifact. [Historical integrity checks](../../tools/compat-history/README.md) preserve the original source-bound records.

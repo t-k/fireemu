@@ -37,8 +37,10 @@ jobs:
       - name: Check immutable historical tools, observations and approvals
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check
       - name: Test current historical isolation and session revision 2 contracts
-        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history tools/auth-session-v2 -q
+        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history tools/auth-session-v2 tools/auth-session-continuity -q
       - name: Check session revision 2 candidate observations
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-session-v2.py --check
       - name: Check subject-bound session revision 2 human approval
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-session-v2-approval.py --check
+      - name: Check no-password-change session continuity candidate
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-session-continuity.py --check

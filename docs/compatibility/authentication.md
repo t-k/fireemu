@@ -92,6 +92,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Auth displayName candidate observations](auth-display-name.md). Twelve scoped cases cover setting, replacement, malformed-token refusal, selected-state preservation and clearing after verified UID persistence; no human approval or broad profile-update claim.
 
+[Auth displayName updates and deletion: scoped human approval](auth-display-name-approval.md). The twelve recorded cases are verified and approved as redacted observations for end-user REST, no tenant, local strict and recorded production configuration. No fault-recovery, string-boundary, update-token-issuance, SDK or full profile-update claim. The candidate page preserves acquisition-time history.
+
 ### User lifecycle and email/password
 
 Sources: AUTH-OVERVIEW; AUTH-REST; AUTH-DISCOVERY-V1. API surfaces: AUTH-SIGNUP; AUTH-PASSWORD.

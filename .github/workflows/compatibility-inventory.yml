@@ -49,3 +49,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-profile-approval.py --check
       - name: Check bounded Auth displayName candidate observations
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-display-name.py --check
+      - name: Check subject-bound Auth displayName human approval
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-display-name-approval.py --check

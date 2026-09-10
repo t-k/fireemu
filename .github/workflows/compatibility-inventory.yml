@@ -56,3 +56,7 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/disabled_history.py --check
       - name: Check original deletion mismatch and prior approval at their fixed source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/deleted_history.py --check
+      - name: Check corrected deleted-account artifact observation
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_deleted_recheck.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-deleted-recheck.py --check

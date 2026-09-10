@@ -15,6 +15,7 @@ from pathlib import Path
 
 from aggregation_corpus import SCOPE, corpus, query_body
 from aggregation_index import cleanup_index, prepare_index
+from aggregation_response import query_matches
 from evidence_common import ROOT, fingerprint, probe_inputs, require, save
 from probe import (
     DATABASE,
@@ -25,7 +26,6 @@ from probe import (
     owned_name,
     request,
     require_status,
-    summarize_aggregation,
 )
 
 
@@ -147,8 +147,7 @@ def observe(
             }
             report["cases"].append(result)
             save(output, report)
-            require_status(status, 200)
-            result["passed"] = summarize_aggregation(raw) == case["expected"]
+            result["passed"] = query_matches(case, status, raw)
         writes = {
             "writes": [
                 {

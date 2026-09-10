@@ -83,7 +83,7 @@ def corpus() -> dict:
             "missing-before-limit",
             [count, total],
             {"limit": 2},
-            {"count": {"integerValue": "2"}, "sum": {"integerValue": "10"}},
+            {"count": {"integerValue": "2"}, "sum": {"doubleValue": 30.5}},
         ),
         (
             "bounded-count",
@@ -92,9 +92,27 @@ def corpus() -> dict:
             {"count": {"integerValue": "2"}},
         ),
     ]
+    for name, direction, offset, limit, selected, summed in [
+        ("explicit-x-asc", "ASCENDING", None, 2, "2", {"doubleValue": 30.5}),
+        ("explicit-x-desc", "DESCENDING", None, 2, "2", {"doubleValue": 20.5}),
+        ("explicit-x-offset", "ASCENDING", 2, 1, "1", {"integerValue": "0"}),
+    ]:
+        queries.append(
+            (
+                name,
+                [count, total],
+                {
+                    "orderBy": [{"field": {"fieldPath": "x"}, "direction": direction}],
+                    "limit": limit,
+                    **({"offset": offset} if offset is not None else {}),
+                },
+                {"count": {"integerValue": selected}, "sum": summed},
+            )
+        )
     return deepcopy(
         {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
+            "revision": 2,
             "scope": SCOPE,
             "fixtures": {
                 "A": {"x": {"integerValue": "10"}, "y": {"integerValue": "100"}},
@@ -108,6 +126,22 @@ def corpus() -> dict:
             "queries": [
                 {"id": name, "aggregations": aggs, "query": query, "expected": expected}
                 for name, aggs, query, expected in queries
+            ]
+            + [
+                {
+                    "id": "explicit-name-rejected",
+                    "aggregations": [count, total],
+                    "query": {
+                        "orderBy": [
+                            {
+                                "field": {"fieldPath": "__name__"},
+                                "direction": "ASCENDING",
+                            }
+                        ],
+                        "limit": 2,
+                    },
+                    "expectedError": {"httpStatus": 400, "status": "INVALID_ARGUMENT"},
+                }
             ],
             "stateCases": ["refused-commit", "unchanged-state"],
             "limitations": [

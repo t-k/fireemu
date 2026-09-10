@@ -30,7 +30,7 @@ Raw response bodies and extracted article text remain in the caller-selected ign
 
 ### Bounded compound-aggregation evidence
 
-The newer [bounded evidence page](../../docs/compatibility/aggregation-evidence.md) is independent of the historical probes below. Its corpus fixes eight typed query expectations and two refusal/state controls before measurement. `owned_runner.py --build` invokes Cargo, copies its exact artifact and strict configuration into a private directory, launches only Firestore on OS-assigned ports, checks the inherited process/control-token/profile identity, and verifies shutdown. `--binary` remains useful for diagnostics, but without a recorder-owned build its observation cannot pass the evidence validator. External-daemon observations cannot acquire artifact identity.
+The newer [bounded evidence page](../../docs/compatibility/aggregation-evidence.md) is independent of the historical probes below. Its [revision 2 corpus](aggregation-corpus-revisions.md) fixes eleven typed successful-query expectations, one ordering rejection, and two refusal/state controls before measurement. `owned_runner.py --build` invokes Cargo, copies its exact artifact and strict configuration into a private directory, launches only Firestore on OS-assigned ports, checks the inherited process/control-token/profile identity, and verifies shutdown. `--binary` remains useful for diagnostics, but without a recorder-owned build its observation cannot pass the evidence validator. External-daemon observations cannot acquire artifact identity.
 
 ```sh
 uv run --project tools/compat-inventory --locked tools/compat-inventory/owned_runner.py --build --output /absolute/new-owned-run

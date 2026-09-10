@@ -17,6 +17,30 @@ from aggregation_evidence import (
 from evidence_common import save, sha
 
 
+def query_rows(collection):
+    rows = []
+    for case in corpus()["queries"]:
+        error = case.get("expectedError")
+        rows.append(
+            {
+                "id": case["id"],
+                "request": query_body(case, collection),
+                "httpStatus": error["httpStatus"] if error else 200,
+                "rawResponse": {
+                    "error": {
+                        "code": 400,
+                        "status": "INVALID_ARGUMENT",
+                        "message": "Invalid ordering",
+                    }
+                }
+                if error
+                else [{"result": {"aggregateFields": case["expected"]}}],
+                "passed": True,
+            }
+        )
+    return rows
+
+
 def test_approval_state_space_fails_closed():
     for present, current, scoped, identified in product([False, True], repeat=4):
         approval = {
@@ -37,24 +61,16 @@ def test_approval_state_space_fails_closed():
 
 def test_well_formed_mismatch_is_visible_but_never_approval_eligible():
     collection = "compat_" + "a" * 32
-    rows = [
-        {
-            "id": c["id"],
-            "request": query_body(c, collection),
-            "httpStatus": 200,
-            "rawResponse": [{"result": {"aggregateFields": c["expected"]}}],
-            "passed": True,
-        }
-        for c in corpus()["queries"]
-    ]
-    rows[6]["rawResponse"][0]["result"]["aggregateFields"] = {
+    rows = query_rows(collection)
+    mismatch = next(row for row in rows if row["id"] == "missing-before-limit")
+    mismatch["rawResponse"][0]["result"]["aggregateFields"] = {
         "count": {"integerValue": "2"},
-        "sum": {"doubleValue": 30.5},
+        "sum": {"doubleValue": 31.5},
     }
-    rows[6]["passed"] = False
+    mismatch["passed"] = False
     eligible = validate_query_cases(rows, collection)
     assert "missing-before-limit" not in eligible
-    assert len(eligible) == 7
+    assert len(eligible) == len(corpus()["queries"]) - 1
     approval = {
         "subjectSha256": "subject",
         "cases": ["missing-before-limit"],
@@ -79,16 +95,7 @@ def test_well_formed_mismatch_is_visible_but_never_approval_eligible():
 )
 def test_malformed_inner_values_are_not_publishable_mismatches(fields):
     collection = "compat_" + "a" * 32
-    rows = [
-        {
-            "id": c["id"],
-            "request": query_body(c, collection),
-            "httpStatus": 200,
-            "rawResponse": [{"result": {"aggregateFields": c["expected"]}}],
-            "passed": True,
-        }
-        for c in corpus()["queries"]
-    ]
+    rows = query_rows(collection)
     rows[0]["rawResponse"] = [{"result": {"aggregateFields": fields}}]
     rows[0]["passed"] = False
     with pytest.raises((ValueError, TypeError)):
@@ -112,16 +119,7 @@ def test_state_control_requires_complete_document_timestamps():
 
 def test_every_raw_response_element_is_checked_even_when_passed_is_true():
     collection = "compat_" + "a" * 32
-    rows = [
-        {
-            "id": c["id"],
-            "request": query_body(c, collection),
-            "httpStatus": 200,
-            "rawResponse": [{"result": {"aggregateFields": c["expected"]}}],
-            "passed": True,
-        }
-        for c in corpus()["queries"]
-    ]
+    rows = query_rows(collection)
     validate_query_cases(rows, collection)
     for tail in [None, {"error": {"code": 13}}, {}]:
         rows[0]["rawResponse"].append(tail)
@@ -130,6 +128,109 @@ def test_every_raw_response_element_is_checked_even_when_passed_is_true():
         rows[0]["rawResponse"].pop()
     with pytest.raises(ValueError):
         validate_query_cases(rows[:-1], collection)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_rejection_control_checks_the_complete_error_response(stream):
+    collection = "compat_" + "a" * 32
+    rows = query_rows(collection)
+    rejected = rows[-1]
+    if stream:
+        rejected["rawResponse"] = [rejected["rawResponse"]]
+    assert validate_query_cases(rows, collection) == {
+        c["id"] for c in corpus()["queries"]
+    }
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "null-tail",
+        "result-tail",
+        "empty",
+        "extra-envelope",
+        "extra-error",
+        "wrong-code",
+        "missing-message",
+        "bool-code",
+    ],
+)
+def test_malformed_rejection_never_becomes_an_eligible_case(fault):
+    collection = "compat_" + "a" * 32
+    rows = query_rows(collection)
+    rejected = rows[-1]
+    raw = rejected["rawResponse"]
+    if fault == "null-tail":
+        rejected["rawResponse"] = [raw, None]
+    elif fault == "result-tail":
+        rejected["rawResponse"] = [raw, {"result": {"aggregateFields": {}}}]
+    elif fault == "empty":
+        rejected["rawResponse"] = []
+    elif fault == "extra-envelope":
+        raw["result"] = {}
+    elif fault == "extra-error":
+        raw["error"]["unknown"] = True
+    elif fault == "wrong-code":
+        raw["error"]["code"] = 403
+    elif fault == "missing-message":
+        del raw["error"]["message"]
+    elif fault == "bool-code":
+        raw["error"]["code"] = True
+    with pytest.raises(ValueError):
+        validate_query_cases(rows, collection)
+
+
+@pytest.mark.parametrize("unexpected_success", [False, True])
+def test_wrong_rejection_outcome_is_preserved_but_cannot_be_approved(
+    unexpected_success,
+):
+    collection = "compat_" + "a" * 32
+    rows = query_rows(collection)
+    rejected = rows[-1]
+    if unexpected_success:
+        rejected["httpStatus"] = 200
+        rejected["rawResponse"] = [
+            {
+                "result": {
+                    "aggregateFields": {
+                        "count": {"integerValue": "2"},
+                        "sum": {"integerValue": "10"},
+                    }
+                }
+            }
+        ]
+    else:
+        rejected["rawResponse"]["error"]["status"] = "FAILED_PRECONDITION"
+    rejected["passed"] = False
+    eligible = validate_query_cases(rows, collection)
+    assert rejected["id"] not in eligible
+    with pytest.raises(ValueError, match="mismatched case"):
+        approved_cases(
+            [
+                {
+                    "subjectSha256": "subject",
+                    "cases": [rejected["id"]],
+                    "reviewer": "synthetic-test-only",
+                    "reviewedAt": "2000-01-01",
+                    "decision": "approve",
+                }
+            ],
+            "subject",
+            eligible,
+        )
+    rejected["passed"] = True
+    with pytest.raises(ValueError, match="contradicts"):
+        validate_query_cases(rows, collection)
+
+
+@pytest.mark.parametrize("status", [403, 500, True, 200.0])
+def test_unsupported_or_malformed_http_status_blocks_acceptance(status):
+    collection = "compat_" + "a" * 32
+    rows = query_rows(collection)
+    rows[-1]["httpStatus"] = status
+    rows[-1]["passed"] = False
+    with pytest.raises(ValueError):
+        validate_query_cases(rows, collection)
 
 
 def test_real_bundle_remains_pending_and_test_only_approval_is_scoped(tmp_path):

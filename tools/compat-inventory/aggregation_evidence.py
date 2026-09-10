@@ -3,12 +3,15 @@
 import gzip
 import io
 import json
-import math
 import re
 from datetime import UTC, date, datetime
 
 from aggregation_corpus import CONFIG, SCOPE, corpus, index_definition, query_body
 from aggregation_index import owned_index, resolved_operation
+from aggregation_response import (
+    query_matches,
+    validate_aggregate_fields,  # noqa: F401 -- preserve the diagnostic import API.
+)
 from capture import extract_page
 from evidence_common import (
     ROOT,
@@ -20,7 +23,7 @@ from evidence_common import (
     sha,
 )
 from owned_runner import local_addresses, validate_build
-from probe import DATABASE, NUMBER, PROJECT, owned_name, summarize_aggregation
+from probe import DATABASE, NUMBER, PROJECT, owned_name
 
 DIRECTORY = ROOT / "spec/compatibility/evidence/aggregation"
 PAGE = ROOT / "docs/compatibility/aggregation-evidence.md"
@@ -56,6 +59,17 @@ OBLIGATIONS = [
         "locator": LOCATORS[4],
         "condition": "Derived boundary controls: empty results and missing fields before a limit.",
         "cases": ["empty-result", "missing-before-limit"],
+    },
+    {
+        "id": "AGG-ORDER",
+        "locator": LOCATORS[4],
+        "condition": "Measured controls, not a direct source guarantee: x ASC/DESC and offset selection; explicit name-only order is rejected with INVALID_ARGUMENT.",
+        "cases": [
+            "explicit-x-asc",
+            "explicit-x-desc",
+            "explicit-x-offset",
+            "explicit-name-rejected",
+        ],
     },
     {
         "id": "AGG-STATE",
@@ -108,37 +122,6 @@ def approved_cases(
     return accepted
 
 
-def validate_aggregate_fields(fields: dict, case: dict) -> None:
-    require(
-        set(fields) == set(case["expected"]), "missing or unexpected aggregate alias"
-    )
-    for alias, value in fields.items():
-        require(
-            isinstance(value, dict) and len(value) == 1, "invalid aggregate Value oneof"
-        )
-        kind, scalar = next(iter(value.items()))
-        allowed = {
-            "count": {"integerValue"},
-            "sum": {"integerValue", "doubleValue"},
-            "avg": {"doubleValue", "nullValue"},
-        }[alias]
-        require(kind in allowed, "invalid aggregate scalar type")
-        if kind == "integerValue":
-            require(
-                isinstance(scalar, str)
-                and re.fullmatch(r"-?(0|[1-9][0-9]*)", scalar) is not None,
-                "invalid integer encoding",
-            )
-            require(-(2**63) <= int(scalar) < 2**63, "integer out of range")
-        elif kind == "doubleValue":
-            require(
-                type(scalar) in [int, float] and math.isfinite(scalar),
-                "invalid finite double",
-            )
-        else:
-            require(scalar is None, "invalid null encoding")
-
-
 def validate_query_cases(rows: list, collection: str) -> set[str]:
     matched = set()
     require(
@@ -147,12 +130,10 @@ def validate_query_cases(rows: list, collection: str) -> set[str]:
     )
     for row, case in zip(rows, corpus()["queries"], strict=True):
         require(
-            row["request"] == query_body(case, collection) and row["httpStatus"] == 200,
-            "query request/status mismatch",
+            row["request"] == query_body(case, collection),
+            "query request mismatch",
         )
-        fields = summarize_aggregation(row["rawResponse"])
-        validate_aggregate_fields(fields, case)
-        passed = fields == case["expected"]
+        passed = query_matches(case, row["httpStatus"], row["rawResponse"])
         require(
             row["passed"] is passed, "recorded verdict contradicts the raw response"
         )
@@ -210,9 +191,10 @@ def validate_receipt(value: dict, target: str) -> set[str]:
         "fixture ownership mismatch",
     )
     require([r["id"] for r in value["cases"]] == case_ids(), "missing/duplicate cases")
-    matched = validate_query_cases(value["cases"][:8], collection)
+    query_count = len(corpus()["queries"])
+    matched = validate_query_cases(value["cases"][:query_count], collection)
     require(
-        value["status"] == ("passed" if len(matched) == 8 else "failed"),
+        value["status"] == ("passed" if len(matched) == query_count else "failed"),
         "summary verdict contradicts cases",
     )
     marker = value["ownershipMarker"]
@@ -233,7 +215,7 @@ def validate_receipt(value: dict, target: str) -> set[str]:
             == {**fields, "__fireemuOracleOwner": {"stringValue": marker}},
             "wrong fixture input",
         )
-    refused = value["cases"][8]
+    refused = value["cases"][query_count]
     expected_writes = {
         "writes": [
             {"update": {"name": names[0], "fields": {"x": {"integerValue": "99"}}}},
@@ -248,7 +230,7 @@ def validate_receipt(value: dict, target: str) -> set[str]:
         and refused["httpStatus"] == 409
         and refused["rawResponse"]["error"]["status"] == "ALREADY_EXISTS"
         and refused["passed"] is True
-        and value["cases"][9]["passed"] is True,
+        and value["cases"][query_count + 1]["passed"] is True,
         "refusal/state control failed",
     )
     cleanup = value["cleanup"]
@@ -490,6 +472,7 @@ def render() -> str:
     }
     eligible = matches["local"] & matches["production"]
     prefix = "../../spec/compatibility/evidence/aggregation/"
+    total = len(case_ids())
     lines = [
         "# Bounded compound-aggregation evidence",
         "",
@@ -499,9 +482,11 @@ def render() -> str:
         "",
         f"[Source review]({prefix}source-review.json) covers five selected section locators, not the whole official page. The original acquisition snapshot remains unchanged. The reviewer authored source interpretations; this is separate from approval of execution evidence.",
         "",
-        f"[Local owned artifact]({prefix}local.json): {len(matches['local'])}/10 expectations match. [Fresh production observation]({prefix}production.json): {len(matches['production'])}/10 match. Both completed all 10 cases and cleanup checks. Well-formed mismatches remain visible and cannot be approved; malformed or incomplete evidence is rejected. Matching candidates still require explicit approval.",
+        f"[Local owned artifact]({prefix}local.json): {len(matches['local'])}/{total} expectations match. [Fresh production observation]({prefix}production.json): {len(matches['production'])}/{total} match. Both completed all {total} cases and cleanup checks. Well-formed mismatches remain visible and cannot be approved; malformed or incomplete evidence is rejected. Matching candidates still require explicit approval.",
         "",
-        f"Approval subject: `{subject}`. Approved cases: {len(accepted)}/10. [Approval record]({prefix}index.json).",
+        "[Corpus revision rationale](../../tools/compat-inventory/aggregation-corpus-revisions.md) explains the corrected limit expectation, independent ordering controls, rejection comparison scope and immutable history.",
+        "",
+        f"Approval subject: `{subject}`. Approved cases: {len(accepted)}/{total}. [Approval record]({prefix}index.json).",
         "",
         "| Obligation / parent REQ-FS-PARITY-01 | Condition | Cases | Approval |",
         "| --- | --- | --- | --- |",

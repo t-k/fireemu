@@ -53,3 +53,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-display-name-approval.py --check
       - name: Check bounded Auth password change candidate observations
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password.py --check
+      - name: Check subject-bound Auth password change human approval
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-approval.py --check

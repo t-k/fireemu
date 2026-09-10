@@ -268,6 +268,7 @@ fn features(inv: &Inventory, path: &str, title: &str) -> String {
             out.push_str("[Bounded compound-aggregation source review and execution evidence](aggregation-evidence.md). This separate slice does not promote the broad feature labels.\n\n");
         }
         if text(f, "id") == "AUTH-USERS" {
+            out.push_str("[Auth password change: scoped human approval](auth-password-approval.md). Twelve cases verified and approved as redacted observations for fresh end-user REST tokens, no tenant, local strict and recorded authentication/password policy. Covers password replacement and old/new-password signin, not old-token revocation timing, policy boundaries, SDK or broad Auth compatibility. The candidate page preserves acquisition-time history.\n\n");
             out.push_str("[Auth password change candidate observations](auth-password.md). Twelve scoped end-user REST cases cover credential replacement, old-password rejection, new-password signin, update-token use and selected-state preservation. Unapproved redacted observations only; no revocation-timing, SDK or broad Auth claim.\n\n");
             out.push_str("[Bounded Auth basic candidate observations](auth-basic-evidence.md). These sanitized, unapproved observations do not promote the broad feature labels.\n\n");
             out.push_str("[Auth revision 2: signup-token controls and redacted provenance](auth-basic-v2.md). Twelve scoped cases; no automatic approval or broad Auth claim.\n\n");

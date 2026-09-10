@@ -80,6 +80,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 - AUTH-MFA-TOTP-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
+[Unicode password upper boundary: unapproved diagnostic](auth-password-unicode.md). Eight generated inputs completed credential and cleanup controls on both targets, but the astral over-boundary input differs: production refuses it while the recorded local artifact accepts it. This is an open compatibility difference, not approved coverage or a universal Unicode counting rule.
+
 [Current update-field authorization regressions](../../tools/auth-update-authorization/README.md) cover rejection of four administrator-only fields before state changes. These local handler tests are separate from the approved password observations and do not establish new production-observed authorization coverage.
 
 [Maximum password boundary: scoped human approval](auth-password-maximum-approval.md). The 21 redacted REST cases are verified and approved only for the recorded ASCII inputs, artifact and policy, including exact public-result agreement and preserved fixed credentials after refusal. This supersedes the original candidate status for the pinned subject only. Administrator-only field authorization is explicitly not approved by this observation.

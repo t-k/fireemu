@@ -52,3 +52,7 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/unicode_history.py --check
       - name: Check pre-disable-fix observations and approvals at their fixed source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/disabled_history.py --check
+      - name: Check corrected disable and re-enable artifact observation
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_disabled_recheck.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-disabled-recheck.py --check

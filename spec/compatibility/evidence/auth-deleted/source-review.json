@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "kind": "deleted-account-route-case-mapping",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-11",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-delete-account",
+        "section-sign-in-email-password",
+        "section-get-account-info",
+        "section-refresh-token"
+      ]
+    },
+    {
+      "id": "sessions",
+      "url": "https://firebase.google.com/docs/auth/admin/manage-sessions",
+      "locators": [
+        "manage_user_sessions"
+      ]
+    }
+  ],
+  "transition": {
+    "source": "auth-rest",
+    "locator": "section-delete-account",
+    "condition": "Delete the currently owned A account with its own ID token; require HTTP200, UID/email absence and unchanged selected B state."
+  },
+  "obligations": [
+    {
+      "case": "baseline-a-signin",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "basis": "successful-control",
+      "condition": "Require successful credential use for the same UID/email and selected state; refresh/signin credentials must support derived ID lookup. No substitution of fixed observation inputs."
+    },
+    {
+      "case": "baseline-a-id",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "basis": "successful-control",
+      "condition": "Require successful credential use for the same UID/email and selected state; refresh/signin credentials must support derived ID lookup. No substitution of fixed observation inputs."
+    },
+    {
+      "case": "baseline-a-refresh",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "basis": "successful-control",
+      "condition": "Require successful credential use for the same UID/email and selected state; refresh/signin credentials must support derived ID lookup. No substitution of fixed observation inputs."
+    },
+    {
+      "case": "baseline-b-signin",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "basis": "successful-control",
+      "condition": "Require successful credential use for the same UID/email and selected state; refresh/signin credentials must support derived ID lookup. No substitution of fixed observation inputs."
+    },
+    {
+      "case": "baseline-b-id",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "basis": "successful-control",
+      "condition": "Require successful credential use for the same UID/email and selected state; refresh/signin credentials must support derived ID lookup. No substitution of fixed observation inputs."
+    },
+    {
+      "case": "baseline-b-refresh",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "basis": "successful-control",
+      "condition": "Require successful credential use for the same UID/email and selected state; refresh/signin credentials must support derived ID lookup. No substitution of fixed observation inputs."
+    },
+    {
+      "case": "deleted-a-signin",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "basis": "post-deletion-observation",
+      "condition": "Reuse the exact initial credential after confirmed end-user deletion. Require HTTP400 with a bounded error classification; retain actual code rather than asserting a universal propagation or error guarantee."
+    },
+    {
+      "case": "deleted-a-id",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "basis": "post-deletion-observation",
+      "condition": "Reuse the exact initial credential after confirmed end-user deletion. Require HTTP400 with a bounded error classification; retain actual code rather than asserting a universal propagation or error guarantee."
+    },
+    {
+      "case": "deleted-a-refresh",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "basis": "post-deletion-observation",
+      "condition": "Reuse the exact initial credential after confirmed end-user deletion. Require HTTP400 with a bounded error classification; retain actual code rather than asserting a universal propagation or error guarantee."
+    },
+    {
+      "case": "deleted-b-signin",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "basis": "successful-control",
+      "condition": "Require successful credential use for the same UID/email and selected state; refresh/signin credentials must support derived ID lookup. No substitution of fixed observation inputs."
+    },
+    {
+      "case": "deleted-b-id",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "basis": "successful-control",
+      "condition": "Require successful credential use for the same UID/email and selected state; refresh/signin credentials must support derived ID lookup. No substitution of fixed observation inputs."
+    },
+    {
+      "case": "deleted-b-refresh",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "basis": "successful-control",
+      "condition": "Require successful credential use for the same UID/email and selected state; refresh/signin credentials must support derived ID lookup. No substitution of fixed observation inputs."
+    }
+  ],
+  "limitations": [
+    "URLs and selected sections were read during design; no newly frozen full-body snapshot or completed page review is claimed.",
+    "Deletion and refresh-session lifetime are documented; each route's exact observed error and request timing are observations under recorded settings.",
+    "No execution approval, independent signature verification, SDK checkRevoked, Rules, expiry, recreation, or fault recovery claim."
+  ]
+}

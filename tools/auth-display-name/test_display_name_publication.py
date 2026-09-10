@@ -122,3 +122,16 @@ def test_well_formed_mismatch_stays_visible_and_unapproved():
     page = p.render(value)
     assert "| set-name | Matched | Mismatch |" in page
     assert "candidate, not approved" in page
+
+
+def test_committed_name_receipt_and_generated_page_remain_candidate():
+    p = publisher()
+    value = json.loads(p.BUNDLE.read_bytes())
+    assert p.PAGE.read_text() == p.render(value)
+    assert value["acceptance"] == "candidate"
+    assert all(
+        row["passed"]
+        for target in ("local", "production")
+        for row in value[target]["cases"]
+    )
+    assert "No human approval is inferred" in p.render(value)

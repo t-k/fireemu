@@ -90,6 +90,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Auth photoUrl updates and deletion: scoped human approval](auth-profile-approval.md). The twelve recorded cases are verified and approved as redacted observations for end-user REST, no tenant, local strict and recorded production configuration. This is not approval of general profile updates or image upload/retrieval. The linked candidate page preserves acquisition-time history.
 
+[Auth displayName candidate observations](auth-display-name.md). Twelve scoped cases cover setting, replacement, malformed-token refusal, selected-state preservation and clearing after verified UID persistence; no human approval or broad profile-update claim.
+
 ### User lifecycle and email/password
 
 Sources: AUTH-OVERVIEW; AUTH-REST; AUTH-DISCOVERY-V1. API surfaces: AUTH-SIGNUP; AUTH-PASSWORD.

@@ -80,6 +80,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 - AUTH-MFA-TOTP-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
+[Auth password change candidate observations](auth-password.md). Twelve scoped end-user REST cases cover credential replacement, old-password rejection, new-password signin, update-token use and selected-state preservation. Unapproved redacted observations only; no revocation-timing, SDK or broad Auth claim.
+
 [Bounded Auth basic candidate observations](auth-basic-evidence.md). These sanitized, unapproved observations do not promote the broad feature labels.
 
 [Auth revision 2: signup-token controls and redacted provenance](auth-basic-v2.md). Twelve scoped cases; no automatic approval or broad Auth claim.

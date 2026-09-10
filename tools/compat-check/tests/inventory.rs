@@ -106,6 +106,7 @@ fn auth_observation_link_does_not_promote_broad_labels() {
     assert!(page.contains("(auth-profile-approval.md)"));
     assert!(page.contains("(auth-display-name.md)"));
     assert!(page.contains("(auth-display-name-approval.md)"));
+    assert!(page.contains("(auth-password.md)"));
     assert!(page.contains("Not attested | Not attested | Not attested"));
 }
 

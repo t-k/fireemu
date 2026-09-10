@@ -146,3 +146,17 @@ def test_numeric_substitutes_do_not_satisfy_typed_public_fields(path, invalid):
     parent[path[-1]] = invalid
     with pytest.raises(ValueError):
         p.validate(value)
+
+
+def test_committed_candidate_is_current_and_has_twelve_recorded_matches():
+    p = publisher()
+    value = json.loads(p.BUNDLE.read_bytes())
+    assert p.PAGE.read_text() == p.render(value)
+    assert value["acceptance"] == "candidate"
+    for target in ("local", "production"):
+        rows = value[target]["cases"]
+        assert len(rows) == 12
+        assert all(row["passed"] for row in rows)
+        assert [row["expirySeconds"] for row in rows if "expirySeconds" in row] == [
+            "3600"
+        ] * 5

@@ -34,7 +34,7 @@ jobs:
       - name: Install uv
         run: python3 -m pip install uv==0.11.28
       - name: Test acquisition and candidate receipt contracts
-        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory tools/aggregation-limit tools/auth-basic tools/auth-basic-v2 tools/auth-profile tools/auth-display-name -q
+        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory tools/aggregation-limit tools/auth-basic tools/auth-basic-v2 tools/auth-profile tools/auth-display-name tools/auth-password -q
       - name: Check committed inventory and observations without network acquisition
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/publish.py --check
       - name: Check sanitized Auth candidate observations
@@ -51,3 +51,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-display-name.py --check
       - name: Check subject-bound Auth displayName human approval
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-display-name-approval.py --check
+      - name: Check bounded Auth password change candidate observations
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password.py --check

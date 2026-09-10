@@ -60,3 +60,7 @@ jobs:
         run: |
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-password-unicode-boundary -q
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-unicode-boundary.py --check
+      - name: Check supplementary-character boundary approval
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_boundary_approval.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-unicode-boundary-approval.py --check

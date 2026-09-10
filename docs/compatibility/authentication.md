@@ -80,6 +80,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 - AUTH-MFA-TOTP-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
+[Supplementary-character boundary: scoped human approval](auth-password-unicode-boundary-approval.md). The three recorded patterns are verified and approved: 4095/4096 UTF-16 units accepted, 4097 refused, with credential/state and cleanup controls. Only the pinned subject, artifact and settings are approved; no general Unicode or other-route claim follows.
+
 [Supplementary-character password boundary: candidate](auth-password-unicode-boundary.md). Three newly observed patterns at 4095/4096/4097 UTF-16 units agree on both targets, with branch-specific credential/state and cleanup checks. Separate accounts and random prefixes are used; no human approval or general Unicode guarantee is implied.
 
 [Unicode password recheck: scoped human approval](auth-password-unicode-recheck-approval.md). Eight recorded input patterns are verified and approved as a corrected-artifact comparison against unchanged saved production observations, not a new production run or universal Unicode coverage. Only the pinned subject and recorded controls are approved.

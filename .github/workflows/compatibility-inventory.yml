@@ -64,3 +64,7 @@ jobs:
         run: |
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_boundary_approval.py -q
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-unicode-boundary-approval.py --check
+      - name: Check account disable and re-enable diagnostic
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-disabled -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-disabled.py --check

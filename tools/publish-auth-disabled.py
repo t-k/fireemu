@@ -297,7 +297,7 @@ def render(value):
             "",
             "Privileged disable/re-enable checks persisted UID ownership, flag readback and selected state preservation. The disabled flag itself is excluded from selected-state equality because it is intentionally changed; all other selected fields preserve JSON types and absence. Both accounts are deleted by Admin with UID/email absence confirmation even if A remains disabled. This is not end-user deletion coverage.",
             "",
-            "API-key/project settings and the recorded minimum 6 / maximum 4096 password policy are read before and after without configuration writes. The owned artifact, profile, process identity, exit zero and listener closure are checked. No SDK checkRevoked, Rules, tenant, all-session, same-second boundary, actual expiry or injected-failure recovery claim follows.",
+            "Project configuration and the recorded minimum 6 / maximum 4096 password policy are read before and after without configuration writes. API key metadata and restrictions are not independently read back. The owned artifact, profile, process identity, exit zero and listener closure are checked. No SDK checkRevoked, Rules, tenant, all-session, same-second boundary, actual expiry or injected-failure recovery claim follows.",
             "",
             "[Receipt](../../spec/compatibility/evidence/auth-disabled/receipt.json) · [Source mapping](../../spec/compatibility/evidence/auth-disabled/source-review.json). All earlier evidence and approvals remain unchanged.",
             "",

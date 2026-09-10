@@ -80,6 +80,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 - AUTH-MFA-TOTP-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
+[Maximum password boundary: scoped human approval](auth-password-maximum-approval.md). The 21 redacted REST cases are verified and approved only for the recorded ASCII inputs, artifact and policy, including exact public-result agreement and preserved fixed credentials after refusal. This supersedes the original candidate status for the pinned subject only. Administrator-only field authorization is explicitly not approved by this observation.
+
 [Maximum password boundary: unapproved observations](auth-password-maximum.md). These 21 redacted REST cases cover a generated 4096-character ASCII update, last-character and prefix signin controls, 4097-character refusal and continued use of fixed credentials under the recorded policy. Candidate only; no earlier approval transfers to this artifact. Unicode counting, all strings, custom policies, SDK, Rules, expiry and fault recovery remain separate.
 
 [No-password-change session continuity: scoped human approval](auth-session-continuity-approval.md). The recorded 34 redacted REST observations are verified and approved for fixed A/B and reference-exchange credentials at finite 0/10/30-second targets, including successful refresh-issued ID lookup and recorded invalid-input, deletion and termination checks. This does not establish permanent validity, actual elapsed expiry, whole token lineage, SDK, Rules, strict causality or exact revocation propagation timing.

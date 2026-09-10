@@ -42,3 +42,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history tools/auth-password-maximum -q
       - name: Check maximum password boundary candidate
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-maximum.py --check
+      - name: Check subject-bound maximum password approval
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-maximum-approval.py --check

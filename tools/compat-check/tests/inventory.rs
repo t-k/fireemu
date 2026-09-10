@@ -118,6 +118,7 @@ fn auth_observation_link_does_not_promote_broad_labels() {
     assert!(page.contains("(auth-password-minimum.md)"));
     assert!(page.contains("(auth-password-minimum-approval.md)"));
     assert!(page.contains("(auth-password-maximum.md)"));
+    assert!(page.contains("(auth-password-maximum-approval.md)"));
     assert!(page.contains("acquisition-time candidate status"));
     assert!(page.contains("Not attested | Not attested | Not attested"));
 }

@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- Configuration files containing fireemu-only keys such as `profile` or `auth.totp` without `schemaVersion` are refused with an actionable diagnostic instead of silently ignoring those settings as Firebase project configuration. The check covers `--config`, `--firebase-json`, and `firebaseJson` references.
+
 ## [0.7.0] - 2026-09-09
 
 ### Changed

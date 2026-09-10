@@ -491,7 +491,7 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-const AUTH_KEYS: [&str; 8] = [
+pub(crate) const AUTH_KEYS: [&str; 8] = [
     "enabled",
     "projectIssuer",
     "idTokenSigning",

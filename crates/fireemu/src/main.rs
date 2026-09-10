@@ -713,14 +713,48 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
 }
 
 /// Reads the file `--config` names. A canonical fireemu configuration always carries
-/// `schemaVersion`; anything else is a `firebase.json`, so `firebase emulators:exec --config
-/// firebase.json` works verbatim while every existing `--config fireemu.json` keeps working.
+/// `schemaVersion`; otherwise it is a `firebase.json` unless fireemu-only keys reveal a
+/// missing version. Shared product sections and unrelated Firebase deploy keys remain valid.
 fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CliError::refused(format!("cannot read {}: {e}", diagnostic_path(path))))?;
     let json: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| CliError::refused(format!("{} does not parse: {e}", diagnostic_path(path))))?;
     let canonical = json.get("schemaVersion").is_some();
+    if !canonical {
+        // Do not use the filename or reject arbitrary Firebase deployment extensions.
+        const FIREEMU_ONLY_KEYS: &[&str] = &[
+            "firebaseJson",
+            "profile",
+            "bind",
+            "projects",
+            "limits",
+            "rules",
+            "appCheck",
+            "events",
+            "scheduler",
+            "trace",
+            "daemon",
+        ];
+        let key = FIREEMU_ONLY_KEYS
+            .iter()
+            .copied()
+            .find(|key| json.get(*key).is_some())
+            .map(str::to_owned)
+            .or_else(|| {
+                let auth = json.get("auth")?;
+                config::AUTH_KEYS
+                    .iter()
+                    .find(|key| auth.get(**key).is_some())
+                    .map(|key| format!("auth.{key}"))
+            });
+        if let Some(key) = key {
+            return Err(CliError::refused(format!(
+                "{}: {key} requires a fireemu canonical configuration; add \"schemaVersion\": 1 and pass it with --config",
+                diagnostic_path(path)
+            )));
+        }
+    }
     Ok((json, canonical))
 }
 
@@ -2329,6 +2363,172 @@ mod config_reload_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn config_without_schema_version_rejects_canonical_keys_on_every_input_path() {
+        let dir = scratch("missing-schema-version");
+        let source = dir.join("settings.json");
+        let canonical = dir.join("fireemu.json");
+        std::fs::write(
+            &canonical,
+            r#"{"schemaVersion":1,"firebaseJson":"settings.json"}"#,
+        )
+        .unwrap();
+        let inputs = [
+            RawOptions {
+                config_path: Some(source.clone()),
+                ..RawOptions::default()
+            },
+            RawOptions {
+                firebase_json: Some(source.clone()),
+                ..RawOptions::default()
+            },
+            RawOptions {
+                config_path: Some(canonical),
+                ..RawOptions::default()
+            },
+        ];
+        let mut cases = vec![
+            (
+                serde_json::json!({"auth":{"logActionCodes":false}}),
+                "auth.logActionCodes",
+            ),
+            (serde_json::json!({"auth":{"enabled":null}}), "auth.enabled"),
+            (
+                serde_json::json!({"auth":{"projectIssuer":null}}),
+                "auth.projectIssuer",
+            ),
+            (
+                serde_json::json!({"auth":{"idTokenSigning":null}}),
+                "auth.idTokenSigning",
+            ),
+            (
+                serde_json::json!({"auth":{"secretMaterialization":null}}),
+                "auth.secretMaterialization",
+            ),
+            (
+                serde_json::json!({"auth":{"forwardInboundCredentials":null}}),
+                "auth.forwardInboundCredentials",
+            ),
+            (
+                serde_json::json!({"auth":{"improvedEmailPrivacy":null}}),
+                "auth.improvedEmailPrivacy",
+            ),
+            (
+                serde_json::json!({"auth":{"totp":{"periodSeconds":30}}}),
+                "auth.totp",
+            ),
+            (
+                serde_json::json!({"auth":{"totp":{"bogusKey":1}}}),
+                "auth.totp",
+            ),
+            (serde_json::json!({"auth":{"totp":null}}), "auth.totp"),
+        ];
+        for key in [
+            "firebaseJson",
+            "profile",
+            "bind",
+            "projects",
+            "limits",
+            "rules",
+            "appCheck",
+            "events",
+            "scheduler",
+            "trace",
+            "daemon",
+        ] {
+            cases.push((serde_json::json!({key: null}), key));
+        }
+        for (json, key) in cases {
+            std::fs::write(&source, json.to_string()).unwrap();
+            for raw in &inputs {
+                let err = load_project_config(raw, &Selection::default()).unwrap_err();
+                assert_eq!(err.code, 1);
+                let message = err.message;
+                assert!(message.contains("settings.json"), "{message}");
+                assert!(message.contains(key), "{message}");
+                assert!(message.contains("add \"schemaVersion\": 1"), "{message}");
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn config_without_schema_version_preserves_firebase_sections_and_filenames() {
+        let dir = scratch("firebase-schema-compatibility");
+        // Format detection is based on content, even when the filename says fireemu.
+        let source = dir.join("fireemu.json");
+        std::fs::write(
+            &source,
+            serde_json::json!({
+                "$schema":"https://example.com/firebase.schema.json",
+                "emulators":{"auth":{"port":9199}},
+                "firestore":{"rules":"firestore.rules"},
+                "storage":{"rules":"storage.rules"},
+                "functions":{"source":"functions"},
+                "hosting":{"public":"dist"},
+                "auth":{"providers":{}},
+                "customMetadata":{"profile":"strict","auth":{"totp":{}}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        for raw in [
+            RawOptions {
+                config_path: Some(source.clone()),
+                ..RawOptions::default()
+            },
+            RawOptions {
+                firebase_json: Some(source.clone()),
+                ..RawOptions::default()
+            },
+        ] {
+            let (cfg, _) = load_project_config(&raw, &Selection::default())
+                .unwrap_or_else(|e| panic!("{}", e.message));
+            assert!(cfg.http_addr.ends_with(":9199"));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn config_with_schema_version_still_uses_canonical_validation() {
+        let dir = scratch("canonical-schema-validation");
+        let source = dir.join("firebase.json");
+        let raw = RawOptions {
+            config_path: Some(source.clone()),
+            ..RawOptions::default()
+        };
+        for version in [
+            serde_json::json!(null),
+            serde_json::json!(0),
+            serde_json::json!("1"),
+        ] {
+            std::fs::write(
+                &source,
+                serde_json::json!({"schemaVersion":version,"profile":"strict"}).to_string(),
+            )
+            .unwrap();
+            let err = load_project_config(&raw, &Selection::default()).unwrap_err();
+            assert!(
+                err.message.contains("schemaVersion must be 1"),
+                "{}",
+                err.message
+            );
+        }
+        std::fs::write(
+            &source,
+            r#"{"schemaVersion":1,"auth":{"totp":{"bogusKey":1}}}"#,
+        )
+        .unwrap();
+        let err = load_project_config(&raw, &Selection::default()).unwrap_err();
+        assert!(
+            err.message
+                .contains("unknown config key auth.totp.bogusKey"),
+            "{}",
+            err.message
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -1,6 +1,7 @@
 """Owned launch boundaries, with an opt-in real fireemu process integration test."""
 
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -104,10 +105,67 @@ def test_owned_runner_refuses_ambient_configuration_and_remote_endpoints():
 )
 def test_owned_runner_proves_instance_and_stops_the_actual_artifact(tmp_path):
     report = run_owned(Path(os.environ["FIREEMU_EVIDENCE_BINARY"]), tmp_path / "run")
+    assert_owned_run_completed(report)
+
+
+def assert_owned_run_completed(report):
+    assert report["status"] in {"passed", "failed"}
+    assert observation_complete(report)
+    assert not any(
+        key in report for key in ("failure", "cleanupFailure", "childCleanupFailure")
+    )
     assert report["connection"] == "owned-artifact"
+    assert report["ownedProcess"]["exitCode"] == 0
+    assert report["ownedProcess"]["listenersClosed"] is True
     assert report["ownedProcess"]["stopped"] is True
     assert report["ownedProcess"]["pid"] == report["instance"]["parentPid"]
     assert report["instance"]["wrongTokenStatus"] == 403
     assert report["instance"]["profile"] == "strict"
-    assert len(report["cases"]) == 10
     assert all(row["confirmedMissing"] for row in report["cleanup"])
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_owned_completion_assertions_accept_completed_observations(matches):
+    assert_owned_run_completed(completed_report(matches))
+
+
+def completed_report(matches=True):
+    from aggregation_corpus import corpus
+
+    ids = [case["id"] for case in corpus()["queries"]] + corpus()["stateCases"]
+    return {
+        "connection": "owned-artifact",
+        "status": "passed" if matches else "failed",
+        "ownedProcess": {
+            "pid": 123,
+            "exitCode": 0,
+            "stopped": True,
+            "listenersClosed": True,
+        },
+        "instance": {"parentPid": 123, "wrongTokenStatus": 403, "profile": "strict"},
+        "cases": [{"id": key, "passed": matches} for key in ids],
+        "cleanup": [{"confirmedMissing": True} for _ in range(4)],
+    }
+
+
+@pytest.mark.parametrize(
+    "section,key,value",
+    [
+        (None, "status", "owned-run-failed"),
+        (None, "failure", ""),
+        (None, "cleanupFailure", ""),
+        (None, "childCleanupFailure", ""),
+        (None, "cleanup", []),
+        ("ownedProcess", "exitCode", 2),
+        ("ownedProcess", "listenersClosed", False),
+        ("ownedProcess", "stopped", False),
+        ("ownedProcess", "pid", 456),
+        ("instance", "wrongTokenStatus", 200),
+        ("instance", "profile", "emulator"),
+    ],
+)
+def test_owned_completion_assertions_reject_lifecycle_failures(section, key, value):
+    report = deepcopy(completed_report())
+    (report if section is None else report[section])[key] = value
+    with pytest.raises(AssertionError):
+        assert_owned_run_completed(report)

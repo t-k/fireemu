@@ -812,7 +812,8 @@ pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> Index
 }
 
 /// Decides how a canonical aggregation query is served. `sum` and `avg` fields are added to the
-/// index requirement only; the executable query and its document set remain unchanged.
+/// index requirement. Callers validate and normalize aggregation ordering before planning;
+/// this function does not silently repair invalid explicit ordering at the gateway boundary.
 #[must_use]
 pub fn validate_aggregation_query(
     query: &Query,

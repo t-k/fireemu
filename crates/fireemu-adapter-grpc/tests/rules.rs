@@ -1333,6 +1333,68 @@ service cloud.firestore {
     h.handle.abort();
 }
 
+#[tokio::test]
+async fn aggregation_implicit_order_does_not_change_security_rules_query_metadata() {
+    let mut h = start().await;
+    let (_, token) = h.user("aggregation@example.com");
+    h.rules.replace_source("rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /ordered/{id} { allow list: if request.query.orderBy == null; } } }").unwrap();
+    for explicit in [false, true] {
+        let Some(pb::run_query_request::QueryType::StructuredQuery(mut query)) =
+            list("ordered").query_type
+        else {
+            panic!("structured query required")
+        };
+        if explicit {
+            query.order_by.push(sq::Order {
+                field: Some(sq::FieldReference {
+                    field_path: "x".into(),
+                }),
+                direction: sq::Direction::Ascending as i32,
+            });
+        }
+        let request = pb::RunAggregationQueryRequest {
+            parent: DOCS.into(),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    pb::StructuredAggregationQuery {
+                        query_type: Some(
+                            pb::structured_aggregation_query::QueryType::StructuredQuery(query),
+                        ),
+                        aggregations: vec![pb::structured_aggregation_query::Aggregation {
+                            alias: "sum".into(),
+                            operator: Some(
+                                pb::structured_aggregation_query::aggregation::Operator::Sum(
+                                    pb::structured_aggregation_query::aggregation::Sum {
+                                        field: Some(sq::FieldReference {
+                                            field_path: "x".into(),
+                                        }),
+                                    },
+                                ),
+                            ),
+                        }],
+                    },
+                ),
+            ),
+            ..Default::default()
+        };
+        let result = h
+            .client
+            .run_aggregation_query(with_bearer(request, &token))
+            .await
+            .map(|_| ())
+            .map_err(|error| error.code());
+        assert_eq!(
+            result,
+            if explicit {
+                Err(tonic::Code::PermissionDenied)
+            } else {
+                Ok(())
+            }
+        );
+    }
+    h.handle.abort();
+}
+
 async fn query_code(
     h: &mut Harness,
     token: &str,

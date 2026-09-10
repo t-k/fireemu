@@ -14,7 +14,8 @@ use fireemu_core_firestore::query::{
     Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
 };
 use fireemu_core_firestore::store::{
-    get_field, Aggregation, Document, FirestoreState, ListedDocument, Write, WriteOp,
+    get_field, normalize_aggregation_query, Aggregation, Document, FirestoreState, ListedDocument,
+    Write, WriteOp,
 };
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
@@ -1381,6 +1382,128 @@ fn bounded_name_reads_at_two_hundred_thousand_documents_stay_within_twice_the_ba
 // ---------------------------------------------------------------------------------------
 
 #[test]
+fn aggregation_preserves_inequality_order_before_appending_canonical_targets() {
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.filter = Some(FilterExpr::Field {
+        field: fp("y"),
+        op: FieldOp::GreaterThan,
+        value: Value::Integer(0),
+    });
+    let aggregations = [Aggregation::Sum(fp("x"))];
+    let normalized = normalize_aggregation_query(&query, &aggregations).unwrap();
+    assert_eq!(
+        normalized
+            .effective_order_by()
+            .iter()
+            .map(|order| order.field.clone())
+            .collect::<Vec<_>>(),
+        vec![fp("y"), fp("x"), FieldPath::document_name()]
+    );
+    assert_eq!(
+        normalize_aggregation_query(&normalized, &aggregations).unwrap(),
+        normalized
+    );
+    query.start_at = Some(Cursor {
+        values: vec![Value::Integer(10)],
+        before: false,
+    });
+    assert!(normalize_aggregation_query(&query, &[Aggregation::Count { up_to: None }]).is_err());
+}
+
+#[test]
+fn aggregation_limit_uses_target_field_order_without_changing_document_queries() {
+    let mut db = FirestoreState::new();
+    db.commit(
+        &[
+            set(
+                "items/A",
+                BTreeMap::from([("x".into(), Value::Integer(10))]),
+            ),
+            set("items/B", BTreeMap::new()),
+            set(
+                "items/C",
+                BTreeMap::from([("x".into(), Value::String("text".into()))]),
+            ),
+            set(
+                "items/D",
+                BTreeMap::from([("x".into(), Value::Double(20.5))]),
+            ),
+        ],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.limit = Some(2);
+    let aggregations = [
+        Aggregation::Count { up_to: None },
+        Aggregation::Sum(fp("x")),
+    ];
+    let expected = vec![Value::Integer(2), Value::Double(30.5)];
+    assert_eq!(
+        db.run_aggregation(&query, &aggregations, None).unwrap(),
+        expected
+    );
+    let docs = db.run_query_with_stats(&query, None).unwrap().0;
+    assert_eq!(
+        docs.iter().map(|doc| doc.path.clone()).collect::<Vec<_>>(),
+        vec![path("items/A"), path("items/B")]
+    );
+    let transaction = db
+        .begin_transaction(false, LogicalInstant::from_unix_seconds(1))
+        .unwrap();
+    assert_eq!(
+        db.run_aggregation_in_transaction_with_stats(&transaction, &query, &aggregations)
+            .unwrap()
+            .0,
+        expected
+    );
+    db.commit(
+        &[],
+        Some(&transaction),
+        LogicalInstant::from_unix_seconds(2),
+    )
+    .unwrap();
+}
+
+#[test]
+fn aggregation_rejects_implicit_cursors_and_unfulfilled_fields_after_name() {
+    let db = FirestoreState::new();
+    let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    let aggregations = [Aggregation::Sum(fp("x"))];
+    for values in [
+        vec![Value::Integer(10)],
+        vec![Value::Reference(path("items/B").resource_name())],
+        vec![
+            Value::Integer(10),
+            Value::Reference(path("items/B").resource_name()),
+        ],
+    ] {
+        query.start_at = Some(Cursor {
+            values,
+            before: false,
+        });
+        assert!(db.run_aggregation(&query, &aggregations, None).is_err());
+    }
+    query.start_at = None;
+    query.order_by = vec![OrderClause {
+        field: FieldPath::document_name(),
+        direction: Direction::Ascending,
+    }];
+    for filter in [
+        None,
+        Some(FilterExpr::Field {
+            field: fp("x"),
+            op: FieldOp::Equal,
+            value: Value::Integer(10),
+        }),
+    ] {
+        query.filter = filter;
+        assert!(db.run_aggregation(&query, &aggregations, None).is_err());
+    }
+}
+
+#[test]
 fn combined_aggregations_use_the_common_set_of_documents_with_every_target_field() {
     let mut db = FirestoreState::new();
     db.commit(
@@ -1551,7 +1674,7 @@ fn aggregation_field_presence_is_applied_before_offset_and_limit() {
 }
 
 #[test]
-fn aggregation_field_presence_respects_a_cursor_on_an_excluded_document() {
+fn aggregation_field_presence_respects_an_explicit_field_cursor() {
     let mut db = FirestoreState::new();
     db.commit(
         &[
@@ -1570,8 +1693,12 @@ fn aggregation_field_presence_respects_a_cursor_on_an_excluded_document() {
     )
     .unwrap();
     let mut query = Query::new(QueryScope::collection(None, collection("items")));
+    query.order_by = vec![OrderClause {
+        field: fp("x"),
+        direction: Direction::Ascending,
+    }];
     query.start_at = Some(Cursor {
-        values: vec![Value::Reference(path("items/b-missing").resource_name())],
+        values: vec![Value::Integer(10)],
         before: false,
     });
 
@@ -1663,7 +1790,18 @@ fn reference_aggregation_input(
         })
         .cloned()
         .collect::<Vec<_>>();
-    reference_run(&eligible, query)
+    let mut ordered = query.clone();
+    let fields: std::collections::BTreeSet<_> = required.into_iter().cloned().collect();
+    let direction = query
+        .order_by
+        .last()
+        .map_or(Direction::Ascending, |o| o.direction);
+    for field in query.inequality_fields().into_iter().chain(fields) {
+        if !field.is_document_name() && !ordered.order_by.iter().any(|o| o.field == field) {
+            ordered.order_by.push(OrderClause { field, direction });
+        }
+    }
+    reference_run(&eligible, &ordered)
 }
 
 /// FS-AGG-PERF-03 / FS-AGG-PERF-04: the streaming aggregations agree with the materializing
@@ -1683,37 +1821,77 @@ fn streaming_aggregations_agree_with_the_materializing_reference() {
         Aggregation::Sum(fp("missing")),
         Aggregation::Avg(fp("missing")),
     ];
-    for seed in 0..12u64 {
-        let mut g = Gen::new(0xa66_0000 + seed);
-        let (db, docs) = corpus(&mut g);
-        for case in 0..120u32 {
-            let query = g.query(&docs);
-            let (got, stats) = db
-                .run_aggregation_with_stats(&query, &aggregations, None)
-                .unwrap();
-            // An aggregation reads the stored fields: a projection selects what a result
-            // returns and takes nothing away from what `sum` / `avg` see.
-            let mut unprojected = query.clone();
-            unprojected.projection = None;
-            let selected = reference_aggregation_input(&docs, &unprojected, &aggregations);
-            let want: Vec<Value> = aggregations
-                .iter()
-                .map(|a| reference_aggregate(&selected, a))
-                .collect();
-            assert_eq!(
+    for aggregation_count in [7, 9] {
+        let aggregations = &aggregations[..aggregation_count];
+        let mut nonempty = 0;
+        for seed in 0..12u64 {
+            let mut g = Gen::new(0xa66_0000 + seed);
+            let (db, docs) = corpus(&mut g);
+            for case in 0..120u32 {
+                let query = g.query(&docs);
+                let has_unbound_cursor = [&query.start_at, &query.end_at]
+                    .into_iter()
+                    .flatten()
+                    .any(|cursor| cursor.values.len() > query.order_by.len());
+                let missing_target = aggregations.iter().any(|aggregation| match aggregation {
+                    Aggregation::Sum(field) | Aggregation::Avg(field) => {
+                        !query.order_by.iter().any(|order| order.field == *field)
+                    }
+                    Aggregation::Count { .. } => false,
+                });
+                let missing_inequality = query.inequality_fields().iter().any(|field| {
+                    !field.is_document_name()
+                        && !query.order_by.iter().any(|order| order.field == *field)
+                });
+                let has_order_after_key = query
+                    .order_by
+                    .iter()
+                    .position(|order| order.field.is_document_name())
+                    .is_some_and(|position| {
+                        position + 1 < query.order_by.len() || missing_target || missing_inequality
+                    });
+                if has_unbound_cursor || has_order_after_key {
+                    assert!(
+                        db.run_aggregation_with_stats(&query, aggregations, None)
+                            .is_err(),
+                        "seed {seed} case {case}: invalid aggregation accepted"
+                    );
+                    continue;
+                }
+                let (got, stats) = db
+                    .run_aggregation_with_stats(&query, aggregations, None)
+                    .unwrap_or_else(|error| panic!("seed {seed} case {case} batch {aggregation_count} query {query:?}: {error:?}"));
+                // An aggregation reads the stored fields: a projection selects what a result
+                // returns and takes nothing away from what `sum` / `avg` see.
+                let mut unprojected = query.clone();
+                unprojected.projection = None;
+                let selected = reference_aggregation_input(&docs, &unprojected, aggregations);
+                nonempty += usize::from(!selected.is_empty());
+                let want: Vec<Value> = aggregations
+                    .iter()
+                    .map(|a| reference_aggregate(&selected, a))
+                    .collect();
+                assert_eq!(
                 format!("{got:#?}"),
                 format!("{want:#?}"),
                 "seed {seed} case {case}: streaming and reference aggregations differ for {query:?}"
             );
-            assert_eq!(stats.cloned_documents, 0, "seed {seed} case {case}");
-            if query.limit.is_none() && query.offset == 0 {
-                assert_eq!(
-                    stats.peak_candidates, 0,
-                    "seed {seed} case {case}: an unbounded aggregation retains no candidate"
-                );
-            } else if let Some(limit) = query.limit {
-                assert!(stats.peak_candidates <= u64::from(query.offset) + u64::from(limit));
+                assert_eq!(stats.cloned_documents, 0, "seed {seed} case {case}");
+                if query.limit.is_none() && query.offset == 0 {
+                    assert_eq!(
+                        stats.peak_candidates, 0,
+                        "seed {seed} case {case}: an unbounded aggregation retains no candidate"
+                    );
+                } else if let Some(limit) = query.limit {
+                    assert!(stats.peak_candidates <= u64::from(query.offset) + u64::from(limit));
+                }
             }
+        }
+        if aggregation_count == 7 {
+            assert!(
+                nonempty > 0,
+                "populated target batch must exercise actual documents"
+            );
         }
     }
 }

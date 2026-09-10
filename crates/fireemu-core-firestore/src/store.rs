@@ -283,6 +283,60 @@ pub enum Aggregation {
     Avg(FieldPath),
 }
 
+/// Derives aggregation ordering without changing ordinary query normalization.
+/// Target fields participate in index order even when constrained by equality. Cursor
+/// values bind to explicit order clauses, not the fields appended for aggregation.
+pub fn normalize_aggregation_query(
+    query: &Query,
+    aggregations: &[Aggregation],
+) -> Result<Query, FirestoreError> {
+    let mut fields = BTreeSet::new();
+    for aggregation in aggregations {
+        if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
+            if field.is_document_name() {
+                return Err(FirestoreError::InvalidArgument(
+                    "Aggregations are not supported for the property: __key__".into(),
+                ));
+            }
+            fields.insert(field.clone());
+        }
+    }
+    // The gateway owns general filter canonicalization. Keep this lower-level helper
+    // ordering-only, like the ordinary store executor's canonical-input contract.
+    let mut normalized = query.clone();
+    if [&query.start_at, &query.end_at]
+        .into_iter()
+        .flatten()
+        .any(|cursor| cursor.values.len() > query.order_by.len())
+    {
+        return Err(FirestoreError::InvalidArgument(
+            "Cursor has too many values.".into(),
+        ));
+    }
+    let direction = query
+        .order_by
+        .last()
+        .map_or(Direction::Ascending, |order| order.direction);
+    for field in query.inequality_fields().into_iter().chain(fields) {
+        if !field.is_document_name()
+            && !normalized.order_by.iter().any(|order| order.field == field)
+        {
+            normalized.order_by.push(OrderClause { field, direction });
+        }
+    }
+    let order = normalized.effective_order_by();
+    if order
+        .iter()
+        .position(|clause| clause.field.is_document_name())
+        .is_some_and(|position| position + 1 < order.len())
+    {
+        return Err(FirestoreError::InvalidArgument(
+            "order by clause cannot contain more fields after the key".into(),
+        ));
+    }
+    Ok(normalized)
+}
+
 /// Firestore errors (spec 8.12); the wire adapter maps them to gRPC / REST codes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FirestoreError {
@@ -4274,6 +4328,8 @@ impl FirestoreState {
         aggregations: &[Aggregation],
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Value>, QueryStats), FirestoreError> {
+        let normalized = normalize_aggregation_query(query, aggregations)?;
+        let query = &normalized;
         let mut required_fields = Vec::new();
         for aggregation in aggregations {
             if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
@@ -4320,6 +4376,8 @@ impl FirestoreState {
         query: &Query,
         aggregations: &[Aggregation],
     ) -> Result<(Vec<Value>, QueryStats), FirestoreError> {
+        let normalized = normalize_aggregation_query(query, aggregations)?;
+        let query = &normalized;
         let read_only = self.transaction(id)?.read_only;
         let execution_id = self.allocate_query_execution_id();
         let mut required_fields = Vec::new();

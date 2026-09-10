@@ -3,7 +3,7 @@
 from copy import deepcopy
 
 import pytest
-from probe_limit import cases, corpus, document_ids
+from probe_limit import cases, corpus, document_ids, observe
 
 
 def test_extended_controls_preserve_baseline_and_cover_cursor_and_field_order():
@@ -16,6 +16,21 @@ def test_extended_controls_preserve_baseline_and_cover_cursor_and_field_order():
     assert (
         by_id["multi-reversed"]["aggregations"][0]["avg"]["field"]["fieldPath"] == "y"
     )
+
+
+def test_ordering_details_keep_the_default_controls():
+    rows = cases("compat_" + "a" * 32, details=True)
+    assert rows[:15] == cases("compat_" + "a" * 32)
+    assert len(rows) == 23
+    assert rows[-4]["id"] == "count-cursor-reference"
+    assert rows[-1]["id"] == "array-contains-count"
+
+
+def test_production_refuses_a_caller_selected_namespace_before_any_output(tmp_path):
+    output = tmp_path / "unused.json"
+    with pytest.raises(ValueError):
+        observe("production", output, collection="compat_" + "a" * 32)
+    assert not output.exists()
 
 
 def test_offset_metadata_has_a_bounded_integer_and_read_time():

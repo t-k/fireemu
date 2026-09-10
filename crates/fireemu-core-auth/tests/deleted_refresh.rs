@@ -92,7 +92,7 @@ fn deleted_refresh_never_revives_on_uid_recreation_and_reset_forgets_it() {
     assert_eq!(before.redeem_refresh_token(&token), Ok(uid.clone()));
     assert!(live.transient_bytes() >= 32);
     live.sweep_transient_credentials(
-        now.checked_add(LogicalDuration::from_seconds(864000))
+        now.checked_add(LogicalDuration::from_seconds(864_000))
             .unwrap(),
     );
     assert_eq!(

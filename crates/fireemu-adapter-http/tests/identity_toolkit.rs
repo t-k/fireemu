@@ -2200,6 +2200,7 @@ fn deleted_account_credentials_are_distinct_from_unknown_inputs() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep disable, re-enable and revocation controls in one lifecycle.
 fn disabled_account_preserves_fixed_credentials_for_reenable_in_strict_profile() {
     let s = strict_state();
     let mut accounts = Vec::new();

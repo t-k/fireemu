@@ -726,15 +726,17 @@ fn custom_claims_via_accounts_update_show_up_in_tokens() {
         &json!({"email": "a@example.com", "password": "hunter22"}),
     );
     let uid = body["localId"].as_str().unwrap().to_owned();
-    let (status, _) = post(
+    let (status, _) = admin(
         &s,
-        &format!("{V1}/accounts:update"),
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
         &json!({"localId": uid, "customAttributes": "{\"role\":\"admin\"}"}),
     );
     assert_eq!(status, 200);
-    let (status, bad) = post(
+    let (status, bad) = admin(
         &s,
-        &format!("{V1}/accounts:update"),
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
         &json!({"localId": uid, "customAttributes": "{\"sub\":\"x\"}"}),
     );
     assert_eq!(status, 400);
@@ -1018,9 +1020,10 @@ fn expired_enrollment_session_and_disabled_user() {
     assert_eq!(status, 400);
     assert_eq!(expired["error"]["message"], "SESSION_EXPIRED");
 
-    let (status, _) = post(
+    let (status, _) = admin(
         &s,
-        &format!("{V1}/accounts:update"),
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
         &json!({"localId": uid, "disableUser": true}),
     );
     assert_eq!(status, 200);
@@ -2111,6 +2114,131 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
     );
     assert_eq!(status, 400, "{deleted}");
     assert_eq!(deleted["error"]["message"], "INVALID_REFRESH_TOKEN");
+}
+
+#[test]
+fn password_maximum_update_preserves_credentials_and_full_suffix() {
+    let s = strict_state();
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "maximum@example.com", "password": "original-password", "returnSecureToken": true
+        }),
+    );
+    advance(&s, 2);
+    let maximum = "a".repeat(4096);
+    let (status, changed) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({
+            "idToken": signed["idToken"], "password": maximum, "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{changed}");
+    for password in [
+        maximum.clone(),
+        format!("{}b", "a".repeat(4095)),
+        "a".repeat(4095),
+    ] {
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({
+                "email": "maximum@example.com", "password": password, "returnSecureToken": true
+            }),
+        );
+        assert_eq!(
+            status,
+            if password == maximum { 200 } else { 400 },
+            "{response}"
+        );
+    }
+    advance(&s, 2);
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({
+            "idToken": changed["idToken"], "password": "a".repeat(4097), "displayName": "must-not-apply"
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+    );
+    let (status, looked) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": changed["idToken"]}),
+    );
+    assert_eq!(status, 200, "{looked}");
+    assert_ne!(looked["users"][0]["displayName"], "must-not-apply");
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({
+            "grant_type": "refresh_token", "refresh_token": changed["refreshToken"]
+        }),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "maximum@example.com", "password": maximum, "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+}
+
+#[test]
+fn end_user_update_cannot_select_an_account_by_local_id() {
+    let s = strict_state();
+    let (_, victim) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "victim@example.com", "password": "original-password", "returnSecureToken": true
+        }),
+    );
+    let (_, other) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "other@example.com", "password": "other-password", "returnSecureToken": true
+        }),
+    );
+    for token in [Value::Null, other["idToken"].clone()] {
+        for password in ["replacement".to_owned(), "a".repeat(4097)] {
+            let (status, _) = post(
+                &s,
+                &format!("{V1}/accounts:update"),
+                &json!({
+                    "localId": victim["localId"], "idToken": token, "password": password
+                }),
+            );
+            assert_eq!(status, 400);
+        }
+    }
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "victim@example.com", "password": "original-password", "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200);
+    // The authenticated Admin route is a distinct, explicitly privileged operation.
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": victim["localId"], "displayName": "admin-updated"
+        }),
+    );
+    assert_eq!(status, 200);
 }
 
 #[test]

@@ -1187,9 +1187,9 @@ fn allow_duplicate_emails_applies_to_password_accounts_and_active_lookup() {
         second["localId"]
     );
 
-    let (status, updated) = post(
+    let (status, updated) = admin(
         &s,
-        &format!("{V1}/accounts:update"),
+        &format!("{V1}/projects/demo-app/accounts:update"),
         &json!({"localId": first["localId"], "email": "duplicate@example.com"}),
     );
     assert_eq!(status, 200, "{updated}");

@@ -2331,9 +2331,13 @@ fn dispatch(
             options.fake_custom_token_expiry == FakeCustomTokenExpiry::Reject,
         ),
         Handler::Lookup => lookup(store, body, at, false),
-        Handler::Update | Handler::AdminUpdate => {
-            update(store, body, at, options.stateless_refresh_tokens)
-        }
+        Handler::Update | Handler::AdminUpdate => update(
+            store,
+            body,
+            at,
+            options.stateless_refresh_tokens,
+            handler == Handler::AdminUpdate,
+        ),
         Handler::Delete => delete_account(store, body, at, false),
         Handler::SendOobCode => send_oob_code(store, body, at, headers),
         Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
@@ -3678,6 +3682,7 @@ fn update(
     body: &Value,
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
+    privileged: bool,
 ) -> JsonResponse {
     // `applyActionCode`: an email verification / change code instead of a session.
     if let Some(code) = str_field(body, "oobCode") {
@@ -3687,6 +3692,9 @@ fn update(
         Ok(v) => v,
         Err(r) => return r,
     };
+    if !privileged && local_id.is_some() {
+        return error(400, "OPERATION_NOT_ALLOWED");
+    }
     // The provider the request's session signed in with, when it carries one: the official
     // emulator re-issues tokens for a session whose credentials it just changed.
     let mut session_provider: Option<fireemu_core_auth::store::Provider> = None;
@@ -3713,6 +3721,16 @@ fn update(
         Ok(p) => p,
         Err(r) => return r,
     };
+    // The recorded end-user password policy caps updates at 4096 characters.
+    // Keep Admin/import/reset semantics separate; Unicode counting is not oracle-verified.
+    if !privileged
+        && plan
+            .password
+            .as_ref()
+            .is_some_and(|p| p.chars().count() > 4096)
+    {
+        return error(400, "PASSWORD_DOES_NOT_MEET_REQUIREMENTS");
+    }
     // Improved email privacy requires a proof-of-ownership OOB flow for address changes.
     // It also removes the legacy setAccountInfo email/password linking path; clients link
     // through accounts:signUp with the current ID token instead. Privileged Admin updates

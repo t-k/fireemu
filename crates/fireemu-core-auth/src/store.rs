@@ -476,8 +476,10 @@ pub enum AuthError {
     InvalidPassword,
     /// The user is disabled.
     UserDisabled,
-    /// Unknown or revoked refresh token.
+    /// Unknown or removed refresh token.
     InvalidRefreshToken,
+    /// Known session issued before the user's revocation threshold.
+    ExpiredRefreshToken,
     /// Caller-chosen user ID is malformed.
     InvalidLocalId,
     /// Caller-chosen user ID already exists.
@@ -514,6 +516,7 @@ impl fmt::Display for AuthError {
             Self::InvalidPassword => f.write_str("invalid password"),
             Self::UserDisabled => f.write_str("user is disabled"),
             Self::InvalidRefreshToken => f.write_str("invalid refresh token"),
+            Self::ExpiredRefreshToken => f.write_str("expired refresh token"),
             Self::InvalidLocalId => f.write_str("invalid local id"),
             Self::LocalIdExists => f.write_str("local id already exists"),
             Self::PhoneNumberExists => f.write_str("phone number already exists"),
@@ -2430,7 +2433,7 @@ impl AuthStore {
             return Err(AuthError::UserDisabled);
         }
         if enforce_revocation && session.issued_at < user.tokens_valid_after {
-            return Err(AuthError::InvalidRefreshToken);
+            return Err(AuthError::ExpiredRefreshToken);
         }
         Ok(session.uid.clone())
     }

@@ -2114,6 +2114,89 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
 }
 
 #[test]
+fn strict_password_change_distinguishes_revoked_refresh() {
+    let s = strict_state();
+    let (status, a) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "revoked@example.com", "password": "password1", "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200);
+    advance(&s, 2);
+    let (status, b) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "revoked@example.com", "password": "password1", "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200);
+    let refresh_path = "/securetoken.googleapis.com/v1/token";
+    for token in [&a["refreshToken"], &b["refreshToken"]] {
+        let (status, response) = post(
+            &s,
+            refresh_path,
+            &json!({
+                "grant_type": "refresh_token", "refresh_token": token
+            }),
+        );
+        assert_eq!(status, 200, "{response}");
+    }
+    advance(&s, 3);
+    let (status, changed) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({
+            "idToken": a["idToken"], "password": "password2", "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{changed}");
+    let lookup = |token: &Value| {
+        post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": token}),
+        )
+    };
+    let baseline = lookup(&changed["idToken"]);
+    assert_eq!(baseline.0, 200);
+    for token in [&a["refreshToken"], &b["refreshToken"]] {
+        let (status, response) = post(
+            &s,
+            refresh_path,
+            &json!({
+                "grant_type": "refresh_token", "refresh_token": token
+            }),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(response["error"]["message"], "TOKEN_EXPIRED");
+    }
+    for token in ["", "rt-unknown", "malformed.token"] {
+        let (status, response) = post(
+            &s,
+            refresh_path,
+            &json!({
+                "grant_type": "refresh_token", "refresh_token": token
+            }),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(response["error"]["message"], "INVALID_REFRESH_TOKEN");
+    }
+    assert_eq!(lookup(&changed["idToken"]), baseline);
+    let (status, fresh) = post(
+        &s,
+        refresh_path,
+        &json!({
+            "grant_type": "refresh_token", "refresh_token": changed["refreshToken"]
+        }),
+    );
+    assert_eq!(status, 200, "{fresh}");
+    assert_eq!(lookup(&fresh["id_token"]), baseline);
+}
+
+#[test]
 fn strict_profile_admin_password_change_revokes_refresh_tokens() {
     let s = strict_state();
     let (status, signed) = post(

@@ -681,6 +681,7 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::InvalidPassword => error(400, "INVALID_PASSWORD"),
         AuthError::UserDisabled => error(400, "USER_DISABLED"),
         AuthError::InvalidRefreshToken => error(400, "INVALID_REFRESH_TOKEN"),
+        AuthError::ExpiredRefreshToken => error(400, "TOKEN_EXPIRED"),
         AuthError::UserNotFound => error(400, "USER_NOT_FOUND"),
         AuthError::InvalidLocalId => error(400, "INVALID_LOCAL_ID"),
         AuthError::LocalIdExists => error(400, "DUPLICATE_LOCAL_ID"),

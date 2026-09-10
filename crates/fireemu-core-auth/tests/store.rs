@@ -357,6 +357,40 @@ fn passwords_are_validated_hashed_and_verified() {
 }
 
 #[test]
+fn refresh_revocation_boundary_preserves_stateless_and_disabled_precedence() {
+    for issued in [2, 3, 4] {
+        let mut s = store();
+        let uid = s
+            .create_user(NewUser::email("boundary@example.com"), t0())
+            .unwrap();
+        let other = s
+            .create_user(NewUser::email("other@example.com"), t0())
+            .unwrap();
+        let token = s.issue_refresh_token(&uid, t(issued)).unwrap();
+        let other_token = s.issue_refresh_token(&other, t(1)).unwrap();
+        s.revoke_tokens(&uid, t(3)).unwrap();
+        let expected = if issued < 3 {
+            Err(AuthError::ExpiredRefreshToken)
+        } else {
+            Ok(uid.clone())
+        };
+        assert_eq!(s.redeem_refresh_token(&token), expected);
+        assert!(s.stateless_refresh_session(&token).is_ok());
+        assert_eq!(s.redeem_refresh_token(&other_token), Ok(other));
+        assert_eq!(
+            s.redeem_refresh_token("unknown"),
+            Err(AuthError::InvalidRefreshToken)
+        );
+        s.user_mut(&uid).unwrap().disabled = true;
+        assert_eq!(s.redeem_refresh_token(&token), Err(AuthError::UserDisabled));
+        assert_eq!(
+            s.stateless_refresh_session(&token).unwrap_err(),
+            AuthError::UserDisabled
+        );
+    }
+}
+
+#[test]
 fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
     let mut s = store();
     let ghost = ghost(&mut s);
@@ -389,7 +423,7 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
     s.revoke_tokens(&b, t(3)).unwrap();
     assert_eq!(
         s.redeem_refresh_token(&tb),
-        Err(AuthError::InvalidRefreshToken)
+        Err(AuthError::ExpiredRefreshToken)
     );
     assert_eq!(s.redeem_refresh_token(&tb2), Ok(b.clone()));
     assert_eq!(s.revoke_tokens(&ghost, t(3)), Err(AuthError::UserNotFound));

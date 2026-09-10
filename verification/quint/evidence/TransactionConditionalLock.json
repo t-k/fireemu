@@ -59,7 +59,7 @@
     "conformance/functions/index.js": "72ae82eb08f58affa6fa756ab7daca6687fa2de3880938a8ef88b8e4fe8e66b7",
     "conformance/src/corpus/firestore.mjs": "f079f9cb0ccbc7412b7f83f3a02c068428557aa6ea1aece01df35de47e0d12ee",
     "conformance/src/corpus/functions.mjs": "b36a9cd6c3df901e573f87cd822f40ce1ca47bafa1b3b385ac1efc7fb93204d6",
-    "crates/fireemu-core-firestore/src/store.rs": "3edee6ab8b2631ab9d39d64689a34fbef3837b571abc225129d57966950594a7",
+    "crates/fireemu-core-firestore/src/store.rs": "0b32fd8e68fe8d9e8acf3082762048cd650e44dea2bfaa5ba2ab2866d1f329cf",
     "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",

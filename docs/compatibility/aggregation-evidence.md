@@ -6,9 +6,9 @@ This is a finite Standard/Native REST, strict-profile, admin-bypass slice. It do
 
 [Source review](../../spec/compatibility/evidence/aggregation/source-review.json) covers five selected section locators, not the whole official page. The original acquisition snapshot remains unchanged. The reviewer authored source interpretations; this is separate from approval of execution evidence.
 
-[Local owned artifact](../../spec/compatibility/evidence/aggregation/local.json): 10/10 expectations match. [Fresh production observation](../../spec/compatibility/evidence/aggregation/production.json): 9/10 match. Both completed all 10 cases and cleanup checks. Well-formed mismatches remain visible and cannot be approved; malformed or incomplete evidence is rejected. Matching candidates still require explicit approval.
+[Local owned artifact](../../spec/compatibility/evidence/aggregation/local.json): 9/10 expectations match. [Fresh production observation](../../spec/compatibility/evidence/aggregation/production.json): 9/10 match. Both completed all 10 cases and cleanup checks. Well-formed mismatches remain visible and cannot be approved; malformed or incomplete evidence is rejected. Matching candidates still require explicit approval.
 
-Approval subject: `376db0d96ca2ee4e449c523297d51b511fb3d6fc8f314690a08bea07842218b9`. Approved cases: 0/10. [Approval record](../../spec/compatibility/evidence/aggregation/index.json).
+Approval subject: `677e406a7f741649f56c68e53536808b2793f8ba90d856ced05b85170e7f7465`. Approved cases: 0/10. [Approval record](../../spec/compatibility/evidence/aggregation/index.json).
 
 | Obligation / parent REQ-FS-PARITY-01 | Condition | Cases | Approval |
 | --- | --- | --- | --- |
@@ -28,7 +28,7 @@ Approval subject: `376db0d96ca2ee4e449c523297d51b511fb3d6fc8f314690a08bea0784221
 | sum-average | Matches | Matches |
 | multiple-fields | Matches | Matches |
 | empty-result | Matches | Matches |
-| missing-before-limit | Matches | Mismatch |
+| missing-before-limit | Mismatch | Mismatch |
 | bounded-count | Matches | Matches |
 | refused-commit | Matches | Matches |
 | unchanged-state | Matches | Matches |

@@ -11,9 +11,9 @@
     "profile": "strict",
     "rules": "admin-bypass"
   },
-  "recordedAt": "2026-09-10T00:42:45.126334+00:00",
+  "recordedAt": "2026-09-09T16:01:23.852589+00:00",
   "probeSource": {
-    "commit": "9b57dd25e55c008b4026ae61f6b4c63e1fede18e",
+    "commit": "f12115a9f00803293f973657fd25048856ae0c6b",
     "files": {
       "aggregation_corpus.py": "399edc8bda3db3b91e9e82cf97cde0d1ffe96ad34e74f4686478d63ea0b3d23c",
       "aggregation_evidence.py": "b50ba6db452fbdba5cf00f2ab5b67d459643b925ac830f994840846b91259bea",
@@ -23,7 +23,7 @@
       "auth_probe.py": "097ead80880d23fe74902601578ee8250efcc06218b7cd0588e54004ad027122",
       "capture.py": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
       "evidence_common.py": "054f8dcba3652ae905d489f100eda3bc4528dc6c497ec94c3938b03102dc8750",
-      "owned_runner.py": "414ff5662138a6362104f3542cdfa7326b769548f5ebdf495841baaa7687eb64",
+      "owned_runner.py": "c508bd659f8e81cf51d3a3cb890518fe841d7f9c54476b18c0d7742e4d375618",
       "probe.py": "38383f9705f553edce413ac1a544e0ed39c200b10a0a5c2170d33fb889f19a94",
       "protobuf_inventory.py": "d1218f5a411770f98b3d87c7c308af887b65cc2385db931e2f77389a0f5ce76b",
       "publish.py": "57d932b37fca87ee840925abf2680e347d89c3d6a7e0f2b5eb36739f9a46275b"
@@ -39,7 +39,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_aaaa51680dda4169a52d8cb9a17d9fe6"
               }
             ]
           },
@@ -61,7 +61,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:49.518684Z"
+          "readTime": "2026-09-09T16:07:29.560926Z"
         }
       ],
       "passed": true
@@ -73,7 +73,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_aaaa51680dda4169a52d8cb9a17d9fe6"
               }
             ]
           },
@@ -106,7 +106,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:50.432655Z"
+          "readTime": "2026-09-09T16:07:30.510999Z"
         }
       ],
       "passed": true
@@ -118,7 +118,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_aaaa51680dda4169a52d8cb9a17d9fe6"
               }
             ]
           },
@@ -151,7 +151,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:51.442715Z"
+          "readTime": "2026-09-09T16:07:31.460694Z"
         }
       ],
       "passed": true
@@ -163,7 +163,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_aaaa51680dda4169a52d8cb9a17d9fe6"
               }
             ]
           },
@@ -200,7 +200,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:52.370201Z"
+          "readTime": "2026-09-09T16:07:32.408419Z"
         }
       ],
       "passed": true
@@ -212,7 +212,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_aaaa51680dda4169a52d8cb9a17d9fe6"
               }
             ]
           },
@@ -256,7 +256,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:52.601936Z"
+          "readTime": "2026-09-09T16:07:32.610974Z"
         }
       ],
       "passed": true
@@ -268,7 +268,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_aaaa51680dda4169a52d8cb9a17d9fe6"
               }
             ],
             "where": {
@@ -323,7 +323,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:53.588107Z"
+          "readTime": "2026-09-09T16:07:32.813188Z"
         }
       ],
       "passed": true
@@ -335,7 +335,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_aaaa51680dda4169a52d8cb9a17d9fe6"
               }
             ],
             "limit": 2
@@ -369,7 +369,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:54.583061Z"
+          "readTime": "2026-09-09T16:07:33.779220Z"
         }
       ],
       "passed": false
@@ -381,7 +381,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_aaaa51680dda4169a52d8cb9a17d9fe6"
               }
             ]
           },
@@ -405,7 +405,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:55.560598Z"
+          "readTime": "2026-09-09T16:07:34.731586Z"
         }
       ],
       "passed": true
@@ -416,7 +416,7 @@
         "writes": [
           {
             "update": {
-              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/A",
               "fields": {
                 "x": {
                   "integerValue": "99"
@@ -426,7 +426,7 @@
           },
           {
             "update": {
-              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/D",
               "fields": {}
             },
             "currentDocument": {
@@ -439,7 +439,7 @@
       "rawResponse": {
         "error": {
           "code": 409,
-          "message": "Document already exists: projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+          "message": "Document already exists: projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/D",
           "status": "ALREADY_EXISTS"
         }
       },
@@ -452,34 +452,34 @@
   ],
   "cleanup": [
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/A",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     },
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/B",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     },
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/C",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     },
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/D",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     }
   ],
   "status": "failed",
-  "collection": "compat_d448d3411c404f3784adfc1ee567ca1d",
+  "collection": "compat_aaaa51680dda4169a52d8cb9a17d9fe6",
   "index": {
-    "collection": "compat_d448d3411c404f3784adfc1ee567ca1d",
+    "collection": "compat_aaaa51680dda4169a52d8cb9a17d9fe6",
     "baselineEmpty": true,
     "createAttempted": true,
     "definition": {
@@ -499,21 +499,21 @@
         }
       ]
     },
-    "operation": "projects/fireemu-35fe6/databases/(default)/operations/S1VZOEhpSmdBQ0lDDCoDIDEyZTE4MjllZGVmNi00ZjRiLWNjOTQtMWE0MC1jMzg0MmVmYiQac2VuaWxlcGlwCQpBEg",
+    "operation": "projects/fireemu-35fe6/databases/(default)/operations/S3M0NklpTGdBQ0lDDCoDIGY5NGViZDRlOTczNS05OGZhLWU5YzQtNGVmYS0zMDAxOWFhZiQac2VuaWxlcGlwCQpBEg",
     "operationReadback": {
-      "name": "projects/fireemu-35fe6/databases/(default)/operations/S1VZOEhpSmdBQ0lDDCoDIDEyZTE4MjllZGVmNi00ZjRiLWNjOTQtMWE0MC1jMzg0MmVmYiQac2VuaWxlcGlwCQpBEg",
+      "name": "projects/fireemu-35fe6/databases/(default)/operations/S3M0NklpTGdBQ0lDDCoDIGY5NGViZDRlOTczNS05OGZhLWU5YzQtNGVmYS0zMDAxOWFhZiQac2VuaWxlcGlwCQpBEg",
       "metadata": {
         "@type": "type.googleapis.com/google.firestore.admin.v1.IndexOperationMetadata",
-        "startTime": "2026-09-10T00:42:50.350417Z",
-        "endTime": "2026-09-10T00:48:41.039627Z",
-        "index": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_d448d3411c404f3784adfc1ee567ca1d/indexes/CICAgJiH8YUK",
+        "startTime": "2026-09-09T16:01:29.546888Z",
+        "endTime": "2026-09-09T16:07:20.175390Z",
+        "index": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_aaaa51680dda4169a52d8cb9a17d9fe6/indexes/CICAgLiI64sK",
         "state": "SUCCESSFUL",
         "progressDocuments": {}
       },
       "done": true,
       "response": {
         "@type": "type.googleapis.com/google.firestore.admin.v1.Index",
-        "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_d448d3411c404f3784adfc1ee567ca1d/indexes/CICAgJiH8YUK",
+        "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_aaaa51680dda4169a52d8cb9a17d9fe6/indexes/CICAgLiI64sK",
         "queryScope": "COLLECTION",
         "fields": [
           {
@@ -534,7 +534,7 @@
       }
     },
     "ready": {
-      "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_d448d3411c404f3784adfc1ee567ca1d/indexes/CICAgJiH8YUK",
+      "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_aaaa51680dda4169a52d8cb9a17d9fe6/indexes/CICAgLiI64sK",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -554,7 +554,7 @@
       "density": "SPARSE_ALL"
     },
     "deletedNames": [
-      "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_d448d3411c404f3784adfc1ee567ca1d/indexes/CICAgJiH8YUK"
+      "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_aaaa51680dda4169a52d8cb9a17d9fe6/indexes/CICAgLiI64sK"
     ],
     "confirmedMissing": true
   },
@@ -566,131 +566,131 @@
     "concurrencyMode": "PESSIMISTIC",
     "locationId": "us-central1"
   },
-  "ownershipMarker": "7251ed9663c0485cafd5bcd491098a1c",
+  "ownershipMarker": "3ab41285ec0b42949daaf82f47579cf2",
   "attemptedResources": [
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D"
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/D"
   ],
   "ownedResources": [
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D"
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/D"
   ],
   "stateBefore": {
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/A": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/A",
       "fields": {
+        "x": {
+          "integerValue": "10"
+        },
         "y": {
           "integerValue": "100"
         },
         "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
-        },
-        "x": {
-          "integerValue": "10"
+          "stringValue": "3ab41285ec0b42949daaf82f47579cf2"
         }
       },
-      "createTime": "2026-09-10T00:48:43.797517Z",
-      "updateTime": "2026-09-10T00:48:43.797517Z"
+      "createTime": "2026-09-09T16:07:23.714471Z",
+      "updateTime": "2026-09-09T16:07:23.714471Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/B": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/B",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
+          "stringValue": "3ab41285ec0b42949daaf82f47579cf2"
         }
       },
-      "createTime": "2026-09-10T00:48:44.799394Z",
-      "updateTime": "2026-09-10T00:48:44.799394Z"
+      "createTime": "2026-09-09T16:07:24.003028Z",
+      "updateTime": "2026-09-09T16:07:24.003028Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/C": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/C",
       "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "3ab41285ec0b42949daaf82f47579cf2"
+        },
         "x": {
           "stringValue": "not-a-number"
-        },
-        "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
         },
         "y": {
           "integerValue": "20"
         }
       },
-      "createTime": "2026-09-10T00:48:45.119348Z",
-      "updateTime": "2026-09-10T00:48:45.119348Z"
+      "createTime": "2026-09-09T16:07:24.987593Z",
+      "updateTime": "2026-09-09T16:07:24.987593Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/D": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/D",
       "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "3ab41285ec0b42949daaf82f47579cf2"
+        },
         "x": {
           "doubleValue": 20.5
-        },
-        "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
         }
       },
-      "createTime": "2026-09-10T00:48:45.402437Z",
-      "updateTime": "2026-09-10T00:48:45.402437Z"
+      "createTime": "2026-09-09T16:07:26.080711Z",
+      "updateTime": "2026-09-09T16:07:26.080711Z"
     }
   },
   "stateAfter": {
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/A": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/A",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
-        },
-        "x": {
-          "integerValue": "10"
+          "stringValue": "3ab41285ec0b42949daaf82f47579cf2"
         },
         "y": {
           "integerValue": "100"
+        },
+        "x": {
+          "integerValue": "10"
         }
       },
-      "createTime": "2026-09-10T00:48:43.797517Z",
-      "updateTime": "2026-09-10T00:48:43.797517Z"
+      "createTime": "2026-09-09T16:07:23.714471Z",
+      "updateTime": "2026-09-09T16:07:23.714471Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/B": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/B",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
+          "stringValue": "3ab41285ec0b42949daaf82f47579cf2"
         }
       },
-      "createTime": "2026-09-10T00:48:44.799394Z",
-      "updateTime": "2026-09-10T00:48:44.799394Z"
+      "createTime": "2026-09-09T16:07:24.003028Z",
+      "updateTime": "2026-09-09T16:07:24.003028Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/C": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/C",
       "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "3ab41285ec0b42949daaf82f47579cf2"
+        },
         "x": {
           "stringValue": "not-a-number"
-        },
-        "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
         },
         "y": {
           "integerValue": "20"
         }
       },
-      "createTime": "2026-09-10T00:48:45.119348Z",
-      "updateTime": "2026-09-10T00:48:45.119348Z"
+      "createTime": "2026-09-09T16:07:24.987593Z",
+      "updateTime": "2026-09-09T16:07:24.987593Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/D": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_aaaa51680dda4169a52d8cb9a17d9fe6/D",
       "fields": {
-        "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
-        },
         "x": {
           "doubleValue": 20.5
+        },
+        "__fireemuOracleOwner": {
+          "stringValue": "3ab41285ec0b42949daaf82f47579cf2"
         }
       },
-      "createTime": "2026-09-10T00:48:45.402437Z",
-      "updateTime": "2026-09-10T00:48:45.402437Z"
+      "createTime": "2026-09-09T16:07:26.080711Z",
+      "updateTime": "2026-09-09T16:07:26.080711Z"
     }
   }
 }

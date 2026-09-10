@@ -11,9 +11,9 @@
     "profile": "strict",
     "rules": "admin-bypass"
   },
-  "recordedAt": "2026-09-10T01:02:41.483677+00:00",
+  "recordedAt": "2026-09-09T16:01:26.581029+00:00",
   "probeSource": {
-    "commit": "fe37fe012906b7fd60048f4e698c72fbb1b79109",
+    "commit": "f12115a9f00803293f973657fd25048856ae0c6b",
     "files": {
       "aggregation_corpus.py": "399edc8bda3db3b91e9e82cf97cde0d1ffe96ad34e74f4686478d63ea0b3d23c",
       "aggregation_evidence.py": "b50ba6db452fbdba5cf00f2ab5b67d459643b925ac830f994840846b91259bea",
@@ -23,7 +23,7 @@
       "auth_probe.py": "097ead80880d23fe74902601578ee8250efcc06218b7cd0588e54004ad027122",
       "capture.py": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
       "evidence_common.py": "054f8dcba3652ae905d489f100eda3bc4528dc6c497ec94c3938b03102dc8750",
-      "owned_runner.py": "414ff5662138a6362104f3542cdfa7326b769548f5ebdf495841baaa7687eb64",
+      "owned_runner.py": "c508bd659f8e81cf51d3a3cb890518fe841d7f9c54476b18c0d7742e4d375618",
       "probe.py": "38383f9705f553edce413ac1a544e0ed39c200b10a0a5c2170d33fb889f19a94",
       "protobuf_inventory.py": "d1218f5a411770f98b3d87c7c308af887b65cc2385db931e2f77389a0f5ce76b",
       "publish.py": "57d932b37fca87ee840925abf2680e347d89c3d6a7e0f2b5eb36739f9a46275b"
@@ -39,7 +39,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_475e2198450548f5b0f3b279e178eaf1"
+                "collectionId": "compat_e520a0892a16496693ab15607dbfda99"
               }
             ]
           },
@@ -54,7 +54,7 @@
       "httpStatus": 200,
       "rawResponse": [
         {
-          "readTime": "2026-09-10T01:02:41.521324Z",
+          "readTime": "2026-09-09T16:01:26.633793Z",
           "result": {
             "aggregateFields": {
               "count": {
@@ -73,7 +73,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_475e2198450548f5b0f3b279e178eaf1"
+                "collectionId": "compat_e520a0892a16496693ab15607dbfda99"
               }
             ]
           },
@@ -96,7 +96,7 @@
       "httpStatus": 200,
       "rawResponse": [
         {
-          "readTime": "2026-09-10T01:02:41.524597Z",
+          "readTime": "2026-09-09T16:01:26.638302Z",
           "result": {
             "aggregateFields": {
               "count": {
@@ -118,7 +118,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_475e2198450548f5b0f3b279e178eaf1"
+                "collectionId": "compat_e520a0892a16496693ab15607dbfda99"
               }
             ]
           },
@@ -141,7 +141,7 @@
       "httpStatus": 200,
       "rawResponse": [
         {
-          "readTime": "2026-09-10T01:02:41.530220Z",
+          "readTime": "2026-09-09T16:01:26.644878Z",
           "result": {
             "aggregateFields": {
               "avg": {
@@ -163,7 +163,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_475e2198450548f5b0f3b279e178eaf1"
+                "collectionId": "compat_e520a0892a16496693ab15607dbfda99"
               }
             ]
           },
@@ -190,7 +190,7 @@
       "httpStatus": 200,
       "rawResponse": [
         {
-          "readTime": "2026-09-10T01:02:41.533507Z",
+          "readTime": "2026-09-09T16:01:26.649192Z",
           "result": {
             "aggregateFields": {
               "avg": {
@@ -212,7 +212,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_475e2198450548f5b0f3b279e178eaf1"
+                "collectionId": "compat_e520a0892a16496693ab15607dbfda99"
               }
             ]
           },
@@ -243,7 +243,7 @@
       "httpStatus": 200,
       "rawResponse": [
         {
-          "readTime": "2026-09-10T01:02:41.536515Z",
+          "readTime": "2026-09-09T16:01:26.653684Z",
           "result": {
             "aggregateFields": {
               "avg": {
@@ -268,7 +268,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_475e2198450548f5b0f3b279e178eaf1"
+                "collectionId": "compat_e520a0892a16496693ab15607dbfda99"
               }
             ],
             "where": {
@@ -310,7 +310,7 @@
       "httpStatus": 200,
       "rawResponse": [
         {
-          "readTime": "2026-09-10T01:02:41.539506Z",
+          "readTime": "2026-09-09T16:01:26.658295Z",
           "result": {
             "aggregateFields": {
               "avg": {
@@ -335,7 +335,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_475e2198450548f5b0f3b279e178eaf1"
+                "collectionId": "compat_e520a0892a16496693ab15607dbfda99"
               }
             ],
             "limit": 2
@@ -359,20 +359,20 @@
       "httpStatus": 200,
       "rawResponse": [
         {
-          "readTime": "2026-09-10T01:02:41.542888Z",
+          "readTime": "2026-09-09T16:01:26.662695Z",
           "result": {
             "aggregateFields": {
               "count": {
                 "integerValue": "2"
               },
               "sum": {
-                "doubleValue": 30.5
+                "integerValue": "10"
               }
             }
           }
         }
       ],
-      "passed": false
+      "passed": true
     },
     {
       "id": "bounded-count",
@@ -381,7 +381,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_475e2198450548f5b0f3b279e178eaf1"
+                "collectionId": "compat_e520a0892a16496693ab15607dbfda99"
               }
             ]
           },
@@ -398,7 +398,7 @@
       "httpStatus": 200,
       "rawResponse": [
         {
-          "readTime": "2026-09-10T01:02:41.545976Z",
+          "readTime": "2026-09-09T16:01:26.667355Z",
           "result": {
             "aggregateFields": {
               "count": {
@@ -416,7 +416,7 @@
         "writes": [
           {
             "update": {
-              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/A",
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/A",
               "fields": {
                 "x": {
                   "integerValue": "99"
@@ -426,7 +426,7 @@
           },
           {
             "update": {
-              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/D",
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/D",
               "fields": {}
             },
             "currentDocument": {
@@ -439,7 +439,7 @@
       "rawResponse": {
         "error": {
           "code": 409,
-          "message": "Document already exists: projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/D",
+          "message": "Document already exists: projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/D",
           "status": "ALREADY_EXISTS"
         }
       },
@@ -452,52 +452,52 @@
   ],
   "cleanup": [
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/A",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/A",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     },
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/B",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/B",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     },
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/C",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/C",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     },
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/D",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/D",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     }
   ],
-  "status": "failed",
-  "collection": "compat_475e2198450548f5b0f3b279e178eaf1",
+  "status": "passed",
+  "collection": "compat_e520a0892a16496693ab15607dbfda99",
   "index": {},
-  "ownershipMarker": "b9731f14929d4309a59f178fd41ffc05",
+  "ownershipMarker": "59f1f2f10e80499ebf6d3d4ff7e3604d",
   "attemptedResources": [
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/A",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/B",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/C",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/D"
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/D"
   ],
   "ownedResources": [
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/A",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/B",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/C",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/D"
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/D"
   ],
   "stateBefore": {
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/A": {
-      "createTime": "2026-09-10T01:02:41.496751Z",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/A": {
+      "createTime": "2026-09-09T16:01:26.598699Z",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "b9731f14929d4309a59f178fd41ffc05"
+          "stringValue": "59f1f2f10e80499ebf6d3d4ff7e3604d"
         },
         "x": {
           "integerValue": "10"
@@ -506,24 +506,24 @@
           "integerValue": "100"
         }
       },
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/A",
-      "updateTime": "2026-09-10T01:02:41.496751Z"
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/A",
+      "updateTime": "2026-09-09T16:01:26.598699Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/B": {
-      "createTime": "2026-09-10T01:02:41.500689Z",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/B": {
+      "createTime": "2026-09-09T16:01:26.604231Z",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "b9731f14929d4309a59f178fd41ffc05"
+          "stringValue": "59f1f2f10e80499ebf6d3d4ff7e3604d"
         }
       },
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/B",
-      "updateTime": "2026-09-10T01:02:41.500689Z"
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/B",
+      "updateTime": "2026-09-09T16:01:26.604231Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/C": {
-      "createTime": "2026-09-10T01:02:41.503865Z",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/C": {
+      "createTime": "2026-09-09T16:01:26.609166Z",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "b9731f14929d4309a59f178fd41ffc05"
+          "stringValue": "59f1f2f10e80499ebf6d3d4ff7e3604d"
         },
         "x": {
           "stringValue": "not-a-number"
@@ -532,29 +532,29 @@
           "integerValue": "20"
         }
       },
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/C",
-      "updateTime": "2026-09-10T01:02:41.503865Z"
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/C",
+      "updateTime": "2026-09-09T16:01:26.609166Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/D": {
-      "createTime": "2026-09-10T01:02:41.506999Z",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/D": {
+      "createTime": "2026-09-09T16:01:26.613661Z",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "b9731f14929d4309a59f178fd41ffc05"
+          "stringValue": "59f1f2f10e80499ebf6d3d4ff7e3604d"
         },
         "x": {
           "doubleValue": 20.5
         }
       },
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/D",
-      "updateTime": "2026-09-10T01:02:41.506999Z"
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/D",
+      "updateTime": "2026-09-09T16:01:26.613661Z"
     }
   },
   "stateAfter": {
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/A": {
-      "createTime": "2026-09-10T01:02:41.496751Z",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/A": {
+      "createTime": "2026-09-09T16:01:26.598699Z",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "b9731f14929d4309a59f178fd41ffc05"
+          "stringValue": "59f1f2f10e80499ebf6d3d4ff7e3604d"
         },
         "x": {
           "integerValue": "10"
@@ -563,24 +563,24 @@
           "integerValue": "100"
         }
       },
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/A",
-      "updateTime": "2026-09-10T01:02:41.496751Z"
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/A",
+      "updateTime": "2026-09-09T16:01:26.598699Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/B": {
-      "createTime": "2026-09-10T01:02:41.500689Z",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/B": {
+      "createTime": "2026-09-09T16:01:26.604231Z",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "b9731f14929d4309a59f178fd41ffc05"
+          "stringValue": "59f1f2f10e80499ebf6d3d4ff7e3604d"
         }
       },
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/B",
-      "updateTime": "2026-09-10T01:02:41.500689Z"
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/B",
+      "updateTime": "2026-09-09T16:01:26.604231Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/C": {
-      "createTime": "2026-09-10T01:02:41.503865Z",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/C": {
+      "createTime": "2026-09-09T16:01:26.609166Z",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "b9731f14929d4309a59f178fd41ffc05"
+          "stringValue": "59f1f2f10e80499ebf6d3d4ff7e3604d"
         },
         "x": {
           "stringValue": "not-a-number"
@@ -589,37 +589,37 @@
           "integerValue": "20"
         }
       },
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/C",
-      "updateTime": "2026-09-10T01:02:41.503865Z"
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/C",
+      "updateTime": "2026-09-09T16:01:26.609166Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/D": {
-      "createTime": "2026-09-10T01:02:41.506999Z",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/D": {
+      "createTime": "2026-09-09T16:01:26.613661Z",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "b9731f14929d4309a59f178fd41ffc05"
+          "stringValue": "59f1f2f10e80499ebf6d3d4ff7e3604d"
         },
         "x": {
           "doubleValue": 20.5
         }
       },
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_475e2198450548f5b0f3b279e178eaf1/D",
-      "updateTime": "2026-09-10T01:02:41.506999Z"
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_e520a0892a16496693ab15607dbfda99/D",
+      "updateTime": "2026-09-09T16:01:26.613661Z"
     }
   },
   "instance": {
-    "parentPid": 36276,
-    "childPid": 36277,
-    "nonce": "475e2198450548f5b0f3b279e178eaf1",
+    "parentPid": 47517,
+    "childPid": 47518,
+    "nonce": "e520a0892a16496693ab15607dbfda99",
     "authorizedStatus": 200,
     "wrongTokenStatus": 403,
     "profile": "strict",
     "version": "0.7.0",
     "project": "fireemu-35fe6",
-    "firestoreOrigin": "http://127.0.0.1:58861",
-    "controlOrigin": "http://127.0.0.1:58862"
+    "firestoreOrigin": "http://127.0.0.1:57199",
+    "controlOrigin": "http://127.0.0.1:57200"
   },
   "artifact": {
-    "sha256": "c17ebd282ce6b05295b72e03948e6b6ff5cd988664de01cc6e8a4c48c9d3ad4b",
+    "sha256": "a040ef4cf99c2eb41284f74ccb8cee86e16fb6d4b2e9dc8932e16ee4d35696c6",
     "version": "0.7.0",
     "kind": "local-binary",
     "platform": "darwin",
@@ -635,7 +635,7 @@
       "--message-format=json"
     ],
     "exitCode": 0,
-    "artifactSha256": "c17ebd282ce6b05295b72e03948e6b6ff5cd988664de01cc6e8a4c48c9d3ad4b",
+    "artifactSha256": "a040ef4cf99c2eb41284f74ccb8cee86e16fb6d4b2e9dc8932e16ee4d35696c6",
     "inputs": {
       ".cargo/mutants.toml": "a93fcfc891d19ad6a3ef41c3914f6afd95a954fddf39eb0f635d8e112cfbbf33",
       "Cargo.lock": "694a401c6f85bf81e14004dc935f9eec696a9492cd31933607c3f7f62f58834c",
@@ -661,7 +661,7 @@
       "crates/fireemu-adapter-grpc/benches/read_concurrency.rs": "473ab20134428eadcaf34c643b866ecfe743e95fab0568a227f173e2cb84ead5",
       "crates/fireemu-adapter-grpc/src/decode.rs": "72a09992dd9bdcd9d679438f947feec214119f6bce71af47aff5f6735f3fb7e2",
       "crates/fireemu-adapter-grpc/src/encode.rs": "8e992495ce648a750e0ce0cae8077ede63ec90a226b2c82aa0a6bdfff16f02c4",
-      "crates/fireemu-adapter-grpc/src/gateway.rs": "05c85d470adf8dc74c61eb64bb6415a54b93f5673260b2b2a3176c5f7e4cc698",
+      "crates/fireemu-adapter-grpc/src/gateway.rs": "426aaf596e1a1359109a2af249b1d84f321c5b84f01f8a197b61ef5ac3e07969",
       "crates/fireemu-adapter-grpc/src/lib.rs": "a02534d908b9e0d7df2a9ad3a7cb47fb9e9bcee1138044e227467ee7484d4a85",
       "crates/fireemu-adapter-grpc/src/local.rs": "fae72b7f9d16db840a90a9dadca1c633729a05039dbacc892b3b72a2c2986399",
       "crates/fireemu-adapter-grpc/src/pipeline.rs": "fb2187ff408e9fe1ad22535edc05466969005891062ac8c2996e41e1f6f3c37d",
@@ -677,11 +677,11 @@
       "crates/fireemu-adapter-grpc/tests/app_check.rs": "cd35d5b2df902a73285fa6f2f885913346c4d30a99f627e7ea039d50adde9baf",
       "crates/fireemu-adapter-grpc/tests/depth_transport.rs": "0d7d854951d7bd2673196439a76df2a16ed53fd1e65f9433da186e0fbb6c77b4",
       "crates/fireemu-adapter-grpc/tests/drop.rs": "af07869d3e933912eecdf83eb11a237497913baaa1f4d14fed5d88b14be1bc9f",
-      "crates/fireemu-adapter-grpc/tests/gateway.rs": "dadb3b316a1b070908fc2c4311314c48846db3244d45a18f3cc05b1eab931c03",
+      "crates/fireemu-adapter-grpc/tests/gateway.rs": "e87260ea695ed9bdf774544ac185e528e84c6eaa2d728f798531688eff5b75ad",
       "crates/fireemu-adapter-grpc/tests/local.rs": "628142e2148dfccde2845561f02b2ab0425636911ff8670177e3215865546388",
       "crates/fireemu-adapter-grpc/tests/readiness.rs": "6078603aa5e51490f8b4c14a4342e8f6162350effb3c8ac8799c1603ee5ddf4a",
       "crates/fireemu-adapter-grpc/tests/rest.rs": "358738991241ca3a5284d9a94856b503c9e5598b32ca22dd64bbc61870e9d4f5",
-      "crates/fireemu-adapter-grpc/tests/rules.rs": "c5b23f1dc84175afd95ede9e0b4a3ee3894209627d944029de7200b8e9523132",
+      "crates/fireemu-adapter-grpc/tests/rules.rs": "21c398bd7194483029838714bac1fd1ecb070bb6ebb1fc96f0cb9cce06a9a3e4",
       "crates/fireemu-adapter-grpc/tests/streams.rs": "de0cb53cbdeb9e662867af3022f93cbf622c2651681a34b54ef2913fc7acaded",
       "crates/fireemu-adapter-grpc/tests/webchannel.rs": "07706cdec2d4984ade8c9bc3d318501e8b99b2d86ac7d510133b24ff168ad69a",
       "crates/fireemu-adapter-http/Cargo.toml": "fcedc1f5ed23bcfcf13cc8499675e21485f712a8a5e647d174c1736fdd43964d",
@@ -797,7 +797,7 @@
       "crates/fireemu-core-firestore/benches/commit_batch.rs": "50d62777b4fd35670509f8ed6af27ad352683abaa210f1ba6c4cda0e8294672d",
       "crates/fireemu-core-firestore/benches/verify.rs": "7522cb2a3223d44991353f514d48411199abb0e7eea6226619711f4fbeb2df26",
       "crates/fireemu-core-firestore/src/field_path.rs": "bebf2d27d530840cd478358848bb1ab417e8a66fccef15a093fd80c5ba0c45b1",
-      "crates/fireemu-core-firestore/src/index.rs": "545cc7487bd4390de3a30a14e176784bf39609110b1bf2c3e302a03b3412a079",
+      "crates/fireemu-core-firestore/src/index.rs": "ce4af6f7db9f06dc9152b9275bdaf03e64b69bad78f1f30acfdb505347fcfda3",
       "crates/fireemu-core-firestore/src/index_usage.rs": "b3221cfa8d2d60830f6385991e1f5e2eda08b01770444a9cbd6798e6fab2601c",
       "crates/fireemu-core-firestore/src/lib.rs": "03a4b3183bea2df38e80a93ce8fc14a1f5190961405ac37999f59664f81dadb0",
       "crates/fireemu-core-firestore/src/limits.rs": "b11312aa9852fbc9ebca5290b23bb1d39fe17ec1b72cbae7d42a7e8c85fdbf3e",
@@ -805,7 +805,7 @@
       "crates/fireemu-core-firestore/src/pipeline.rs": "0ea0403dd6c91ea2ee69813d37818cc9ac7cdf1f44dd02ad6bf4d5f656b2ee11",
       "crates/fireemu-core-firestore/src/query.rs": "8f8ecead08e438fa24b1f07c904ebcb3e10af9f5cfdd4476d17ed7afddeed481",
       "crates/fireemu-core-firestore/src/size.rs": "fd998763fcb4b55be3a9ee31ff720cac74b8aadf9e070a47d85338df6364d69e",
-      "crates/fireemu-core-firestore/src/store.rs": "0b32fd8e68fe8d9e8acf3082762048cd650e44dea2bfaa5ba2ab2866d1f329cf",
+      "crates/fireemu-core-firestore/src/store.rs": "3edee6ab8b2631ab9d39d64689a34fbef3837b571abc225129d57966950594a7",
       "crates/fireemu-core-firestore/src/text_index.rs": "8d22cc906849e7cc5840add6404aa7b093af1bd8954947eed7402218188b23d6",
       "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
       "crates/fireemu-core-firestore/tests/compaction.rs": "49a813c02c92ca13e18446b520341e97d45c6d3b17b77a880830949d7b0de28a",
@@ -816,7 +816,7 @@
       "crates/fireemu-core-firestore/tests/index.rs": "a991fd04fa7faf93a81bb159462d5c3ffecb2b9b3d354f03355fde5228270537",
       "crates/fireemu-core-firestore/tests/mutants.rs": "36a0a12f1c452f13b8f8bb72ca8b039b7d67d3d7a8ce1bc3f37859e867b768f3",
       "crates/fireemu-core-firestore/tests/query.rs": "e20cddd27a9ae33a0f133dbbcdb41718897f1b73706b73764ad859bb5dea0445",
-      "crates/fireemu-core-firestore/tests/query_execution.rs": "99f803a7a89054ff093eb002def2b2efe73a3d66029280ecb24bf8c5fe0642f6",
+      "crates/fireemu-core-firestore/tests/query_execution.rs": "3b5ad465b28c8dc4bbfad2f29b71dc5199c8336eaa3aaa54d03db002d1c9a6f7",
       "crates/fireemu-core-firestore/tests/size.rs": "e208ecb3a9a725bd8c64ce2a469e57c38d6a829318473cc86ca81994269eba7b",
       "crates/fireemu-core-firestore/tests/snapshot.rs": "113b3b98174b44f4982adb75e2e37b5df6380779495f79a8ca3690f6d2bcf1aa",
       "crates/fireemu-core-firestore/tests/store.rs": "a531badfab91fbf14e7ae56a70f106ff5ce303777010ea16c7bc3dbafc376194",
@@ -1028,7 +1028,7 @@
     "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)"
   },
   "runtimeSource": {
-    "commit": "fe37fe012906b7fd60048f4e698c72fbb1b79109",
+    "commit": "f12115a9f00803293f973657fd25048856ae0c6b",
     "files": {
       ".cargo/mutants.toml": "a93fcfc891d19ad6a3ef41c3914f6afd95a954fddf39eb0f635d8e112cfbbf33",
       "Cargo.lock": "694a401c6f85bf81e14004dc935f9eec696a9492cd31933607c3f7f62f58834c",
@@ -1054,7 +1054,7 @@
       "crates/fireemu-adapter-grpc/benches/read_concurrency.rs": "473ab20134428eadcaf34c643b866ecfe743e95fab0568a227f173e2cb84ead5",
       "crates/fireemu-adapter-grpc/src/decode.rs": "72a09992dd9bdcd9d679438f947feec214119f6bce71af47aff5f6735f3fb7e2",
       "crates/fireemu-adapter-grpc/src/encode.rs": "8e992495ce648a750e0ce0cae8077ede63ec90a226b2c82aa0a6bdfff16f02c4",
-      "crates/fireemu-adapter-grpc/src/gateway.rs": "05c85d470adf8dc74c61eb64bb6415a54b93f5673260b2b2a3176c5f7e4cc698",
+      "crates/fireemu-adapter-grpc/src/gateway.rs": "426aaf596e1a1359109a2af249b1d84f321c5b84f01f8a197b61ef5ac3e07969",
       "crates/fireemu-adapter-grpc/src/lib.rs": "a02534d908b9e0d7df2a9ad3a7cb47fb9e9bcee1138044e227467ee7484d4a85",
       "crates/fireemu-adapter-grpc/src/local.rs": "fae72b7f9d16db840a90a9dadca1c633729a05039dbacc892b3b72a2c2986399",
       "crates/fireemu-adapter-grpc/src/pipeline.rs": "fb2187ff408e9fe1ad22535edc05466969005891062ac8c2996e41e1f6f3c37d",
@@ -1070,11 +1070,11 @@
       "crates/fireemu-adapter-grpc/tests/app_check.rs": "cd35d5b2df902a73285fa6f2f885913346c4d30a99f627e7ea039d50adde9baf",
       "crates/fireemu-adapter-grpc/tests/depth_transport.rs": "0d7d854951d7bd2673196439a76df2a16ed53fd1e65f9433da186e0fbb6c77b4",
       "crates/fireemu-adapter-grpc/tests/drop.rs": "af07869d3e933912eecdf83eb11a237497913baaa1f4d14fed5d88b14be1bc9f",
-      "crates/fireemu-adapter-grpc/tests/gateway.rs": "dadb3b316a1b070908fc2c4311314c48846db3244d45a18f3cc05b1eab931c03",
+      "crates/fireemu-adapter-grpc/tests/gateway.rs": "e87260ea695ed9bdf774544ac185e528e84c6eaa2d728f798531688eff5b75ad",
       "crates/fireemu-adapter-grpc/tests/local.rs": "628142e2148dfccde2845561f02b2ab0425636911ff8670177e3215865546388",
       "crates/fireemu-adapter-grpc/tests/readiness.rs": "6078603aa5e51490f8b4c14a4342e8f6162350effb3c8ac8799c1603ee5ddf4a",
       "crates/fireemu-adapter-grpc/tests/rest.rs": "358738991241ca3a5284d9a94856b503c9e5598b32ca22dd64bbc61870e9d4f5",
-      "crates/fireemu-adapter-grpc/tests/rules.rs": "c5b23f1dc84175afd95ede9e0b4a3ee3894209627d944029de7200b8e9523132",
+      "crates/fireemu-adapter-grpc/tests/rules.rs": "21c398bd7194483029838714bac1fd1ecb070bb6ebb1fc96f0cb9cce06a9a3e4",
       "crates/fireemu-adapter-grpc/tests/streams.rs": "de0cb53cbdeb9e662867af3022f93cbf622c2651681a34b54ef2913fc7acaded",
       "crates/fireemu-adapter-grpc/tests/webchannel.rs": "07706cdec2d4984ade8c9bc3d318501e8b99b2d86ac7d510133b24ff168ad69a",
       "crates/fireemu-adapter-http/Cargo.toml": "fcedc1f5ed23bcfcf13cc8499675e21485f712a8a5e647d174c1736fdd43964d",
@@ -1190,7 +1190,7 @@
       "crates/fireemu-core-firestore/benches/commit_batch.rs": "50d62777b4fd35670509f8ed6af27ad352683abaa210f1ba6c4cda0e8294672d",
       "crates/fireemu-core-firestore/benches/verify.rs": "7522cb2a3223d44991353f514d48411199abb0e7eea6226619711f4fbeb2df26",
       "crates/fireemu-core-firestore/src/field_path.rs": "bebf2d27d530840cd478358848bb1ab417e8a66fccef15a093fd80c5ba0c45b1",
-      "crates/fireemu-core-firestore/src/index.rs": "545cc7487bd4390de3a30a14e176784bf39609110b1bf2c3e302a03b3412a079",
+      "crates/fireemu-core-firestore/src/index.rs": "ce4af6f7db9f06dc9152b9275bdaf03e64b69bad78f1f30acfdb505347fcfda3",
       "crates/fireemu-core-firestore/src/index_usage.rs": "b3221cfa8d2d60830f6385991e1f5e2eda08b01770444a9cbd6798e6fab2601c",
       "crates/fireemu-core-firestore/src/lib.rs": "03a4b3183bea2df38e80a93ce8fc14a1f5190961405ac37999f59664f81dadb0",
       "crates/fireemu-core-firestore/src/limits.rs": "b11312aa9852fbc9ebca5290b23bb1d39fe17ec1b72cbae7d42a7e8c85fdbf3e",
@@ -1198,7 +1198,7 @@
       "crates/fireemu-core-firestore/src/pipeline.rs": "0ea0403dd6c91ea2ee69813d37818cc9ac7cdf1f44dd02ad6bf4d5f656b2ee11",
       "crates/fireemu-core-firestore/src/query.rs": "8f8ecead08e438fa24b1f07c904ebcb3e10af9f5cfdd4476d17ed7afddeed481",
       "crates/fireemu-core-firestore/src/size.rs": "fd998763fcb4b55be3a9ee31ff720cac74b8aadf9e070a47d85338df6364d69e",
-      "crates/fireemu-core-firestore/src/store.rs": "0b32fd8e68fe8d9e8acf3082762048cd650e44dea2bfaa5ba2ab2866d1f329cf",
+      "crates/fireemu-core-firestore/src/store.rs": "3edee6ab8b2631ab9d39d64689a34fbef3837b571abc225129d57966950594a7",
       "crates/fireemu-core-firestore/src/text_index.rs": "8d22cc906849e7cc5840add6404aa7b093af1bd8954947eed7402218188b23d6",
       "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
       "crates/fireemu-core-firestore/tests/compaction.rs": "49a813c02c92ca13e18446b520341e97d45c6d3b17b77a880830949d7b0de28a",
@@ -1209,7 +1209,7 @@
       "crates/fireemu-core-firestore/tests/index.rs": "a991fd04fa7faf93a81bb159462d5c3ffecb2b9b3d354f03355fde5228270537",
       "crates/fireemu-core-firestore/tests/mutants.rs": "36a0a12f1c452f13b8f8bb72ca8b039b7d67d3d7a8ce1bc3f37859e867b768f3",
       "crates/fireemu-core-firestore/tests/query.rs": "e20cddd27a9ae33a0f133dbbcdb41718897f1b73706b73764ad859bb5dea0445",
-      "crates/fireemu-core-firestore/tests/query_execution.rs": "99f803a7a89054ff093eb002def2b2efe73a3d66029280ecb24bf8c5fe0642f6",
+      "crates/fireemu-core-firestore/tests/query_execution.rs": "3b5ad465b28c8dc4bbfad2f29b71dc5199c8336eaa3aaa54d03db002d1c9a6f7",
       "crates/fireemu-core-firestore/tests/size.rs": "e208ecb3a9a725bd8c64ce2a469e57c38d6a829318473cc86ca81994269eba7b",
       "crates/fireemu-core-firestore/tests/snapshot.rs": "113b3b98174b44f4982adb75e2e37b5df6380779495f79a8ca3690f6d2bcf1aa",
       "crates/fireemu-core-firestore/tests/store.rs": "a531badfab91fbf14e7ae56a70f106ff5ce303777010ea16c7bc3dbafc376194",
@@ -1443,7 +1443,7 @@
     "indexes": {
       "indexes": [
         {
-          "collectionGroup": "compat_475e2198450548f5b0f3b279e178eaf1",
+          "collectionGroup": "compat_e520a0892a16496693ab15607dbfda99",
           "queryScope": "COLLECTION",
           "fields": [
             {
@@ -1463,12 +1463,12 @@
       ],
       "fieldOverrides": []
     },
-    "indexFileSha256": "b79195ed5abe87930f376966f7f55506a0fde3a3c65d90c18d16b7c3b43fc314",
+    "indexFileSha256": "a4bcb513e6c58d94a182b10cf5d8928fa9711a4b1f64c0a952b996f904a4912a",
     "effectiveProfile": "strict",
     "basis": "owned immutable launch inputs plus runtime profile readback"
   },
   "ownedProcess": {
-    "pid": 36276,
+    "pid": 47517,
     "exitCode": 0,
     "stopped": true,
     "listenersClosed": true,

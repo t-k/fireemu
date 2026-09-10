@@ -5,7 +5,7 @@
   "extractor": "article-text-v1",
   "extractorSha256": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
   "fetchedAt": "2026-09-09T14:21:24.817821+00:00",
-  "reviewedAt": "2026-09-10",
+  "reviewedAt": "2026-09-09",
   "reviewer": "Codex (agent-authored interpretation, not execution approval)",
   "extent": "selected-sections-only",
   "locators": [

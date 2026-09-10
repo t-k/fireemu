@@ -82,6 +82,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Bounded Auth basic candidate observations](auth-basic-evidence.md). These sanitized, unapproved observations do not promote the broad feature labels.
 
+[Auth revision 2: signup-token controls and redacted provenance](auth-basic-v2.md). Twelve scoped cases; no automatic approval or broad Auth claim.
+
 ### User lifecycle and email/password
 
 Sources: AUTH-OVERVIEW; AUTH-REST; AUTH-DISCOVERY-V1. API surfaces: AUTH-SIGNUP; AUTH-PASSWORD.

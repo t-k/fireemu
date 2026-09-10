@@ -1,6 +1,7 @@
 """Validate and publish the bounded, explicitly redacted Auth revision 2 receipt."""
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -54,6 +55,10 @@ def hex_value(value, length=64):
     require(
         isinstance(value, str) and re.fullmatch(r"[0-9a-f]{" + str(length) + "}", value)
     )
+
+
+def publication_contract_sha():
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 def validate_case(row, name):
@@ -153,6 +158,7 @@ def validate(value):
             "corpus",
             "probeInputs",
             "sourceReviewSha256",
+            "publicationContractSha256",
             "local",
             "production",
         }
@@ -167,6 +173,7 @@ def validate(value):
         and value["probeInputs"] == inputs()
     )
     review = json.loads(REVIEW.read_bytes())
+    require(value["publicationContractSha256"] == publication_contract_sha())
     require(value["sourceReviewSha256"] == digest(review))
     require([row["case"] for row in review["obligations"]] == list(CASES))
     require(review["executionApproval"] == "not-granted")
@@ -245,6 +252,11 @@ def validate(value):
         )
         require(config["sha256"] == digest(config["value"]))
         hex_value(config["fileSha256"])
+        serialized = json.dumps(config["value"], indent=2, sort_keys=True) + "\n"
+        require(
+            type(config["value"]["schemaVersion"]) is int
+            and config["fileSha256"] == hashlib.sha256(serialized.encode()).hexdigest()
+        )
         build = report["build"]
         require(set(build) == {"command", "exitCode", "artifactSha256", "inputs"})
         require(
@@ -349,6 +361,7 @@ if __name__ == "__main__":
             "corpus": {"revision": 2, "cases": list(CASES)},
             "probeInputs": inputs(),
             "sourceReviewSha256": digest(json.loads(REVIEW.read_bytes())),
+            "publicationContractSha256": publication_contract_sha(),
             "local": project(json.loads(args.local.read_bytes()), "local"),
             "production": project(
                 json.loads(args.production.read_bytes()), "production"

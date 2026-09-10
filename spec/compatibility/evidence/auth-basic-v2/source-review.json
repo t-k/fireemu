@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 2,
+  "kind": "agent-authored-source-review",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-10",
+  "executionApproval": "not-granted",
+  "priorSourceReviewSha256": "9e6c026678d6e6c6e972397ff2a8119ffd1d780d138dde362cdb80d5252105fb",
+  "sources": [
+    {
+      "id": "rest-guide",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/use-rest-api",
+      "rawSha256": "1a0d28899d269974211d1af47289c021ec0d0e4a83ed02efad7250fa782ecd4a",
+      "bodySha256": "0fd07fee55ec1c2feab46f27e1994ab0128a0c0fd71777a45f11a37dd84debc6",
+      "fetchedAt": "2026-09-10T02:50:39.164887+00:00",
+      "locators": [
+        "section-create-email-password",
+        "section-sign-in-email-password",
+        "section-refresh-token",
+        "section-get-account-info",
+        "section-delete-account"
+      ]
+    },
+    {
+      "id": "email-privacy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/admin/email-enumeration-protection",
+      "rawSha256": "5453d3f8444b34e624b9217f1cc61fe39701cec8794a263f2ea6a9c0d182e3c5",
+      "bodySha256": "6457558a31c25b2f770f277c29839eecc1fa2f5e0c3878f2e3df3911e2a3061a",
+      "fetchedAt": "2026-09-10T02:50:39.999196+00:00",
+      "locators": [
+        "overview",
+        "example_of_an_error_response"
+      ]
+    },
+    {
+      "id": "client-lookup",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/accounts/lookup",
+      "rawSha256": "74ce43fe32c3e0c75aadf66f9dcebce7dbb2292db2fffea58285232f83cb1f30",
+      "bodySha256": "3d34392a66d9676f4c16402d5fe3db964118e800543e009a988ece495dc5b5b5",
+      "fetchedAt": "2026-09-10T02:50:40.705389+00:00",
+      "locators": [
+        "http-request",
+        "request-body"
+      ]
+    },
+    {
+      "id": "admin-lookup",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/lookup",
+      "rawSha256": "f5db168cc958501ce952bfebd00def48e0c9447a8990670d4177abaf228612b8",
+      "bodySha256": "04eee1bdb5d3a6c684a062c2fe29b75302db963c5b14d3a812cc04ad9389b3d6",
+      "fetchedAt": "2026-09-10T02:50:41.794217+00:00",
+      "locators": [
+        "path-parameters",
+        "request-body"
+      ]
+    }
+  ],
+  "expirySource": {
+    "url": "https://firebase.google.com/docs/auth/admin/manage-sessions",
+    "rawSha256": "3fc0802f8df89fc3c699c2a77b169d7e3c229fdc31111dcd42cd9e14b359b1e4",
+    "bodySha256": "5302929198bef46eff0214c11609881bd610df20af898cc9a411a6c0b8185a9f",
+    "fetchedAt": "2026-09-10T03:06:26.295183+00:00",
+    "locator": {
+      "kind": "article-text-prefix",
+      "value": "Firebase Authentication sessions are long lived."
+    },
+    "interpretation": "The source describes one-hour ID tokens. Revision 2 records the endpoint expiry field and explicitly tests 3600 seconds, separately from positive-integer shape. No elapsed-time expiration or independent JWT signature check is claimed."
+  },
+  "obligations": [
+    {
+      "id": "AUTH-BASIC-SIGNUP",
+      "case": "signup",
+      "basis": "source-derived",
+      "source": "rest-guide",
+      "locator": "section-create-email-password",
+      "condition": "A fresh email/password signup succeeds and returns identity and renewal credentials for the new account.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-SIGNUP-LOOKUP",
+      "case": "signup-token-lookup",
+      "basis": "derived-control",
+      "source": "client-lookup",
+      "locator": "request-body",
+      "condition": "Use the signup ID token to retrieve the same owned account.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-SIGNUP-REFRESH",
+      "case": "signup-token-refresh",
+      "basis": "derived-control",
+      "source": "rest-guide",
+      "locator": "section-refresh-token",
+      "condition": "Use the signup refresh token to obtain same-UID identity credentials; separately check expiry shape and the 3600-second expectation.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-SIGNUP-REFRESH-LOOKUP",
+      "case": "signup-refreshed-lookup",
+      "basis": "derived-control",
+      "source": "client-lookup",
+      "locator": "request-body",
+      "condition": "Use the ID token produced from the signup refresh token to retrieve the same owned account.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-SIGNIN",
+      "case": "signin",
+      "basis": "source-derived",
+      "source": "rest-guide",
+      "locator": "section-sign-in-email-password",
+      "condition": "Valid email/password credentials sign into the same account.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-LOOKUP",
+      "case": "lookup",
+      "basis": "source-derived",
+      "source": "client-lookup",
+      "locator": "request-body",
+      "condition": "An end-user ID token retrieves its account; the recorder additionally checks its ownership marker.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-REFUSAL",
+      "case": "wrong-password",
+      "basis": "source-derived",
+      "source": "email-privacy",
+      "locator": "overview",
+      "condition": "With improved email privacy enabled, incorrect password sign-in returns INVALID_LOGIN_CREDENTIALS; the recorder additionally checks HTTP400, as illustrated in the separately reviewed error-response example.",
+      "existingRequirement": "AUTH-PRIVACY-001"
+    },
+    {
+      "id": "AUTH-BASIC-STATE",
+      "case": "unchanged-state",
+      "basis": "harness-control",
+      "source": "client-lookup",
+      "locator": "request-body",
+      "condition": "Selected account fields are equal before and after the refusal; this is a measured control, not a full-state immutability guarantee from the source.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-REFRESH",
+      "case": "refresh",
+      "basis": "source-derived",
+      "source": "rest-guide",
+      "locator": "section-refresh-token",
+      "condition": "A form-encoded refresh request returns usable identity and renewal credentials for the same UID.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-REFRESH-LOOKUP",
+      "case": "refreshed-lookup",
+      "basis": "derived-control",
+      "source": "client-lookup",
+      "locator": "request-body",
+      "condition": "The service accepts the refreshed ID token for the same owned account; this does not independently verify a token signature.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-DELETE",
+      "case": "delete",
+      "basis": "source-derived",
+      "source": "rest-guide",
+      "locator": "section-delete-account",
+      "condition": "Deleting the current account using its ID token succeeds.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-BASIC-ABSENCE",
+      "case": "deleted-account-absent",
+      "basis": "harness-control",
+      "source": "admin-lookup",
+      "locator": "request-body",
+      "condition": "Separate exact UID and email Admin lookups find no account after deletion; the selectors are documented, while the cleanup protocol is a recorder control.",
+      "existingRequirement": null
+    }
+  ],
+  "limitations": [
+    "Slice-local obligations are not newly registered broad requirements.",
+    "All token and account values remain ephemeral; token presence and identity relationships are recorder observations, not independently reconstructed raw responses.",
+    "The redacted receipt exposes numeric expiry and safe artifact/configuration/build/process provenance for offline consistency validation.",
+    "Only the wrong-password branch of AUTH-PRIVACY-001 is covered; SDK, Rules, MFA, OOB, tenant, disabled users, revocation and elapsed-time expiry remain out of scope.",
+    "Source raw bytes remain in the private operator cache."
+  ]
+}

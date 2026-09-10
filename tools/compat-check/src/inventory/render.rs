@@ -269,6 +269,7 @@ fn features(inv: &Inventory, path: &str, title: &str) -> String {
         }
         if text(f, "id") == "AUTH-USERS" {
             out.push_str("[Bounded Auth basic candidate observations](auth-basic-evidence.md). These sanitized, unapproved observations do not promote the broad feature labels.\n\n");
+            out.push_str("[Auth revision 2: signup-token controls and redacted provenance](auth-basic-v2.md). Twelve scoped cases; no automatic approval or broad Auth claim.\n\n");
         }
         writeln!(out, "### {}\n\nSources: {}. API surfaces: {}.\n\nRequirements: {}.\n\nContract claims: {}.\n", escape(text(f, "title")), list(&strings(f, "sources")), list(&strings(f, "surfaces")), list(&strings(f, "requirements")), list(&strings(f, "claims"))).unwrap();
         for cap in strings(f, "capabilities") {

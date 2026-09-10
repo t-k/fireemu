@@ -1,4 +1,6 @@
+import copy
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -48,3 +50,33 @@ def test_publication_refuses_unexpected_secret_fields():
     for field in ["idToken", "refresh_token", "email", "rawResponse"]:
         with pytest.raises(ValueError):
             p.validate_case({**row, field: "SECRET"}, "signup-token-lookup")
+
+
+def test_public_receipt_rejects_tampered_provenance_and_cleanup():
+    p = publisher()
+    assert p.BUNDLE.exists(), (
+        "Capture revision 2 before validating its published receipt"
+    )
+    value = json.loads(p.BUNDLE.read_bytes())
+    p.validate(value)
+    mutations = [
+        (("local", "ownedProcess", "exitCode"), 2),
+        (("local", "ownedProcess", "listenersClosed"), False),
+        (("local", "instance", "parentPid"), 1),
+        (("local", "build", "artifactSha256"), "0" * 64),
+        (("local", "configuration", "fileSha256"), "0" * 64),
+        (("local", "cleanup", "uidAbsent"), False),
+        (("production", "configuration", "improvedEmailPrivacy"), False),
+        (("acceptance",), "approved"),
+        (("scope",), "All Auth verified"),
+        (("sourceReviewSha256",), "0" * 64),
+        (("publicationContractSha256",), "0" * 64),
+    ]
+    for path, invalid in mutations:
+        changed = copy.deepcopy(value)
+        parent = changed
+        for name in path[:-1]:
+            parent = parent[name]
+        parent[path[-1]] = invalid
+        with pytest.raises(ValueError):
+            p.validate(changed)

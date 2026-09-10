@@ -4,6 +4,8 @@ Reviewed on 2026-09-10 by Codex. This is an agent-authored interpretation of sel
 
 This review maps the existing [nine-case observations](auth-basic-evidence.md). It neither changes those observations nor establishes additional successful tests. Slice-local obligation IDs below are review identifiers, not newly registered requirements. All feature-level approval remains pending.
 
+Review clarification for revision 1: `expiryValid` accepts a positive integer string of one to six digits; `"1"`, `"3600"` and `"999999"` all pass. It does not establish a specification-matching lifetime or rejection after expiry. Signup credentials are checked for presence only; the nine-case run uses signin credentials for subsequent requests. The separate [revision 2 receipt](auth-basic-v2.md) adds signup-token usage controls and separates expiry shape from the one-hour expectation. It does not rewrite the original observations.
+
 ## Source-to-case mapping
 
 | Obligation / case | Source and interpretation | Coverage boundary |
@@ -30,7 +32,7 @@ Signup, signin, lookup, refresh and deletion need atomic requirement registratio
 
 ## Approval-readiness decision
 
-Do not request execution approval for these nine projections yet. Source mapping is necessary but does not close the evidence gaps:
+The original nine projections must not be approved as independently recomputable raw-response evidence. Source mapping is necessary but does not close the evidence gaps:
 
 - Raw Auth responses were intentionally not retained. The public booleans cannot reproduce the recorder's decisions, and cannot be relabeled as raw-response evidence.
 - The detailed artifact/process/build receipt is private. A public hash and `ownedProcessVerified` assertion alone do not let a reviewer repeat its identity checks.
@@ -39,4 +41,4 @@ Do not request execution approval for these nine projections yet. Source mapping
 
 Two follow-up designs are possible. Recommended: define a versioned, explicitly redacted evidence contract with public artifact/configuration/build provenance, structurally validated observations and explicit limits; collect a new separate bundle and bind the eventual approval subject to that bundle, corpus and source review. Alternative: retain the present data indefinitely as informal observations, with no execution approval. Do not recreate discarded raw responses, transfer aggregation approval, or silently overwrite the current nine-case bundle.
 
-The recommended design needs review before implementation. It does not imply that retaining reusable credentials is acceptable: token values and recovery journals must remain private or ephemeral. SDK, Rules, MFA, OOB, tenant, public npm and complete Auth compatibility claims remain excluded.
+The user approved the separately versioned redacted-evidence design after this review. Revision 2 implements that bounded direction; human execution approval remains separate. Approval of a limited redacted-observation scope does not need to wait for complete Auth coverage, but cannot be presented as raw-response or independent signature verification. Token values and recovery journals must remain private or ephemeral. SDK, Rules, MFA, OOB, tenant, public npm and complete Auth compatibility claims remain excluded.

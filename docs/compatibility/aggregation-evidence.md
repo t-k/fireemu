@@ -6,16 +6,19 @@ This is a finite Standard/Native REST, strict-profile, admin-bypass slice. It do
 
 [Source review](../../spec/compatibility/evidence/aggregation/source-review.json) covers five selected section locators, not the whole official page. The original acquisition snapshot remains unchanged. The reviewer authored source interpretations; this is separate from approval of execution evidence.
 
-[Local owned artifact](../../spec/compatibility/evidence/aggregation/local.json): 9/10 expectations match. [Fresh production observation](../../spec/compatibility/evidence/aggregation/production.json): 9/10 match. Both completed all 10 cases and cleanup checks. Well-formed mismatches remain visible and cannot be approved; malformed or incomplete evidence is rejected. Matching candidates still require explicit approval.
+[Local owned artifact](../../spec/compatibility/evidence/aggregation/local.json): 14/14 expectations match. [Fresh production observation](../../spec/compatibility/evidence/aggregation/production.json): 14/14 match. Both completed all 14 cases and cleanup checks. Well-formed mismatches remain visible and cannot be approved; malformed or incomplete evidence is rejected. Matching candidates still require explicit approval.
 
-Approval subject: `677e406a7f741649f56c68e53536808b2793f8ba90d856ced05b85170e7f7465`. Approved cases: 0/10. [Approval record](../../spec/compatibility/evidence/aggregation/index.json).
+[Corpus revision rationale](../../tools/compat-inventory/aggregation-corpus-revisions.md) explains the corrected limit expectation, independent ordering controls, rejection comparison scope and immutable history.
+
+Approval subject: `08f92bf428850eefda32833de2003a3f93c94955e6793247e8ea2f7d8e94def3`. Approved cases: 0/14. [Approval record](../../spec/compatibility/evidence/aggregation/index.json).
 
 | Obligation / parent REQ-FS-PARITY-01 | Condition | Cases | Approval |
 | --- | --- | --- | --- |
 | AGG-COUNT | Count alone includes all four query documents. | count-alone, bounded-count | Pending human review |
 | AGG-NUMERIC | Sum and average ignore strings; count still includes present nonnumeric fields. | count-sum, count-average, sum-average | Pending human review |
 | AGG-INTERSECTION | Multiple fields use the intersection of field existence, with a composite index. | multiple-fields | Pending human review |
-| AGG-BOUNDARY | Derived boundary controls: empty results and missing fields before a limit. | empty-result, missing-before-limit | Mismatch: not eligible |
+| AGG-BOUNDARY | Derived boundary controls: empty results and missing fields before a limit. | empty-result, missing-before-limit | Pending human review |
+| AGG-ORDER | Measured controls, not a direct source guarantee: x ASC/DESC and offset selection; explicit name-only order is rejected with INVALID_ARGUMENT. | explicit-x-asc, explicit-x-desc, explicit-x-offset, explicit-name-rejected | Pending human review |
 | AGG-STATE | Harness control, not a claim from this section: refused Commit leaves all fixture documents unchanged. | refused-commit, unchanged-state | Pending human review |
 
 ## Case comparison
@@ -28,8 +31,12 @@ Approval subject: `677e406a7f741649f56c68e53536808b2793f8ba90d856ced05b85170e7f7
 | sum-average | Matches | Matches |
 | multiple-fields | Matches | Matches |
 | empty-result | Matches | Matches |
-| missing-before-limit | Mismatch | Mismatch |
+| missing-before-limit | Matches | Matches |
 | bounded-count | Matches | Matches |
+| explicit-x-asc | Matches | Matches |
+| explicit-x-desc | Matches | Matches |
+| explicit-x-offset | Matches | Matches |
+| explicit-name-rejected | Matches | Matches |
 | refused-commit | Matches | Matches |
 | unchanged-state | Matches | Matches |
 

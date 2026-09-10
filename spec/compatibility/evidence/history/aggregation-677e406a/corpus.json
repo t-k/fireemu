@@ -1,6 +1,5 @@
 {
-  "schemaVersion": 2,
-  "revision": 2,
+  "schemaVersion": 1,
   "scope": {
     "feature": "FS-AGGREGATIONS",
     "edition": "STANDARD",
@@ -241,7 +240,7 @@
           "integerValue": "2"
         },
         "sum": {
-          "doubleValue": 30.5
+          "integerValue": "10"
         }
       }
     },
@@ -260,147 +259,6 @@
         "count": {
           "integerValue": "2"
         }
-      }
-    },
-    {
-      "id": "explicit-x-asc",
-      "aggregations": [
-        {
-          "alias": "count",
-          "count": {}
-        },
-        {
-          "alias": "sum",
-          "sum": {
-            "field": {
-              "fieldPath": "x"
-            }
-          }
-        }
-      ],
-      "query": {
-        "orderBy": [
-          {
-            "field": {
-              "fieldPath": "x"
-            },
-            "direction": "ASCENDING"
-          }
-        ],
-        "limit": 2
-      },
-      "expected": {
-        "count": {
-          "integerValue": "2"
-        },
-        "sum": {
-          "doubleValue": 30.5
-        }
-      }
-    },
-    {
-      "id": "explicit-x-desc",
-      "aggregations": [
-        {
-          "alias": "count",
-          "count": {}
-        },
-        {
-          "alias": "sum",
-          "sum": {
-            "field": {
-              "fieldPath": "x"
-            }
-          }
-        }
-      ],
-      "query": {
-        "orderBy": [
-          {
-            "field": {
-              "fieldPath": "x"
-            },
-            "direction": "DESCENDING"
-          }
-        ],
-        "limit": 2
-      },
-      "expected": {
-        "count": {
-          "integerValue": "2"
-        },
-        "sum": {
-          "doubleValue": 20.5
-        }
-      }
-    },
-    {
-      "id": "explicit-x-offset",
-      "aggregations": [
-        {
-          "alias": "count",
-          "count": {}
-        },
-        {
-          "alias": "sum",
-          "sum": {
-            "field": {
-              "fieldPath": "x"
-            }
-          }
-        }
-      ],
-      "query": {
-        "orderBy": [
-          {
-            "field": {
-              "fieldPath": "x"
-            },
-            "direction": "ASCENDING"
-          }
-        ],
-        "limit": 1,
-        "offset": 2
-      },
-      "expected": {
-        "count": {
-          "integerValue": "1"
-        },
-        "sum": {
-          "integerValue": "0"
-        }
-      }
-    },
-    {
-      "id": "explicit-name-rejected",
-      "aggregations": [
-        {
-          "alias": "count",
-          "count": {}
-        },
-        {
-          "alias": "sum",
-          "sum": {
-            "field": {
-              "fieldPath": "x"
-            }
-          }
-        }
-      ],
-      "query": {
-        "orderBy": [
-          {
-            "field": {
-              "fieldPath": "__name__"
-            },
-            "direction": "ASCENDING"
-          }
-        ],
-        "limit": 2
-      },
-      "expectedError": {
-        "httpStatus": 400,
-        "status": "INVALID_ARGUMENT"
       }
     }
   ],

@@ -8,6 +8,7 @@ import pytest
 from aggregation_corpus import corpus, query_body
 from aggregation_evidence import (
     DIRECTORY,
+    OBLIGATIONS,
     approved_cases,
     case_ids,
     validate_bundle,
@@ -15,6 +16,12 @@ from aggregation_evidence import (
     validate_query_cases,
 )
 from evidence_common import save, sha
+
+
+def test_every_fixed_case_has_an_explicit_bounded_obligation():
+    assert {case for obligation in OBLIGATIONS for case in obligation["cases"]} == set(
+        case_ids()
+    )
 
 
 def query_rows(collection):
@@ -274,6 +281,10 @@ def test_real_bundle_remains_pending_and_test_only_approval_is_scoped(tmp_path):
         "raw-error",
         "timestamps",
         "cleanup",
+        "shutdown-exit",
+        "shutdown-listener",
+        "cleanup-failure",
+        "child-cleanup-failure",
         "runtime",
         "probe",
         "source",
@@ -313,6 +324,14 @@ def test_bound_bundle_mutations_never_strengthen_evidence(tmp_path, mutation):
                 del document["updateTime"]
     elif mutation == "cleanup":
         local["cleanup"][0]["confirmedMissing"] = False
+    elif mutation == "shutdown-exit":
+        local["ownedProcess"]["exitCode"] = 2
+    elif mutation == "shutdown-listener":
+        local["ownedProcess"]["listenersClosed"] = False
+    elif mutation == "cleanup-failure":
+        local["cleanupFailure"] = ""
+    elif mutation == "child-cleanup-failure":
+        local["childCleanupFailure"] = ""
     elif mutation == "runtime":
         local["runtimeSource"]["files"].pop("Cargo.toml")
     elif mutation == "probe":

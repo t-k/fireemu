@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from copy import deepcopy
+from itertools import product
 from pathlib import Path
 
 import pytest
@@ -195,3 +196,28 @@ def test_owned_completion_assertions_reject_lifecycle_failures(section, key, val
     (report if section is None else report[section])[key] = value
     with pytest.raises(AssertionError):
         assert_owned_run_completed(report)
+
+
+def test_bounded_lifecycle_state_space_keeps_semantic_mismatch_separate():
+    for matches, exited, stopped, closed, cleaned, failure in product(
+        [False, True],
+        [False, True],
+        [False, True],
+        [False, True],
+        [False, True],
+        [None, "failure", "cleanupFailure", "childCleanupFailure"],
+    ):
+        report = completed_report(matches)
+        report["ownedProcess"].update(
+            exitCode=0 if exited else 2, stopped=stopped, listenersClosed=closed
+        )
+        if not cleaned:
+            report["cleanup"] = []
+        if failure is not None:
+            report[failure] = ""
+        expected = exited and stopped and closed and cleaned and failure is None
+        if expected:
+            assert_owned_run_completed(report)
+        else:
+            with pytest.raises(AssertionError):
+                assert_owned_run_completed(report)

@@ -53,17 +53,6 @@
       ]
     },
     {
-      "id": "AGG-ORDER",
-      "locator": "limitations",
-      "condition": "Measured controls, not a direct source guarantee: x ASC/DESC and offset selection; explicit name-only order is rejected with INVALID_ARGUMENT.",
-      "cases": [
-        "explicit-x-asc",
-        "explicit-x-desc",
-        "explicit-x-offset",
-        "explicit-name-rejected"
-      ]
-    },
-    {
       "id": "AGG-STATE",
       "locator": "calculate_multiple_aggregations_in_a_query",
       "condition": "Harness control, not a claim from this section: refused Commit leaves all fixture documents unchanged.",

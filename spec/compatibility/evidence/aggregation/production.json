@@ -11,25 +11,26 @@
     "profile": "strict",
     "rules": "admin-bypass"
   },
-  "recordedAt": "2026-09-10T00:42:45.126334+00:00",
+  "recordedAt": "2026-09-10T01:44:33.571101+00:00",
   "probeSource": {
-    "commit": "9b57dd25e55c008b4026ae61f6b4c63e1fede18e",
+    "commit": "b76a253d886e73c2d72523846744c9c0972a9db4",
     "files": {
-      "aggregation_corpus.py": "399edc8bda3db3b91e9e82cf97cde0d1ffe96ad34e74f4686478d63ea0b3d23c",
-      "aggregation_evidence.py": "b50ba6db452fbdba5cf00f2ab5b67d459643b925ac830f994840846b91259bea",
+      "aggregation_corpus.py": "d33b7e358aac69d69548ca4b8d166454ee108b7042ffa257c8acc2e82e39dce0",
+      "aggregation_evidence.py": "e196c75e2f9678fe5ee3b5e684def42d93a1ab6143c3e5b39e89805ce5a215ba",
       "aggregation_index.py": "0a24bfc2de926b98018c64a3689d3cc0aecf3113a0192414ca6cd7141080b818",
       "aggregation_package.py": "9ae81c9af268c80cf3a3c08fdf0b24903c56bcbb246c93c8bfdf01133859eb8b",
-      "aggregation_probe.py": "043f07fc404e7cbf6324f805626bd7ffc3c37e4557e920267d1d4d44d8332548",
+      "aggregation_probe.py": "917d9600008d7ef509c6c40084cad4755e9016f0e8cefafd784b85114d4a641e",
+      "aggregation_response.py": "976f60525c988020bfd8d51fad5b2bb618a510b4ef00d09a887b831ad6048cfa",
       "auth_probe.py": "097ead80880d23fe74902601578ee8250efcc06218b7cd0588e54004ad027122",
       "capture.py": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
       "evidence_common.py": "054f8dcba3652ae905d489f100eda3bc4528dc6c497ec94c3938b03102dc8750",
-      "owned_runner.py": "414ff5662138a6362104f3542cdfa7326b769548f5ebdf495841baaa7687eb64",
+      "owned_runner.py": "ceb7dab2ab9bd4878e21e28da475d1156e6948aae07de13384cbbe56aff1deed",
       "probe.py": "38383f9705f553edce413ac1a544e0ed39c200b10a0a5c2170d33fb889f19a94",
       "protobuf_inventory.py": "d1218f5a411770f98b3d87c7c308af887b65cc2385db931e2f77389a0f5ce76b",
       "publish.py": "57d932b37fca87ee840925abf2680e347d89c3d6a7e0f2b5eb36739f9a46275b"
     }
   },
-  "corpusSha256": "7d5d472afe019e0eb20ceea61f8a4eea58a7d01cb1d4204798abd0b6227f736a",
+  "corpusSha256": "5185a066b8a6438f82e7ba5a3ca512262da9aa577398a5b1c609758c61d5c94a",
   "project": "fireemu-35fe6",
   "cases": [
     {
@@ -39,7 +40,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
               }
             ]
           },
@@ -61,7 +62,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:49.518684Z"
+          "readTime": "2026-09-10T01:50:42.388736Z"
         }
       ],
       "passed": true
@@ -73,7 +74,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
               }
             ]
           },
@@ -106,7 +107,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:50.432655Z"
+          "readTime": "2026-09-10T01:50:42.652069Z"
         }
       ],
       "passed": true
@@ -118,7 +119,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
               }
             ]
           },
@@ -151,7 +152,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:51.442715Z"
+          "readTime": "2026-09-10T01:50:43.633441Z"
         }
       ],
       "passed": true
@@ -163,7 +164,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
               }
             ]
           },
@@ -200,7 +201,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:52.370201Z"
+          "readTime": "2026-09-10T01:50:44.602212Z"
         }
       ],
       "passed": true
@@ -212,7 +213,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
               }
             ]
           },
@@ -256,7 +257,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:52.601936Z"
+          "readTime": "2026-09-10T01:50:45.560058Z"
         }
       ],
       "passed": true
@@ -268,7 +269,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
               }
             ],
             "where": {
@@ -323,7 +324,7 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:53.588107Z"
+          "readTime": "2026-09-10T01:50:46.506570Z"
         }
       ],
       "passed": true
@@ -335,7 +336,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
               }
             ],
             "limit": 2
@@ -369,10 +370,10 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:54.583061Z"
+          "readTime": "2026-09-10T01:50:47.405757Z"
         }
       ],
-      "passed": false
+      "passed": true
     },
     {
       "id": "bounded-count",
@@ -381,7 +382,7 @@
           "structuredQuery": {
             "from": [
               {
-                "collectionId": "compat_d448d3411c404f3784adfc1ee567ca1d"
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
               }
             ]
           },
@@ -405,7 +406,218 @@
               }
             }
           },
-          "readTime": "2026-09-10T00:48:55.560598Z"
+          "readTime": "2026-09-10T01:50:48.402331Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "explicit-x-asc",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "orderBy": [
+              {
+                "field": {
+                  "fieldPath": "x"
+                },
+                "direction": "ASCENDING"
+              }
+            ],
+            "limit": 2
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "2"
+              },
+              "sum": {
+                "doubleValue": 30.5
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:49.352219Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "explicit-x-desc",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "orderBy": [
+              {
+                "field": {
+                  "fieldPath": "x"
+                },
+                "direction": "DESCENDING"
+              }
+            ],
+            "limit": 2
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "2"
+              },
+              "sum": {
+                "doubleValue": 20.5
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:50.274474Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "explicit-x-offset",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "orderBy": [
+              {
+                "field": {
+                  "fieldPath": "x"
+                },
+                "direction": "ASCENDING"
+              }
+            ],
+            "limit": 1,
+            "offset": 2
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "1"
+              },
+              "sum": {
+                "integerValue": "0"
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:51.233975Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "explicit-name-rejected",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "orderBy": [
+              {
+                "field": {
+                  "fieldPath": "__name__"
+                },
+                "direction": "ASCENDING"
+              }
+            ],
+            "limit": 2
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 400,
+      "rawResponse": [
+        {
+          "error": {
+            "code": 400,
+            "message": "This query requires an index with fields [x] after __name__ and Firestore does not currently support such an index. Please try the query again with additional ordering on those fields.",
+            "status": "INVALID_ARGUMENT"
+          }
         }
       ],
       "passed": true
@@ -416,7 +628,7 @@
         "writes": [
           {
             "update": {
-              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
               "fields": {
                 "x": {
                   "integerValue": "99"
@@ -426,7 +638,7 @@
           },
           {
             "update": {
-              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
               "fields": {}
             },
             "currentDocument": {
@@ -439,7 +651,7 @@
       "rawResponse": {
         "error": {
           "code": 409,
-          "message": "Document already exists: projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+          "message": "Document already exists: projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
           "status": "ALREADY_EXISTS"
         }
       },
@@ -452,34 +664,34 @@
   ],
   "cleanup": [
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     },
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     },
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     },
     {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
       "deleted": true,
       "confirmedMissing": true,
       "recoveredOwnership": false
     }
   ],
-  "status": "failed",
-  "collection": "compat_d448d3411c404f3784adfc1ee567ca1d",
+  "status": "passed",
+  "collection": "compat_5cb71337c6ae4974a80f37fd0fc46f3a",
   "index": {
-    "collection": "compat_d448d3411c404f3784adfc1ee567ca1d",
+    "collection": "compat_5cb71337c6ae4974a80f37fd0fc46f3a",
     "baselineEmpty": true,
     "createAttempted": true,
     "definition": {
@@ -499,21 +711,21 @@
         }
       ]
     },
-    "operation": "projects/fireemu-35fe6/databases/(default)/operations/S1VZOEhpSmdBQ0lDDCoDIDEyZTE4MjllZGVmNi00ZjRiLWNjOTQtMWE0MC1jMzg0MmVmYiQac2VuaWxlcGlwCQpBEg",
+    "operation": "projects/fireemu-35fe6/databases/(default)/operations/S2twamFqTmdBQ0lDDCoDIDQ1ZGE5YzlhZGVkNy04MDU5LWU0YzQtYWM4OS1lYjg2ZTk3MiQac2VuaWxlcGlwCQpBEg",
     "operationReadback": {
-      "name": "projects/fireemu-35fe6/databases/(default)/operations/S1VZOEhpSmdBQ0lDDCoDIDEyZTE4MjllZGVmNi00ZjRiLWNjOTQtMWE0MC1jMzg0MmVmYiQac2VuaWxlcGlwCQpBEg",
+      "name": "projects/fireemu-35fe6/databases/(default)/operations/S2twamFqTmdBQ0lDDCoDIDQ1ZGE5YzlhZGVkNy04MDU5LWU0YzQtYWM4OS1lYjg2ZTk3MiQac2VuaWxlcGlwCQpBEg",
       "metadata": {
         "@type": "type.googleapis.com/google.firestore.admin.v1.IndexOperationMetadata",
-        "startTime": "2026-09-10T00:42:50.350417Z",
-        "endTime": "2026-09-10T00:48:41.039627Z",
-        "index": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_d448d3411c404f3784adfc1ee567ca1d/indexes/CICAgJiH8YUK",
+        "startTime": "2026-09-10T01:44:39.452937Z",
+        "endTime": "2026-09-10T01:50:29.970110Z",
+        "index": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_5cb71337c6ae4974a80f37fd0fc46f3a/indexes/CICAgNjajpkK",
         "state": "SUCCESSFUL",
         "progressDocuments": {}
       },
       "done": true,
       "response": {
         "@type": "type.googleapis.com/google.firestore.admin.v1.Index",
-        "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_d448d3411c404f3784adfc1ee567ca1d/indexes/CICAgJiH8YUK",
+        "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_5cb71337c6ae4974a80f37fd0fc46f3a/indexes/CICAgNjajpkK",
         "queryScope": "COLLECTION",
         "fields": [
           {
@@ -534,7 +746,7 @@
       }
     },
     "ready": {
-      "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_d448d3411c404f3784adfc1ee567ca1d/indexes/CICAgJiH8YUK",
+      "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_5cb71337c6ae4974a80f37fd0fc46f3a/indexes/CICAgNjajpkK",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -554,7 +766,7 @@
       "density": "SPARSE_ALL"
     },
     "deletedNames": [
-      "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_d448d3411c404f3784adfc1ee567ca1d/indexes/CICAgJiH8YUK"
+      "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_5cb71337c6ae4974a80f37fd0fc46f3a/indexes/CICAgNjajpkK"
     ],
     "confirmedMissing": true
   },
@@ -566,131 +778,131 @@
     "concurrencyMode": "PESSIMISTIC",
     "locationId": "us-central1"
   },
-  "ownershipMarker": "7251ed9663c0485cafd5bcd491098a1c",
+  "ownershipMarker": "6b8f9ae97227422f9c3c614f0c4ed130",
   "attemptedResources": [
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D"
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D"
   ],
   "ownedResources": [
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D"
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D"
   ],
   "stateBefore": {
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
       "fields": {
-        "y": {
-          "integerValue": "100"
-        },
         "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
         },
         "x": {
           "integerValue": "10"
-        }
-      },
-      "createTime": "2026-09-10T00:48:43.797517Z",
-      "updateTime": "2026-09-10T00:48:43.797517Z"
-    },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
-      "fields": {
-        "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
-        }
-      },
-      "createTime": "2026-09-10T00:48:44.799394Z",
-      "updateTime": "2026-09-10T00:48:44.799394Z"
-    },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
-      "fields": {
-        "x": {
-          "stringValue": "not-a-number"
-        },
-        "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
         },
         "y": {
-          "integerValue": "20"
+          "integerValue": "100"
         }
       },
-      "createTime": "2026-09-10T00:48:45.119348Z",
-      "updateTime": "2026-09-10T00:48:45.119348Z"
+      "createTime": "2026-09-10T01:50:34.412060Z",
+      "updateTime": "2026-09-10T01:50:34.412060Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        }
+      },
+      "createTime": "2026-09-10T01:50:35.452217Z",
+      "updateTime": "2026-09-10T01:50:35.452217Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
+      "fields": {
+        "y": {
+          "integerValue": "20"
+        },
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        },
+        "x": {
+          "stringValue": "not-a-number"
+        }
+      },
+      "createTime": "2026-09-10T01:50:36.466515Z",
+      "updateTime": "2026-09-10T01:50:36.466515Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
       "fields": {
         "x": {
           "doubleValue": 20.5
         },
         "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
         }
       },
-      "createTime": "2026-09-10T00:48:45.402437Z",
-      "updateTime": "2026-09-10T00:48:45.402437Z"
+      "createTime": "2026-09-10T01:50:37.478920Z",
+      "updateTime": "2026-09-10T01:50:37.478920Z"
     }
   },
   "stateAfter": {
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
       "fields": {
+        "y": {
+          "integerValue": "100"
+        },
         "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
         },
         "x": {
           "integerValue": "10"
-        },
-        "y": {
-          "integerValue": "100"
         }
       },
-      "createTime": "2026-09-10T00:48:43.797517Z",
-      "updateTime": "2026-09-10T00:48:43.797517Z"
+      "createTime": "2026-09-10T01:50:34.412060Z",
+      "updateTime": "2026-09-10T01:50:34.412060Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
       "fields": {
         "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
         }
       },
-      "createTime": "2026-09-10T00:48:44.799394Z",
-      "updateTime": "2026-09-10T00:48:44.799394Z"
+      "createTime": "2026-09-10T01:50:35.452217Z",
+      "updateTime": "2026-09-10T01:50:35.452217Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
       "fields": {
+        "y": {
+          "integerValue": "20"
+        },
         "x": {
           "stringValue": "not-a-number"
         },
         "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
-        },
-        "y": {
-          "integerValue": "20"
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
         }
       },
-      "createTime": "2026-09-10T00:48:45.119348Z",
-      "updateTime": "2026-09-10T00:48:45.119348Z"
+      "createTime": "2026-09-10T01:50:36.466515Z",
+      "updateTime": "2026-09-10T01:50:36.466515Z"
     },
-    "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D": {
-      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_d448d3411c404f3784adfc1ee567ca1d/D",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
       "fields": {
-        "__fireemuOracleOwner": {
-          "stringValue": "7251ed9663c0485cafd5bcd491098a1c"
-        },
         "x": {
           "doubleValue": 20.5
+        },
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
         }
       },
-      "createTime": "2026-09-10T00:48:45.402437Z",
-      "updateTime": "2026-09-10T00:48:45.402437Z"
+      "createTime": "2026-09-10T01:50:37.478920Z",
+      "updateTime": "2026-09-10T01:50:37.478920Z"
     }
   }
 }

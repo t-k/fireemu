@@ -52,3 +52,7 @@ jobs:
         run: |
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_unicode_recheck.py -q
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-unicode-recheck.py --check
+      - name: Check scoped Unicode recheck approval
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_unicode_approval.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-password-unicode-recheck-approval.py --check

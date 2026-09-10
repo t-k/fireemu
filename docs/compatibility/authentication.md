@@ -80,6 +80,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 - AUTH-MFA-TOTP-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
+[Unicode password recheck: scoped human approval](auth-password-unicode-recheck-approval.md). Eight recorded input patterns are verified and approved as a corrected-artifact comparison against unchanged saved production observations, not a new production run or universal Unicode coverage. Only the pinned subject and recorded controls are approved.
+
 [Unicode password upper boundary: corrected artifact recheck](auth-password-unicode-recheck.md). Eight redacted input results agree between the corrected local artifact and the unchanged earlier production observation. Candidate only, not human-approved; no fresh production run or universal Unicode claim. The original artifact's mismatch remains in the historical record below.
 
 [Unicode password upper boundary: unapproved diagnostic](auth-password-unicode.md). Eight generated inputs completed credential and cleanup controls on both targets, but the astral over-boundary input differs: production refuses it while the recorded local artifact accepts it. This is an open compatibility difference, not approved coverage or a universal Unicode counting rule.

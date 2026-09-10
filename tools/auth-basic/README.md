@@ -2,6 +2,8 @@
 
 This independent recorder exercises email/password signup, signin, account lookup, wrong-password refusal, selected stable state after refusal, SecureToken refresh, lookup using the refreshed token, client deletion and exact Admin absence readback. It does not test SDKs, MFA, tenants, OOB messages, Rules or the public npm package. Results are unapproved candidate observations, not a general Auth compatibility claim.
 
+The [selected-section source review and coverage map](../../docs/compatibility/auth-basic-source-review.md) links all nine cases to their source-derived or harness-control obligations and records the remaining approval gaps. It is review documentation, not an accepted execution receipt.
+
 ## Safety and evidence boundaries
 
 Production is fixed to `fireemu-35fe6` / `592603257417`. Read-only preflight checks project identity, password provider settings, improved email privacy, absence of blocking triggers and an empty Cloud Functions list. Requests use project-bound API keys and a request-local quota project header. No IAM, ADC configuration or Firebase settings are modified. See the [quota-project REST documentation](https://docs.cloud.google.com/docs/authentication/rest#set_the_quota_project_with_a_rest_request).

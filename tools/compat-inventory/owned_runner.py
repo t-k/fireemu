@@ -483,7 +483,9 @@ def main() -> None:
         result = run_owned(binary, args.output, build)
         if result["status"] != "passed":
             raise SystemExit("Owned artifact run failed; inspect private candidate")
-        print("Owned artifact: 10 cases passed; process stopped and fixtures absent")
+        print(
+            f"Owned artifact: {len(result['cases'])} cases passed; process stopped and fixtures absent"
+        )
     else:
         parser.error("use --binary/--output or --owned-child/--nonce")
 

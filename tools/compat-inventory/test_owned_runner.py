@@ -1,6 +1,8 @@
 """Owned launch boundaries, with an opt-in real fireemu process integration test."""
 
 import os
+import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -106,6 +108,30 @@ def test_owned_runner_refuses_ambient_configuration_and_remote_endpoints():
 def test_owned_runner_proves_instance_and_stops_the_actual_artifact(tmp_path):
     report = run_owned(Path(os.environ["FIREEMU_EVIDENCE_BINARY"]), tmp_path / "run")
     assert_owned_run_completed(report)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("FIREEMU_EVIDENCE_BINARY"),
+    reason="requires explicitly built real fireemu artifact",
+)
+def test_owned_runner_cli_reports_the_measured_case_count(tmp_path):
+    from aggregation_corpus import corpus
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("owned_runner.py")),
+            "--binary",
+            os.environ["FIREEMU_EVIDENCE_BINARY"],
+            "--output",
+            str(tmp_path / "cli"),
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    count = len(corpus()["queries"]) + len(corpus()["stateCases"])
+    assert f"{count} cases" in completed.stdout
 
 
 def assert_owned_run_completed(report):

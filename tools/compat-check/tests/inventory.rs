@@ -109,6 +109,7 @@ fn auth_observation_link_does_not_promote_broad_labels() {
     assert!(page.contains("(auth-password.md)"));
     assert!(page.contains("(auth-password-approval.md)"));
     assert!(page.contains("(auth-session-token.md)"));
+    assert!(page.contains("(auth-session-v2.md)"));
     assert!(page.contains("Not attested | Not attested | Not attested"));
 }
 

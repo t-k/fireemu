@@ -48,3 +48,7 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/maximum_history.py --check
       - name: Check original Unicode mismatch at its fixed historical source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/unicode_history.py --check
+      - name: Check corrected Unicode artifact observation
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_unicode_recheck.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-unicode-recheck.py --check

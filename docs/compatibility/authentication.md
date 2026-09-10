@@ -86,6 +86,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Auth revision 2 scoped human approval](auth-basic-v2-approval.md). Twelve scoped cases verified and approved as redacted semantic observations: email/password REST using end-user tokens, no tenant, local strict profile and recorded production configuration. This does not promote the broad Auth feature labels.
 
+[Auth photo URL candidate observations](auth-profile.md). Twelve scoped cases cover set, replacement, malformed-token refusal, selected-state preservation and clearing; no human approval or broader account-update claim.
+
 ### User lifecycle and email/password
 
 Sources: AUTH-OVERVIEW; AUTH-REST; AUTH-DISCOVERY-V1. API surfaces: AUTH-SIGNUP; AUTH-PASSWORD.

@@ -267,6 +267,9 @@ fn features(inv: &Inventory, path: &str, title: &str) -> String {
         if text(f, "id") == "FS-AGGREGATIONS" {
             out.push_str("[Bounded compound-aggregation source review and execution evidence](aggregation-evidence.md). This separate slice does not promote the broad feature labels.\n\n");
         }
+        if text(f, "id") == "AUTH-USERS" {
+            out.push_str("[Bounded Auth basic candidate observations](auth-basic-evidence.md). These sanitized, unapproved observations do not promote the broad feature labels.\n\n");
+        }
         writeln!(out, "### {}\n\nSources: {}. API surfaces: {}.\n\nRequirements: {}.\n\nContract claims: {}.\n", escape(text(f, "title")), list(&strings(f, "sources")), list(&strings(f, "surfaces")), list(&strings(f, "requirements")), list(&strings(f, "claims"))).unwrap();
         for cap in strings(f, "capabilities") {
             writeln!(

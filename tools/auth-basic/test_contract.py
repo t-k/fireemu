@@ -104,3 +104,29 @@ def test_indeterminate_create_cannot_be_proven_clean_by_empty_lookups():
                 assert c.cleanup_confirmed(known_uid, uid_absent, email_absent) is (
                     known_uid is not None and uid_absent and email_absent
                 )
+
+
+def test_cleanup_state_model_kills_removed_identity_and_absence_guards():
+    import inspect
+
+    c = contract()
+    source = inspect.getsource(c.cleanup_confirmed)
+    guards = [
+        "isinstance(uid, str)",
+        "bool(uid)",
+        "uid_absent is True",
+        "email_absent is True",
+    ]
+    for guard in guards:
+        assert guard in source
+        namespace = {}
+        exec(source.replace(guard, "True", 1), namespace)  # noqa: S102 -- Bounded mutation of repository source, not external input.
+        mutant = namespace["cleanup_confirmed"]
+        killed = any(
+            mutant(uid, uid_absent, email_absent)
+            != c.cleanup_confirmed(uid, uid_absent, email_absent)
+            for uid in [None, "", 123, "uid"]
+            for uid_absent in [False, True]
+            for email_absent in [False, True]
+        )
+        assert killed, f"Surviving cleanup guard mutant: {guard}"

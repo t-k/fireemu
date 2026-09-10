@@ -80,6 +80,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 - AUTH-MFA-TOTP-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
+[Bounded Auth basic candidate observations](auth-basic-evidence.md). These sanitized, unapproved observations do not promote the broad feature labels.
+
 ### User lifecycle and email/password
 
 Sources: AUTH-OVERVIEW; AUTH-REST; AUTH-DISCOVERY-V1. API surfaces: AUTH-SIGNUP; AUTH-PASSWORD.

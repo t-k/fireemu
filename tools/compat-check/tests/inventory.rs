@@ -92,6 +92,18 @@ fn aggregation_slice_link_does_not_promote_broad_labels() {
 }
 
 #[test]
+fn auth_observation_link_does_not_promote_broad_labels() {
+    let f = Fixture::new();
+    f.mutate("spec/compatibility/features.json", |v| {
+        v["features"][0]["id"] = json!("AUTH-USERS");
+    });
+    generate(&f.0).unwrap();
+    let page = fs::read_to_string(f.0.join("docs/compatibility/authentication.md")).unwrap();
+    assert!(page.contains("(auth-basic-evidence.md)"));
+    assert!(page.contains("Not attested | Not attested | Not attested"));
+}
+
+#[test]
 fn generated_matrix_separates_implementation_from_execution() {
     let f = Fixture::new();
     generate(&f.0).unwrap();

@@ -27,7 +27,7 @@ def synthetic_receipt(p):
 
     value.update(
         scope=p.SCOPE,
-        corpus=p.CORPUS,
+        corpus=copy.deepcopy(p.CORPUS),
         probeInputs=p.inputs(),
         sourceReviewSha256=p.digest(json.loads(p.REVIEW.read_bytes())),
         publicationContractSha256=p.publication_contract_sha(),
@@ -125,3 +125,24 @@ def test_incomplete_report_is_rejected():
             },
             "local",
         )
+
+
+@pytest.mark.parametrize(
+    "path,invalid",
+    [
+        (("schemaVersion",), 2.0),
+        (("corpus", "revision"), True),
+        (("production", "cleanup", "uidAbsent"), 1),
+        (("local", "cleanup", "emailAbsent"), 1),
+        (("local", "instance", "wrongTokenStatus"), 403.0),
+    ],
+)
+def test_numeric_substitutes_do_not_satisfy_typed_public_fields(path, invalid):
+    p = publisher()
+    value = synthetic_receipt(p)
+    parent = value
+    for key in path[:-1]:
+        parent = parent[key]
+    parent[path[-1]] = invalid
+    with pytest.raises(ValueError):
+        p.validate(value)

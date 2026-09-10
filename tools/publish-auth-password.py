@@ -33,12 +33,15 @@ def publication_contract_sha():
 
 def project(report, target):
     require(
-        report["schemaVersion"] == 2
+        type(report["schemaVersion"]) is int
+        and report["schemaVersion"] == 2
         and report["acceptance"] == "candidate"
         and report["target"] == target
         and complete(report)
     )
-    require(report["corpus"] == CORPUS and report["probeInputs"] == inputs())
+    require(
+        digest(report["corpus"]) == digest(CORPUS) and report["probeInputs"] == inputs()
+    )
     out = {
         key: report[key]
         for key in ["target", "recordedAt", "probeSourceCommit", "cases", "cleanup"]
@@ -99,11 +102,14 @@ def validate(value):
         }
     )
     require(
-        value["schemaVersion"] == 2
+        type(value["schemaVersion"]) is int
+        and value["schemaVersion"] == 2
         and value["acceptance"] == "candidate"
         and value["scope"] == SCOPE
     )
-    require(value["corpus"] == CORPUS and value["probeInputs"] == inputs())
+    require(
+        digest(value["corpus"]) == digest(CORPUS) and value["probeInputs"] == inputs()
+    )
     review = json.loads(REVIEW.read_bytes())
     require(value["publicationContractSha256"] == publication_contract_sha())
     require(value["sourceReviewSha256"] == digest(review))
@@ -143,7 +149,11 @@ def validate(value):
         )
         hex_value(report["probeSourceCommit"], 40)
         hex_value(report["privateReceiptSha256"])
-        require(report["cleanup"] == {"uidAbsent": True, "emailAbsent": True})
+        require(
+            isinstance(report["cleanup"], dict)
+            and set(report["cleanup"]) == {"uidAbsent", "emailAbsent"}
+        )
+        require(all(item is True for item in report["cleanup"].values()))
         require(len(report["cases"]) == len(CASES))
         for row, name in zip(report["cases"], CASES, strict=True):
             validate_case(row, name)
@@ -238,7 +248,8 @@ def validate(value):
             and process["listenersClosed"] is True
         )
         require(
-            instance["wrongTokenStatus"] == 403
+            type(instance["wrongTokenStatus"]) is int
+            and instance["wrongTokenStatus"] == 403
             and instance["profile"] == "strict"
             and instance["version"] == artifact["version"]
         )

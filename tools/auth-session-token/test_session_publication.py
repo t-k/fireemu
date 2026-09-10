@@ -58,6 +58,28 @@ def test_frozen_password_evidence_is_not_used_as_session_evidence():
         p.validate(copy.deepcopy(value))
 
 
+def test_committed_diagnostics_preserve_differences_without_approval():
+    p = publisher()
+    value = json.loads(p.BUNDLE.read_bytes())
+    p.validate(value)
+    assert value["acceptance"] == "candidate"
+    assert p.PAGE.read_text() == p.render(value)
+    assert len(value["local"]["cases"]) == len(value["production"]["cases"]) == 32
+    differences = [
+        local["id"]
+        for local, production in zip(
+            value["local"]["cases"], value["production"]["cases"], strict=True
+        )
+        if p.comparison(local, production, p.round_controls(value, local["id"]))
+        == "Different observations"
+    ]
+    assert differences == [
+        f"{lane}@{offset}"
+        for offset in (0, 10000, 30000)
+        for lane in ("a-refresh", "b-refresh")
+    ]
+
+
 def synthetic_receipt(p):
     # Synthetic validator fixture only, never saved as live observation.
     import base64

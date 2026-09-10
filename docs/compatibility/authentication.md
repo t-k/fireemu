@@ -80,6 +80,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 - AUTH-MFA-TOTP-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
+[Auth session token diagnostic observations](auth-session-token.md). Fixed pre-change A/B ID and refresh credentials are observed at bounded offsets after password replacement, with fresh-token controls. This unapproved diagnostic distinguishes REST lookup from refresh exchange; it does not establish universal immediate revocation, SDK checkRevoked, Rules or elapsed-expiry compatibility.
+
 [Auth password change: scoped human approval](auth-password-approval.md). Twelve cases verified and approved as redacted observations for fresh end-user REST tokens, no tenant, local strict and recorded authentication/password policy. Covers password replacement and old/new-password signin, not old-token revocation timing, policy boundaries, SDK or broad Auth compatibility. The candidate page preserves acquisition-time history.
 
 [Auth password change candidate observations](auth-password.md). Twelve scoped end-user REST cases cover credential replacement, old-password rejection, new-password signin, update-token use and selected-state preservation. Unapproved redacted observations only; no revocation-timing, SDK or broad Auth claim.

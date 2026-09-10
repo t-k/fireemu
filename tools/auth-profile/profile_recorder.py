@@ -255,10 +255,33 @@ def cleanup_account(admin, email, marker, uid=None):
     return {"uidAbsent": True, "emailAbsent": True}
 
 
-def reconcile(journal):
-    require(not journal.is_symlink() and journal.stat().st_mode & 0o077 == 0)
+def recovery_identity(journal):
+    require(
+        journal.is_file()
+        and not journal.is_symlink()
+        and journal.stat().st_mode & 0o077 == 0
+    )
     value = json.loads(journal.read_bytes())
     validate_journal(value)
+    verified = journal.parent / "verified-account.json"
+    if not verified.exists():
+        require(not verified.is_symlink())
+        return value, None
+    require(
+        verified.is_file()
+        and not verified.is_symlink()
+        and verified.stat().st_mode & 0o077 == 0
+    )
+    identity = json.loads(verified.read_bytes())
+    require(isinstance(identity, dict) and set(identity) == set(value) | {"uid"})
+    require(all(identity[key] == item for key, item in value.items()))
+    uid = identity["uid"]
+    require(isinstance(uid, str) and bool(uid) and len(uid) <= 128)
+    return value, uid
+
+
+def reconcile(journal):
+    value, uid = recovery_identity(journal)
     token, _, _ = production_preflight()
 
     def admin(action, body):
@@ -269,8 +292,19 @@ def reconcile(journal):
             quota=True,
         )
 
+    # Persist a recovered identity before deletion, including interrupted signups.
+    if uid is None:
+        records = users(*admin("lookup", {"email": [value["email"]]}))
+        uid = owned(records, value["email"], value["marker"])
+        owned(
+            users(*admin("lookup", {"localId": [uid]})),
+            value["email"],
+            value["marker"],
+            uid,
+        )
+        save(journal.parent / "verified-account.json", {**value, "uid": uid})
     # An absent account with unknown UID remains unresolved; never close the journal.
-    return cleanup_account(admin, value["email"], value["marker"])
+    return cleanup_account(admin, value["email"], value["marker"], uid)
 
 
 def observe(output, origin=None):
@@ -379,6 +413,10 @@ def observe(output, origin=None):
             },
         )
         uid = owned(lookup({"email": [email]}), email, marker)
+        save(
+            output / "verified-account.json",
+            {**json.loads((output / "recovery.json").read_bytes()), "uid": uid},
+        )
         checks = tokens(signup, uid, email)
         record(
             "signup",

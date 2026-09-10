@@ -32,3 +32,8 @@ def test_profile_owned_lifecycle(tmp_path):
     assert report["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
     assert len(report["cases"]) == 12
     assert all(row["passed"] for row in report["cases"])
+    sys.path.insert(0, str(Path(__file__).parent))
+    from profile_recorder import recovery_identity
+
+    _, uid = recovery_identity(tmp_path / "run/observation/recovery.json")
+    assert isinstance(uid, str) and uid

@@ -1,6 +1,7 @@
 """Bounded photoUrl response predicates and secret-free projections."""
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -73,3 +74,31 @@ def test_complete_rejects_cleanup_or_exit_failures_but_keeps_mismatches():
     for key in ["failure", "cleanupFailure", "childCleanupFailure"]:
         assert not c.complete({**report, key: "failure"})
     assert not c.complete({**report, "cleanup": {"emailAbsent": True}})
+
+
+def test_recovery_preserves_verified_uid_without_trusting_unrelated_record(tmp_path):
+    sys.path.insert(0, str(Path(__file__).parent))
+    import profile_recorder as recorder
+
+    assert hasattr(recorder, "recovery_identity"), (
+        "Recovery must retain ownership-verified UID"
+    )
+    journal = {
+        "project": recorder.PROJECT,
+        "email": "fireemu-basic-" + "a" * 32 + "@example.test",
+        "marker": "fireemu-owned-" + "b" * 48,
+        "creationAttempted": True,
+    }
+    path = tmp_path / "recovery.json"
+    recorder.save(path, journal)
+    assert recorder.recovery_identity(path) == (journal, None)
+    verified = {**journal, "uid": "owned-uid"}
+    recorder.save(tmp_path / "verified-account.json", verified)
+    assert recorder.recovery_identity(path) == (journal, "owned-uid")
+    # A real second private file must agree with the original journal.
+    other = tmp_path / "other"
+    other.mkdir()
+    recorder.save(other / "recovery.json", journal)
+    recorder.save(other / "verified-account.json", {**verified, "marker": "different"})
+    with pytest.raises(ValueError):
+        recorder.recovery_identity(other / "recovery.json")

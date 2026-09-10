@@ -8,7 +8,30 @@
     "profile": "strict",
     "rules": "admin-bypass"
   },
-  "approvals": [],
+  "approvals": [
+    {
+      "subjectSha256": "08f92bf428850eefda32833de2003a3f93c94955e6793247e8ea2f7d8e94def3",
+      "cases": [
+        "count-alone",
+        "count-sum",
+        "count-average",
+        "sum-average",
+        "multiple-fields",
+        "empty-result",
+        "missing-before-limit",
+        "bounded-count",
+        "explicit-x-asc",
+        "explicit-x-desc",
+        "explicit-x-offset",
+        "explicit-name-rejected",
+        "refused-commit",
+        "unchanged-state"
+      ],
+      "reviewer": "github:t-k (id:426779)",
+      "reviewedAt": "2026-09-10",
+      "decision": "approve"
+    }
+  ],
   "files": {
     "corpus.json": "8c49ce7a5af5f1e252251103815dfd0eb1ef664d0fc0978ab7a4d25e09248db2",
     "local.json": "44412d3bb9a5536f1e20dccdba48c6d66a1f923792b90cc6937feada8293bbc2",

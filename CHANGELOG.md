@@ -8,9 +8,12 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-10
+
 ### Fixed
 
 - Configuration files containing fireemu-only keys such as `profile` or `auth.totp` without `schemaVersion` are refused with an actionable diagnostic instead of silently ignoring those settings as Firebase project configuration. The check covers `--config`, `--firebase-json`, and `firebaseJson` references.
+- The npm launcher forwards PID-directed `SIGTERM` and `SIGINT` to the native daemon on Unix and waits for shutdown, so stopping the launcher no longer leaves an emulator serving in the background. The launcher preserves child exit status and waits for cleanup after repeated signals.
 
 ## [0.7.0] - 2026-09-09
 
@@ -129,7 +132,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/t-k/fireemu/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/t-k/fireemu/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/t-k/fireemu/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/t-k/fireemu/compare/v0.4.0...v0.5.0

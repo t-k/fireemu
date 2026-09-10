@@ -40,3 +40,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/password_history.py --check
       - name: Test current historical isolation and maximum password contracts
         run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history tools/auth-password-maximum -q
+      - name: Check maximum password boundary candidate
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-password-maximum.py --check

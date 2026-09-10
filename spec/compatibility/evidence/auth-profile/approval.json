@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "23913299c5d414abbdffe0692711f77ead500b639318a09a60a5802bd1f199d2",
+  "sourceCommit": "bb2f1a2f15f8aa447bce9395e7322840ec11b5f3",
+  "scope": "Photo URL setting, replacement and deletion through REST using end-user tokens; no tenant; local strict profile and recorded production configuration; only the recorded artifact, configuration and auth-photo-url corpus revision 1 twelve cases; approved as redacted semantic observations matching the published checks.",
+  "cases": [
+    "signup",
+    "initial-lookup",
+    "set-photo",
+    "set-photo-lookup",
+    "replace-photo",
+    "replace-photo-lookup",
+    "invalid-token-update",
+    "unchanged-state",
+    "delete-photo",
+    "deleted-photo-lookup",
+    "delete",
+    "deleted-account-absent"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-10",
+  "decision": "approve"
+}

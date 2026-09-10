@@ -1,0 +1,206 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent-authored-source-review",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-10",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "rawSha256": "c3454bcf8f4e565422657ba8d55ea0d23bb3d82a2bfbc0a3c6aaabdcfc888af8",
+      "bodySha256": "a9b8129d0d42db1aa1b7eed2121ac7dc2be6d5b53c3976502ecf6b753b09c0c9",
+      "fetchedAt": "2026-09-10T04:04:29.598062+00:00",
+      "locators": [
+        "section-create-email-password",
+        "section-sign-in-email-password",
+        "section-change-password",
+        "section-get-account-info",
+        "section-refresh-token",
+        "section-delete-account"
+      ]
+    },
+    {
+      "id": "password-policy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/TopLevel/getPasswordPolicy",
+      "rawSha256": "e0358d44836900cf88704efeb032ea23674afa1be5f60badd618631aae9319e6",
+      "bodySha256": "32ee1fa52b8d6dcdeb7c051dcd34d22378ed5e6fac51aed65092f26879ee26fe",
+      "fetchedAt": "2026-09-10T05:41:19.870929+00:00",
+      "locators": [
+        "response-body",
+        "customstrengthoptions",
+        "enforcementstate"
+      ]
+    },
+    {
+      "id": "email-privacy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/admin/email-enumeration-protection",
+      "rawSha256": "0ae2cb918d4d56d047a2b928a5eb66d96a80127fb60a7ed55e5389f5551a8834",
+      "bodySha256": "6457558a31c25b2f770f277c29839eecc1fa2f5e0c3878f2e3df3911e2a3061a",
+      "fetchedAt": "2026-09-10T05:41:20.751654+00:00",
+      "locators": [
+        "overview",
+        "example_of_an_error_response"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "id": "AUTH-PASSWORD-REJECTION-SIGNUP",
+      "case": "signup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-create-email-password",
+      "condition": "Create a dedicated random-email account with a strong generated password. Check returned same-account tokens and separate expiry format/3600 expectations; verify marker/email and independent UID, persist/reread UID before mutation.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-BASELINE-SIGNIN",
+      "case": "baseline-signin",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Authenticate with the original strong password and preserve the returned ID/refresh bytes as the fixed pre-refusal credentials.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-BASELINE-REFRESH",
+      "case": "baseline-refresh",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Prove the baseline signin refresh token usable before refusal; preserve original bytes for later reuse.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-BASELINE-REFRESHED-LOOKUP",
+      "case": "baseline-refreshed-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Use the ID token returned by baseline refresh to retrieve the same account and compare selected field presence and JSON types to the initial snapshot.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-WEAK-PASSWORD-REJECTED",
+      "case": "weak-password-rejected",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-change-password",
+      "condition": "Five-character ASCII update under explicit minimum-six policy: HTTP400 WEAK_PASSWORD. No raw message or password retained.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-UNCHANGED-STATE",
+      "case": "unchanged-state",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Use fixed baseline ID token after refusal and compare selected identity/profile field presence and JSON types with initial lookup.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-ORIGINAL-PASSWORD-SIGNIN",
+      "case": "original-password-signin",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "After the weak update refusal, authenticate with the unchanged original password as the same UID/email; retain its fresh ID token for the final valid change.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-ORIGINAL-PASSWORD-LOOKUP",
+      "case": "original-password-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Use the post-refusal original-password signin ID token to retrieve the initial selected state.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-ORIGINAL-TOKEN-REFRESH",
+      "case": "original-token-refresh",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Reuse exactly the baseline signin refresh token after refusal; check issued credentials then separately lookup.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-ORIGINAL-REFRESHED-LOOKUP",
+      "case": "original-refreshed-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Use the ID token returned by reusing the fixed original refresh after refusal; retrieve the initial selected state.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-VALID-PASSWORD-CHANGE",
+      "case": "valid-password-change",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-change-password",
+      "condition": "Final distinct strong update succeeds using fresh original-password signin ID token, and returns same-account credentials.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-CHANGED-TOKEN-LOOKUP",
+      "case": "changed-token-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Use the successful final update's ID token to retrieve the same initial selected account fields; credential metadata is excluded.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-NEW-PASSWORD-SIGNIN",
+      "case": "new-password-signin",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Authenticate with the final distinct strong replacement password as the same UID/email, proving a working update route.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-NEW-PASSWORD-LOOKUP",
+      "case": "new-password-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Use the final new-password signin ID token to retrieve the initial selected state.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-DELETE",
+      "case": "delete",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Delete using the final signin ID token after Admin UID/email ownership confirmation; require HTTP200 without error.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REJECTION-DELETED-ACCOUNT-ABSENT",
+      "case": "deleted-account-absent",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Independently confirm the dedicated UID and email are absent. This is a cleanup control, not proof of fault-injected recovery.",
+      "existingRequirement": null
+    }
+  ],
+  "limitations": [
+    "Candidate only, no approval inferred.",
+    "Reuses official snapshots at original acquisition times.",
+    "One five-character ASCII refusal and final strong update; not all password-policy boundaries.",
+    "No actual expiry, revocation timing, SDK/Rules, MFA or fault-injected recovery."
+  ],
+  "preconditions": [
+    {
+      "source": "password-policy",
+      "locator": "response-body",
+      "condition": "Require exact client schemaVersion 1, enforcementState ENFORCE, minPasswordLength 6 and maxPasswordLength 4096; admin config must omit passwordPolicyConfig. This explicit readback is not inferred OFF. Distinct 47-character generated passwords have uppercase/lowercase/numeric/non-alphanumeric characters; no configuration is changed."
+    }
+  ]
+}

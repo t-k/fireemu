@@ -56,3 +56,7 @@ jobs:
         run: |
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_disabled_recheck.py -q
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-disabled-recheck.py --check
+      - name: Check deleted-account credential candidate
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-deleted -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-deleted.py --check

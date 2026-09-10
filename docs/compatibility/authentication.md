@@ -84,6 +84,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Account disable / re-enable: corrected artifact recheck](auth-disabled-recheck.md). All 18 semantic projections match the unchanged saved production observation on the new local artifact. This is not a new production run or an approval, and the original mismatch remains preserved.
 
+[Deleted-account credential observations](auth-deleted.md). Twelve route observations compare fixed credentials before and after end-user deletion, with an unaffected successful account as control. Exact error classifications and any differences remain visible; no approval is inherited.
+
 [Supplementary-character boundary: scoped human approval](auth-password-unicode-boundary-approval.md). The three recorded patterns are verified and approved: 4095/4096 UTF-16 units accepted, 4097 refused, with credential/state and cleanup controls. Only the pinned subject, artifact and settings are approved; no general Unicode or other-route claim follows.
 
 [Supplementary-character password boundary: candidate](auth-password-unicode-boundary.md). Three newly observed patterns at 4095/4096/4097 UTF-16 units agree on both targets, with branch-specific credential/state and cleanup checks. Separate accounts and random prefixes are used; no human approval or general Unicode guarantee is implied.

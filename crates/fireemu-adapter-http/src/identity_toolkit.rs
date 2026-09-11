@@ -1898,14 +1898,19 @@ fn dispatch_with_blocking_hook(
                     committed.revoke_refresh_tokens(&uid);
                     *live = committed;
                 } else if handler == routes::Handler::MfaSignInFinalize {
-                    for (event, value) in &blocking_responses {
-                        if let Err(reason) =
-                            apply_blocking_response(&mut live, &uid, *event, value)
-                        {
-                            return error(400, &reason);
-                        }
+                    // Applied to a working copy so that a response that passed on the
+                    // committed copy but fails against the live record (claims size)
+                    // leaves no partial update; the refusal is USER_DISABLED either way.
+                    let mut updated = live.clone();
+                    let applied = blocking_responses.iter().all(|(event, value)| {
+                        apply_blocking_response(&mut updated, &uid, *event, value).is_ok()
+                    });
+                    if applied {
+                        *live = updated;
                     }
                 }
+                // Do not call `discard_pending_inbound_credentials` here: it takes the
+                // store lock that this closure already holds.
                 return error(400, "USER_DISABLED");
             }
             if let Some(mut session) = issued_session.take() {

@@ -4033,6 +4033,13 @@ fn pending_retry_hook_disable_persists_the_whole_response_and_created_accounts()
     assert_ne!(lookup["users"][0]["disabled"], true, "{lookup}");
     assert_eq!(lookup["users"][0]["lastLoginAt"], before["users"][0]["lastLoginAt"]);
     assert!(lookup["users"][0].get("customAttributes").is_none(), "{lookup}");
+    s.blocking = None;
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "hook-disable-claims@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{signed}");
 
     // An account created by the very request the hook disables is kept, disabled, with
     // no tokens and no session (production behavior for this case is not yet observed).

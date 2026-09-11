@@ -471,19 +471,21 @@ def observe(output):
         )
         require(status == 200 and "error" not in response)
         current, other = lookup(target), lookup(control)
+        readback_at = int(time.time())
         require(current.get("validSince") == str(revoke_at))
         require(other.get("validSince") == control["validSince"])
         report["revocation"] = {"validSinceReadback": True, "controlUnchanged": True}
         report["heldCredentialIssuedBeforeRevocation"] = issued_at < revoke_at
         require(report["heldCredentialIssuedBeforeRevocation"])
+        # Each timestamp is taken at its own event: the readback right after the target
+        # lookup, the held start immediately before the request.
         held_start_at = int(time.time())
         report["timeline"] = {
             "heldIssuedAt": issued_at,
             "validSince": revoke_at,
-            "validSinceReadbackAt": held_start_at,
+            "validSinceReadbackAt": readback_at,
             "heldStartAt": held_start_at,
         }
-
         status, started = start(target, held)
         session = started.get("phoneResponseInfo", {}).get("sessionInfo")
         held_start = row(

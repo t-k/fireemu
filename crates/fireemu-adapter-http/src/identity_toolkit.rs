@@ -2954,6 +2954,13 @@ fn sign_up(
             u.display_name = Some(name.to_owned());
         }
     }
+    // `photoUrl` is a documented sign-up field alongside `displayName`; it is stored
+    // before any blocking hook runs so a hook can see it on the new record.
+    if let Some(photo) = str_field(body, "photoUrl") {
+        if let Some(u) = store.user_mut(&uid) {
+            u.photo_url = Some(photo.to_owned());
+        }
+    }
     store.record_sign_in(&uid, at);
     let display_name = store.user(&uid).and_then(|u| u.display_name.clone());
     match issue_tokens(store, &uid, None, at) {

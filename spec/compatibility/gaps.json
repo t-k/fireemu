@@ -107,15 +107,15 @@
       "feature": "AUTH-BLOCKING",
       "kind": "unobserved",
       "scope": "An account created by the request that a blocking function disables: whether the created record persists, beforeCreate versus beforeSignIn order, and differences from existing accounts. fireemu keeps the created, disabled record without a session; unobserved.",
-      "implementationStatus": "unknown",
-      "localTestStatus": "none",
+      "implementationStatus": "implemented",
+      "localTestStatus": "passing",
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
-        "tools/auth-blocking-disable/README.md"
+        "tools/auth-blocking-create-disable/README.md"
       ],
-      "nextAction": "Second blocking corpus with a creation-time selector; observe signUp and auto-creating sign-ins.",
-      "blockedReason": "",
+      "nextAction": "Corpus, fixtures, offline safety tests and a local run exist (tools/auth-blocking-create-disable); run it in production once the deployment is approved, then publish the comparison.",
+      "blockedReason": "Production deployment and execution not yet approved for this corpus.",
       "requiresProductionChange": true
     },
     {
@@ -552,6 +552,23 @@
       "nextAction": "Keep this file current; do not treat filing alone as closure.",
       "blockedReason": "",
       "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-AUTH-002",
+      "feature": "AUTH-USERS",
+      "kind": "mismatch",
+      "scope": "accounts:signUp ignored the documented photoUrl field, so the record had no photo URL and a blocking hook could not see it on the creating request. Fixed locally: sign-up stores photoUrl before the hook runs. Production confirmation of the persisted field comes with the AUTH-U02 corpus control row.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "tools/auth-blocking-create-disable/README.md",
+        "crates/fireemu-adapter-http/tests/auth_flows.rs"
+      ],
+      "nextAction": "Confirm with the AUTH-U02 production run (control-c-signup-readback.photoUrlPersisted).",
+      "blockedReason": "",
+      "requiresProductionChange": true
     }
   ]
 }

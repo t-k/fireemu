@@ -30,11 +30,24 @@ struct Inventory {
     sources: Value,
     surfaces: Value,
     features: Value,
+    gaps: Value,
     requirements: Value,
     capabilities: Value,
     contract: Value,
     packages: Value,
 }
+
+const GAP_KINDS: [&str; 5] = [
+    "mismatch",
+    "unimplemented",
+    "unobserved",
+    "unmapped",
+    "untested",
+];
+const GAP_IMPLEMENTATION: [&str; 4] = ["unknown", "unimplemented", "implemented", "fixed"];
+const GAP_LOCAL: [&str; 3] = ["none", "passing", "failing"];
+const GAP_PRODUCTION: [&str; 3] = ["none", "recorded", "approved"];
+const GAP_COMPARISON: [&str; 3] = ["none", "mismatch", "matches-in-scope"];
 
 /// Checks input references and byte-for-byte generated output without writing anything.
 pub fn check(root: &Path) -> Report {
@@ -79,6 +92,7 @@ fn documents(root: &Path) -> Result<BTreeMap<String, String>, Vec<String>> {
         sources: read(&format!("{BASE}/sources/index.json"))?,
         surfaces: read(&format!("{BASE}/surfaces/index.json"))?,
         features: read(&format!("{BASE}/features.json"))?,
+        gaps: read(&format!("{BASE}/gaps.json"))?,
         requirements: read("verification/requirements/requirements.json")?,
         capabilities: read(crate::MANIFEST_PATH)?,
         contract: read(crate::CONTRACT_PATH)?,
@@ -86,6 +100,7 @@ fn documents(root: &Path) -> Result<BTreeMap<String, String>, Vec<String>> {
     };
     let mut problems = Vec::new();
     inventory.validate(&mut problems);
+    inventory.validate_gaps(root, &mut problems);
     if problems.is_empty() {
         Ok(render::documents(&inventory))
     } else {
@@ -600,6 +615,99 @@ impl Inventory {
                         &format!("capability {cap} has no linked contract claim"),
                     );
                 }
+            }
+        }
+    }
+}
+
+impl Inventory {
+    /// The gap ledger: every record names a known feature, keeps its four status axes in
+    /// the allowed vocabularies, points at evidence that exists, and cannot claim more
+    /// than its axes support (a comparison needs a production observation; a fix needs
+    /// passing local tests).
+    fn validate_gaps(&self, root: &Path, p: &mut Vec<String>) {
+        if self.gaps.get("schemaVersion") != Some(&Value::from(1)) {
+            fail(p, "CI-01", "gaps.json", "schemaVersion must be 1");
+        }
+        nonempty(&self.gaps, &["policy"], "gaps.json", p);
+        let feature_ids: BTreeSet<&str> = rows(&self.features, "features")
+            .iter()
+            .map(|f| text(f, "id"))
+            .collect();
+        let gaps = index(&self.gaps, "gaps", p);
+        for gap in gaps.values() {
+            let id = text(gap, "id");
+            shape(
+                gap,
+                &[
+                    "id",
+                    "feature",
+                    "kind",
+                    "scope",
+                    "implementationStatus",
+                    "localTestStatus",
+                    "productionObservationStatus",
+                    "comparisonStatus",
+                    "evidenceRefs",
+                    "nextAction",
+                    "blockedReason",
+                    "requiresProductionChange",
+                ],
+                &[],
+                id,
+                p,
+            );
+            nonempty(gap, &["scope", "nextAction"], id, p);
+            if !feature_ids.contains(text(gap, "feature")) {
+                fail(p, "CI-02", id, "gap feature is not a known feature id");
+            }
+            choices(gap, "kind", &GAP_KINDS, id, p);
+            choices(gap, "implementationStatus", &GAP_IMPLEMENTATION, id, p);
+            choices(gap, "localTestStatus", &GAP_LOCAL, id, p);
+            choices(gap, "productionObservationStatus", &GAP_PRODUCTION, id, p);
+            choices(gap, "comparisonStatus", &GAP_COMPARISON, id, p);
+            string_array(gap, "evidenceRefs", id, p);
+            if strings(gap, "evidenceRefs").is_empty() {
+                fail(p, "CI-03", id, "gaps need at least one evidence reference");
+            }
+            for reference in strings(gap, "evidenceRefs") {
+                if reference.contains("..") || !root.join(reference).exists() {
+                    fail(
+                        p,
+                        "CI-03",
+                        id,
+                        &format!("evidence reference {reference} does not exist"),
+                    );
+                }
+            }
+            if !gap
+                .get("requiresProductionChange")
+                .is_some_and(Value::is_boolean)
+            {
+                fail(p, "CI-01", id, "requiresProductionChange must be a boolean");
+            }
+            if !gap.get("blockedReason").is_some_and(Value::is_string) {
+                fail(
+                    p,
+                    "CI-01",
+                    id,
+                    "blockedReason must be a string (possibly empty)",
+                );
+            }
+            if text(gap, "comparisonStatus") != "none"
+                && text(gap, "productionObservationStatus") == "none"
+            {
+                fail(
+                    p,
+                    "CI-03",
+                    id,
+                    "a comparison needs a production observation",
+                );
+            }
+            if text(gap, "implementationStatus") == "fixed"
+                && text(gap, "localTestStatus") != "passing"
+            {
+                fail(p, "CI-03", id, "a fix needs passing local tests");
             }
         }
     }

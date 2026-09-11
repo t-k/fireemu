@@ -23,7 +23,7 @@ Declared profiles: strict; emulator. These are scope dimensions, not a claim tha
 
 Known source entries: 25. Reviewed sources: 0. Enumerated seed surfaces: 20. Accepted feature execution receipts: 0. None of these counts is a product compatibility percentage.
 
-[Source inventory](sources.md) · [API surface seed](surfaces.md) · [Requirement mappings and debt](requirements.md) · [Evidence policy](evidence-policy.md)
+[Source inventory](sources.md) · [API surface seed](surfaces.md) · [Requirement mappings and debt](requirements.md) · [Evidence policy](evidence-policy.md) · [Gap ledger](gaps.md)
 
 ## Existing authorities
 

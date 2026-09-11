@@ -54,6 +54,18 @@ impl Fixture {
                 "limitations":["Exact production behavior is not attested."]
             }]}),
         );
+        f.write("docs/compatibility/evidence-note.md", "evidence\n");
+        f.json(
+            "spec/compatibility/gaps.json",
+            json!({"schemaVersion":1,"policy":"Filing is not closure.","gaps":[{
+                "id":"GAP-1","feature":"FEATURE","kind":"unobserved",
+                "scope":"Something not yet observed.",
+                "implementationStatus":"implemented","localTestStatus":"passing",
+                "productionObservationStatus":"none","comparisonStatus":"none",
+                "evidenceRefs":["docs/compatibility/evidence-note.md"],
+                "nextAction":"Observe it.","blockedReason":"","requiresProductionChange":false
+            }]}),
+        );
         f
     }
     fn write(&self, path: &str, value: &str) {
@@ -85,6 +97,9 @@ fn aggregation_slice_link_does_not_promote_broad_labels() {
     f.mutate("spec/compatibility/features.json", |v| {
         v["features"][0]["id"] = json!("FS-AGGREGATIONS");
     });
+    f.mutate("spec/compatibility/gaps.json", |v| {
+        v["gaps"][0]["feature"] = json!("FS-AGGREGATIONS");
+    });
     generate(&f.0).unwrap();
     let page = fs::read_to_string(f.0.join("docs/compatibility/authentication.md")).unwrap();
     assert!(page.contains("(aggregation-evidence.md)"));
@@ -96,6 +111,9 @@ fn auth_observation_link_does_not_promote_broad_labels() {
     let f = Fixture::new();
     f.mutate("spec/compatibility/features.json", |v| {
         v["features"][0]["id"] = json!("AUTH-USERS");
+    });
+    f.mutate("spec/compatibility/gaps.json", |v| {
+        v["gaps"][0]["feature"] = json!("AUTH-USERS");
     });
     generate(&f.0).unwrap();
     let page = fs::read_to_string(f.0.join("docs/compatibility/authentication.md")).unwrap();
@@ -187,6 +205,22 @@ fn inventory_mutations_cannot_turn_mapping_into_verification() {
         }),
         ("unknown goal", "features.json", |v| {
             v["features"][0]["goal"] = json!("MISSING");
+        }),
+        ("gap names an unknown feature", "gaps.json", |v| {
+            v["gaps"][0]["feature"] = json!("MISSING");
+        }),
+        ("gap comparison without an observation", "gaps.json", |v| {
+            v["gaps"][0]["comparisonStatus"] = json!("matches-in-scope");
+        }),
+        ("gap fixed without passing tests", "gaps.json", |v| {
+            v["gaps"][0]["implementationStatus"] = json!("fixed");
+            v["gaps"][0]["localTestStatus"] = json!("none");
+        }),
+        ("gap evidence that does not exist", "gaps.json", |v| {
+            v["gaps"][0]["evidenceRefs"] = json!(["docs/compatibility/missing.md"]);
+        }),
+        ("gap with an invented status", "gaps.json", |v| {
+            v["gaps"][0]["productionObservationStatus"] = json!("verified");
         }),
         ("duplicate feature", "features.json", |v| {
             let row = v["features"][0].clone();

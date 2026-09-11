@@ -104,6 +104,7 @@ pub(super) fn documents(inv: &Inventory) -> BTreeMap<String, String> {
     docs.insert("surfaces.md", surfaces(inv));
     docs.insert("requirements.md", requirements(inv));
     docs.insert("evidence-policy.md", policy());
+    docs.insert("gaps.md", gaps(inv));
     for (path, title) in [
         ("authentication.md", "Authentication"),
         (
@@ -146,7 +147,7 @@ fn overview(inv: &Inventory) -> String {
         writeln!(out, "| {goal} | {count} | [Open]({}) |", goal_page(goal)).unwrap();
     }
     writeln!(out, "\nKnown source entries: {}. Reviewed sources: 0. Enumerated seed surfaces: {}. Accepted feature execution receipts: 0. None of these counts is a product compatibility percentage.\n", rows(&inv.sources, "sources").len(), rows(&inv.surfaces, "surfaces").len()).unwrap();
-    out.push_str("[Source inventory](sources.md) · [API surface seed](surfaces.md) · [Requirement mappings and debt](requirements.md) · [Evidence policy](evidence-policy.md)\n\n## Existing authorities\n\nThe [compatibility contract](../../spec/compatibility/contract.json) owns the pinned official-emulator claims. The [capability manifest](../../crates/fireemu/src/capabilities.json) owns implementation declarations. The [requirement ledger](../../verification/requirements/requirements.json) owns requirement status and artifact references. These generated pages do not replace them.\n\nHistorical corpus comparisons: [Authentication](../../conformance/AUTH-PRODUCTION-MATRIX.md) and [Firestore](../../conformance/FIRESTORE-PRODUCTION-MATRIX.md). Read their artifact, source, profile and configuration identities; their row counts are not feature coverage and are not transferred to this source tree.\n\n## Open inventory work\n\n");
+    out.push_str("[Source inventory](sources.md) · [API surface seed](surfaces.md) · [Requirement mappings and debt](requirements.md) · [Evidence policy](evidence-policy.md) · [Gap ledger](gaps.md)\n\n## Existing authorities\n\nThe [compatibility contract](../../spec/compatibility/contract.json) owns the pinned official-emulator claims. The [capability manifest](../../crates/fireemu/src/capabilities.json) owns implementation declarations. The [requirement ledger](../../verification/requirements/requirements.json) owns requirement status and artifact references. These generated pages do not replace them.\n\nHistorical corpus comparisons: [Authentication](../../conformance/AUTH-PRODUCTION-MATRIX.md) and [Firestore](../../conformance/FIRESTORE-PRODUCTION-MATRIX.md). Read their artifact, source, profile and configuration identities; their row counts are not feature coverage and are not transferred to this source tree.\n\n## Open inventory work\n\n");
     for debt in strings(&inv.meta, "debt") {
         writeln!(out, "- {}", escape(debt)).unwrap();
     }
@@ -371,5 +372,42 @@ fn requirements(inv: &Inventory) -> String {
 fn policy() -> String {
     let mut out = page("Evidence policy");
     out.push_str("## Independent axes\n\nImplementation status belongs to the capability manifest and requirement ledger. Source review belongs to a source snapshot and reviewed sections. Execution belongs to an exact run against an identified artifact, configuration, SDK and case set. Schema 1 supports discovery pointers and mappings only: all feature execution cells remain `Not attested`, and completed source review cannot be recorded. This is a deliberate fail-closed boundary, not a claim that historical runs do not exist.\n\n## Labels\n\n`Implemented, unverified` means every linked capability currently declares implemented; it does not cover unmapped behavior. `Partial, unverified` means the linked declarations are mixed or incomplete. `Unsupported` means all linked capabilities declare unsupported. `Unmapped, unverified` means no capability mapping has been reviewed. Notes preserve validation-only, fixture-only, external-service and known-divergence qualifications from the existing manifest.\n\n## Before accepting execution receipts\n\nA later schema must bind the tested binary/source digest, configuration readback (edition, API mode, concurrency mode, profile), SDK lock, corpus and comparator revision, exact case IDs, assertion results, execution timestamp and sanitized artifacts. Production live observations, official-emulator runs, recorded replay and SDK E2E are separate run kinds. Zero tests, all skipped, failed preconditions, unrecognized results and unknown cleanup cannot pass. Changed dependencies produce stale evidence, never automatic re-verification.\n\nRecording creates a candidate; comparison is read-only; acceptance needs a reviewable diff and explicit human decision. The current generator performs no network access and no production operations. It cannot accept expectations or publish a release claim.\n\n## Comparison obligations\n\nRetain missing/null and integer/double distinctions, ordered results, structured errors, timestamp relationships, persistent state and side effects. Fully consume pages and streams. Test normalizers independently. Rejected operations need post-state assertions; asynchronous outcomes may be inconclusive. Never expose credentials or raw tokens in evidence. Finite cases and bounded formal models do not prove all Firebase inputs or schedules equivalent.\n\n## Release separation\n\nThe source-tree pages do not describe the latest npm release. Historical corpus reports keep their original tested artifact/source identities. Release snapshots must eventually be generated from receipts for the distributed artifact and cannot use the later report commit as the tested binary identity. No `releases/<version>` snapshot exists in this schema.\n");
+    out
+}
+
+/// The gap ledger: one row per open or closed work record, with its independent axes.
+fn gaps(inv: &Inventory) -> String {
+    let mut out = page("Gap ledger");
+    out.push_str(text(&inv.gaps, "policy"));
+    out.push_str("\n\nEach row keeps four independent axes. `implementation`: unknown, unimplemented, implemented or fixed. `local tests`: none, passing or failing. `production observation`: none, recorded or approved (a scoped human approval of a recorded observation, never a general verdict). `comparison`: none, mismatch or matches-in-scope (a production/local comparison of the same corpus). A record whose fix landed but whose comparison is `none` is not compatibility coverage; a record whose observation is approved but whose comparison is `none` was observed in production only. Filing a record here is not closure. Kinds: `mismatch` (saved production result differs from current code), `unimplemented` (explicitly not implemented), `unobserved` (behavior not yet observed in production), `unmapped` (surface not yet connected to cases and evidence), `untested` (verification infrastructure debt).\n\n| Id | Feature | Kind | Implementation | Local tests | Production observation | Comparison | Production change needed | Scope | Next action | Blocked | Evidence |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+    for gap in rows(&inv.gaps, "gaps") {
+        let evidence = strings(gap, "evidenceRefs")
+            .iter()
+            .map(|r| format!("[{}](../../{})", escape(r), r))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            out,
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            text(gap, "id"),
+            text(gap, "feature"),
+            text(gap, "kind"),
+            text(gap, "implementationStatus"),
+            text(gap, "localTestStatus"),
+            text(gap, "productionObservationStatus"),
+            text(gap, "comparisonStatus"),
+            if gap["requiresProductionChange"].as_bool() == Some(true) {
+                "yes"
+            } else {
+                "no"
+            },
+            escape(text(gap, "scope")),
+            escape(text(gap, "nextAction")),
+            escape(text(gap, "blockedReason")),
+            evidence
+        )
+        .unwrap();
+    }
+    out.push_str("\nEdit `spec/compatibility/gaps.json` and regenerate with `cargo run -p compat-check -- --write-inventory`. Closed records stay in the file with their final axes.\n");
     out
 }

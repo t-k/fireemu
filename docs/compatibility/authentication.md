@@ -96,6 +96,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [MFA pending credential across an explicit revocation: scoped approval](auth-pending-revocation-approval.md). These 8 observations are verified and approved only for the recorded conditions, operation order and single run. The approval matches the local implementation, which does not compare a pending credential's start time with validSince, and does not extend to password changes, other MFA methods, tenants, blocking hooks, SDK checkRevoked, Rules or credential expiry.
 
+[Blocking function that disables the account: production candidate](auth-blocking-disable.md). Twelve production-only observations from one saved run with a beforeSignIn function deployed for the run: when the function answered disabled: true, a password sign-in and a phone MFA finalize were both refused with USER_DISABLED on the same request and no tokens were issued; the control completed before and after. The function was removed and the configuration restored. fireemu now refuses the same request; no local artifact ran this corpus.
+
 [Current lookup authorization regressions](../../tools/auth-lookup-authorization/README.md) separate token-verified self lookup from authenticated Admin identifier search. These local regressions correct the identifier bypass independently of the approved deletion observations; no production error-code parity or complete Auth authorization claim is made.
 
 [Current OOB issuance authorization regressions](../../tools/auth-oob-authorization/README.md) restrict returned action credentials to authenticated Admin routes and require verified end-user identity for verification delivery. These are local regressions, not new production observations or complete Auth authorization coverage.

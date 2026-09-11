@@ -51,6 +51,7 @@ jobs:
         run: |
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-revocation -q
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-revocation.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-revocation-approval.py --check
       - name: Check immutable historical tools, observations and approvals
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check
       - name: Check later approved observations at their fixed historical source

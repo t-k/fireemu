@@ -92,6 +92,10 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Deleted-account credentials: scoped approval](auth-deleted-recheck-approval.md). These 12 observations are verified and approved for the recorded artifact, settings and operation order against saved production observations. Identifier-based lookup authorization is explicitly excluded from this approval; no complete Auth claim follows.
 
+[MFA pending credential across an explicit revocation: production candidate](auth-pending-revocation.md). Eight production-only observations from one saved run: a pending credential issued before an explicit validSince update was accepted by mfaSignIn:start and :finalize after the update and its readback, and the returned tokens served lookup and refresh. Phone MFA with test numbers, no tenant, no blocking hook, configuration restored; no local artifact ran this corpus and no propagation-time claim follows.
+
+[MFA pending credential across an explicit revocation: scoped approval](auth-pending-revocation-approval.md). These 8 observations are verified and approved only for the recorded conditions, operation order and single run. The approval matches the local implementation, which does not compare a pending credential's start time with validSince, and does not extend to password changes, other MFA methods, tenants, blocking hooks, SDK checkRevoked, Rules or credential expiry.
+
 [Current lookup authorization regressions](../../tools/auth-lookup-authorization/README.md) separate token-verified self lookup from authenticated Admin identifier search. These local regressions correct the identifier bypass independently of the approved deletion observations; no production error-code parity or complete Auth authorization claim is made.
 
 [Current OOB issuance authorization regressions](../../tools/auth-oob-authorization/README.md) restrict returned action credentials to authenticated Admin routes and require verified end-user identity for verification delivery. These are local regressions, not new production observations or complete Auth authorization coverage.

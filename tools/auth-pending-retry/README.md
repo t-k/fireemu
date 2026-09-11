@@ -1,0 +1,15 @@
+# Phone MFA refusal and retry
+
+This local correction delays credential consumption until request matching succeeds. It is not a new production observation or approval.
+
+The HTTP handler now checks an SMS code without consuming it, validates its MFA purpose and exact pending credential, and consumes the code after successful core finalization. The core finalizer checks that both the pending credential and requested phone factor exist before removing the pending credential and its owner index. Existing request serialization, SMS expiry validation and transient expiry sweeping remain unchanged.
+
+## Local coverage
+
+- Two independent pending credentials for the same account are created by real password sign-ins. An SMS session from A combined with pending B is refused without losing the SMS code, changing the pending count or emitting a notice. A can then use that same code and obtain an ID token that retrieves the original account. Both profiles are tested without blocking hooks.
+- Successful retry consumes the SMS code immediately, checked directly in the store before request-level sweeping can mask a missing consumption. Reusing the completed combination is refused.
+- A core finalization request naming an absent factor preserves its pending credential; a retry naming the existing factor succeeds and removes that pending credential.
+
+These tests are selected by `pending_retry` in the HTTP `auth_flows` and core `mfa` test binaries and run in compatibility CI. The first two regressions failed against the previous implementation: the SMS listing became empty after a pending mismatch, and the pending owner disappeared after a missing-factor refusal.
+
+The guarantee is limited to the tested pre-finalization refusals. It does not promise rollback for every subsequent token issuance or signing failure, all disabled/revoked/expired-user transitions, all code purposes, tenant boundaries, or production error precedence. Existing historical evidence and approvals are preserved and checked at their pinned sources. The broader MFA/Auth audit remains incomplete.

@@ -3186,6 +3186,73 @@ fn two_party_accounts(s: &AuthState, a: &Value, b: &Value) -> Value {
 }
 
 #[test]
+fn pending_retry_preserves_sms_after_a_mismatched_pending_credential() {
+    for strict in [false, true] {
+        let (s, lines) = oob_authorization_state(strict);
+        let user = sign_up(&s, "pending-retry@example.com");
+        let (status, seeded) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:update"),
+            &json!({"localId": user["localId"], "emailVerified": true,
+                "mfa": {"enrollments": [{"phoneInfo": "+15559876543"}]}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let login = || {
+            let (status, response) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": "pending-retry@example.com", "password": "hunter22"}),
+            );
+            assert_eq!(status, 200, "{response}");
+            assert!(response.get("idToken").is_none());
+            response
+        };
+        let a = login();
+        let b = login();
+        assert_ne!(a["mfaPendingCredential"], b["mfaPendingCredential"]);
+        let (status, started) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:start"),
+            &json!({"mfaPendingCredential": a["mfaPendingCredential"],
+                "mfaEnrollmentId": a["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+        );
+        assert_eq!(status, 200, "{started}");
+        let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+        let phone = json!({"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": codes["verificationCodes"][0]["code"]});
+        let notices = lines.lock().unwrap().clone();
+        let count = s.store.lock().unwrap().pending_sign_in_count();
+        let (status, refused) = finalize_mfa(
+            &s,
+            &json!({"mfaPendingCredential": b["mfaPendingCredential"], "phoneVerificationInfo": phone}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused["error"]["message"],
+            "INVALID_MFA_PENDING_CREDENTIAL"
+        );
+        assert!(refused.get("idToken").is_none());
+        assert_eq!(get(&s, &format!("{EMU}/verificationCodes")).1, codes);
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count);
+        assert_eq!(*lines.lock().unwrap(), notices);
+        let (status, signed) = finalize_mfa(
+            &s,
+            &json!({"mfaPendingCredential": a["mfaPendingCredential"], "phoneVerificationInfo": phone}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        let (status, lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        assert_eq!(lookup["users"][0]["localId"], user["localId"]);
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+        assert_ne!(finalize_mfa(&s, &json!({"mfaPendingCredential": a["mfaPendingCredential"], "phoneVerificationInfo": phone})).0, 200);
+    }
+}
+
+#[test]
 fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
     for strict in [false, true] {
         let (s, lines) = oob_authorization_state(strict);

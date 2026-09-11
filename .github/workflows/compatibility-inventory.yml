@@ -36,6 +36,8 @@ jobs:
           cargo test --locked -p fireemu-adapter-http --test identity_toolkit lookup_authorization
           cargo test --locked -p fireemu-adapter-http --test auth_flows oob_authorization
           cargo test --locked -p fireemu-adapter-http --test auth_flows two_party
+          cargo test --locked -p fireemu-adapter-http --test auth_flows pending_retry
+          cargo test --locked -p fireemu-core-auth --test mfa pending_retry
   offline-acquisition-integrity:
     runs-on: ubuntu-latest
     steps:

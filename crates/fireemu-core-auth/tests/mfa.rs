@@ -13,6 +13,27 @@ fn store() -> AuthStore {
     AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default())
 }
 
+#[test]
+fn pending_retry_missing_phone_factor_does_not_consume_pending() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("pending@example.com"), t0())
+        .unwrap();
+    let factor = s
+        .enroll_phone_factor(&uid, "+15559876543", None, t0())
+        .unwrap();
+    let pending = s.start_mfa_sign_in(&uid, t0()).unwrap();
+    assert_eq!(
+        s.finalize_phone_mfa_sign_in(&uid, &pending, "missing", t0()),
+        Err(MfaError::NoEnrolledFactor)
+    );
+    assert_eq!(s.pending_sign_in_user(&pending), Some(uid.clone()));
+    assert!(s
+        .finalize_phone_mfa_sign_in(&uid, &pending, &factor.mfa_enrollment_id, t0())
+        .is_ok());
+    assert_eq!(s.pending_sign_in_user(&pending), None);
+}
+
 fn t0() -> LogicalInstant {
     LogicalInstant::from_unix_seconds(1_788_004_860)
 }

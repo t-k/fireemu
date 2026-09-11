@@ -6286,7 +6286,7 @@ fn finalize_phone_sign_in(
     else {
         return error(400, "INVALID_CODE : missing sessionInfo or code");
     };
-    let verified = match store.verify_phone_code(session, code, at) {
+    let verified = match store.check_phone_code(session, code, at) {
         Ok(v) => v,
         Err(e) => return auth_error(&e),
     };
@@ -6303,23 +6303,26 @@ fn finalize_phone_sign_in(
     }
     let first_factor = store.pending_sign_in_context(&pending_id).cloned();
     match store.finalize_phone_mfa_sign_in(&uid, &pending_id, &enrollment_id, at) {
-        Ok(assertion) => match issue_tokens_with_sign_in_attributes(
-            store,
-            &uid,
-            Some(&assertion),
-            at,
-            None,
-            first_factor
-                .as_ref()
-                .and_then(PendingSignInContext::sign_in_provider)
-                .map(provider_from_id),
-            first_factor
-                .as_ref()
-                .and_then(PendingSignInContext::sign_in_attributes),
-        ) {
-            Ok(tokens) => token_only_response(&tokens, false),
-            Err(r) => r,
-        },
+        Ok(assertion) => {
+            store.consume_phone_code(session);
+            match issue_tokens_with_sign_in_attributes(
+                store,
+                &uid,
+                Some(&assertion),
+                at,
+                None,
+                first_factor
+                    .as_ref()
+                    .and_then(PendingSignInContext::sign_in_provider)
+                    .map(provider_from_id),
+                first_factor
+                    .as_ref()
+                    .and_then(PendingSignInContext::sign_in_attributes),
+            ) {
+                Ok(tokens) => token_only_response(&tokens, false),
+                Err(r) => r,
+            }
+        }
         Err(e) => mfa_error(&e),
     }
 }

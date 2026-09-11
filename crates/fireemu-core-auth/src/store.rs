@@ -2118,12 +2118,8 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(MfaError::UserNotFound)?;
-        if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
+        if user.mfa.pending_sign_in(&pending.0).is_none() {
             return Err(MfaError::PendingSignInUnknown);
-        }
-        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
         }
         if !user
             .mfa
@@ -2132,6 +2128,11 @@ impl AuthStore {
             .any(|f| f.mfa_enrollment_id == enrollment_id)
         {
             return Err(MfaError::NoEnrolledFactor);
+        }
+        user.mfa.pending_sign_ins_mut().remove(&pending.0);
+        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
+        if user.mfa.pending_count() == 0 {
+            self.pending_user_ids.remove(uid);
         }
         user.last_sign_in_at = Some(now);
         self.activate_email_owner(uid);

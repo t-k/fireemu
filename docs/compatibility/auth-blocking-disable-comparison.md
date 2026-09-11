@@ -21,9 +21,9 @@ Row-by-row comparison of the approved production record of auth-blocking-disable
 
 Differing rows: hook-c-disabled-readback.
 
-Comparison subject (unapproved): `319175cabd4f3a8a4c92abc6e07b963454a47f25ed2d716346ebb3d0d1e33d6f`. Production subject compared: `81e74c75576f91b3cf889cae905e4eb21437a8f6a86846082b160dc1e4e6db0d`.
+Comparison subject (unapproved): `246053f36c67af4f509d07a694c4aa52182d17a647dafeeca9b5f198e57c0d65`. Production subject compared: `81e74c75576f91b3cf889cae905e4eb21437a8f6a86846082b160dc1e4e6db0d`.
 
-Local artifact `0.7.0` built from `0b5988a7ac95da85e04962516e06221487460d0d` with recorder files at `a2291e91a51ecdd3f2624326b09e6f013dbcb0f3`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
+Local artifact `0.7.0` built from the tree at `be5a756da98cf8b0bf37780aaac47806eac14f8e` (repository HEAD `0b5988a7ac95da85e04962516e06221487460d0d` at run time) with recorder files at `a2291e91a51ecdd3f2624326b09e6f013dbcb0f3`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
 
 The local run has no deployment, trigger registration or configuration change, and reads phone codes from the emulator inspection route, so the `hook`, `functionRemoved` and configuration fields of the local report describe the fixture, not a cloud function. A row that differs is an open gap in the ledger, not a verdict about which side is right; the ledger names the follow-up.
 

@@ -634,6 +634,7 @@
         "tools/auth-blocking-readback/readback_recorder.py": "0ea007781fe25186c389a2d881aaf5bc5b40931e518d125db8e76b7910070151"
       }
     },
+    "runtimeInputsCommit": "5e6f3a32db85e46d9e34a37098e2cabafddf655b",
     "runtimeSourceCommit": "01013b842e0df234e45b94c7f6e9c4257599d73d",
     "setup": {
       "x": true,
@@ -643,7 +644,7 @@
     "target": "local"
   },
   "productionSubjectSha256": "81dae6d26f525a31e121abb87669e875026696f50ce44a223fc9c396c9806b9b",
-  "publicationContractSha256": "8250f0b12a1499e86c6f017fbf628c8455a01fe3b1c5e5d6e667339685c00f27",
+  "publicationContractSha256": "66928b442197317a7f1069e0f2369cddf24e25914236ed0bff93903aa7c36546",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the production candidate record of auth-blocking-readback revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the disabling local fixture from tools/auth-blocking-disable served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds and the measured seconds since the refusal. This is a comparison record, not a new production run, not an approval, and not a claim beyond these eleven cases on one time axis."
 }

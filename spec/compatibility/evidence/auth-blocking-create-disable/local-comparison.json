@@ -2,46 +2,54 @@
   "acceptance": "candidate",
   "comparison": [
     {
-      "id": "baseline-a-fresh-finalize",
+      "id": "control-c-signup",
       "sameSemanticProjection": true
     },
     {
-      "id": "baseline-b-fresh-finalize",
+      "id": "control-c-signup-readback",
       "sameSemanticProjection": true
     },
     {
-      "id": "revoked-a-held-start",
+      "id": "control-c-signin",
       "sameSemanticProjection": true
     },
     {
-      "id": "revoked-a-held-finalize",
+      "id": "target-t-signup",
       "sameSemanticProjection": true
     },
     {
-      "id": "revoked-a-held-lookup",
+      "id": "target-t-token-lookup",
       "sameSemanticProjection": true
     },
     {
-      "id": "revoked-a-held-refresh",
+      "id": "target-t-token-refresh",
       "sameSemanticProjection": true
     },
     {
-      "id": "revoked-a-fresh-finalize",
+      "id": "target-t-record-readback",
       "sameSemanticProjection": true
     },
     {
-      "id": "revoked-b-fresh-finalize",
+      "id": "target-t-signin",
+      "sameSemanticProjection": true
+    },
+    {
+      "id": "target-t-second-signup",
+      "sameSemanticProjection": true
+    },
+    {
+      "id": "control-c-final-signin",
       "sameSemanticProjection": true
     }
   ],
   "local": {
     "artifact": {
       "kind": "local-build",
-      "sha256": "8310493e42d9f1a92405f6315b40461c7a6606ef03ab522242bc48a4e6384b60",
+      "sha256": "432840d3b895d3014d20c80b7846b0164a611020b24285beb168359e513b31ee",
       "version": "0.7.0"
     },
     "build": {
-      "artifactSha256": "8310493e42d9f1a92405f6315b40461c7a6606ef03ab522242bc48a4e6384b60",
+      "artifactSha256": "432840d3b895d3014d20c80b7846b0164a611020b24285beb168359e513b31ee",
       "command": [
         "cargo",
         "build",
@@ -104,7 +112,7 @@
         "crates/fireemu-adapter-http/benches/auth_signing_parallel.rs": "6a17bd606af6c91f53d188311db88d0cd9802cf9bcdb9ab7f59c45a43e0996bd",
         "crates/fireemu-adapter-http/src/app_check.rs": "1ca9ff7bf2b26b09c5ea56a7ec138fef27d67e1f10b0f57122eefa724f573cf1",
         "crates/fireemu-adapter-http/src/control.rs": "9796c4486765c7ef2cd308e4ed45751cafa6602bfc53451e628d7fa64363a9a6",
-        "crates/fireemu-adapter-http/src/identity_toolkit.rs": "33736b35e223e4f23b24ae3e7b50bd27a511798971f36d57ce1493ddbe5cdb99",
+        "crates/fireemu-adapter-http/src/identity_toolkit.rs": "13c0531bd763c573ff882d718ce72fae3c9e5cff58aebf3408572dec178b3979",
         "crates/fireemu-adapter-http/src/identity_toolkit/routes.rs": "5ca50a06ccfe883cc4068c2b8824cb45d01c7f4c3ab3ef4ce1f1e2fd7bee7cf0",
         "crates/fireemu-adapter-http/src/identity_toolkit/widget.rs": "f2546b32734fafdf3759241f852ebaa5f003d2a721185478cfa584efb06a3e1f",
         "crates/fireemu-adapter-http/src/identity_toolkit/widget_templates.rs": "e702799e98cd26603fa3e9f1035f016db6b0e2c8756a2420694b103854ad73d1",
@@ -118,7 +126,7 @@
         "crates/fireemu-adapter-http/tests/app_check_control.rs": "8d51f6fdf616f9082021ee89fd86ee4f6874c966c3632842eebd5a72e63e8856",
         "crates/fireemu-adapter-http/tests/app_check_storage.rs": "ca5a050c6a67600a8362863112b49cdd697b7bcfd16f160cfeb184603d69f526",
         "crates/fireemu-adapter-http/tests/app_check_support/mod.rs": "3e80e5cd7616ab61d93c850e0256c00b965273c44db474c9162cfbbcd9438776",
-        "crates/fireemu-adapter-http/tests/auth_flows.rs": "a5df0883d27c923592994233f24bc45b8e565c9a669ec97939b7b52909a4405b",
+        "crates/fireemu-adapter-http/tests/auth_flows.rs": "10e147041cc370e5287b24a25c2bf0df98d55c015bd607cf108b41c9c404cc9a",
         "crates/fireemu-adapter-http/tests/control.rs": "94b8102f6a4f96e769ab4615a5631ee65639ca77280590e287f5cb4a7ba55766",
         "crates/fireemu-adapter-http/tests/fixtures/INSECURE_TEST_ONLY_RSA_A.der.hex": "74782086f9afd61b10b1b32d114aac9ad229ad54ef19be4ad75de71d22b8e73a",
         "crates/fireemu-adapter-http/tests/fixtures/INSECURE_TEST_ONLY_RSA_B.der.hex": "1bf303c2b4c79c4fe406ec1271b2be3c25af8b8d3c7f12dc9b1b147ea737752b",
@@ -445,82 +453,8 @@
     "cases": [
       {
         "checks": {
-          "claimEmailMatches": true,
-          "claimSubMatches": true,
           "derivedLookup": true,
-          "idTokenPresent": true,
-          "noError": true,
-          "refreshTokenPresent": true,
-          "secondFactorClaim": true
-        },
-        "elapsedMs": 81,
-        "httpStatus": 200,
-        "id": "baseline-a-fresh-finalize",
-        "observedError": null,
-        "outcome": "accepted",
-        "skipped": false
-      },
-      {
-        "checks": {
-          "claimEmailMatches": true,
-          "claimSubMatches": true,
-          "derivedLookup": true,
-          "idTokenPresent": true,
-          "noError": true,
-          "refreshTokenPresent": true,
-          "secondFactorClaim": true
-        },
-        "elapsedMs": 100,
-        "httpStatus": 200,
-        "id": "baseline-b-fresh-finalize",
-        "observedError": null,
-        "outcome": "accepted",
-        "skipped": false
-      },
-      {
-        "checks": {
-          "sessionInfoPresent": true
-        },
-        "elapsedMs": 2134,
-        "httpStatus": 200,
-        "id": "revoked-a-held-start",
-        "observedError": null,
-        "outcome": "accepted",
-        "skipped": false
-      },
-      {
-        "checks": {
-          "authTimeAtOrAfterValidSince": true,
-          "claimEmailMatches": true,
-          "claimSubMatches": true,
-          "derivedLookup": true,
-          "idTokenPresent": true,
-          "noError": true,
-          "refreshTokenPresent": true,
-          "secondFactorClaim": true
-        },
-        "elapsedMs": 2144,
-        "httpStatus": 200,
-        "id": "revoked-a-held-finalize",
-        "observedError": null,
-        "outcome": "accepted",
-        "skipped": false
-      },
-      {
-        "checks": {
-          "ownerMatches": true
-        },
-        "elapsedMs": 2148,
-        "httpStatus": 200,
-        "id": "revoked-a-held-lookup",
-        "observedError": null,
-        "outcome": "accepted",
-        "skipped": false
-      },
-      {
-        "checks": {
-          "bearerType": true,
-          "derivedLookup": true,
+          "emailMatches": true,
           "expiryIsPositiveInteger": true,
           "expiryMatchesOneHour": true,
           "idTokenPresent": true,
@@ -528,51 +462,129 @@
           "refreshTokenPresent": true,
           "uidMatches": true
         },
-        "elapsedMs": 2157,
+        "elapsedMs": 19,
         "httpStatus": 200,
-        "id": "revoked-a-held-refresh",
+        "id": "control-c-signup",
         "observedError": null,
         "outcome": "accepted",
         "skipped": false
       },
       {
         "checks": {
-          "claimEmailMatches": true,
-          "claimSubMatches": true,
-          "derivedLookup": true,
-          "idTokenPresent": true,
-          "noError": true,
-          "refreshTokenPresent": true,
-          "secondFactorClaim": true
+          "notDisabled": true,
+          "photoUrlPersisted": false,
+          "recordExists": true
         },
-        "elapsedMs": 2179,
+        "elapsedMs": 23,
         "httpStatus": 200,
-        "id": "revoked-a-fresh-finalize",
+        "id": "control-c-signup-readback",
         "observedError": null,
         "outcome": "accepted",
         "skipped": false
       },
       {
         "checks": {
-          "claimEmailMatches": true,
-          "claimSubMatches": true,
           "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
           "idTokenPresent": true,
           "noError": true,
           "refreshTokenPresent": true,
-          "secondFactorClaim": true
+          "uidMatches": true
         },
-        "elapsedMs": 2198,
+        "elapsedMs": 30,
         "httpStatus": 200,
-        "id": "revoked-b-fresh-finalize",
+        "id": "control-c-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 39,
+        "httpStatus": 400,
+        "id": "target-t-signup",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 39,
+        "httpStatus": null,
+        "id": "target-t-token-lookup",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {},
+        "elapsedMs": 39,
+        "httpStatus": null,
+        "id": "target-t-token-refresh",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {
+          "disabledPersisted": true,
+          "recordExists": true
+        },
+        "elapsedMs": 42,
+        "httpStatus": 200,
+        "id": "target-t-record-readback",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 45,
+        "httpStatus": 400,
+        "id": "target-t-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 47,
+        "httpStatus": 400,
+        "id": "target-t-second-signup",
+        "observedError": "EMAIL_EXISTS",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 53,
+        "httpStatus": 200,
+        "id": "control-c-final-signin",
         "observedError": null,
         "outcome": "accepted",
         "skipped": false
       }
     ],
     "cleanup": {
-      "emailAbsent": true,
-      "uidAbsent": true
+      "c": {
+        "emailAbsent": true,
+        "uidAbsent": true
+      },
+      "t": {
+        "emailAbsent": true,
+        "uidAbsent": true
+      }
     },
     "configuration": {
       "fileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
@@ -583,50 +595,49 @@
       }
     },
     "connection": "owned-artifact",
-    "heldCredentialIssuedBeforeRevocation": true,
-    "heldFinalizeTimes": {
-      "authTime": 1789140477,
-      "iat": 1789140477,
-      "validSince": 1789140477
+    "functionsRunner": {
+      "path": "tools/runner-node/index.mjs",
+      "sha256": "a4a19393c150bf1f9d9b6dd3c50fe6a1c2c7113e258eae3190669bf56db5a6cf"
+    },
+    "hook": {
+      "deployed": true,
+      "triggerReadback": true
     },
     "instance": {
-      "childPid": 22377,
-      "nonce": "94a2c94b91b349d88eadbae3e3a59185",
-      "parentPid": 22376,
+      "childPid": 58658,
+      "nonce": "e9e50d7cb05047318b55a4e89cef0af2",
+      "parentPid": 58651,
       "profile": "strict",
       "version": "0.7.0",
       "wrongTokenStatus": 403
     },
+    "localFunctionFixture": "tools/auth-blocking-create-disable/function-local",
     "ownedProcess": {
       "exitCode": 0,
       "listenersClosed": true,
-      "pid": 22376,
+      "pid": 58651,
       "stopped": true
     },
-    "privateReportSha256": "b8e19d0871eb60f8372e274650c6dbeb6f7281280bfe79fd33473f64d308a014",
-    "probeSourceCommit": "b33474382999c140eb32a4279a9116b0abf988bf",
-    "recordedAt": "2026-09-11T15:27:55.492450+00:00",
+    "privateReportSha256": "a613c7c07f1154babab05f5e7c3e9c8f5e0dbd6911e39ff34c4ae52e618e92f4",
+    "probeSourceCommit": "fdaa6dcc74216d92b6ff5dec0429429697c20686",
+    "recordedAt": "2026-09-11T16:19:51.632412+00:00",
     "recordedWith": {
-      "recorderCommit": "c0661db2707ae3d110c33cbc7a5b483717b2dcdb",
+      "recorderCommit": "5e6f3a32db85e46d9e34a37098e2cabafddf655b",
       "recorderInputs": {
-        "tools/auth-pending-revocation/revocation_contract.py": "068ab00d3c832165a9ffb4a476973eccce0b1b66eb8d09dc24e1bcf3a8453856",
-        "tools/auth-pending-revocation/revocation_recorder.py": "83c65d82b5b3c7ce7de0aee814cea7fefafda48b6bbb5665ea8758f147f4c553"
+        "tools/auth-blocking-create-disable/create_contract.py": "bf12630cef3e94da2b216737c28a6225f83a71fd5e2296d48c16b22cfd63a455",
+        "tools/auth-blocking-create-disable/create_recorder.py": "6de902fd800dda202ed39aaba438e1e0cf094443d31edd8dff194ac5bc151cb9"
       }
     },
-    "revocation": {
-      "controlUnchanged": true,
-      "validSinceReadback": true
-    },
-    "runtimeInputsCommit": "4ae036393e582cf76617bd278f73bc8318cc314a",
-    "runtimeSourceCommit": "b33474382999c140eb32a4279a9116b0abf988bf",
+    "runtimeInputsCommit": "fdaa6dcc74216d92b6ff5dec0429429697c20686",
+    "runtimeSourceCommit": "fdaa6dcc74216d92b6ff5dec0429429697c20686",
     "setup": {
-      "a": true,
-      "b": true
+      "c": true
     },
-    "target": "local"
+    "target": "local",
+    "targetRecordExists": true
   },
-  "productionSubjectSha256": "c6ce38ac6a05b969cdbbf516e77a1fc386e73cb221301d53f98c2c45029a0eb7",
-  "publicationContractSha256": "da7c16712a7a165dd84d70e58cc6d215ba40b56290f10cd373c6eb690dd8e013",
+  "productionSubjectSha256": "206490130d5191df9a25a80634315a2b2c0ba190860cc91f7455931a9c25b362",
+  "publicationContractSha256": "eb41cddb0efcdf999e986cc299f8528b00e7e6076c1844119285449f06e0790f",
   "schemaVersion": 1,
-  "scope": "Row-by-row comparison of the approved production record of auth-pending-revocation revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth, no configuration change, codes read from the emulator inspection route). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim that the local artifact matches on anything outside these eight cases."
+  "scope": "Row-by-row comparison of the production candidate record of auth-blocking-create-disable revision 2 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-create-disable/function-local served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim beyond these ten cases."
 }

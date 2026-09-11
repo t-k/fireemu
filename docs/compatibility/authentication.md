@@ -110,6 +110,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Blocking function on the creating request, revision 2: production candidate](auth-blocking-create-disable.md). Ten production-only observations with an email-prefix selector: the creating sign-up was refused with USER_DISABLED, the created record exists and is disabled, a second sign-up with the same email is EMAIL_EXISTS, and the control signed up, signed in and (again) did not get its photo URL persisted. Not approved; the local comparison is published separately.
 
+[Blocking function on the creating request, revision 2: local comparison](auth-blocking-create-disable-comparison.md). One run of the same corpus on the owned local artifact compared row by row with the production candidate: all ten rows agree (creating sign-up refused, disabled record kept, second sign-up EMAIL_EXISTS, photo URL not persisted). A comparison record, not an approval.
+
 [Hook-applied disable: readback timing, production candidate](auth-blocking-readback.md). Eleven production-only observations on one run's time axis: two accounts refused by the disabling function read back as not disabled before, immediately after, five and thirty seconds after the refusal, and after thirty seconds with no earlier read, while their sign-ins stayed refused under the registered function; the control succeeded. Not approved; this is the observation behind GAP-AUTH-001.
 
 [Hook-applied disable, readback timing: local comparison](auth-blocking-readback-comparison.md). One run of the same corpus on the owned local artifact built after fireemu stopped persisting a hook disable for an existing account's first-factor sign-in: all eleven rows agree with the production candidate (the measured seconds are excluded). A comparison record, not an approval.

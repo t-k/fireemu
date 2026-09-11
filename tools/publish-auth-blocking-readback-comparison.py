@@ -17,7 +17,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/auth-blocking-readback"))
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
-from evidence_common import runtime_inputs
 from readback_contract import (
     CASES,
     DIAGNOSTIC,
@@ -87,11 +86,35 @@ def working_tree_sha256(path):
     return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
 
 
+RUNTIME_INPUT_ROOTS = (
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    ".cargo",
+    "crates",
+)
+
+
+def runtime_inputs_at(commit):
+    """The runtime input set of the tree at `commit`, the same files and digests the owned
+    runner hashes from its working tree; binding the build to a commit keeps the record
+    checkable after later source changes."""
+    names = subprocess.check_output(
+        ["git", "ls-tree", "-r", "--name-only", commit, "--", *RUNTIME_INPUT_ROOTS],
+        cwd=ROOT,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).split("\n")
+    return {
+        name: git_blob_sha256(commit, name) for name in sorted(n for n in names if n)
+    }
+
+
 def publication_contract_sha():
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
-def project_local(report, recorder_commit):
+def project_local(report, recorder_commit, runtime_commit):
     require(
         report["schemaVersion"] == 1
         and report["acceptance"] == "candidate"
@@ -115,6 +138,8 @@ def project_local(report, recorder_commit):
     out["functionsRunner"] = exact_keys(report["functionsRunner"], RUNNER_KEYS)
     out["privateReportSha256"] = digest(report)
     hex_value(recorder_commit, 40)
+    hex_value(runtime_commit, 40)
+    out["runtimeInputsCommit"] = runtime_commit
     inputs = {path: report["probeInputs"][path] for path in RECORDER_FILES}
     for path, value in inputs.items():
         require(git_blob_sha256(recorder_commit, path) == value)
@@ -136,6 +161,7 @@ def validate_local(local):
             "functionsRunner",
             "privateReportSha256",
             "recordedWith",
+            "runtimeInputsCommit",
         }
     )
     require(local["target"] == "local" and local["connection"] == "owned-artifact")
@@ -172,8 +198,9 @@ def validate_local(local):
         == ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
         and build["exitCode"] == 0
         and build["artifactSha256"] == artifact["sha256"]
-        and build["inputs"] == runtime_inputs(ROOT)
+        and build["inputs"] == runtime_inputs_at(local["runtimeInputsCommit"])
     )
+    hex_value(local["runtimeInputsCommit"], 40)
     process = exact_keys(local["ownedProcess"], PROCESS_KEYS)
     instance = exact_keys(local["instance"], INSTANCE_KEYS)
     require(
@@ -272,7 +299,7 @@ def render(value):
             "",
             f"Comparison subject (unapproved): `{digest(value)}`. Production subject compared: `{value['productionSubjectSha256']}`.",
             "",
-            f"Local artifact `{value['local']['artifact']['version']}` built from `{value['local']['runtimeSourceCommit']}` with recorder files at `{value['local']['recordedWith']['recorderCommit']}`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `{value['local']['functionsRunner']['sha256'][:16]}…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.",
+            f"Local artifact `{value['local']['artifact']['version']}` built from the tree at `{value['local']['runtimeInputsCommit']}` (repository HEAD `{value['local']['runtimeSourceCommit']}` at run time) with recorder files at `{value['local']['recordedWith']['recorderCommit']}`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `{value['local']['functionsRunner']['sha256'][:16]}…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.",
             "",
             "The local run has no deployment, trigger registration or configuration change, and reads phone codes from the emulator inspection route, so the `hook`, `functionRemoved` and configuration fields of the local report describe the fixture, not a cloud function. A row that differs is an open gap in the ledger, not a verdict about which side is right; the ledger names the follow-up.",
             "",
@@ -287,12 +314,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--local", type=Path)
     parser.add_argument("--recorder-commit")
+    parser.add_argument("--runtime-commit")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     if args.local:
-        require(bool(args.recorder_commit) and not args.check and not BUNDLE.exists())
+        require(
+            bool(args.recorder_commit)
+            and bool(args.runtime_commit)
+            and not args.check
+            and not BUNDLE.exists()
+        )
         receipt = json.loads(RECEIPT.read_bytes())
-        local = project_local(json.loads(args.local.read_bytes()), args.recorder_commit)
+        local = project_local(
+            json.loads(args.local.read_bytes()),
+            args.recorder_commit,
+            args.runtime_commit,
+        )
         value = {
             "schemaVersion": 1,
             "acceptance": "candidate",

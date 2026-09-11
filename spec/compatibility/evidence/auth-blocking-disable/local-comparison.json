@@ -634,6 +634,7 @@
         "tools/auth-blocking-disable/blocking_recorder.py": "cb74d32b6e72fedb30e84ff6eb1abd3addb186abbf6ac37a6a8a2910a02c9510"
       }
     },
+    "runtimeInputsCommit": "be5a756da98cf8b0bf37780aaac47806eac14f8e",
     "runtimeSourceCommit": "0b5988a7ac95da85e04962516e06221487460d0d",
     "setup": {
       "a": true,
@@ -643,7 +644,7 @@
     "target": "local"
   },
   "productionSubjectSha256": "81e74c75576f91b3cf889cae905e4eb21437a8f6a86846082b160dc1e4e6db0d",
-  "publicationContractSha256": "92d0c1c8ddc1c010481e1aec3e5f05ed5f3798e1dcc0ad239081ae77fa3f5093",
+  "publicationContractSha256": "ddbb9f562aceddb33f370ce3fcf6a1caac98c60044c36c5657532e94c456b853",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the approved production record of auth-blocking-disable revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-disable/function-local served by the repository's Functions runner, codes read from the emulator inspection route). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim that the local artifact matches on anything outside these twelve cases."
 }

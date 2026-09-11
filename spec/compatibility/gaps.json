@@ -111,11 +111,13 @@
       "implementationStatus": "implemented",
       "localTestStatus": "passing",
       "productionObservationStatus": "recorded",
-      "comparisonStatus": "none",
+      "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
+        "docs/compatibility/auth-blocking-create-disable-comparison.md",
+        "docs/compatibility/auth-blocking-create-disable.md",
         "tools/auth-blocking-create-disable/README.md"
       ],
-      "nextAction": "Publish the local comparison record for revision 2, then scope an approval.",
+      "nextAction": "Closed for the recorded conditions (sign-up path; the local artifact keeps the created, disabled record as production does). Remaining: scope an approval; auto-creating sign-ins by other methods are unobserved.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

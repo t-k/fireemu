@@ -3514,6 +3514,9 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
         let (s, user) = pending_expiry_state(strict, email);
         let pending = pending_login(&s, email);
         let phone = start_phone_code(&s, &pending);
+        // Later than the first factor, so a refusal that wrote the current time into the
+        // last sign-in would be visible below.
+        advance_clock(&s, 5);
         let account = |disabled: bool| {
             let (status, updated) = admin(
                 &s,
@@ -3605,6 +3608,23 @@ fn pending_retry_refuses_totp_finalize_and_enrollment_after_the_account_is_disab
     // Second factor pending, then disabled: the TOTP finalize has no adapter-level guard and
     // rests on the core check.
     let pending = pending_login(&s, email);
+    // A phone enrollment is left unfinished before the disable (only one TOTP factor is
+    // allowed per account, so the second session is a phone one).
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": enrolled["idToken"], "phoneEnrollmentInfo": {"phoneNumber": "+15559876543"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let unfinished = json!({"sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": codes["verificationCodes"][0]["code"]});
+    let phone_finalize = |token: &Value| {
+        post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            &json!({"idToken": token, "phoneVerificationInfo": unfinished}),
+        )
+    };
     set_disabled(true);
     let step = fireemu_core_types::time::LogicalDuration::from_seconds(30);
     let t1 = t0.checked_add(step).unwrap();
@@ -3624,15 +3644,24 @@ fn pending_retry_refuses_totp_finalize_and_enrollment_after_the_account_is_disab
     );
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "USER_DISABLED");
-    let (status, refused) = enroll_finalize(&enrolled["idToken"], &enrollment, t1);
+    let (status, refused) = phone_finalize(&enrolled["idToken"]);
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "USER_DISABLED");
-    // Re-enabled: the same pending credential and the same code complete the sign-in.
+    assert_eq!(
+        get(&s, &format!("{EMU}/verificationCodes")).1,
+        codes,
+        "the unfinished enrollment code survives"
+    );
+    // Re-enabled: the same pending credential and the same code complete the sign-in, and
+    // the unfinished enrollment session still finalizes.
     set_disabled(false);
     s.clock.lock().unwrap().advance(step).unwrap();
     let (status, signed) = finalize_mfa(&s, &finalize);
     assert_eq!(status, 200, "{signed}");
     assert_eq!(claims(signed["idToken"].as_str().unwrap())["firebase"]["sign_in_second_factor"], "totp");
+    let (status, enrolled_again) = phone_finalize(&signed["idToken"]);
+    assert_eq!(status, 200, "{enrolled_again}");
+    assert!(s.store.lock().unwrap().verification_codes().is_empty());
 }
 
 #[test]

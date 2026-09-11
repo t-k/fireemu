@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "c5edbe9850fc52c66c666ca0c62961af3c4ad214fc074a950380c592960560fd",
+  "sourceCommit": "3cadafe7a42effb58b392897298e583a32e51792",
+  "scope": "Ten-case frame (eight executed rows, two conditionally skipped rows) projected without secrets from the saved 2026-09-12 production run of auth-disabled-admin-update revision 1. Approved as recorded: an administrative password replacement and a photo update of a disabled account are accepted and applied with no tokens returned, the account's own sign-in stays USER_DISABLED, the replaced password signs in after re-enablement, the control signs in at every phase, the configuration and password policy are unchanged, and both accounts are deleted with absence confirmation. The two token rows were skipped because no tokens were returned and are not approved as executed. No tenant, two update fields, a single run; not extended to other fields, self-service updates, SDK or Rules.",
+  "cases": [
+    "baseline-a-signin",
+    "baseline-b-signin",
+    "disabled-a-password-update",
+    "disabled-a-update-token-lookup",
+    "disabled-a-update-token-refresh",
+    "disabled-a-photo-update",
+    "disabled-a-signin",
+    "disabled-b-signin",
+    "reenabled-a-signin",
+    "reenabled-b-signin"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-12",
+  "decision": "approve"
+}

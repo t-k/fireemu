@@ -43,14 +43,14 @@
       "scope": "Persistence of a hook-applied disable. Production (recorded 2026-09-11 and 2026-09-12): an MFA finalize persists the flag; a sign-up keeps a created, disabled record; a first-factor password sign-in of an existing account persists nothing (false before, immediately after, 5 s and ~31 s after, and 30 s after with no earlier read) while sign-ins stay refused only under the registered function. fireemu persisted on every path; it now persists for sign-up and MFA finalize only.",
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
-      "productionObservationStatus": "recorded",
+      "productionObservationStatus": "approved",
       "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
         "docs/compatibility/auth-blocking-readback-comparison.md",
         "docs/compatibility/auth-blocking-readback.md",
         "tools/auth-blocking-readback/README.md"
       ],
-      "nextAction": "Closed for the recorded conditions: the readback corpus on the corrected local artifact agrees with the production record on all eleven rows. Remaining: scope approvals for the revision 2 and readback records; other first-factor paths (email link, IdP, custom token, phone) follow the existing-account rule unobserved.",
+      "nextAction": "Closed for the recorded conditions: production candidate approved; the local comparison on the corrected artifact is re-run with pinned fixture dependencies and approved separately.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -93,14 +93,14 @@
       "scope": "Administrative accounts:update of an already disabled account. Production (recorded 2026-09-12): password replacement and photo update are accepted and applied, no tokens are returned, the account's own sign-in stays USER_DISABLED, and the new password signs in after re-enablement. fireemu returned tokens for the password change; fixed so tokens follow a credential change only for an account enabled after the update.",
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
-      "productionObservationStatus": "recorded",
+      "productionObservationStatus": "approved",
       "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
         "docs/compatibility/auth-disabled-admin-update.md",
         "docs/compatibility/auth-disabled-admin-update-comparison.md",
         "tools/auth-disabled-admin-update/README.md"
       ],
-      "nextAction": "Closed for the recorded conditions; scope an approval for the candidate record and its comparison separately.",
+      "nextAction": "Closed: production candidate and local comparison each carry a scoped approval.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -111,14 +111,14 @@
       "scope": "An account created by the request that a blocking function disables. Production (recorded 2026-09-12, revision 2 with an email-prefix selector): the creating sign-up is refused with USER_DISABLED, the record exists and is disabled, a second sign-up is EMAIL_EXISTS; the local artifact showed the same rows before the run.",
       "implementationStatus": "implemented",
       "localTestStatus": "passing",
-      "productionObservationStatus": "recorded",
+      "productionObservationStatus": "approved",
       "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
         "docs/compatibility/auth-blocking-create-disable-comparison.md",
         "docs/compatibility/auth-blocking-create-disable.md",
         "tools/auth-blocking-create-disable/README.md"
       ],
-      "nextAction": "Closed for the recorded conditions (sign-up path; the local artifact keeps the created, disabled record as production does). Remaining: scope an approval; auto-creating sign-ins by other methods are unobserved.",
+      "nextAction": "Closed for the recorded sign-up path: production candidate approved; the local comparison is re-run with pinned fixture dependencies and approved separately. Other auto-creating methods stay unobserved.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

@@ -116,6 +116,9 @@ def publication_contract_sha():
 
 
 def project_local(report, recorder_commit, runtime_commit):
+    # A child cleanup failure is not carried by the corpus contract (which the
+    # production recorder shares); an owned local run with one is not publishable.
+    require("childCleanupFailure" not in report and "failure" not in report)
     require(
         report["schemaVersion"] == 1
         and report["acceptance"] == "candidate"

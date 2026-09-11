@@ -39,6 +39,13 @@ from owned_runner import (
 CONFIG = {"schemaVersion": 1, "profile": "strict"}
 
 
+def owned_complete(report):
+    """An owned local run is complete only when the corpus contract is satisfied and
+    the owned child process was confirmed stopped; a child cleanup failure is a failure
+    of the run, not a footnote."""
+    return complete(report) and "childCleanupFailure" not in report
+
+
 def child(directory, nonce):
     origin, control = local_addresses(
         os.environ["FIREBASE_AUTH_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
@@ -260,7 +267,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     try:
         result = child(args.child, args.nonce) if args.child else run(args.output)
-        print(json.dumps({"status": result["status"], "complete": complete(result)}))
-        raise SystemExit(0 if complete(result) else 2)
+        done = owned_complete(result)
+        print(json.dumps({"status": result["status"], "complete": done}))
+        raise SystemExit(0 if done else 2)
     except Exception:
         raise SystemExit("Revocation owned observation did not complete") from None

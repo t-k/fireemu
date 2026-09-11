@@ -1891,8 +1891,10 @@ fn dispatch_with_blocking_hook(
             // first-factor sign-in of an existing account persists nothing (the flag
             // read back as not disabled before, immediately after, and up to thirty
             // seconds after the refusal, while sign-ins stayed refused under the
-            // registered function). Paths other than password sign-in, sign-up and
-            // phone MFA finalize are unobserved and follow the existing-account rule.
+            // registered function; the same account after the function's removal was
+            // not observed in production). Paths other than password sign-in, sign-up
+            // and phone MFA finalize are unobserved and follow the existing-account
+            // rule.
             if issued_session.is_some() && committed.user(&uid).is_some_and(|u| u.disabled) {
                 if live.user(&uid).is_none() {
                     committed.revoke_refresh_tokens(&uid);

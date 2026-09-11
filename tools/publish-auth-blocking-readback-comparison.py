@@ -62,6 +62,10 @@ INSTANCE_KEYS = (
 )
 BUILD_KEYS = ("command", "exitCode", "artifactSha256", "inputs")
 RUNNER_KEYS = ("path", "sha256")
+FIXTURE_FILES = (
+    "tools/auth-blocking-disable/function-local/index.js",
+    "tools/auth-blocking-disable/function-local/package.json",
+)
 
 
 def hex_value(value, length=64):
@@ -115,6 +119,9 @@ def publication_contract_sha():
 
 
 def project_local(report, recorder_commit, runtime_commit):
+    # A child cleanup failure is not carried by the corpus contract (which the
+    # production recorder shares); an owned local run with one is not publishable.
+    require("childCleanupFailure" not in report and "failure" not in report)
     require(
         report["schemaVersion"] == 1
         and report["acceptance"] == "candidate"
@@ -136,6 +143,7 @@ def project_local(report, recorder_commit, runtime_commit):
     # The private build record carries toolchain details beyond the published four.
     out["build"] = {key: report["build"][key] for key in BUILD_KEYS}
     out["functionsRunner"] = exact_keys(report["functionsRunner"], RUNNER_KEYS)
+    out["localFixtureInputs"] = exact_keys(report["localFixtureInputs"], FIXTURE_FILES)
     out["privateReportSha256"] = digest(report)
     hex_value(recorder_commit, 40)
     hex_value(runtime_commit, 40)
@@ -159,6 +167,7 @@ def validate_local(local):
             "instance",
             "build",
             "functionsRunner",
+            "localFixtureInputs",
             "privateReportSha256",
             "recordedWith",
             "runtimeInputsCommit",
@@ -217,7 +226,17 @@ def validate_local(local):
     hex_value(instance["nonce"], 32)
     runner = exact_keys(local["functionsRunner"], RUNNER_KEYS)
     require(runner["path"] == "tools/runner-node/index.mjs")
-    require(runner["sha256"] == working_tree_sha256(runner["path"]))
+    # The runner and the fixture are bound to committed content, not to the working
+    # tree: the runner to the tree the artifact was built from, the fixture to the
+    # recorder commit whose files produced the run.
+    require(
+        runner["sha256"]
+        == git_blob_sha256(local["runtimeInputsCommit"], runner["path"])
+    )
+    fixture = exact_keys(local["localFixtureInputs"], FIXTURE_FILES)
+    for path, value in fixture.items():
+        hex_value(value)
+        require(git_blob_sha256(local["recordedWith"]["recorderCommit"], path) == value)
     require(
         local["localFunctionFixture"] == "tools/auth-blocking-disable/function-local"
     )

@@ -40,6 +40,13 @@ CONFIG = {"schemaVersion": 1, "profile": "strict"}
 FIXTURE = Path(__file__).resolve().parent / "function-local"
 
 
+def owned_complete(report):
+    """An owned local run is complete only when the corpus contract is satisfied and
+    the owned child process was confirmed stopped; a child cleanup failure is a failure
+    of the run, not a footnote."""
+    return complete(report) and "childCleanupFailure" not in report
+
+
 def child(directory, nonce):
     origin, control = local_addresses(
         os.environ["FIREBASE_AUTH_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
@@ -132,6 +139,14 @@ def run(output):
         config_hash = sha(config.read_bytes())
         fixture = private / "function-local"
         shutil.copytree(FIXTURE, fixture, ignore=shutil.ignore_patterns("node_modules"))
+        # The files actually served to the Functions runtime, hashed from the private
+        # copy before dependencies are installed; the comparison record checks them
+        # against the recorder commit.
+        fixture_inputs = {
+            f"{FIXTURE.relative_to(ROOT)}/{p.name}": sha(p.read_bytes())
+            for p in sorted(fixture.iterdir())
+            if p.is_file() and p.name != ".gitignore"
+        }
         # fireemu's Functions runtime loads the codebase with Node; the SDK must resolve
         # from the codebase itself, so it is installed into the private copy.
         install = subprocess.run(
@@ -254,6 +269,7 @@ def run(output):
                 ]
             }
             report["build"] = build
+            report["localFixtureInputs"] = fixture_inputs
             report["functionsRunner"] = {
                 "path": "tools/runner-node/index.mjs",
                 "sha256": runner_hash,
@@ -287,7 +303,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     try:
         result = child(args.child, args.nonce) if args.child else run(args.output)
-        print(json.dumps({"status": result["status"], "complete": complete(result)}))
-        raise SystemExit(0 if complete(result) else 2)
+        done = owned_complete(result)
+        print(json.dumps({"status": result["status"], "complete": done}))
+        raise SystemExit(0 if done else 2)
     except Exception:
         raise SystemExit("Blocking owned observation did not complete") from None

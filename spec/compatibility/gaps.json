@@ -95,9 +95,10 @@
       "productionObservationStatus": "recorded",
       "comparisonStatus": "mismatch",
       "evidenceRefs": [
+        "docs/compatibility/auth-disabled-admin-update.md",
         "tools/auth-disabled-admin-update/README.md"
       ],
-      "nextAction": "Publish the recorded run as a candidate receipt, then re-run the corpus on the current local artifact and record the comparison.",
+      "nextAction": "Candidate receipt published (unapproved); re-run the corpus on the current local artifact and record the comparison, then scope an approval to the recorded conditions.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

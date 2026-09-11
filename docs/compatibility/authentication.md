@@ -102,6 +102,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Blocking function that disables the account: local comparison](auth-blocking-disable-comparison.md). One run of the same corpus on an owned local artifact compared row by row with the approved production record: eleven rows agree; the immediate readback of the disabled flag for the password-sign-in account reads true locally and read false in production, which the gap ledger keeps open. A comparison record, not an approval.
 
+[Administrative updates to a disabled account: production candidate](auth-disabled-admin-update.md). Ten production-only observations from one saved run: an administrative password replacement and a photo update of a disabled account were accepted and applied without returning tokens, the account's own sign-in stayed USER_DISABLED, and the replaced password signed in after re-enablement; the control succeeded at every phase. fireemu was corrected to issue no tokens for a credential change of an account that is disabled after the update; no local artifact ran this corpus.
+
 [Current lookup authorization regressions](../../tools/auth-lookup-authorization/README.md) separate token-verified self lookup from authenticated Admin identifier search. These local regressions correct the identifier bypass independently of the approved deletion observations; no production error-code parity or complete Auth authorization claim is made.
 
 [Current OOB issuance authorization regressions](../../tools/auth-oob-authorization/README.md) restrict returned action credentials to authenticated Admin routes and require verified end-user identity for verification delivery. These are local regressions, not new production observations or complete Auth authorization coverage.

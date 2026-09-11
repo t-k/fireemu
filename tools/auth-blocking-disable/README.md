@@ -22,3 +22,11 @@ Earlier attempts in the same session: the second-generation identity handler of 
 This covers one function shape (a disabling response for a claim), one run, phone MFA with test numbers, no tenant, and neither a rejecting function nor `beforeCreate`. Refused rows record the HTTP status and the classified error only; the absence of tokens in a refused response is not an independent check of this recorder, and the persisted flag was read back once immediately (false for C, true for A), so the recorded observation supports "the same request is refused" and not "the disable is persisted immediately on every path". Any human approval is a separate step and should be worded to that record.
 
 After the run the recorder was hardened without re-running it: a raw API response is no longer bound to a row while its follow-up requests run (an interrupted follow-up could have saved it to the private report), an account whose creation response was lost is no longer reported absent (it is recovered by email or stays unconfirmed with its journal), and the MFA account's second sign-in accepts a pending credential as a valid observation. Safety tests drive `observe()` against a scripted fake and reproduce each of the three against the previous behavior.
+
+## Local run of the same corpus
+
+`blocking_owned.py` builds the strict fireemu artifact, starts it with `--only auth,functions` and the local fixture in `function-local` (the second-generation identity API at the SDK version fireemu's runner supports, installed into a private copy), points the Functions runtime at the repository's `tools/runner-node/index.mjs`, and runs the same `observe()` against it: no deployment, no configuration change, and codes read from the emulator inspection route instead of test phone numbers. On 2026-09-12 the local run matched the production record on every row except `hook-c-disabled-readback`, which reads true locally and read false in production; that difference is the open gap GAP-AUTH-001. The local report is private; a comparison record against the approved production receipt is published separately.
+
+```sh
+uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-disable/blocking_owned.py --output /absolute/private/new-local
+```

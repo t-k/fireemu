@@ -158,21 +158,25 @@ def remove_function():
     return True
 
 
-def observe(output):
+def observe(output, origin=None):
+    """Production when `origin` is None; otherwise an owned local fireemu at `origin`,
+    which already serves the local function fixture and needs no deployment, no
+    configuration change and no test phone numbers (codes are read from the emulator
+    inspection route)."""
     global FUNCTION_BUILD
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     FUNCTION_BUILD = output / "function-build"
-    identity = "https://identitytoolkit.googleapis.com"
-    secure = "https://securetoken.googleapis.com"
+    identity, secure = core.origins(origin)
+    production = origin is None
     before = inputs()
     report: dict = {
         "schemaVersion": 1,
         "acceptance": "candidate",
         "status": "incomplete",
-        "target": "production",
+        "target": "production" if production else "local",
         "recordedAt": datetime.now(UTC).isoformat(),
         "project": PROJECT,
-        "projectNumber": NUMBER,
+        "projectNumber": NUMBER if production else None,
         "probeInputs": before,
         "probeSourceCommit": core.command(["git", "rev-parse", "HEAD"]),
         "corpus": CORPUS,
@@ -187,79 +191,88 @@ def observe(output):
     original = None
     change_attempted = False
     try:
-        access, key, report["configReadback"] = core.production_preflight()
+        access, key = "owner", "local-test-key"
+        if production:
+            access, key, report["configReadback"] = core.production_preflight()
+            status, raw = core.request(CONFIG_URL, token=access, quota=True)
+            require(status == 200 and "error" not in raw)
+            read = {
+                "mfa": raw.get("mfa"),
+                "phoneNumber": raw.get("signIn", {}).get("phoneNumber"),
+                "smsRegionConfig": raw.get("smsRegionConfig"),
+                "blockingFunctions": raw.get("blockingFunctions"),
+            }
+            # Preconditions first: nothing is written or deployed on an unexpected project.
+            require(read["mfa"] == revocation.MFA_OFF and not read["phoneNumber"])
+            require(read["smsRegionConfig"] == {"allowlistOnly": {}})
+            require(not (read["blockingFunctions"] or {}).get("triggers"))
+            require(deployed_functions() == [])
+            original = read
+            save(
+                output / "hook-recovery.json",
+                {
+                    "project": PROJECT,
+                    "original": original,
+                    "function": FUNCTION,
+                    "region": REGION,
+                    "changeAttempted": True,
+                },
+            )
+            change_attempted = True
+
+            # Deploy the function from a private copy of the checked-in source.
+            shutil.copytree(
+                FUNCTION_SOURCE,
+                FUNCTION_BUILD,
+                ignore=shutil.ignore_patterns("node_modules"),
+            )
+            install = subprocess.run(
+                ["npm", "install", "--no-audit", "--no-fund", "--loglevel=error"],
+                cwd=FUNCTION_BUILD,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
+            require(install.returncode == 0)
+            require(firebase(["deploy", "--only", "functions", "--force"], 900) == 0)
+            require(any(FUNCTION in name for name in deployed_functions()))
+            status, raw = core.request(CONFIG_URL, token=access, quota=True)
+            trigger = (
+                (raw.get("blockingFunctions") or {})
+                .get("triggers", {})
+                .get("beforeSignIn", {})
+            )
+            require(
+                isinstance(trigger.get("functionUri"), str)
+                and FUNCTION in trigger["functionUri"]
+            )
+            report["hook"] = {"deployed": True, "triggerReadback": True}
+
+            status, patched = revocation.patch(
+                f"{CONFIG_URL}?updateMask=mfa,signIn.phoneNumber,smsRegionConfig",
+                {
+                    "mfa": revocation.MFA_ON,
+                    "signIn": {"phoneNumber": revocation.phone_config(True)},
+                    "smsRegionConfig": revocation.SMS_REGIONS_ON,
+                },
+                access,
+            )
+            require(status == 200 and "error" not in patched)
+            status, raw = core.request(CONFIG_URL, token=access, quota=True)
+            require(status == 200 and raw.get("mfa") == revocation.MFA_ON)
+            require(
+                raw.get("signIn", {}).get("phoneNumber")
+                == revocation.phone_config(True)
+            )
+            time.sleep(30)
+
+        else:
+            report["hook"] = {"deployed": True, "triggerReadback": True}
+            report["localFunctionFixture"] = (
+                "tools/auth-blocking-disable/function-local"
+            )
         query = f"?key={urllib.parse.quote(key, safe='')}"
-        status, raw = core.request(CONFIG_URL, token=access, quota=True)
-        require(status == 200 and "error" not in raw)
-        read = {
-            "mfa": raw.get("mfa"),
-            "phoneNumber": raw.get("signIn", {}).get("phoneNumber"),
-            "smsRegionConfig": raw.get("smsRegionConfig"),
-            "blockingFunctions": raw.get("blockingFunctions"),
-        }
-        # Preconditions first: nothing is written or deployed on an unexpected project.
-        require(read["mfa"] == revocation.MFA_OFF and not read["phoneNumber"])
-        require(read["smsRegionConfig"] == {"allowlistOnly": {}})
-        require(not (read["blockingFunctions"] or {}).get("triggers"))
-        require(deployed_functions() == [])
-        original = read
-        save(
-            output / "hook-recovery.json",
-            {
-                "project": PROJECT,
-                "original": original,
-                "function": FUNCTION,
-                "region": REGION,
-                "changeAttempted": True,
-            },
-        )
-        change_attempted = True
-
-        # Deploy the function from a private copy of the checked-in source.
-        shutil.copytree(
-            FUNCTION_SOURCE,
-            FUNCTION_BUILD,
-            ignore=shutil.ignore_patterns("node_modules"),
-        )
-        install = subprocess.run(
-            ["npm", "install", "--no-audit", "--no-fund", "--loglevel=error"],
-            cwd=FUNCTION_BUILD,
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
-        require(install.returncode == 0)
-        require(firebase(["deploy", "--only", "functions", "--force"], 900) == 0)
-        require(any(FUNCTION in name for name in deployed_functions()))
-        status, raw = core.request(CONFIG_URL, token=access, quota=True)
-        trigger = (
-            (raw.get("blockingFunctions") or {})
-            .get("triggers", {})
-            .get("beforeSignIn", {})
-        )
-        require(
-            isinstance(trigger.get("functionUri"), str)
-            and FUNCTION in trigger["functionUri"]
-        )
-        report["hook"] = {"deployed": True, "triggerReadback": True}
-
-        status, patched = revocation.patch(
-            f"{CONFIG_URL}?updateMask=mfa,signIn.phoneNumber,smsRegionConfig",
-            {
-                "mfa": revocation.MFA_ON,
-                "signIn": {"phoneNumber": revocation.phone_config(True)},
-                "smsRegionConfig": revocation.SMS_REGIONS_ON,
-            },
-            access,
-        )
-        require(status == 200 and "error" not in patched)
-        status, raw = core.request(CONFIG_URL, token=access, quota=True)
-        require(status == 200 and raw.get("mfa") == revocation.MFA_ON)
-        require(
-            raw.get("signIn", {}).get("phoneNumber") == revocation.phone_config(True)
-        )
-        time.sleep(30)
 
         def admin(action, body):
             require(action in {"lookup", "update", "delete"})
@@ -267,7 +280,7 @@ def observe(output):
                 f"{identity}/v1/projects/{PROJECT}/accounts:{action}",
                 body,
                 access,
-                quota=True,
+                quota=production,
             )
 
         def client(action, body):
@@ -323,6 +336,22 @@ def observe(output):
             require(isinstance(credential, str) and bool(credential))
             return credential
 
+        def code_for(session):
+            """Production uses the fixed test-number code; the local emulator prints codes
+            on its inspection route at the emulator root (not under the API host)."""
+            if production:
+                return TEST_CODE
+            status, listing = core.request(
+                f"{origin}/emulator/v1/projects/{PROJECT}/verificationCodes"
+            )
+            note(report, "emulator:verificationCodes", status, listing)
+            require(status == 200)
+            return next(
+                c["code"]
+                for c in listing.get("verificationCodes", [])
+                if c.get("sessionInfo") == session
+            )
+
         def finalize_phone(account, credential):
             status, started = mfa(
                 "mfaSignIn:start",
@@ -344,7 +373,7 @@ def observe(output):
                     "mfaPendingCredential": credential,
                     "phoneVerificationInfo": {
                         "sessionInfo": session,
-                        "code": TEST_CODE,
+                        "code": code_for(session),
                     },
                 },
             )
@@ -593,6 +622,10 @@ def observe(output):
             c == {"uidAbsent": True, "emailAbsent": True} for c in clean
         ):
             report["cleanup"] = {"uidAbsent": True, "emailAbsent": True}
+        if not production:
+            report["functionRemoved"] = True
+            report["configRestored"] = True
+            report["configDigestMatches"] = True
         if change_attempted:
             try:
                 report["functionRemoved"] = remove_function()

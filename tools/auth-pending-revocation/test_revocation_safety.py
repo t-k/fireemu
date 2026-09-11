@@ -3,6 +3,7 @@ what it read, must not retain raw error text, and complete() must reject a run t
 observed the held credential or did not restore the configuration."""
 
 import json
+
 import revocation_contract as contract
 import revocation_recorder as recorder
 from revocation_contract import CASES, FINALIZE_CHECKS, complete

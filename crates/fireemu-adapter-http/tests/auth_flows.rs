@@ -3477,12 +3477,28 @@ fn pending_retry_ends_when_the_pending_credential_expires() {
         let phone = start_phone_code(&s, &pending);
         let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
+        // The code is issued just before the pending credential expires, so at the request
+        // it is two seconds old and valid on its own: only the pending sweep can remove it.
         let pending = pending_login(&s, email);
+        advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS - 1);
         let phone = start_phone_code(&s, &pending);
-        advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS + 1);
+        advance_clock(&s, 2);
+        // Checked in the store directly: an inspection request would sweep first.
+        let at = s.clock.lock().unwrap().now_for_test();
+        assert!(s
+            .store
+            .lock()
+            .unwrap()
+            .check_phone_code(
+                phone["sessionInfo"].as_str().unwrap(),
+                phone["code"].as_str().unwrap(),
+                at,
+            )
+            .is_ok());
         let (status, refused) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+        assert!(refused.get("idToken").is_none());
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
         let (status, refused) = start_phone_step(&s, &pending);

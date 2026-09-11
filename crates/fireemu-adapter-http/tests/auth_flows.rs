@@ -3947,8 +3947,10 @@ fn pending_retry_hook_that_disables_the_account_refuses_the_same_request() {
         &json!({"localId": [user["localId"]]}),
     );
     assert_eq!(status, 200, "{lookup}");
-    assert_eq!(lookup["users"][0]["disabled"], true);
-    s.blocking = None;
+    // Production (readback timing, 2026-09-12): the flag is not persisted for a refused
+    // first-factor sign-in of an existing account; the sign-in stays refused only while
+    // the function is registered.
+    assert_ne!(lookup["users"][0]["disabled"], true, "{lookup}");
     let (status, again) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -3956,6 +3958,13 @@ fn pending_retry_hook_that_disables_the_account_refuses_the_same_request() {
     );
     assert_eq!(status, 400, "{again}");
     assert_eq!(again["error"]["message"], "USER_DISABLED");
+    s.blocking = None;
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "hook-disable@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{signed}");
 
     // Phone MFA finalize: the hook runs after the second factor; the refusal keeps the
     // pending credential and code (pre-finalization policy) and persists the flag.
@@ -4019,12 +4028,11 @@ fn pending_retry_hook_disable_persists_the_whole_response_and_created_accounts()
         &format!("{V1}/projects/demo-app/accounts:lookup"),
         &json!({"localId": [user["localId"]]}),
     );
-    assert_eq!(lookup["users"][0]["disabled"], true);
+    // An existing account's first-factor sign-in persists none of the response: neither
+    // the flag nor the claims, and no sign-in time.
+    assert_ne!(lookup["users"][0]["disabled"], true, "{lookup}");
     assert_eq!(lookup["users"][0]["lastLoginAt"], before["users"][0]["lastLoginAt"]);
-    assert_eq!(
-        serde_json::from_str::<Value>(lookup["users"][0]["customAttributes"].as_str().unwrap()).unwrap()["role"],
-        "auditor"
-    );
+    assert!(lookup["users"][0].get("customAttributes").is_none(), "{lookup}");
 
     // An account created by the very request the hook disables is kept, disabled, with
     // no tokens and no session (production behavior for this case is not yet observed).

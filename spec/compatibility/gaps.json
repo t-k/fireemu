@@ -40,16 +40,17 @@
       "id": "GAP-AUTH-001",
       "feature": "AUTH-BLOCKING",
       "kind": "mismatch",
-      "scope": "Immediate Admin readback of the disabled flag after a hook-disabled request: production run3 read false for the password sign-in account and true for the MFA account. The same corpus on the current local artifact (2026-09-12, tools/auth-blocking-disable/blocking_owned.py) matched every other row and read true for both accounts. The readback-timing corpus (tools/auth-blocking-readback) ran locally on 2026-09-12: the flag reads true at every point after the refusal on the local artifact; the production run of that corpus is pending approval.",
-      "implementationStatus": "implemented",
+      "scope": "Persistence of a hook-applied disable. Production (recorded 2026-09-11 and 2026-09-12): an MFA finalize persists the flag; a sign-up keeps a created, disabled record; a first-factor password sign-in of an existing account persists nothing (false before, immediately after, 5 s and ~31 s after, and 30 s after with no earlier read) while sign-ins stay refused only under the registered function. fireemu persisted on every path; it now persists for sign-up and MFA finalize only.",
+      "implementationStatus": "fixed",
       "localTestStatus": "passing",
-      "productionObservationStatus": "approved",
+      "productionObservationStatus": "recorded",
       "comparisonStatus": "mismatch",
       "evidenceRefs": [
-        "docs/compatibility/auth-blocking-disable-approval.md",
-        "tools/auth-blocking-disable/README.md"
+        "docs/compatibility/auth-blocking-readback.md",
+        "docs/compatibility/auth-blocking-create-disable.md",
+        "tools/auth-blocking-readback/README.md"
       ],
-      "nextAction": "Publish the local comparison record next to the approved production receipt, then plan the additional production observation that separates the initial value, the immediate readback, a later readback and a hook-bypassing readback, with a control; decide the persistence rule from that.",
+      "nextAction": "Re-run the readback corpus on the fixed local artifact and publish its comparison with the production record; then scope approvals for the revision 2 and readback records.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -105,17 +106,17 @@
     {
       "id": "AUTH-U02",
       "feature": "AUTH-BLOCKING",
-      "kind": "unobserved",
-      "scope": "An account created by the request that a blocking function disables. Revision 1 of the corpus selected on a sign-up photo URL that production does not persist, so the function never matched and the case stays unobserved; revision 2 selects on an email prefix. fireemu keeps the created, disabled record without a session.",
+      "kind": "mismatch",
+      "scope": "An account created by the request that a blocking function disables. Production (recorded 2026-09-12, revision 2 with an email-prefix selector): the creating sign-up is refused with USER_DISABLED, the record exists and is disabled, a second sign-up is EMAIL_EXISTS; the local artifact showed the same rows before the run.",
       "implementationStatus": "implemented",
       "localTestStatus": "passing",
-      "productionObservationStatus": "none",
+      "productionObservationStatus": "recorded",
       "comparisonStatus": "none",
       "evidenceRefs": [
         "tools/auth-blocking-create-disable/README.md"
       ],
-      "nextAction": "Run revision 2 in production once its deployment is approved, then publish the comparison.",
-      "blockedReason": "Production deployment and execution of revision 2 not yet approved.",
+      "nextAction": "Publish the local comparison record for revision 2, then scope an approval.",
+      "blockedReason": "",
       "requiresProductionChange": true
     },
     {

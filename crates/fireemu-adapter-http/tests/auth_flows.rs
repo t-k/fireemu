@@ -3742,6 +3742,9 @@ fn pending_retry_survives_a_rejecting_hook_and_honors_a_disable_during_the_hook(
     s.blocking = Some(Arc::new(PassThroughBlockingHook));
     let (status, signed) = finalize_phone_step(&s, &pending, &phone);
     assert_eq!(status, 200, "{signed}");
+    // Consumption is checked before any further request could sweep for it.
+    assert!(s.store.lock().unwrap().verification_codes().is_empty());
+    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
     let (status, lookup) = post(
         &s,
         &format!("{V1}/accounts:lookup"),
@@ -3749,8 +3752,6 @@ fn pending_retry_survives_a_rejecting_hook_and_honors_a_disable_during_the_hook(
     );
     assert_eq!(status, 200, "{lookup}");
     assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-    assert!(s.store.lock().unwrap().verification_codes().is_empty());
-    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
     assert_ne!(finalize_phone_step(&s, &pending, &phone).0, 200);
 }
 

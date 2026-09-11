@@ -4102,6 +4102,41 @@ fn pending_retry_admin_password_update_of_a_disabled_account_returns_no_tokens()
     }
 }
 
+/// The token decision reads the record after the update: a credential change that
+/// re-enables the account in the same request issues tokens, one that disables it does not.
+#[test]
+fn pending_retry_admin_credential_change_tokens_follow_the_enabled_state_after_update() {
+    for strict in [false, true] {
+        let (s, _) = oob_authorization_state(strict);
+        let user = sign_up(&s, "admin-update-toggle@example.com");
+        let uid = user["localId"].clone();
+        let update = |body: Value| {
+            admin(&s, &format!("{V1}/projects/demo-app/accounts:update"), &body)
+        };
+        // Enabled account: password change plus disable in one request issues nothing.
+        let (status, response) = update(json!({"localId": uid, "password": "toggle-22", "disableUser": true}));
+        assert_eq!(status, 200, "{response}");
+        for key in ["idToken", "refreshToken", "expiresIn"] {
+            assert!(response.get(key).is_none(), "{key}: {response}");
+        }
+        assert_eq!(
+            post(&s, &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": "admin-update-toggle@example.com", "password": "toggle-22"})).1["error"]["message"],
+            "USER_DISABLED"
+        );
+        // Disabled account: password change plus re-enable in one request issues tokens.
+        let (status, response) = update(json!({"localId": uid, "password": "toggle-33", "disableUser": false}));
+        assert_eq!(status, 200, "{response}");
+        assert!(response["idToken"].is_string() && response["refreshToken"].is_string(), "{response}");
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "admin-update-toggle@example.com", "password": "toggle-33"}),
+        );
+        assert_eq!(status, 200, "{signed}");
+    }
+}
+
 #[test]
 fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
     for strict in [false, true] {

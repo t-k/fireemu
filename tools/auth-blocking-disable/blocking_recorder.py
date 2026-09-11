@@ -402,12 +402,14 @@ def observe(output):
             checks["derivedLookup"] = derived_lookup(account, response["idToken"])
             return checks
 
-        def token_rows(account, label, first):
+        def token_rows(account, label, first, response):
+            # The raw response stays a local argument: it is never attached to a row or
+            # to the report, so an interrupted follow-up cannot save it.
             if first["outcome"] != "accepted":
                 skipped(f"hook-{label}-token-lookup")
                 skipped(f"hook-{label}-token-refresh")
                 return
-            status, seen = client("lookup", {"idToken": first["response"]["idToken"]})
+            status, seen = client("lookup", {"idToken": response["idToken"]})
             checks = None
             if status == 200:
                 checks = {
@@ -420,13 +422,30 @@ def observe(output):
                     == account["uid"]
                 }
             row(f"hook-{label}-token-lookup", status, seen, checks)
-            status, renewed = refresh(first["response"]["refreshToken"])
+            status, renewed = refresh(response["refreshToken"])
             checks = None
             if status == 200:
                 checks = tokens(renewed, account["uid"], account["email"], True)
                 require(all(v is True for v in checks.values()))
                 checks["derivedLookup"] = derived_lookup(account, renewed["id_token"])
             row(f"hook-{label}-token-refresh", status, renewed, checks)
+
+        def pending_checks(account, response):
+            """The MFA account's second sign-in may be accepted as a new pending
+            credential: recorded without any token or credential value."""
+            info = response.get("mfaInfo")
+            return {
+                "noError": "error" not in response,
+                "pendingCredentialPresent": isinstance(
+                    response.get("mfaPendingCredential"), str
+                )
+                and bool(response["mfaPendingCredential"]),
+                "noIdToken": "idToken" not in response,
+                "noRefreshToken": "refreshToken" not in response,
+                "enrollmentMatches": isinstance(info, list)
+                and len(info) == 1
+                and info[0].get("mfaEnrollmentId") == account["enrollmentId"],
+            }
 
         for label in ("a", "b", "c"):
             directory = output / label
@@ -506,9 +525,7 @@ def observe(output):
             response,
             signin_checks(c, response) if status == 200 else None,
         )
-        first["response"] = response
-        token_rows(c, "c", first)
-        del first["response"]
+        token_rows(c, "c", first, response)
         record = lookup(c)
         row(
             "hook-c-disabled-readback",
@@ -532,9 +549,7 @@ def observe(output):
             response,
             finalize_checks(a, response) if status == 200 else None,
         )
-        first["response"] = response
-        token_rows(a, "a", first)
-        del first["response"]
+        token_rows(a, "a", first, response)
         record = lookup(a)
         row(
             "hook-a-disabled-readback",
@@ -547,7 +562,7 @@ def observe(output):
             "hook-a-second-signin",
             status,
             again,
-            signin_checks(a, again) if status == 200 else None,
+            pending_checks(a, again) if status == 200 else None,
         )
 
         status, signed = finalize_phone(b, pending(b))
@@ -561,13 +576,8 @@ def observe(output):
         clean = []
         for account in accounts.values():
             try:
-                if account["uid"] is None and admin is not None:
-                    # Creation never completed: absence by email is the only identity.
-                    require(
-                        users(*admin("lookup", {"email": [account["email"]]})) == []
-                    )
-                    clean.append({"uidAbsent": True, "emailAbsent": True})
-                    continue
+                # An account whose creation response was lost is recovered by email or
+                # stays unconfirmed with its journal; it is never reported absent here.
                 clean.append(
                     core.cleanup_account(
                         admin,

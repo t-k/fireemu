@@ -63,6 +63,14 @@ FINALIZE_CHECKS = {
     "derivedLookup",
 }
 SIGNIN_CHECKS = set(tokens({}, "uid", "email")) | {"derivedLookup"}
+# The MFA account's second sign-in, if accepted, yields a pending credential, not tokens.
+PENDING_CHECKS = {
+    "noError",
+    "pendingCredentialPresent",
+    "noIdToken",
+    "noRefreshToken",
+    "enrollmentMatches",
+}
 TEST_PHONES = {"a": "+15555550100", "b": "+15555550101"}
 TEST_CODE = "135790"
 DISABLING_CLAIM = "fireemuDisableOnSignIn"
@@ -119,6 +127,8 @@ def validate_row(row, name):
     require(all(v is True for v in row["checks"].values()))
     if name.endswith("-finalize"):
         require(set(row["checks"]) == FINALIZE_CHECKS)
+    elif name == "hook-a-second-signin":
+        require(set(row["checks"]) == PENDING_CHECKS)
     elif name.endswith("-signin"):
         require(set(row["checks"]) == SIGNIN_CHECKS)
     elif name.endswith("-token-lookup"):

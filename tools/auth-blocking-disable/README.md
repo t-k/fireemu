@@ -11,7 +11,7 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocki
 uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-blocking-disable -q
 ```
 
-## Observed on 2026-09-11 (private receipt, not yet published or approved)
+## Observed on 2026-09-11 (recorded with the recorder at `08002f5`; published as an unapproved candidate)
 
 With the function registered, B's phone MFA completions succeeded before and after the hook observations. C's password sign-in was refused with `USER_DISABLED` and no tokens were returned; the Admin readback immediately afterwards showed `disabled: false`, and a second sign-in was refused with `USER_DISABLED` again. A's phone MFA finalize was refused with `USER_DISABLED` and no tokens were returned; the Admin readback showed `disabled: true`, and a second sign-in was refused with `USER_DISABLED`. Both accounts were deleted, the function was removed, and the configuration was restored with a matching digest.
 
@@ -19,4 +19,6 @@ So production refuses the same request in which the blocking function disables t
 
 Earlier attempts in the same session: the second-generation identity handler of firebase-functions 6 rejected the blocking token's audience (Identity Platform registers and signs for the cloudfunctions.net URI, the handler expects run.app), so the function uses the first-generation API; and the readback row originally required the flag to be persisted, which would have failed the run on an observation rather than recording it.
 
-This covers one function shape (a disabling response for a claim), one run, phone MFA with test numbers, no tenant, and neither a rejecting function nor `beforeCreate`. Publication as a receipt and page, and any human approval, are separate steps.
+This covers one function shape (a disabling response for a claim), one run, phone MFA with test numbers, no tenant, and neither a rejecting function nor `beforeCreate`. Refused rows record the HTTP status and the classified error only; the absence of tokens in a refused response is not an independent check of this recorder, and the persisted flag was read back once immediately (false for C, true for A), so the recorded observation supports "the same request is refused" and not "the disable is persisted immediately on every path". Any human approval is a separate step and should be worded to that record.
+
+After the run the recorder was hardened without re-running it: a raw API response is no longer bound to a row while its follow-up requests run (an interrupted follow-up could have saved it to the private report), an account whose creation response was lost is no longer reported absent (it is recovered by email or stays unconfirmed with its journal), and the MFA account's second sign-in accepts a pending credential as a valid observation. Safety tests drive `observe()` against a scripted fake and reproduce each of the three against the previous behavior.

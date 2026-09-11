@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "538747b5e8e9fc3be27952255019fe1a147b766d12c919e8b8c1aef865744174",
+  "sourceCommit": "7e9b327acbede270687cbe76164bef098d32b43b",
+  "scope": "Twelve observations rechecked on the recorded corrected local artifact against unchanged saved production observations. No tenant, local strict profile and recorded production authentication/password-policy settings. Target A is deleted using its own fixed ID token; independent B is the unaffected successful control. Each phase follows the recorded order: password signin, fixed original ID-token lookup, then fixed original refresh-token exchange; successful issued tokens are used for lookup. Approval includes selected state checks, deletion and UID/email absence, remaining owned-account cleanup and owned process termination. Only elapsedMs is excluded from semantic comparison: deleted-A signin returns INVALID_LOGIN_CREDENTIALS, deleted-A ID lookup and refresh return USER_NOT_FOUND, and the remaining nine succeed. This is not a new production run. Approval explicitly excludes identifier-based accounts:lookup authorization; its authentication/authorization bypass is a separate required fix. No claim covers all credential series, ID-token UID reuse, SDK/checkRevoked, Rules, actual expiry, propagation time or fault recovery.",
+  "cases": [
+    "baseline-a-signin",
+    "baseline-a-id",
+    "baseline-a-refresh",
+    "baseline-b-signin",
+    "baseline-b-id",
+    "baseline-b-refresh",
+    "deleted-a-signin",
+    "deleted-a-id",
+    "deleted-a-refresh",
+    "deleted-b-signin",
+    "deleted-b-id",
+    "deleted-b-refresh"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-11",
+  "decision": "approve"
+}

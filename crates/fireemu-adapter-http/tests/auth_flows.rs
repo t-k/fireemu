@@ -3980,6 +3980,71 @@ fn pending_retry_hook_that_disables_the_account_refuses_the_same_request() {
     assert_eq!(lookup["users"][0]["disabled"], true);
     s.blocking = Some(Arc::new(PassThroughBlockingHook));
     assert_eq!(finalize_phone_step(&s, &pending, &phone).1["error"]["message"], "USER_DISABLED");
+
+}
+
+/// The whole hook response persists as one record update, and an account created by the
+/// very request the hook disables is kept as a disabled record without a session.
+#[test]
+fn pending_retry_hook_disable_persists_the_whole_response_and_created_accounts() {
+    let disabling = || -> Arc<dyn AuthBlockingHook> {
+        Arc::new(FixedBeforeSignInHook {
+            response: json!({"userRecord": {"updateMask": "disabled", "disabled": true}}),
+        })
+    };
+    // Claims set by the same response are on the record, not only the flag.
+    let mut s = state();
+    let user = sign_up(&s, "hook-disable-claims@example.com");
+    s.blocking = Some(Arc::new(FixedBeforeSignInHook {
+        response: json!({"userRecord": {"updateMask": "disabled,customClaims",
+            "disabled": true, "customClaims": {"role": "auditor"}}}),
+    }));
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "hook-disable-claims@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [user["localId"]]}),
+    );
+    assert_eq!(lookup["users"][0]["disabled"], true);
+    assert_eq!(
+        serde_json::from_str::<Value>(lookup["users"][0]["customAttributes"].as_str().unwrap()).unwrap()["role"],
+        "auditor"
+    );
+
+    // An account created by the very request the hook disables is kept, disabled, with
+    // no tokens and no session (production behavior for this case is not yet observed).
+    let mut s = state();
+    s.blocking = Some(disabling());
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "hook-disable-new@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    assert!(refused.get("idToken").is_none() && refused.get("refreshToken").is_none());
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["hook-disable-new@example.com"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"].as_array().map(Vec::len), Some(1));
+    assert_eq!(lookup["users"][0]["disabled"], true);
+    s.blocking = None;
+    let (status, again) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "hook-disable-new@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{again}");
+    assert_eq!(again["error"]["message"], "USER_DISABLED");
 }
 
 #[test]

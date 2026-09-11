@@ -1885,12 +1885,28 @@ fn dispatch_with_blocking_hook(
             }
             // A hook response that disables the account refuses the very request that
             // ran it (production, recorded 2026-09-11: USER_DISABLED, no tokens, for a
-            // first-factor sign-in and an MFA finalize alike). The flag is the only part
-            // of the attempt that persists: the consumed credentials and the provisional
-            // refresh session of the committed copy are dropped with it.
+            // first-factor sign-in and an MFA finalize alike). The whole hook response
+            // persists as one record update; no session is issued.
             if issued_session.is_some() && committed.user(&uid).is_some_and(|u| u.disabled) {
-                if let Some(user) = live.user_mut(&uid) {
-                    user.disabled = true;
+                if live.user(&uid).is_none() {
+                    // Created by this request: the created, disabled record is kept (the
+                    // hook response is already applied to it) without its provisional
+                    // session. Production behavior for a created-then-disabled account
+                    // is not yet observed; dropping the record silently is not an option.
+                    committed.revoke_refresh_tokens(&uid);
+                    *live = committed;
+                } else {
+                    // Existing account: the response is applied to the live record and
+                    // the committed copy is dropped, so the credentials consumed by the
+                    // attempt (pending credential, code) and the provisional session are
+                    // not persisted.
+                    for (event, value) in &blocking_responses {
+                        if let Err(reason) =
+                            apply_blocking_response(&mut live, &uid, *event, value)
+                        {
+                            return error(400, &reason);
+                        }
+                    }
                 }
                 return error(400, "USER_DISABLED");
             }

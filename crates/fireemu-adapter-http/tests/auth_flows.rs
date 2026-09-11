@@ -3756,6 +3756,167 @@ fn pending_retry_survives_a_rejecting_hook_and_honors_a_disable_during_the_hook(
 }
 
 #[test]
+fn pending_retry_two_party_totp_refusal_keeps_both_pendings_and_the_owners_step() {
+    let mut s = state();
+    s.totp_extension_enabled = true;
+    let t0 = LogicalInstant::from_unix_seconds(1_788_004_860);
+    let enroll = |email: &str| {
+        let user = sign_up(&s, email);
+        verify_email(&s, user["localId"].as_str().unwrap());
+        let (status, enrollment) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": user["idToken"], "totpEnrollmentInfo": {}}),
+        );
+        assert_eq!(status, 200, "{enrollment}");
+        let secret = base32::decode(enrollment["totpSessionInfo"]["sharedSecretKey"].as_str().unwrap()).unwrap();
+        let (status, enrolled) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            &json!({"idToken": user["idToken"], "totpVerificationInfo": {
+                "sessionInfo": enrollment["totpSessionInfo"]["sessionInfo"],
+                "verificationCode": totp_at(&secret, &TotpPolicy::default().params(), t0)}}),
+        );
+        assert_eq!(status, 200, "{enrolled}");
+        let factor = claims(enrolled["idToken"].as_str().unwrap())["firebase"]["second_factor_identifier"].clone();
+        (user, secret, factor)
+    };
+    let (a, secret_a, factor_a) = enroll("totp-a@example.com");
+    let (b, _, _) = enroll("totp-b@example.com");
+    let pending_a = pending_login(&s, "totp-a@example.com");
+    let pending_b = pending_login(&s, "totp-b@example.com");
+    let b_before = admin(&s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [b["localId"]]})).1;
+    let count = s.store.lock().unwrap().pending_sign_in_count();
+    let t1 = t0.checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(30)).unwrap();
+    s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(30)).unwrap();
+    let code_a = totp_at(&secret_a, &TotpPolicy::default().params(), t1);
+    // B's pending credential with A's factor and A's valid code: A's factor is not on B.
+    let (status, refused) = finalize_mfa(
+        &s,
+        &json!({"mfaPendingCredential": pending_b["mfaPendingCredential"],
+            "mfaEnrollmentId": factor_a, "totpVerificationInfo": {"verificationCode": code_a}}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "MFA_ENROLLMENT_NOT_FOUND");
+    assert!(refused.get("idToken").is_none());
+    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count);
+    // A's own pending credential accepts the very same code: the refusal did not record
+    // A's step as used.
+    let (status, signed) = finalize_mfa(
+        &s,
+        &json!({"mfaPendingCredential": pending_a["mfaPendingCredential"],
+            "mfaEnrollmentId": factor_a, "totpVerificationInfo": {"verificationCode": code_a}}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+    let (status, lookup) = post(&s, &format!("{V1}/accounts:lookup"), &json!({"idToken": signed["idToken"]}));
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["localId"], a["localId"]);
+    // B's pending credential is intact and B is not signed in.
+    let (status, lookup) = admin(&s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [b["localId"]]}));
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["lastLoginAt"], b_before["users"][0]["lastLoginAt"]);
+    assert!(s.store.lock().unwrap().pending_sign_in_user(&PendingSignId_parse(&pending_b)).is_some());
+}
+
+#[allow(non_snake_case)]
+fn PendingSignId_parse(pending: &Value) -> PendingSignInId {
+    PendingSignInId::parse(pending["mfaPendingCredential"].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn pending_retry_tenant_pending_credentials_do_not_cross_namespaces() {
+    use fireemu_core_auth::store::AuthRegistry;
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer-a").unwrap();
+    registry.ensure_tenant("demo-app", "customer-b").unwrap();
+    s.registry = Some(registry);
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/tenants/customer-a/accounts"),
+        &json!({"email": "tenant-mfa@example.com", "password": "hunter22", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15559876543"}]}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"tenantId": "customer-a", "email": "tenant-mfa@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("idToken").is_none());
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"tenantId": "customer-a", "mfaPendingCredential": pending["mfaPendingCredential"],
+            "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let tenant_codes = || get(&s, "/emulator/v1/projects/demo-app/tenants/customer-a/verificationCodes").1;
+    let codes = tenant_codes();
+    assert_eq!(codes["verificationCodes"].as_array().map(Vec::len), Some(1), "{codes}");
+    let phone = json!({"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": codes["verificationCodes"][0]["code"]});
+    let tenant_store = s.registry.as_ref().unwrap().tenant_store("demo-app", "customer-a").unwrap();
+    let count = tenant_store.lock().unwrap().pending_sign_in_count();
+    assert_eq!(count, 1);
+    // The valid credentials of tenant A are refused in tenant B and in the default
+    // namespace, and neither refusal touches tenant A's pending credential or code.
+    for other in [json!("customer-b"), Value::Null] {
+        let mut body = json!({"mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": phone});
+        if !other.is_null() {
+            body["tenantId"] = other;
+        }
+        let (status, refused) = finalize_mfa(&s, &body);
+        assert_eq!(status, 400, "{refused}");
+        // The other namespace knows neither the code nor the pending credential; the phone
+        // finalizer checks the code first, so the session refusal is what is seen. The
+        // production precedence between the two is unobserved and not pinned here.
+        assert!(
+            ["INVALID_SESSION_INFO", "INVALID_MFA_PENDING_CREDENTIAL"]
+                .contains(&refused["error"]["message"].as_str().unwrap_or_default()),
+            "{refused}"
+        );
+        assert!(refused.get("idToken").is_none());
+        assert_eq!(tenant_codes(), codes);
+        assert_eq!(tenant_store.lock().unwrap().pending_sign_in_count(), count);
+    }
+    // Tenant A still completes with the same credentials, and the token names the tenant.
+    let (status, signed) = finalize_mfa(
+        &s,
+        &json!({"tenantId": "customer-a", "mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": phone}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(claims(signed["idToken"].as_str().unwrap())["firebase"]["tenant"], "customer-a");
+    assert_ne!(
+        finalize_mfa(&s, &json!({"tenantId": "customer-a", "mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": phone})).0,
+        200
+    );
+}
+
+#[test]
+fn pending_retry_concurrent_finalizes_of_one_credential_succeed_exactly_once() {
+    let email = "pending-race@example.com";
+    let (s, user) = pending_expiry_state(false, email);
+    let pending = pending_login(&s, email);
+    let phone = start_phone_code(&s, &pending);
+    let results: Vec<(u16, Value)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| scope.spawn(|| finalize_phone_step(&s, &pending, &phone)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let successes: Vec<&Value> = results.iter().filter(|(status, _)| *status == 200).map(|(_, body)| body).collect();
+    assert_eq!(successes.len(), 1, "{results:?}");
+    assert!(results.iter().filter(|(status, _)| *status != 200).all(|(_, body)| body.get("idToken").is_none()));
+    let (status, lookup) = post(&s, &format!("{V1}/accounts:lookup"), &json!({"idToken": successes[0]["idToken"]}));
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["localId"], user["localId"]);
+    assert!(s.store.lock().unwrap().verification_codes().is_empty());
+    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+}
+
+#[test]
 fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
     for strict in [false, true] {
         let (s, lines) = oob_authorization_state(strict);

@@ -3253,6 +3253,106 @@ fn pending_retry_preserves_sms_after_a_mismatched_pending_credential() {
 }
 
 #[test]
+fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
+    for strict in [false, true] {
+        let (s, lines) = oob_authorization_state(strict);
+        let user = sign_up(&s, "purpose-mismatch@example.com");
+        let (status, seeded) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:update"),
+            &json!({"localId": user["localId"], "emailVerified": true,
+                "mfa": {"enrollments": [{"phoneInfo": "+15559876543"}]}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let (status, pending) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "purpose-mismatch@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{pending}");
+        assert!(pending.get("idToken").is_none());
+        let (status, started) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:start"),
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+                "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+        );
+        assert_eq!(status, 200, "{started}");
+        // A plain phone sign-in code for an unrelated number, issued after the MFA code.
+        let (status, sent) = post(
+            &s,
+            &format!("{V1}/accounts:sendVerificationCode"),
+            &json!({"phoneNumber": "+15550001111"}),
+        );
+        assert_eq!(status, 200, "{sent}");
+        let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+        let list = codes["verificationCodes"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        let mfa_session = started["phoneResponseInfo"]["sessionInfo"].as_str().unwrap();
+        let plain_session = sent["sessionInfo"].as_str().unwrap();
+        let code_for = |session: &str| {
+            list.iter()
+                .find(|c| c["sessionInfo"] == session)
+                .map(|c| c["code"].clone())
+                .unwrap()
+        };
+        let mfa_code = json!({"sessionInfo": mfa_session, "code": code_for(mfa_session)});
+        let plain_code = json!({"sessionInfo": plain_session, "code": code_for(plain_session)});
+        let notices = lines.lock().unwrap().clone();
+        let count = s.store.lock().unwrap().pending_sign_in_count();
+
+        // The plain sign-in code is refused by the MFA finalizer and kept.
+        let (status, refused) = finalize_mfa(
+            &s,
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": plain_code}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+        assert!(refused.get("idToken").is_none());
+        // The MFA code is refused by the plain phone sign-in and kept.
+        let (status, refused) = post(&s, &format!("{V1}/accounts:signInWithPhoneNumber"), &mfa_code);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+        assert!(refused.get("idToken").is_none());
+        assert_eq!(get(&s, &format!("{EMU}/verificationCodes")).1, codes);
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count);
+        assert_eq!(*lines.lock().unwrap(), notices);
+
+        // Both codes still work for their own purpose, and each is consumed exactly once.
+        let (status, signed) = finalize_mfa(
+            &s,
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": mfa_code}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        {
+            let store = s.store.lock().unwrap();
+            let remaining = store.verification_codes();
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].session_info, plain_session);
+            assert_eq!(store.pending_sign_in_count(), count - 1);
+        }
+        let (status, lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        assert_eq!(lookup["users"][0]["localId"], user["localId"]);
+        let (status, phone_user) =
+            post(&s, &format!("{V1}/accounts:signInWithPhoneNumber"), &plain_code);
+        assert_eq!(status, 200, "{phone_user}");
+        assert_eq!(phone_user["phoneNumber"], "+15550001111");
+        assert_ne!(phone_user["localId"], user["localId"]);
+        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        assert_ne!(post(&s, &format!("{V1}/accounts:signInWithPhoneNumber"), &plain_code).0, 200);
+        assert_ne!(
+            finalize_mfa(&s, &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": mfa_code})).0,
+            200
+        );
+    }
+}
+
+#[test]
 fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
     for strict in [false, true] {
         let (s, lines) = oob_authorization_state(strict);

@@ -2349,7 +2349,7 @@ fn dispatch(
             handler == Handler::AdminUpdate,
         ),
         Handler::Delete => delete_account(store, body, at, false),
-        Handler::SendOobCode => send_oob_code(store, body, at, headers),
+        Handler::SendOobCode => send_oob_code(store, body, at, headers, false),
         Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
         Handler::SignInWithEmailLink => sign_in_with_email_link(store, body, at),
         Handler::SendVerificationCode => send_verification_code(store, body, at),
@@ -2389,7 +2389,7 @@ fn dispatch(
         Handler::AdminSendOobCode => {
             let mut with_link = body.clone();
             with_link["returnOobLink"] = json!(true);
-            send_oob_code(store, &with_link, at, headers)
+            send_oob_code(store, &with_link, at, headers, true)
         }
         Handler::AdminCreateSessionCookie => create_session_cookie(store, body, at),
         Handler::TenantCreate
@@ -4955,12 +4955,20 @@ fn percent_encode(s: &str) -> String {
 /// `EMAIL_SIGNIN` (email), `VERIFY_AND_CHANGE_EMAIL` (idToken + newEmail). Nothing is
 /// mailed: the code is kept for `/emulator/v1/projects/{p}/oobCodes`, and returned here
 /// with its link when `returnOobLink` is set (the Admin SDK's link generators).
+// Keep authorization, target selection and credential issuance in one auditable flow.
+#[allow(clippy::too_many_lines)]
 fn send_oob_code(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
     headers: &RequestHeaders,
+    privileged: bool,
 ) -> JsonResponse {
+    // Only the authenticated Admin route may return a credential to the caller.
+    // Check before creating a code or emitting a delivery notice.
+    if !privileged && body.get("returnOobLink").and_then(Value::as_bool) == Some(true) {
+        return error(400, "OPERATION_NOT_ALLOWED");
+    }
     let request_type = match str_field(body, "requestType") {
         None | Some("" | "OOB_REQ_TYPE_UNSPECIFIED") => return error(400, "MISSING_REQ_TYPE"),
         Some(t) => match OobRequestType::parse(t) {
@@ -5002,17 +5010,21 @@ fn send_oob_code(
             (email.to_owned(), uid, None)
         }
         OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => {
-            // A session, or (Admin link generators) the email itself.
-            let uid = match (str_field(body, "idToken"), str_field(body, "email")) {
-                (Some(_), _) => match verify(store, body, at) {
+            // Email-based target selection is reserved for authenticated Admin generators.
+            let uid = match (
+                privileged,
+                str_field(body, "idToken"),
+                str_field(body, "email"),
+            ) {
+                (false, _, _) | (true, Some(_), _) => match verify(store, body, at) {
                     Ok(uid) => uid,
                     Err(r) => return r,
                 },
-                (None, Some(email)) => match store.user_by_email(email) {
+                (true, None, Some(email)) => match store.user_by_email(email) {
                     Some(u) => u.local_id.clone(),
                     None => return error(400, "EMAIL_NOT_FOUND"),
                 },
-                (None, None) => return error(400, "MISSING_ID_TOKEN"),
+                (true, None, None) => return error(400, "MISSING_ID_TOKEN"),
             };
             let Some(email) = store.user(&uid).and_then(|u| u.email.clone()) else {
                 return error(400, "MISSING_EMAIL : the user has no email");

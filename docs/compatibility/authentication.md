@@ -94,6 +94,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Current lookup authorization regressions](../../tools/auth-lookup-authorization/README.md) separate token-verified self lookup from authenticated Admin identifier search. These local regressions correct the identifier bypass independently of the approved deletion observations; no production error-code parity or complete Auth authorization claim is made.
 
+[Current OOB issuance authorization regressions](../../tools/auth-oob-authorization/README.md) restrict returned action credentials to authenticated Admin routes and require verified end-user identity for verification delivery. These are local regressions, not new production observations or complete Auth authorization coverage.
+
 [Supplementary-character boundary: scoped human approval](auth-password-unicode-boundary-approval.md). The three recorded patterns are verified and approved: 4095/4096 UTF-16 units accepted, 4097 refused, with credential/state and cleanup controls. Only the pinned subject, artifact and settings are approved; no general Unicode or other-route claim follows.
 
 [Supplementary-character password boundary: candidate](auth-password-unicode-boundary.md). Three newly observed patterns at 4095/4096/4097 UTF-16 units agree on both targets, with branch-specific credential/state and cleanup checks. Separate accounts and random prefixes are used; no human approval or general Unicode guarantee is implied.

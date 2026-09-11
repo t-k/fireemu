@@ -423,7 +423,7 @@ fn email_verification_and_email_change_apply_action_codes() {
     assert_eq!(status, 200, "{body}");
     let (status, link) = admin(
         &s,
-        &format!("{V1}/accounts:sendOobCode"),
+        &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
         &json!({"requestType": "VERIFY_EMAIL", "email": "v@example.com", "returnOobLink": true, "continueUrl": "https://app.example/x?y=1"}),
     );
     assert_eq!(status, 200, "{link}");
@@ -457,10 +457,20 @@ fn email_verification_and_email_change_apply_action_codes() {
     let (status, change) = post(
         &s,
         &format!("{V1}/accounts:sendOobCode"),
-        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": id_token, "newEmail": "new@example.com", "returnOobLink": true}),
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": id_token, "newEmail": "new@example.com"}),
     );
     assert_eq!(status, 200, "{change}");
-    let code = change["oobCode"].as_str().unwrap().to_owned();
+    assert!(change.get("oobCode").is_none());
+    let (_, codes) = get(&s, &format!("{EMU}/oobCodes"));
+    let code = codes["oobCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["requestType"] == "VERIFY_AND_CHANGE_EMAIL")
+        .unwrap()["oobCode"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let (status, _) = post(
         &s,
         &format!("{V1}/accounts:update"),
@@ -3153,6 +3163,153 @@ fn drain(lines: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
     std::mem::take(&mut *lines.lock().unwrap())
 }
 
+fn oob_authorization_state(strict: bool) -> (AuthState, Arc<Mutex<Vec<String>>>) {
+    let (mut s, lines) = recording_state();
+    if strict {
+        s.stateless_refresh_tokens = false;
+        s.query_limits = fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded;
+        s.fake_custom_token_expiry =
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject;
+    }
+    (s, lines)
+}
+
+fn assert_oob_denial_unchanged(s: &AuthState, lines: &Arc<Mutex<Vec<String>>>, body: &Value) {
+    let selection = json!({"email": ["oob-owner@example.com", "oob-other@example.com"]});
+    let users = admin(
+        s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &selection,
+    );
+    assert_eq!(users.0, 200);
+    let codes = get(s, &format!("{EMU}/oobCodes"));
+    let notices = lines.lock().unwrap().clone();
+    let (status, response) = post(s, &format!("{V1}/accounts:sendOobCode"), body);
+    assert_eq!(status, 400, "{response}");
+    assert!(response.get("oobCode").is_none());
+    assert!(response.get("oobLink").is_none());
+    assert_eq!(get(s, &format!("{EMU}/oobCodes")), codes);
+    assert_eq!(*lines.lock().unwrap(), notices);
+    assert_eq!(
+        admin(
+            s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &selection
+        ),
+        users
+    );
+}
+
+#[test]
+fn oob_authorization_rejects_end_user_link_generation_without_side_effects() {
+    for strict in [false, true] {
+        let (s, lines) = oob_authorization_state(strict);
+        let user = sign_up(&s, "oob-owner@example.com");
+        sign_up(&s, "oob-other@example.com");
+        for request_type in [
+            "PASSWORD_RESET",
+            "EMAIL_SIGNIN",
+            "VERIFY_EMAIL",
+            "VERIFY_AND_CHANGE_EMAIL",
+        ] {
+            for token in [
+                None,
+                Some(json!("malformed")),
+                Some(user["idToken"].clone()),
+            ] {
+                let mut body = json!({"requestType": request_type, "email": "oob-other@example.com",
+                    "newEmail": "oob-new@example.com", "returnOobLink": true, "admin": true});
+                if let Some(token) = token {
+                    body["idToken"] = token;
+                }
+                assert_oob_denial_unchanged(&s, &lines, &body);
+            }
+        }
+    }
+}
+
+#[test]
+fn oob_authorization_requires_verified_identity_for_email_actions() {
+    for strict in [false, true] {
+        let (s, lines) = oob_authorization_state(strict);
+        sign_up(&s, "oob-owner@example.com");
+        sign_up(&s, "oob-other@example.com");
+        for request_type in ["VERIFY_EMAIL", "VERIFY_AND_CHANGE_EMAIL"] {
+            for token in [
+                None,
+                Some(Value::Null),
+                Some(json!(false)),
+                Some(json!("malformed")),
+            ] {
+                let mut body = json!({"requestType": request_type, "email": "oob-other@example.com",
+                    "newEmail": "oob-new@example.com"});
+                if let Some(token) = token {
+                    body["idToken"] = token;
+                }
+                assert_oob_denial_unchanged(&s, &lines, &body);
+            }
+        }
+    }
+}
+
+#[test]
+fn oob_authorization_preserves_delivery_and_authenticated_admin_generation() {
+    for strict in [false, true] {
+        let (s, lines) = oob_authorization_state(strict);
+        let user = sign_up(&s, "oob-owner@example.com");
+        sign_up(&s, "oob-other@example.com");
+        for request_type in [
+            "PASSWORD_RESET",
+            "EMAIL_SIGNIN",
+            "VERIFY_EMAIL",
+            "VERIFY_AND_CHANGE_EMAIL",
+        ] {
+            let mut body = json!({"requestType": request_type, "email": "oob-other@example.com",
+                "newEmail": "oob-new@example.com", "returnOobLink": false});
+            let verification = matches!(request_type, "VERIFY_EMAIL" | "VERIFY_AND_CHANGE_EMAIL");
+            if verification {
+                body["idToken"] = user["idToken"].clone();
+            }
+            let (status, response) = post(&s, &format!("{V1}/accounts:sendOobCode"), &body);
+            assert_eq!(status, 200, "{response}");
+            assert!(response.get("oobCode").is_none());
+            assert!(response.get("oobLink").is_none());
+            assert_eq!(
+                response["email"],
+                if verification {
+                    "oob-owner@example.com"
+                } else {
+                    "oob-other@example.com"
+                }
+            );
+            assert_eq!(drain(&lines).len(), 1);
+            body.as_object_mut().unwrap().remove("idToken");
+            body["returnOobLink"] = json!(true);
+            let path = format!("{V1}/projects/demo-app/accounts:sendOobCode");
+            assert_ne!(post(&s, &path, &body).0, 200);
+            let headers = RequestHeaders {
+                authorization: Some(format!("Bearer {}", user["idToken"].as_str().unwrap())),
+                ..owner()
+            };
+            assert_ne!(handle_with(&s, "POST", &path, &headers, &body).status, 200);
+            let (status, response) = admin(&s, &path, &body);
+            assert_eq!(status, 200, "{response}");
+            assert!(response["oobCode"].is_string());
+            assert!(response["oobLink"].is_string());
+            assert_eq!(response["email"], "oob-other@example.com");
+            assert!(drain(&lines).is_empty());
+            let result = handle_with(
+                &s,
+                "POST",
+                &format!("{V1}/accounts:sendOobCode"),
+                &owner(),
+                &body,
+            );
+            assert_eq!(result.status, 400, "owner header cannot change route class");
+        }
+    }
+}
+
 #[test]
 fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     let (s, lines) = recording_state();
@@ -3181,7 +3338,7 @@ fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     // The Admin link generators receive the link in the response and print nothing.
     let (status, link) = admin(
         &s,
-        &format!("{V1}/accounts:sendOobCode"),
+        &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
         &json!({"requestType": "VERIFY_EMAIL", "email": "notice@example.com", "returnOobLink": true}),
     );
     assert_eq!(status, 200, "{link}");

@@ -2773,9 +2773,10 @@ fn admin_fields_rejection_does_not_consume_an_oob_code() {
             "email": "oob-field@example.com", "password": "password1", "returnSecureToken": true
         }),
     );
-    let (status, link) = post(
+    let (status, link) = admin(
         &s,
-        &format!("{V1}/accounts:sendOobCode"),
+        "POST",
+        &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
         &json!({
             "requestType": "VERIFY_EMAIL", "idToken": signed["idToken"], "returnOobLink": true
         }),

@@ -94,12 +94,13 @@
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
       "productionObservationStatus": "recorded",
-      "comparisonStatus": "mismatch",
+      "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
         "docs/compatibility/auth-disabled-admin-update.md",
+        "docs/compatibility/auth-disabled-admin-update-comparison.md",
         "tools/auth-disabled-admin-update/README.md"
       ],
-      "nextAction": "Candidate receipt published (unapproved); re-run the corpus on the current local artifact and record the comparison, then scope an approval to the recorded conditions.",
+      "nextAction": "Closed for the recorded conditions; scope an approval for the candidate record and its comparison separately.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -495,7 +496,7 @@
       "id": "EVID-U04",
       "feature": "AUTH-BLOCKING",
       "kind": "untested",
-      "scope": "Local side of production-only receipts: every production candidate or approved record should be paired with a local run of the same corpus and a published comparison record. As of 2026-09-12 the blocking-disable, pending-revocation, readback-timing and revision 2 created-then-disabled corpora have comparison records; the disabled-account administrative update does not yet.",
+      "scope": "Local side of production-only receipts: every production candidate or approved record is paired with a local run of the same corpus and a published comparison record. As of 2026-09-12 all five corpora (blocking disable, pending revocation, readback timing, revision 2 created-then-disabled, disabled-account administrative update) have comparison records bound to their build commits and fixture digests.",
       "implementationStatus": "implemented",
       "localTestStatus": "passing",
       "productionObservationStatus": "approved",
@@ -504,9 +505,10 @@
         "docs/compatibility/auth-blocking-disable-comparison.md",
         "docs/compatibility/auth-pending-revocation-comparison.md",
         "docs/compatibility/auth-blocking-readback-comparison.md",
-        "docs/compatibility/auth-blocking-create-disable-comparison.md"
+        "docs/compatibility/auth-blocking-create-disable-comparison.md",
+        "docs/compatibility/auth-disabled-admin-update-comparison.md"
       ],
-      "nextAction": "Add the local comparison for the administrative-update corpus (AUTH-U01). The comparison results themselves are tracked per corpus in EVID-U04A, EVID-U04B and the corpus records.",
+      "nextAction": "Keep pairing future production records with a local comparison; results are tracked per corpus.",
       "blockedReason": "",
       "requiresProductionChange": false
     },

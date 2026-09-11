@@ -104,6 +104,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Blocking function that disables the account: local comparison](auth-blocking-disable-comparison.md). One run of the same corpus on the owned local artifact, after the persistence rule was corrected, agrees with the approved production record on all twelve rows. The earlier comparison on the uncorrected artifact, which differed on the immediate readback of the flag for the password-sign-in account, stays in history (commit 98be375) and is tracked as EVID-U04A. A comparison record, not an approval.
 
+[Blocking function that disables the account, local comparison: scoped approval](auth-blocking-disable-comparison-approval.md). All twelve rows agree on the corrected artifact with pinned fixture dependencies; approved as a comparison of these cases only.
+
 [Administrative updates to a disabled account: production candidate](auth-disabled-admin-update.md). Ten production-only observations from one saved run: an administrative password replacement and a photo update of a disabled account were accepted and applied without returning tokens, the account's own sign-in stayed USER_DISABLED, and the replaced password signed in after re-enablement; the control succeeded at every phase. fireemu was corrected to issue no tokens for a credential change of an account that is disabled after the update; no local artifact ran this corpus.
 
 [Administrative updates to a disabled account: local comparison](auth-disabled-admin-update-comparison.md). One run of the same corpus on the owned local artifact built after the token rule was corrected agrees with the production candidate on all ten rows (no tokens for the administrative password replacement and photo update of a disabled account). A comparison record, not an approval.
@@ -116,11 +118,15 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Blocking function on the creating request, revision 2: local comparison](auth-blocking-create-disable-comparison.md). One run of the same corpus on the owned local artifact compared row by row with the production candidate: all ten rows agree (creating sign-up refused, disabled record kept, second sign-up EMAIL_EXISTS, photo URL not persisted). A comparison record, not an approval.
 
+[Blocking function on the creating request, revision 2, local comparison: scoped approval](auth-blocking-create-disable-comparison-approval.md). All ten rows agree with pinned fixture dependencies; approved as a comparison of these cases only.
+
 [Blocking function on the creating request, revision 2: scoped approval](auth-blocking-create-disable-approval.md). The ten-case frame (eight executed rows, two conditionally skipped) is verified and approved only for the recorded function shape, conditions and single run: the creating sign-up is refused with USER_DISABLED, the created record exists and is disabled, a second sign-up is EMAIL_EXISTS. Not extended to other auto-creating methods, beforeCreate, SDK or Rules.
 
 [Hook-applied disable: readback timing, production candidate](auth-blocking-readback.md). Eleven production-only observations on one run's time axis: two accounts refused by the disabling function read back as not disabled before, immediately after, five and thirty seconds after the refusal, and after thirty seconds with no earlier read, while their sign-ins stayed refused under the registered function; the control succeeded. Not approved; this is the observation behind GAP-AUTH-001.
 
 [Hook-applied disable, readback timing: local comparison](auth-blocking-readback-comparison.md). One run of the same corpus on the owned local artifact built after fireemu stopped persisting a hook disable for an existing account's first-factor sign-in: all eleven rows agree with the production candidate (the measured seconds are excluded). A comparison record, not an approval.
+
+[Hook-applied disable, readback timing, local comparison: scoped approval](auth-blocking-readback-comparison-approval.md). All eleven rows agree on the corrected artifact with pinned fixture dependencies; approved as a comparison of these cases only.
 
 [Hook-applied disable, readback timing: scoped approval](auth-blocking-readback-approval.md). The eleven executed rows are verified and approved only for the recorded function, accounts and single run's time axis: the flag read back as not disabled at every point up to about thirty-one seconds while sign-ins stayed refused under the registered function. Not extended to the same accounts after the function's removal, to propagation beyond these points, or to other methods.
 

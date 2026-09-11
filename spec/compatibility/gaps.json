@@ -50,7 +50,7 @@
         "docs/compatibility/auth-blocking-readback.md",
         "tools/auth-blocking-readback/README.md"
       ],
-      "nextAction": "Closed for the recorded conditions: production candidate approved; the local comparison on the corrected artifact is re-run with pinned fixture dependencies and approved separately.",
+      "nextAction": "Closed for the recorded conditions: production candidate and the local comparison on the corrected artifact each carry a scoped approval; other first-factor paths (email link, IdP, custom token, phone) follow the existing-account rule unobserved.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -118,7 +118,7 @@
         "docs/compatibility/auth-blocking-create-disable.md",
         "tools/auth-blocking-create-disable/README.md"
       ],
-      "nextAction": "Closed for the recorded sign-up path: production candidate approved; the local comparison is re-run with pinned fixture dependencies and approved separately. Other auto-creating methods stay unobserved.",
+      "nextAction": "Closed for the recorded sign-up path: production candidate and local comparison each carry a scoped approval. Other auto-creating methods stay unobserved.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -525,7 +525,7 @@
         "docs/compatibility/auth-blocking-disable-comparison.md",
         "docs/compatibility/auth-blocking-readback-comparison.md"
       ],
-      "nextAction": "None; the original mismatch stays in history at commit 98be375 and the corrected comparison is the current record.",
+      "nextAction": "Closed: the corrected comparison carries a scoped approval; the original mismatch stays in history at commit 98be375.",
       "blockedReason": "",
       "requiresProductionChange": false
     },

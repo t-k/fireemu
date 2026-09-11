@@ -95,10 +95,10 @@
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
-        "tools/auth-pending-retry/README.md"
+        "tools/auth-disabled-admin-update/README.md"
       ],
-      "nextAction": "Plan and run a production observation with an owned disabled account; compare with the local plan-only guard at the update handler.",
-      "blockedReason": "",
+      "nextAction": "Recorder and offline safety tests exist (tools/auth-disabled-admin-update); run it in production once execution is approved, then compare with the local plan-only guard at the update handler.",
+      "blockedReason": "Production execution not yet approved for this corpus.",
       "requiresProductionChange": true
     },
     {

@@ -164,19 +164,21 @@ def phone_config(enabled):
     }
 
 
-def observe(output):
+def observe(output, origin=None):
+    """Production when `origin` is None; otherwise an owned local fireemu at `origin`,
+    which needs no configuration change and prints its codes on the inspection route."""
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
-    identity = "https://identitytoolkit.googleapis.com"
-    secure = "https://securetoken.googleapis.com"
+    identity, secure = core.origins(origin)
+    production = origin is None
     before = inputs()
     report: dict = {
         "schemaVersion": 1,
         "acceptance": "candidate",
         "status": "incomplete",
-        "target": "production",
+        "target": "production" if production else "local",
         "recordedAt": datetime.now(UTC).isoformat(),
         "project": PROJECT,
-        "projectNumber": NUMBER,
+        "projectNumber": NUMBER if production else None,
         "probeInputs": before,
         "probeSourceCommit": core.command(["git", "rev-parse", "HEAD"]),
         "corpus": CORPUS,
@@ -191,53 +193,58 @@ def observe(output):
     original = None
     change_attempted = False
     try:
-        access, key, report["configReadback"] = core.production_preflight()
-        query = f"?key={urllib.parse.quote(key, safe='')}"
+        access, key = "owner", "local-test-key"
+        if production:
+            access, key, report["configReadback"] = core.production_preflight()
 
-        def config(patch_body=None, mask=None):
-            if patch_body is None:
-                return core.request(CONFIG_URL, token=access, quota=True)
-            return patch(
-                f"{CONFIG_URL}?updateMask={urllib.parse.quote(mask, safe=',')}",
-                patch_body,
-                access,
+            def config(patch_body=None, mask=None):
+                if patch_body is None:
+                    return core.request(CONFIG_URL, token=access, quota=True)
+                return patch(
+                    f"{CONFIG_URL}?updateMask={urllib.parse.quote(mask, safe=',')}",
+                    patch_body,
+                    access,
+                )
+
+            status, raw = config()
+            require(status == 200 and "error" not in raw)
+            read = {
+                "mfa": raw.get("mfa"),
+                "phoneNumber": raw.get("signIn", {}).get("phoneNumber"),
+                "smsRegionConfig": raw.get("smsRegionConfig"),
+            }
+            # Preconditions come first: an unexpected configuration aborts the run before
+            # anything is written, and nothing is restored either.
+            require(read["mfa"] == MFA_OFF and not read["phoneNumber"])
+            require(read["smsRegionConfig"] == {"allowlistOnly": {}})
+            original = read
+            # The recovery record and the flag precede the attempt, so a change that reached
+            # the server without a readable response is still restored.
+            save(
+                output / "config-recovery.json",
+                {"project": PROJECT, "original": original, "changeAttempted": True},
             )
+            change_attempted = True
+            status, patched = config(
+                {
+                    "mfa": MFA_ON,
+                    "signIn": {"phoneNumber": phone_config(True)},
+                    "smsRegionConfig": SMS_REGIONS_ON,
+                },
+                CONFIG_MASK,
+            )
+            require(status == 200 and "error" not in patched)
+            status, raw = config()
+            require(status == 200 and raw.get("mfa") == MFA_ON)
+            require(raw.get("signIn", {}).get("phoneNumber") == phone_config(True))
+            require("allowByDefault" in raw.get("smsRegionConfig", {}))
+            report["configEnabled"] = True
+            # Configuration enforcement may lag the readback.
+            time.sleep(30)
 
-        status, raw = config()
-        require(status == 200 and "error" not in raw)
-        read = {
-            "mfa": raw.get("mfa"),
-            "phoneNumber": raw.get("signIn", {}).get("phoneNumber"),
-            "smsRegionConfig": raw.get("smsRegionConfig"),
-        }
-        # Preconditions come first: an unexpected configuration aborts the run before
-        # anything is written, and nothing is restored either.
-        require(read["mfa"] == MFA_OFF and not read["phoneNumber"])
-        require(read["smsRegionConfig"] == {"allowlistOnly": {}})
-        original = read
-        # The recovery record and the flag precede the attempt, so a change that reached
-        # the server without a readable response is still restored.
-        save(
-            output / "config-recovery.json",
-            {"project": PROJECT, "original": original, "changeAttempted": True},
-        )
-        change_attempted = True
-        status, patched = config(
-            {
-                "mfa": MFA_ON,
-                "signIn": {"phoneNumber": phone_config(True)},
-                "smsRegionConfig": SMS_REGIONS_ON,
-            },
-            CONFIG_MASK,
-        )
-        require(status == 200 and "error" not in patched)
-        status, raw = config()
-        require(status == 200 and raw.get("mfa") == MFA_ON)
-        require(raw.get("signIn", {}).get("phoneNumber") == phone_config(True))
-        require("allowByDefault" in raw.get("smsRegionConfig", {}))
-        report["configEnabled"] = True
-        # Configuration enforcement may lag the readback.
-        time.sleep(30)
+        else:
+            report["configEnabled"] = False
+        query = f"?key={urllib.parse.quote(key, safe='')}"
 
         def admin(action, body):
             require(action in {"lookup", "update", "delete"})
@@ -245,7 +252,7 @@ def observe(output):
                 f"{identity}/v1/projects/{PROJECT}/accounts:{action}",
                 body,
                 access,
-                quota=True,
+                quota=production,
             )
 
         def client(action, body):
@@ -299,6 +306,20 @@ def observe(output):
             require(info[0].get("mfaEnrollmentId") == account["enrollmentId"])
             return credential
 
+        def code_for(session):
+            if production:
+                return TEST_CODE
+            status, listing = core.request(
+                f"{origin}/emulator/v1/projects/{PROJECT}/verificationCodes"
+            )
+            note(report, "emulator:verificationCodes", status, listing)
+            require(status == 200)
+            return next(
+                c["code"]
+                for c in listing.get("verificationCodes", [])
+                if c.get("sessionInfo") == session
+            )
+
         def start(account, credential):
             return mfa(
                 "mfaSignIn:start",
@@ -319,7 +340,7 @@ def observe(output):
                     "mfaPendingCredential": credential,
                     "phoneVerificationInfo": {
                         "sessionInfo": session_info,
-                        "code": TEST_CODE,
+                        "code": code_for(session_info),
                     },
                 },
             )
@@ -557,6 +578,9 @@ def observe(output):
             c == {"uidAbsent": True, "emailAbsent": True} for c in clean
         ):
             report["cleanup"] = {"uidAbsent": True, "emailAbsent": True}
+        if not production:
+            report["configRestored"] = True
+            report["configDigestMatches"] = True
         if change_attempted:
             try:
                 status, raw = restore_configuration(access, original)

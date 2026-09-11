@@ -2601,6 +2601,12 @@ impl AuthStore {
             }
             return Err(MfaError::EnrollmentSessionExpired);
         }
+        // Disabled while the enrollment was pending: refused before the code is matched, so
+        // the pending enrollment survives a later re-enablement. Same class as the sign-in
+        // finalizers.
+        if user.disabled {
+            return Err(MfaError::UserDisabled);
+        }
         let step = match match_code(
             &pending.secret,
             &policy.params(),

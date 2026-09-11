@@ -80,6 +80,29 @@ fn pending_retry_disabled_user_is_refused_before_any_factor_is_consumed() {
     assert_eq!(s.user(&uid).unwrap().last_sign_in_at, Some(later));
 }
 
+#[test]
+fn pending_retry_disabled_user_cannot_finalize_a_totp_enrollment() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("disabled-enroll@example.com"), t0())
+        .unwrap();
+    let material = s.start_totp_enrollment(&uid, t0()).unwrap();
+    let code = totp_at(material.secret_for_test(), &s.policy().params(), t0());
+    s.user_mut(&uid).unwrap().disabled = true;
+    assert_eq!(
+        s.finalize_totp_enrollment(&uid, &material.session_id, code, t0()),
+        Err(MfaError::UserDisabled)
+    );
+    // The pending enrollment survives; no factor was created.
+    assert_eq!(s.user(&uid).unwrap().mfa.pending_count(), 1);
+    assert!(s.user(&uid).unwrap().mfa.is_empty());
+    s.user_mut(&uid).unwrap().disabled = false;
+    assert!(s
+        .finalize_totp_enrollment(&uid, &material.session_id, code, t0())
+        .is_ok());
+    assert_eq!(s.user(&uid).unwrap().mfa.pending_count(), 0);
+}
+
 fn t0() -> LogicalInstant {
     LogicalInstant::from_unix_seconds(1_788_004_860)
 }

@@ -3562,6 +3562,80 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
 }
 
 #[test]
+fn pending_retry_refuses_totp_finalize_and_enrollment_after_the_account_is_disabled() {
+    let mut s = state();
+    s.totp_extension_enabled = true;
+    let email = "totp-disabled@example.com";
+    let user = sign_up(&s, email);
+    verify_email(&s, user["localId"].as_str().unwrap());
+    let enroll_start = |token: &Value| {
+        let (status, enrollment) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+        );
+        assert_eq!(status, 200, "{enrollment}");
+        enrollment
+    };
+    let enroll_finalize = |token: &Value, enrollment: &Value, at: LogicalInstant| {
+        let secret = base32::decode(enrollment["totpSessionInfo"]["sharedSecretKey"].as_str().unwrap()).unwrap();
+        let code = totp_at(&secret, &TotpPolicy::default().params(), at);
+        post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            &json!({"idToken": token, "totpVerificationInfo": {
+                "sessionInfo": enrollment["totpSessionInfo"]["sessionInfo"], "verificationCode": code}}),
+        )
+    };
+    let set_disabled = |disabled: bool| {
+        let (status, updated) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:update"),
+            &json!({"localId": user["localId"], "disableUser": disabled}),
+        );
+        assert_eq!(status, 200, "{updated}");
+    };
+    let t0 = LogicalInstant::from_unix_seconds(1_788_004_860);
+    let enrollment = enroll_start(&user["idToken"]);
+    let secret = base32::decode(enrollment["totpSessionInfo"]["sharedSecretKey"].as_str().unwrap()).unwrap();
+    let (status, enrolled) = enroll_finalize(&user["idToken"], &enrollment, t0);
+    assert_eq!(status, 200, "{enrolled}");
+    let enrollment_id = claims(enrolled["idToken"].as_str().unwrap())["firebase"]["second_factor_identifier"].clone();
+
+    // Second factor pending, then disabled: the TOTP finalize has no adapter-level guard and
+    // rests on the core check.
+    let pending = pending_login(&s, email);
+    set_disabled(true);
+    let step = fireemu_core_types::time::LogicalDuration::from_seconds(30);
+    let t1 = t0.checked_add(step).unwrap();
+    let code = totp_at(&secret, &TotpPolicy::default().params(), t1);
+    let finalize = json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+        "mfaEnrollmentId": enrollment_id, "totpVerificationInfo": {"verificationCode": code}});
+    let (status, refused) = finalize_mfa(&s, &finalize);
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    assert!(refused.get("idToken").is_none());
+    // Enrollment of a further factor is refused while disabled (the ID token check), and
+    // the enrollment session started earlier cannot be finalized either.
+    let (status, refused) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": enrolled["idToken"], "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    let (status, refused) = enroll_finalize(&enrolled["idToken"], &enrollment, t1);
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    // Re-enabled: the same pending credential and the same code complete the sign-in.
+    set_disabled(false);
+    s.clock.lock().unwrap().advance(step).unwrap();
+    let (status, signed) = finalize_mfa(&s, &finalize);
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(claims(signed["idToken"].as_str().unwrap())["firebase"]["sign_in_second_factor"], "totp");
+}
+
+#[test]
 fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
     for strict in [false, true] {
         let (s, lines) = oob_authorization_state(strict);

@@ -306,6 +306,6 @@ if __name__ == "__main__":
     else:
         PAGE.write_text(page)
     print(
-        "Auth blocking create-disable revision 1 candidate checked; subject "
+        "Auth blocking create-disable revision 2 candidate checked; subject "
         + digest(value)
     )

@@ -132,9 +132,10 @@
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
-        "tools/auth-pending-retry/README.md"
+        "tools/auth-pending-retry/README.md",
+        "tools/auth-refusal-precedence/README.md"
       ],
-      "nextAction": "Local enumeration done 2026-09-12 (not evidence of production): disabled account with a wrong SMS code refuses INVALID_CODE (code checked before the account state); expired pending credential with a code valid on its own refuses INVALID_SESSION_INFO (the pending sweep removes the code); invalid idToken with administrator-only fields on the client update refuses INVALID_ID_TOKEN and changes nothing. Next: observe the same combinations in production with one corpus (temporary MFA and test-phone configuration as in auth-pending-revocation, restored afterwards) and encode the observed order.",
+      "nextAction": "Recorder for revision 1 (disabled plus wrong code, disabled plus correct code, tampered token plus administrator-only field) is implemented with offline safety tests and validated end to end on an owned local artifact; the local order is OPERATION_NOT_ALLOWED for the tampered-token row, INVALID_CODE for the disabled account with a wrong code, USER_DISABLED with the correct code, and both held credentials survive re-enablement. None of that is evidence of production. Next: production run of revision 1 under a separate execution approval (temporary MFA and test-phone configuration, restored), then publication and comparison. Expired pending credential precedence stays unobserved for a later revision.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

@@ -514,16 +514,16 @@
       "id": "EVID-U04A",
       "feature": "AUTH-BLOCKING",
       "kind": "mismatch",
-      "scope": "Comparison result of the original blocking-disable corpus: on the artifact recorded at the time, the immediate readback of the flag for the password-sign-in account read true locally and false in production; the other eleven rows agree. The difference is explained and corrected under GAP-AUTH-001 (readback corpus, corrected artifact); this record keeps the original comparison as history.",
+      "scope": "Comparison result of the original blocking-disable corpus. On the artifact recorded at the time (comparison record at commit 98be375, kept in history), the immediate readback of the flag for the password-sign-in account read true locally and false in production while the other eleven rows agreed. The current comparison record, regenerated from a run on the corrected artifact with fixture digests, agrees on all twelve rows; the correction is the one made under GAP-AUTH-001.",
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
       "productionObservationStatus": "approved",
-      "comparisonStatus": "mismatch",
+      "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
         "docs/compatibility/auth-blocking-disable-comparison.md",
         "docs/compatibility/auth-blocking-readback-comparison.md"
       ],
-      "nextAction": "None for the historical record; a re-run of this corpus on the corrected artifact would be a new comparison record.",
+      "nextAction": "None; the original mismatch stays in history at commit 98be375 and the corrected comparison is the current record.",
       "blockedReason": "",
       "requiresProductionChange": false
     },

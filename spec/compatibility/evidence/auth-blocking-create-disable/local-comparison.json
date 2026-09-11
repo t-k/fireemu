@@ -45,11 +45,11 @@
   "local": {
     "artifact": {
       "kind": "local-build",
-      "sha256": "432840d3b895d3014d20c80b7846b0164a611020b24285beb168359e513b31ee",
+      "sha256": "cee794fc1d059d4bae7152a2cff1c02889011f19cdc2b797b912d4579772559b",
       "version": "0.7.0"
     },
     "build": {
-      "artifactSha256": "432840d3b895d3014d20c80b7846b0164a611020b24285beb168359e513b31ee",
+      "artifactSha256": "cee794fc1d059d4bae7152a2cff1c02889011f19cdc2b797b912d4579772559b",
       "command": [
         "cargo",
         "build",
@@ -112,7 +112,7 @@
         "crates/fireemu-adapter-http/benches/auth_signing_parallel.rs": "6a17bd606af6c91f53d188311db88d0cd9802cf9bcdb9ab7f59c45a43e0996bd",
         "crates/fireemu-adapter-http/src/app_check.rs": "1ca9ff7bf2b26b09c5ea56a7ec138fef27d67e1f10b0f57122eefa724f573cf1",
         "crates/fireemu-adapter-http/src/control.rs": "9796c4486765c7ef2cd308e4ed45751cafa6602bfc53451e628d7fa64363a9a6",
-        "crates/fireemu-adapter-http/src/identity_toolkit.rs": "13c0531bd763c573ff882d718ce72fae3c9e5cff58aebf3408572dec178b3979",
+        "crates/fireemu-adapter-http/src/identity_toolkit.rs": "af8106dd5e977c1e7fbd8115aa60d51235aa6c8a82e98b2e779d57a33fa2402d",
         "crates/fireemu-adapter-http/src/identity_toolkit/routes.rs": "5ca50a06ccfe883cc4068c2b8824cb45d01c7f4c3ab3ef4ce1f1e2fd7bee7cf0",
         "crates/fireemu-adapter-http/src/identity_toolkit/widget.rs": "f2546b32734fafdf3759241f852ebaa5f003d2a721185478cfa584efb06a3e1f",
         "crates/fireemu-adapter-http/src/identity_toolkit/widget_templates.rs": "e702799e98cd26603fa3e9f1035f016db6b0e2c8756a2420694b103854ad73d1",
@@ -462,7 +462,7 @@
           "refreshTokenPresent": true,
           "uidMatches": true
         },
-        "elapsedMs": 19,
+        "elapsedMs": 46,
         "httpStatus": 200,
         "id": "control-c-signup",
         "observedError": null,
@@ -475,7 +475,7 @@
           "photoUrlPersisted": false,
           "recordExists": true
         },
-        "elapsedMs": 23,
+        "elapsedMs": 54,
         "httpStatus": 200,
         "id": "control-c-signup-readback",
         "observedError": null,
@@ -493,7 +493,7 @@
           "refreshTokenPresent": true,
           "uidMatches": true
         },
-        "elapsedMs": 30,
+        "elapsedMs": 69,
         "httpStatus": 200,
         "id": "control-c-signin",
         "observedError": null,
@@ -502,7 +502,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 39,
+        "elapsedMs": 89,
         "httpStatus": 400,
         "id": "target-t-signup",
         "observedError": "USER_DISABLED",
@@ -511,7 +511,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 39,
+        "elapsedMs": 89,
         "httpStatus": null,
         "id": "target-t-token-lookup",
         "observedError": null,
@@ -520,7 +520,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 39,
+        "elapsedMs": 89,
         "httpStatus": null,
         "id": "target-t-token-refresh",
         "observedError": null,
@@ -532,7 +532,7 @@
           "disabledPersisted": true,
           "recordExists": true
         },
-        "elapsedMs": 42,
+        "elapsedMs": 95,
         "httpStatus": 200,
         "id": "target-t-record-readback",
         "observedError": null,
@@ -541,7 +541,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 45,
+        "elapsedMs": 101,
         "httpStatus": 400,
         "id": "target-t-signin",
         "observedError": "USER_DISABLED",
@@ -550,7 +550,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 47,
+        "elapsedMs": 108,
         "httpStatus": 400,
         "id": "target-t-second-signup",
         "observedError": "EMAIL_EXISTS",
@@ -568,7 +568,7 @@
           "refreshTokenPresent": true,
           "uidMatches": true
         },
-        "elapsedMs": 53,
+        "elapsedMs": 122,
         "httpStatus": 200,
         "id": "control-c-final-signin",
         "observedError": null,
@@ -604,23 +604,27 @@
       "triggerReadback": true
     },
     "instance": {
-      "childPid": 58658,
-      "nonce": "e9e50d7cb05047318b55a4e89cef0af2",
-      "parentPid": 58651,
+      "childPid": 95941,
+      "nonce": "9752b12fd1c54c36a6e7bf6b2c8eaffe",
+      "parentPid": 95933,
       "profile": "strict",
       "version": "0.7.0",
       "wrongTokenStatus": 403
+    },
+    "localFixtureInputs": {
+      "tools/auth-blocking-create-disable/function-local/index.js": "1b9e481382e734ee2f76294c005455b10f4a267c769e343d6072989b600ad3a5",
+      "tools/auth-blocking-create-disable/function-local/package.json": "b859c62e77a8bbd056ca52f3d53109d874914c0ee39151b23678cd3f1dbc2236"
     },
     "localFunctionFixture": "tools/auth-blocking-create-disable/function-local",
     "ownedProcess": {
       "exitCode": 0,
       "listenersClosed": true,
-      "pid": 58651,
+      "pid": 95933,
       "stopped": true
     },
-    "privateReportSha256": "a613c7c07f1154babab05f5e7c3e9c8f5e0dbd6911e39ff34c4ae52e618e92f4",
-    "probeSourceCommit": "fdaa6dcc74216d92b6ff5dec0429429697c20686",
-    "recordedAt": "2026-09-11T16:19:51.632412+00:00",
+    "privateReportSha256": "be425659cb42d409214cb6aef8bfa5ee5b3414ecce43bbaa88f9daca6a4570a6",
+    "probeSourceCommit": "98be37595fcd5b69bdae10dfad06ea0da8e541b8",
+    "recordedAt": "2026-09-11T16:47:30.504535+00:00",
     "recordedWith": {
       "recorderCommit": "5e6f3a32db85e46d9e34a37098e2cabafddf655b",
       "recorderInputs": {
@@ -628,8 +632,8 @@
         "tools/auth-blocking-create-disable/create_recorder.py": "6de902fd800dda202ed39aaba438e1e0cf094443d31edd8dff194ac5bc151cb9"
       }
     },
-    "runtimeInputsCommit": "fdaa6dcc74216d92b6ff5dec0429429697c20686",
-    "runtimeSourceCommit": "fdaa6dcc74216d92b6ff5dec0429429697c20686",
+    "runtimeInputsCommit": "481b76e844a59721ddb1934ab9a3527bb246be74",
+    "runtimeSourceCommit": "98be37595fcd5b69bdae10dfad06ea0da8e541b8",
     "setup": {
       "c": true
     },
@@ -637,7 +641,7 @@
     "targetRecordExists": true
   },
   "productionSubjectSha256": "206490130d5191df9a25a80634315a2b2c0ba190860cc91f7455931a9c25b362",
-  "publicationContractSha256": "eb41cddb0efcdf999e986cc299f8528b00e7e6076c1844119285449f06e0790f",
+  "publicationContractSha256": "6f639ed4049a5f2096f6dee9197adc3aa16dbb8b108139c94baf4aa02ec0d317",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the production candidate record of auth-blocking-create-disable revision 2 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-create-disable/function-local served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim beyond these ten cases."
 }

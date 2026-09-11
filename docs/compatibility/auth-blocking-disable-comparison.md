@@ -10,7 +10,7 @@ Row-by-row comparison of the approved production record of auth-blocking-disable
 | hook-c-first-signin | diagnostic | refused / USER_DISABLED | refused / USER_DISABLED | none | none | True |
 | hook-c-token-lookup | diagnostic | skipped / none | skipped / none | none | none | True |
 | hook-c-token-refresh | diagnostic | skipped / none | skipped / none | none | none | True |
-| hook-c-disabled-readback | control | accepted / none | accepted / none | disabledPersisted=False | disabledPersisted=True | False |
+| hook-c-disabled-readback | control | accepted / none | accepted / none | disabledPersisted=False | disabledPersisted=False | True |
 | hook-c-second-signin | diagnostic | refused / USER_DISABLED | refused / USER_DISABLED | none | none | True |
 | hook-a-first-finalize | diagnostic | refused / USER_DISABLED | refused / USER_DISABLED | none | none | True |
 | hook-a-token-lookup | diagnostic | skipped / none | skipped / none | none | none | True |
@@ -19,11 +19,11 @@ Row-by-row comparison of the approved production record of auth-blocking-disable
 | hook-a-second-signin | diagnostic | refused / USER_DISABLED | refused / USER_DISABLED | none | none | True |
 | final-b-fresh-finalize | control | accepted / none | accepted / none | claimEmailMatches=True, claimSubMatches=True, derivedLookup=True, idTokenPresent=True, noError=True, refreshTokenPresent=True, secondFactorClaim=True | claimEmailMatches=True, claimSubMatches=True, derivedLookup=True, idTokenPresent=True, noError=True, refreshTokenPresent=True, secondFactorClaim=True | True |
 
-Differing rows: hook-c-disabled-readback.
+Differing rows: none.
 
-Comparison subject (unapproved): `246053f36c67af4f509d07a694c4aa52182d17a647dafeeca9b5f198e57c0d65`. Production subject compared: `81e74c75576f91b3cf889cae905e4eb21437a8f6a86846082b160dc1e4e6db0d`.
+Comparison subject (unapproved): `085a886244b8959cdac2c970c8093087face3d1ccc997cc0f8786c37ab9c7541`. Production subject compared: `81e74c75576f91b3cf889cae905e4eb21437a8f6a86846082b160dc1e4e6db0d`.
 
-Local artifact `0.7.0` built from the tree at `be5a756da98cf8b0bf37780aaac47806eac14f8e` (repository HEAD `0b5988a7ac95da85e04962516e06221487460d0d` at run time) with recorder files at `a2291e91a51ecdd3f2624326b09e6f013dbcb0f3`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
+Local artifact `0.7.0` built from the tree at `481b76e844a59721ddb1934ab9a3527bb246be74` (repository HEAD `98be37595fcd5b69bdae10dfad06ea0da8e541b8` at run time) with recorder files at `a2291e91a51ecdd3f2624326b09e6f013dbcb0f3`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
 
 The local run has no deployment, trigger registration or configuration change, and reads phone codes from the emulator inspection route, so the `hook`, `functionRemoved` and configuration fields of the local report describe the fixture, not a cloud function. A row that differs is an open gap in the ledger, not a verdict about which side is right; the ledger names the follow-up.
 

@@ -19,9 +19,9 @@ Row-by-row comparison of the production candidate record of auth-blocking-create
 
 Differing rows: none.
 
-Comparison subject (unapproved): `005bd0eb5689c891f38433df5016968fdb9e3b0d76c79c9f13fafa62620dbded`. Production subject compared: `206490130d5191df9a25a80634315a2b2c0ba190860cc91f7455931a9c25b362`.
+Comparison subject (unapproved): `02d63502dfd09a0125397b35237af27f9577051b6fc4498d8ce137841c1c75df`. Production subject compared: `206490130d5191df9a25a80634315a2b2c0ba190860cc91f7455931a9c25b362`.
 
-Local artifact `0.7.0` built from the tree at `fdaa6dcc74216d92b6ff5dec0429429697c20686` (repository HEAD `fdaa6dcc74216d92b6ff5dec0429429697c20686` at run time) with recorder files at `5e6f3a32db85e46d9e34a37098e2cabafddf655b`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
+Local artifact `0.7.0` built from the tree at `481b76e844a59721ddb1934ab9a3527bb246be74` (repository HEAD `98be37595fcd5b69bdae10dfad06ea0da8e541b8` at run time) with recorder files at `5e6f3a32db85e46d9e34a37098e2cabafddf655b`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
 
 The local run has no deployment, trigger registration or configuration change, and reads phone codes from the emulator inspection route, so the `hook`, `functionRemoved` and configuration fields of the local report describe the fixture, not a cloud function. A row that differs is an open gap in the ledger, not a verdict about which side is right; the ledger names the follow-up.
 

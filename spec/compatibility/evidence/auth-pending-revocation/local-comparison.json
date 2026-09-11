@@ -626,7 +626,7 @@
     "target": "local"
   },
   "productionSubjectSha256": "c6ce38ac6a05b969cdbbf516e77a1fc386e73cb221301d53f98c2c45029a0eb7",
-  "publicationContractSha256": "da7c16712a7a165dd84d70e58cc6d215ba40b56290f10cd373c6eb690dd8e013",
+  "publicationContractSha256": "ec8b3e32afbf412cfe8800f50e33391c6e255a4bdbf8e0371251e59fdec627ba",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the approved production record of auth-pending-revocation revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth, no configuration change, codes read from the emulator inspection route). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim that the local artifact matches on anything outside these eight cases."
 }

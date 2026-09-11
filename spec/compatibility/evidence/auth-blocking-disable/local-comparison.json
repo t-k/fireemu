@@ -19,7 +19,7 @@
     },
     {
       "id": "hook-c-disabled-readback",
-      "sameSemanticProjection": false
+      "sameSemanticProjection": true
     },
     {
       "id": "hook-c-second-signin",
@@ -53,11 +53,11 @@
   "local": {
     "artifact": {
       "kind": "local-build",
-      "sha256": "a93153c039e71a74acdffb8870906fa2e0190d7d8e66f5b501cd1f10dcd1c7a4",
+      "sha256": "4bdc3fcfcabe5172cd3b9772517ac7f83604e4150e405663b2a00f94acf0739c",
       "version": "0.7.0"
     },
     "build": {
-      "artifactSha256": "a93153c039e71a74acdffb8870906fa2e0190d7d8e66f5b501cd1f10dcd1c7a4",
+      "artifactSha256": "4bdc3fcfcabe5172cd3b9772517ac7f83604e4150e405663b2a00f94acf0739c",
       "command": [
         "cargo",
         "build",
@@ -120,7 +120,7 @@
         "crates/fireemu-adapter-http/benches/auth_signing_parallel.rs": "6a17bd606af6c91f53d188311db88d0cd9802cf9bcdb9ab7f59c45a43e0996bd",
         "crates/fireemu-adapter-http/src/app_check.rs": "1ca9ff7bf2b26b09c5ea56a7ec138fef27d67e1f10b0f57122eefa724f573cf1",
         "crates/fireemu-adapter-http/src/control.rs": "9796c4486765c7ef2cd308e4ed45751cafa6602bfc53451e628d7fa64363a9a6",
-        "crates/fireemu-adapter-http/src/identity_toolkit.rs": "33736b35e223e4f23b24ae3e7b50bd27a511798971f36d57ce1493ddbe5cdb99",
+        "crates/fireemu-adapter-http/src/identity_toolkit.rs": "af8106dd5e977c1e7fbd8115aa60d51235aa6c8a82e98b2e779d57a33fa2402d",
         "crates/fireemu-adapter-http/src/identity_toolkit/routes.rs": "5ca50a06ccfe883cc4068c2b8824cb45d01c7f4c3ab3ef4ce1f1e2fd7bee7cf0",
         "crates/fireemu-adapter-http/src/identity_toolkit/widget.rs": "f2546b32734fafdf3759241f852ebaa5f003d2a721185478cfa584efb06a3e1f",
         "crates/fireemu-adapter-http/src/identity_toolkit/widget_templates.rs": "e702799e98cd26603fa3e9f1035f016db6b0e2c8756a2420694b103854ad73d1",
@@ -134,7 +134,7 @@
         "crates/fireemu-adapter-http/tests/app_check_control.rs": "8d51f6fdf616f9082021ee89fd86ee4f6874c966c3632842eebd5a72e63e8856",
         "crates/fireemu-adapter-http/tests/app_check_storage.rs": "ca5a050c6a67600a8362863112b49cdd697b7bcfd16f160cfeb184603d69f526",
         "crates/fireemu-adapter-http/tests/app_check_support/mod.rs": "3e80e5cd7616ab61d93c850e0256c00b965273c44db474c9162cfbbcd9438776",
-        "crates/fireemu-adapter-http/tests/auth_flows.rs": "d9bb4f345af713901f57202aa7622f410cb595675e1a74ac9411f79d601aa7eb",
+        "crates/fireemu-adapter-http/tests/auth_flows.rs": "10e147041cc370e5287b24a25c2bf0df98d55c015bd607cf108b41c9c404cc9a",
         "crates/fireemu-adapter-http/tests/control.rs": "94b8102f6a4f96e769ab4615a5631ee65639ca77280590e287f5cb4a7ba55766",
         "crates/fireemu-adapter-http/tests/fixtures/INSECURE_TEST_ONLY_RSA_A.der.hex": "74782086f9afd61b10b1b32d114aac9ad229ad54ef19be4ad75de71d22b8e73a",
         "crates/fireemu-adapter-http/tests/fixtures/INSECURE_TEST_ONLY_RSA_B.der.hex": "1bf303c2b4c79c4fe406ec1271b2be3c25af8b8d3c7f12dc9b1b147ea737752b",
@@ -469,7 +469,7 @@
           "refreshTokenPresent": true,
           "secondFactorClaim": true
         },
-        "elapsedMs": 98,
+        "elapsedMs": 94,
         "httpStatus": 200,
         "id": "baseline-b-fresh-finalize",
         "observedError": null,
@@ -478,7 +478,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 106,
+        "elapsedMs": 102,
         "httpStatus": 400,
         "id": "hook-c-first-signin",
         "observedError": "USER_DISABLED",
@@ -487,7 +487,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 106,
+        "elapsedMs": 102,
         "httpStatus": null,
         "id": "hook-c-token-lookup",
         "observedError": null,
@@ -496,7 +496,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 106,
+        "elapsedMs": 102,
         "httpStatus": null,
         "id": "hook-c-token-refresh",
         "observedError": null,
@@ -505,9 +505,9 @@
       },
       {
         "checks": {
-          "disabledPersisted": true
+          "disabledPersisted": false
         },
-        "elapsedMs": 110,
+        "elapsedMs": 106,
         "httpStatus": 200,
         "id": "hook-c-disabled-readback",
         "observedError": null,
@@ -516,7 +516,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 113,
+        "elapsedMs": 110,
         "httpStatus": 400,
         "id": "hook-c-second-signin",
         "observedError": "USER_DISABLED",
@@ -525,7 +525,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 130,
+        "elapsedMs": 125,
         "httpStatus": 400,
         "id": "hook-a-first-finalize",
         "observedError": "USER_DISABLED",
@@ -534,7 +534,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 130,
+        "elapsedMs": 125,
         "httpStatus": null,
         "id": "hook-a-token-lookup",
         "observedError": null,
@@ -543,7 +543,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 130,
+        "elapsedMs": 125,
         "httpStatus": null,
         "id": "hook-a-token-refresh",
         "observedError": null,
@@ -554,7 +554,7 @@
         "checks": {
           "disabledPersisted": true
         },
-        "elapsedMs": 134,
+        "elapsedMs": 129,
         "httpStatus": 200,
         "id": "hook-a-disabled-readback",
         "observedError": null,
@@ -563,7 +563,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 138,
+        "elapsedMs": 132,
         "httpStatus": 400,
         "id": "hook-a-second-signin",
         "observedError": "USER_DISABLED",
@@ -580,7 +580,7 @@
           "refreshTokenPresent": true,
           "secondFactorClaim": true
         },
-        "elapsedMs": 159,
+        "elapsedMs": 151,
         "httpStatus": 200,
         "id": "final-b-fresh-finalize",
         "observedError": null,
@@ -610,23 +610,27 @@
       "triggerReadback": true
     },
     "instance": {
-      "childPid": 21193,
-      "nonce": "7283fb7885834ff3aa33450210401a14",
-      "parentPid": 21186,
+      "childPid": 94601,
+      "nonce": "e9a12bf59bcd41579466482f20788d5c",
+      "parentPid": 94593,
       "profile": "strict",
       "version": "0.7.0",
       "wrongTokenStatus": 403
+    },
+    "localFixtureInputs": {
+      "tools/auth-blocking-disable/function-local/index.js": "4d228d4aa0b35ee033e36c2ec4b508788a6868d93e50d4c0a9be20d1db6ef984",
+      "tools/auth-blocking-disable/function-local/package.json": "f8d422820176bfedb2b7af6a816567a912a23dcee2c0b483904cd2b582a268b8"
     },
     "localFunctionFixture": "tools/auth-blocking-disable/function-local",
     "ownedProcess": {
       "exitCode": 0,
       "listenersClosed": true,
-      "pid": 21186,
+      "pid": 94593,
       "stopped": true
     },
-    "privateReportSha256": "4a4dd205d443d716906d3eaa5f6921b13dd82f7e27f507d12420e669685adc13",
-    "probeSourceCommit": "0b5988a7ac95da85e04962516e06221487460d0d",
-    "recordedAt": "2026-09-11T15:20:36.131011+00:00",
+    "privateReportSha256": "3fab211ba2675a305e5ef3c94f5bc51cfb3b66a79fb5e4c4ddfea48eae91621c",
+    "probeSourceCommit": "98be37595fcd5b69bdae10dfad06ea0da8e541b8",
+    "recordedAt": "2026-09-11T16:46:12.824242+00:00",
     "recordedWith": {
       "recorderCommit": "a2291e91a51ecdd3f2624326b09e6f013dbcb0f3",
       "recorderInputs": {
@@ -634,8 +638,8 @@
         "tools/auth-blocking-disable/blocking_recorder.py": "cb74d32b6e72fedb30e84ff6eb1abd3addb186abbf6ac37a6a8a2910a02c9510"
       }
     },
-    "runtimeInputsCommit": "be5a756da98cf8b0bf37780aaac47806eac14f8e",
-    "runtimeSourceCommit": "0b5988a7ac95da85e04962516e06221487460d0d",
+    "runtimeInputsCommit": "481b76e844a59721ddb1934ab9a3527bb246be74",
+    "runtimeSourceCommit": "98be37595fcd5b69bdae10dfad06ea0da8e541b8",
     "setup": {
       "a": true,
       "b": true,
@@ -644,7 +648,7 @@
     "target": "local"
   },
   "productionSubjectSha256": "81e74c75576f91b3cf889cae905e4eb21437a8f6a86846082b160dc1e4e6db0d",
-  "publicationContractSha256": "ddbb9f562aceddb33f370ce3fcf6a1caac98c60044c36c5657532e94c456b853",
+  "publicationContractSha256": "684345945bafeaab515c5bccd402c91609cc319554ed8ebf6a30fa1edd971dff",
   "schemaVersion": 1,
   "scope": "Row-by-row comparison of the approved production record of auth-blocking-disable revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-disable/function-local served by the repository's Functions runner, codes read from the emulator inspection route). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim that the local artifact matches on anything outside these twelve cases."
 }

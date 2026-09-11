@@ -184,7 +184,7 @@
       }
     },
     "reevaluatedWith": {
-      "commit": "5bb7acc0f81b8405adf336e824ce7e6f2ed9cf5a",
+      "commit": "8ac4442058194d1cf96700f09a2cee4a0cfc5dfd",
       "contractSha256": "068ab00d3c832165a9ffb4a476973eccce0b1b66eb8d09dc24e1bcf3a8453856"
     },
     "revocation": {
@@ -197,7 +197,7 @@
     },
     "target": "production"
   },
-  "publicationContractSha256": "b4ce19749d2b25d379d328e220c9a1c1f8c125b42d9a434968bb894e1cb123c5",
+  "publicationContractSha256": "3a71993a74871f5147873f4f61e8ffb36008dabbb00da5b013dfe9ab2335e9b6",
   "schemaVersion": 1,
   "scope": "Eight sequential REST observations in production only: fresh phone MFA completions for target A and control B, then the pending credential of A issued before an explicit validSince update is presented to mfaSignIn:start and :finalize after the update and its readback, with lookup and refresh of any returned tokens, followed by fresh completions for A and B. Phone MFA with test phone numbers, no tenant, no blocking function, one run. The oracle configuration was changed for the run and restored with a digest comparison. Admin is used for owned account setup, the validSince update, readback and cleanup. No human approval, no local artifact comparison, no interval measurement between the update and the retry, and no revocation-propagation claim.",
   "sourceReviewSha256": "46ee89626cb3d59478ba22bab57c875e4c15f6f8823568c5eab4a07d7a8b5ffe"

@@ -45,6 +45,14 @@ PROJECTED = (
     "configRestoredReadback",
     "configDigestMatches",
 )
+CONFIGURATION_KEYS = (
+    "sha256",
+    "emailEnabled",
+    "passwordRequired",
+    "improvedEmailPrivacy",
+    "blockingTriggersAbsent",
+    "adminPasswordPolicyAbsent",
+)
 RECORDER_FILES = (
     "tools/auth-pending-revocation/revocation_contract.py",
     "tools/auth-pending-revocation/revocation_recorder.py",
@@ -59,6 +67,20 @@ def hex_value(value, length=64):
 
 def publication_contract_sha():
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def working_tree_sha256(path):
+    return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+
+
+def exact_keys(value, keys):
+    """A published object carries exactly the allowlisted keys, never more."""
+    require(isinstance(value, dict) and set(value) == set(keys))
+    return {key: value[key] for key in keys}
+
+
+RESTORED_KEYS = ("mfa", "phoneNumber", "smsRegionConfig")
+TIME_KEYS = ("authTime", "iat", "validSince")
 
 
 def git_blob_sha256(commit, path):
@@ -90,9 +112,7 @@ def reevaluated_with():
         "commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
-        "contractSha256": hashlib.sha256(
-            (ROOT / RECORDER_FILES[0]).read_bytes()
-        ).hexdigest(),
+        "contractSha256": working_tree_sha256(RECORDER_FILES[0]),
     }
 
 
@@ -108,10 +128,18 @@ def project(report, recorder_commit):
         and complete(report)
     )
     out = {key: report[key] for key in PROJECTED}
-    out["configuration"] = report["configReadback"]
+    # Nested objects are projected too: an unexpected key inside them refuses the input
+    # rather than being copied through.
+    out["configRestoredReadback"] = exact_keys(
+        report["configRestoredReadback"], RESTORED_KEYS
+    )
+    if report["heldFinalizeTimes"] is not None:
+        out["heldFinalizeTimes"] = exact_keys(report["heldFinalizeTimes"], TIME_KEYS)
+    out["configuration"] = exact_keys(report["configReadback"], CONFIGURATION_KEYS)
     out["privateReceiptSha256"] = digest(report)
     out["recordedWith"] = recorded_with(report, recorder_commit)
     out["reevaluatedWith"] = reevaluated_with()
+    validate_production(out)
     return out
 
 
@@ -140,7 +168,10 @@ def validate(value):
     require(value["sourceReviewSha256"] == digest(review))
     require([row["case"] for row in review["obligations"]] == list(CASES))
     require(review["executionApproval"] == "not-granted")
-    report = value["production"]
+    validate_production(value["production"])
+
+
+def validate_production(report):
     require(
         set(report)
         == set(PROJECTED)
@@ -155,49 +186,45 @@ def validate(value):
     hex_value(report["privateReceiptSha256"])
     for row, name in zip(report["cases"], CASES, strict=True):
         validate_row(row, name)
-    config = report["configuration"]
-    require(
-        set(config)
-        == {
-            "sha256",
-            "emailEnabled",
-            "passwordRequired",
-            "improvedEmailPrivacy",
-            "blockingTriggersAbsent",
-            "adminPasswordPolicyAbsent",
-        }
-    )
+    config = exact_keys(report["configuration"], CONFIGURATION_KEYS)
     require(all(config[key] is True for key in config if key != "sha256"))
     hex_value(config["sha256"])
-    restored = report["configRestoredReadback"]
+    restored = exact_keys(report["configRestoredReadback"], RESTORED_KEYS)
     require(
         restored["mfa"] == {"state": "DISABLED"}
-        and not restored["phoneNumber"]
+        and restored["phoneNumber"] == {}
         and restored["smsRegionConfig"] == {"allowlistOnly": {}}
     )
     times = report["heldFinalizeTimes"]
     held = {r["id"]: r for r in report["cases"] if r["id"] in DIAGNOSTIC}
     if held["revoked-a-held-finalize"]["outcome"] == "accepted":
-        require(
-            set(times) == {"authTime", "iat", "validSince"}
-            and all(type(v) is int for v in times.values())
-            and times["authTime"] >= times["validSince"]
-        )
+        times = exact_keys(times, TIME_KEYS)
+        require(all(type(v) is int for v in times.values()))
+        require(times["authTime"] >= times["validSince"])
     else:
         require(times is None)
-    recorded = report["recordedWith"]
-    require(set(recorded) == {"probeSourceCommit", "recorderCommit", "recorderInputs"})
+    recorded = exact_keys(
+        report["recordedWith"],
+        ("probeSourceCommit", "recorderCommit", "recorderInputs"),
+    )
+    require(recorded["probeSourceCommit"] == report["probeSourceCommit"])
     recorded_with(
         {
             "probeSourceCommit": recorded["probeSourceCommit"],
-            "probeInputs": recorded["recorderInputs"],
+            "probeInputs": exact_keys(recorded["recorderInputs"], RECORDER_FILES),
         },
         recorded["recorderCommit"],
     )
-    reevaluated = report["reevaluatedWith"]
-    require(set(reevaluated) == {"commit", "contractSha256"})
+    # The re-evaluation names a commit and a contract digest: the contract at that commit
+    # and the contract this validation just ran must both have that content.
+    reevaluated = exact_keys(report["reevaluatedWith"], ("commit", "contractSha256"))
     hex_value(reevaluated["commit"], 40)
     hex_value(reevaluated["contractSha256"])
+    require(
+        git_blob_sha256(reevaluated["commit"], RECORDER_FILES[0])
+        == reevaluated["contractSha256"]
+    )
+    require(working_tree_sha256(RECORDER_FILES[0]) == reevaluated["contractSha256"])
 
 
 def render(value):
@@ -234,7 +261,7 @@ def render(value):
             "",
             f"Review subject (unapproved): `{digest(value)}`.",
             "",
-            "The held credential was issued, then after a two-second wait `validSince` was set to the current whole second through privileged `accounts:update` and read back for the target while the control stayed unchanged; only then was the held credential presented. The wait precedes the update, not the retry: the interval between the update and the retry was not measured in this run. Baseline rows completed a different fresh pending credential of each account before the update; fresh rows completed new pending credentials after the held observation. Elapsed milliseconds measure request start since the first observation row and are excluded from semantic equality.",
+            "The held credential was issued, then after a two-second wait `validSince` was set to the current whole second through privileged `accounts:update` and read back for the target while the control stayed unchanged; only then was the held credential presented. The wait precedes the update, not the retry: the interval between the update and the retry was not measured in this run. Baseline rows completed a different fresh pending credential of each account before the update; fresh rows completed new pending credentials after the held observation. Elapsed milliseconds are cumulative time from the recorder's measurement origin (set before account setup), sampled when each row is recorded after its checks; they are neither request latency nor time since the revocation, and are excluded from semantic equality.",
             "",
             "The oracle project had MFA disabled, no phone sign-in and an empty SMS region allowlist. For the run, phone MFA, two test phone numbers with a fixed code (no SMS is sent) and the allow-by-default SMS region policy were enabled, and after a wait for enforcement the flow ran. The recorded values were restored in the recorder's final step; the readback matched and the whole-configuration digest equaled the pre-run digest. Both accounts were deleted with UID and email absence confirmation.",
             "",

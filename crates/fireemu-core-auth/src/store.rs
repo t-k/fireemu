@@ -2121,6 +2121,11 @@ impl AuthStore {
         if user.mfa.pending_sign_in(&pending.0).is_none() {
             return Err(MfaError::PendingSignInUnknown);
         }
+        // Disabled after the first factor: refused before anything is consumed, so the
+        // pending credential and its code survive a later re-enablement.
+        if user.disabled {
+            return Err(MfaError::UserDisabled);
+        }
         if !user
             .mfa
             .phone_factors()
@@ -2731,6 +2736,11 @@ impl AuthStore {
                 .ok_or(MfaError::UserNotFound)?;
             if user.mfa.pending_sign_in(&pending.0).is_none() {
                 return Err(MfaError::PendingSignInUnknown);
+            }
+            // Disabled after the first factor: refused before the code is matched, so
+            // neither the pending credential nor the code's step is consumed.
+            if user.disabled {
+                return Err(MfaError::UserDisabled);
             }
 
             let mut replayed = false;

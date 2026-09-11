@@ -34,6 +34,52 @@ fn pending_retry_missing_phone_factor_does_not_consume_pending() {
     assert_eq!(s.pending_sign_in_user(&pending), None);
 }
 
+#[test]
+fn pending_retry_disabled_user_is_refused_before_any_factor_is_consumed() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("disabled@example.com"), t0())
+        .unwrap();
+    let material = s.start_totp_enrollment(&uid, t0()).unwrap();
+    let secret = material.secret_for_test().to_vec();
+    let code = totp_at(&secret, &s.policy().params(), t0());
+    s.finalize_totp_enrollment(&uid, &material.session_id, code, t0())
+        .unwrap();
+    let totp = factor_id(&s, &uid);
+    let enrolled_step = s.user(&uid).unwrap().mfa.totp_factors()[0].last_accepted_step;
+    let phone = s
+        .enroll_phone_factor(&uid, "+15559876543", None, t0())
+        .unwrap();
+    // The sign-in uses the next TOTP step, so the code is fresh.
+    let later = t0().checked_add(secs(30)).unwrap();
+    let code = totp_at(&secret, &s.policy().params(), later);
+    let pending = s.start_mfa_sign_in(&uid, later).unwrap();
+    s.user_mut(&uid).unwrap().disabled = true;
+    // Neither finalizer consumes anything: the pending credential stays, the TOTP step is
+    // not recorded as used, and the sign-in time is untouched.
+    assert_eq!(
+        s.finalize_mfa_sign_in_for_factor(&uid, &pending, &totp, code, later),
+        Err(MfaError::UserDisabled)
+    );
+    assert_eq!(
+        s.finalize_phone_mfa_sign_in(&uid, &pending, &phone.mfa_enrollment_id, later),
+        Err(MfaError::UserDisabled)
+    );
+    assert_eq!(s.pending_sign_in_user(&pending), Some(uid.clone()));
+    assert_eq!(
+        s.user(&uid).unwrap().mfa.totp_factors()[0].last_accepted_step,
+        enrolled_step
+    );
+    assert_eq!(s.user(&uid).unwrap().last_sign_in_at, None);
+    // Re-enabled, the same pending credential and the same TOTP code complete the sign-in.
+    s.user_mut(&uid).unwrap().disabled = false;
+    assert!(s
+        .finalize_mfa_sign_in_for_factor(&uid, &pending, &totp, code, later)
+        .is_ok());
+    assert_eq!(s.pending_sign_in_user(&pending), None);
+    assert_eq!(s.user(&uid).unwrap().last_sign_in_at, Some(later));
+}
+
 fn t0() -> LogicalInstant {
     LogicalInstant::from_unix_seconds(1_788_004_860)
 }

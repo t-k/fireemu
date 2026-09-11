@@ -3508,6 +3508,60 @@ fn pending_retry_ends_when_the_pending_credential_expires() {
 }
 
 #[test]
+fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
+    for strict in [false, true] {
+        let email = "pending-disabled@example.com";
+        let (s, user) = pending_expiry_state(strict, email);
+        let pending = pending_login(&s, email);
+        let phone = start_phone_code(&s, &pending);
+        let account = |disabled: bool| {
+            let (status, updated) = admin(
+                &s,
+                &format!("{V1}/projects/demo-app/accounts:update"),
+                &json!({"localId": user["localId"], "disableUser": disabled}),
+            );
+            assert_eq!(status, 200, "{updated}");
+            let (status, lookup) = admin(
+                &s,
+                &format!("{V1}/projects/demo-app/accounts:lookup"),
+                &json!({"localId": [user["localId"]]}),
+            );
+            assert_eq!(status, 200, "{lookup}");
+            lookup["users"][0].clone()
+        };
+        let before = account(true);
+        let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+        let count = s.store.lock().unwrap().pending_sign_in_count();
+        // Finalize is refused before anything is consumed.
+        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "USER_DISABLED");
+        assert!(refused.get("idToken").is_none());
+        assert!(refused.get("refreshToken").is_none());
+        // A disabled account cannot start a new phone step either.
+        let (status, refused) = start_phone_step(&s, &pending);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "USER_DISABLED");
+        assert_eq!(get(&s, &format!("{EMU}/verificationCodes")).1, codes);
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count);
+        // Re-enabled: the same pending credential and code complete the sign-in.
+        let after = account(false);
+        assert_eq!(after["lastLoginAt"], before["lastLoginAt"]);
+        let (status, signed) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 200, "{signed}");
+        let (status, lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        assert_eq!(lookup["users"][0]["localId"], user["localId"]);
+        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+    }
+}
+
+#[test]
 fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
     for strict in [false, true] {
         let (s, lines) = oob_authorization_state(strict);

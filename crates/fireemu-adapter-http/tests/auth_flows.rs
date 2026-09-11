@@ -3174,6 +3174,120 @@ fn oob_authorization_state(strict: bool) -> (AuthState, Arc<Mutex<Vec<String>>>)
     (s, lines)
 }
 
+fn two_party_accounts(s: &AuthState, a: &Value, b: &Value) -> Value {
+    let (status, response) = admin(
+        s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [a["localId"], b["localId"]]}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(response["users"].as_array().unwrap().len(), 2);
+    response
+}
+
+#[test]
+fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
+    for strict in [false, true] {
+        let (s, lines) = oob_authorization_state(strict);
+        let a = sign_up(&s, "factor-a@example.com");
+        let b = sign_up(&s, "factor-b@example.com");
+        for user in [&a, &b] {
+            verify_email(&s, user["localId"].as_str().unwrap());
+        }
+        let (status, started) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": a["idToken"], "phoneEnrollmentInfo": {"phoneNumber": "+15559876543"}}),
+        );
+        assert_eq!(status, 200, "{started}");
+        let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+        let verification = json!({"sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": codes["verificationCodes"][0]["code"]});
+        let before = two_party_accounts(&s, &a, &b);
+        let notices = lines.lock().unwrap().clone();
+        let (status, refused) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            &json!({"idToken": b["idToken"], "phoneVerificationInfo": verification}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+        assert_eq!(get(&s, &format!("{EMU}/verificationCodes")).1, codes);
+        assert_eq!(two_party_accounts(&s, &a, &b), before);
+        assert_eq!(*lines.lock().unwrap(), notices);
+        let (status, enrolled) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            &json!({"idToken": a["idToken"], "phoneVerificationInfo": verification}),
+        );
+        assert_eq!(status, 200, "{enrolled}");
+        let factor = claims(enrolled["idToken"].as_str().unwrap())["firebase"]
+            ["second_factor_identifier"]
+            .clone();
+        assert!(factor.is_string());
+        let before = two_party_accounts(&s, &a, &b);
+        let (status, refused) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:withdraw"),
+            &json!({"idToken": b["idToken"], "mfaEnrollmentId": factor}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "MFA_ENROLLMENT_NOT_FOUND");
+        assert_eq!(two_party_accounts(&s, &a, &b), before);
+        let (status, withdrawn) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:withdraw"),
+            &json!({"idToken": enrolled["idToken"], "mfaEnrollmentId": factor}),
+        );
+        assert_eq!(status, 200, "{withdrawn}");
+        let (status, lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": withdrawn["idToken"]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        assert_eq!(lookup["users"].as_array().unwrap().len(), 1);
+        assert_eq!(lookup["users"][0]["localId"], a["localId"]);
+        assert!(lookup["users"][0].get("mfaInfo").is_none());
+    }
+}
+
+#[test]
+fn two_party_idp_fixture_refusal_preserves_both_accounts_and_owner_sign_in() {
+    for strict in [false, true] {
+        let (s, _) = oob_authorization_state(strict);
+        let a = sign_up(&s, "fixture-a@example.com");
+        let b = sign_up(&s, "fixture-b@example.com");
+        let assertion = idp_jwt(
+            &json!({"sub": "owned-identity", "email": "fixture-a@example.com", "email_verified": true}),
+        );
+        let mut request = json!({"postBody": format!("id_token={assertion}&providerId=google.com"), "requestUri": "http://localhost", "idToken": a["idToken"]});
+        let (status, linked) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &request);
+        assert_eq!(status, 200, "{linked}");
+        assert_eq!(linked["localId"], a["localId"]);
+        let before = two_party_accounts(&s, &a, &b);
+        request["idToken"] = b["idToken"].clone();
+        let (status, refused) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &request);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused["error"]["message"],
+            "FEDERATED_USER_ID_ALREADY_LINKED"
+        );
+        assert!(refused.get("idToken").is_none());
+        assert_eq!(two_party_accounts(&s, &a, &b), before);
+        request.as_object_mut().unwrap().remove("idToken");
+        let (status, signed) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &request);
+        assert_eq!(status, 200, "{signed}");
+        assert_eq!(signed["localId"], a["localId"]);
+        let (status, own) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(status, 200);
+        assert_eq!(own["users"][0]["localId"], a["localId"]);
+    }
+}
+
 fn assert_oob_denial_unchanged(s: &AuthState, lines: &Arc<Mutex<Vec<String>>>, body: &Value) {
     let selection = json!({"email": ["oob-owner@example.com", "oob-other@example.com"]});
     let users = admin(

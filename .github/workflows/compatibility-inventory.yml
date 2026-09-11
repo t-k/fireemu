@@ -35,6 +35,7 @@ jobs:
           cargo test --locked -p fireemu-adapter-http --test identity_toolkit deleted_account_credentials
           cargo test --locked -p fireemu-adapter-http --test identity_toolkit lookup_authorization
           cargo test --locked -p fireemu-adapter-http --test auth_flows oob_authorization
+          cargo test --locked -p fireemu-adapter-http --test auth_flows two_party
   offline-acquisition-integrity:
     runs-on: ubuntu-latest
     steps:

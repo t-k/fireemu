@@ -1,0 +1,204 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "baseline-a-fresh-finalize",
+      "baseline-b-fresh-finalize",
+      "revoked-a-held-start",
+      "revoked-a-held-finalize",
+      "revoked-a-held-lookup",
+      "revoked-a-held-refresh",
+      "revoked-a-fresh-finalize",
+      "revoked-b-fresh-finalize"
+    ],
+    "revision": 1,
+    "slice": "auth-pending-revocation"
+  },
+  "production": {
+    "cases": [
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 5654,
+        "httpStatus": 200,
+        "id": "baseline-a-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 6888,
+        "httpStatus": 200,
+        "id": "baseline-b-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "sessionInfoPresent": true
+        },
+        "elapsedMs": 10837,
+        "httpStatus": 200,
+        "id": "revoked-a-held-start",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "authTimeAtOrAfterValidSince": true,
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 11384,
+        "httpStatus": 200,
+        "id": "revoked-a-held-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "ownerMatches": true
+        },
+        "elapsedMs": 11679,
+        "httpStatus": 200,
+        "id": "revoked-a-held-lookup",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "bearerType": true,
+          "derivedLookup": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 12221,
+        "httpStatus": 200,
+        "id": "revoked-a-held-refresh",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 13401,
+        "httpStatus": 200,
+        "id": "revoked-a-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 14587,
+        "httpStatus": 200,
+        "id": "revoked-b-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "configDigestMatches": true,
+    "configRestored": true,
+    "configRestoredReadback": {
+      "mfa": {
+        "state": "DISABLED"
+      },
+      "phoneNumber": {},
+      "smsRegionConfig": {
+        "allowlistOnly": {}
+      }
+    },
+    "configuration": {
+      "adminPasswordPolicyAbsent": true,
+      "blockingTriggersAbsent": true,
+      "emailEnabled": true,
+      "improvedEmailPrivacy": true,
+      "passwordRequired": true,
+      "sha256": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+    },
+    "heldCredentialIssuedBeforeRevocation": true,
+    "heldFinalizeTimes": {
+      "authTime": 1789100213,
+      "iat": 1789100213,
+      "validSince": 1789100211
+    },
+    "privateReceiptSha256": "8c08e0f8bd8cf0941e5dd59ebe7a8d98b6e48ff89fd5c8458857147dbe55015b",
+    "probeSourceCommit": "c320a29ca9c57d23a705356c106a50ff015adf36",
+    "recordedAt": "2026-09-11T04:16:00.503675+00:00",
+    "recordedWith": {
+      "probeSourceCommit": "c320a29ca9c57d23a705356c106a50ff015adf36",
+      "recorderCommit": "ad6faeffb062c967d5180b21ced095e12d894932",
+      "recorderInputs": {
+        "tools/auth-pending-revocation/revocation_contract.py": "2d34940a4769cb6421852ba421b35506505553ac6841d7b51a7d2139b04349b4",
+        "tools/auth-pending-revocation/revocation_recorder.py": "ab7a899f2cf0e247a9530eb6aa81603814a49f51026ae314af3a993fe235a7c6"
+      }
+    },
+    "reevaluatedWith": {
+      "commit": "5bb7acc0f81b8405adf336e824ce7e6f2ed9cf5a",
+      "contractSha256": "068ab00d3c832165a9ffb4a476973eccce0b1b66eb8d09dc24e1bcf3a8453856"
+    },
+    "revocation": {
+      "controlUnchanged": true,
+      "validSinceReadback": true
+    },
+    "setup": {
+      "a": true,
+      "b": true
+    },
+    "target": "production"
+  },
+  "publicationContractSha256": "b4ce19749d2b25d379d328e220c9a1c1f8c125b42d9a434968bb894e1cb123c5",
+  "schemaVersion": 1,
+  "scope": "Eight sequential REST observations in production only: fresh phone MFA completions for target A and control B, then the pending credential of A issued before an explicit validSince update is presented to mfaSignIn:start and :finalize after the update and its readback, with lookup and refresh of any returned tokens, followed by fresh completions for A and B. Phone MFA with test phone numbers, no tenant, no blocking function, one run. The oracle configuration was changed for the run and restored with a digest comparison. Admin is used for owned account setup, the validSince update, readback and cleanup. No human approval, no local artifact comparison, no interval measurement between the update and the retry, and no revocation-propagation claim.",
+  "sourceReviewSha256": "46ee89626cb3d59478ba22bab57c875e4c15f6f8823568c5eab4a07d7a8b5ffe"
+}

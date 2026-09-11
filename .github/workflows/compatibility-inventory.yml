@@ -47,6 +47,10 @@ jobs:
           fetch-depth: 0
       - name: Install uv
         run: python3 -m pip install uv==0.11.28
+      - name: Check the pending-revocation recorder contract and its published receipt
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-revocation -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-revocation.py --check
       - name: Check immutable historical tools, observations and approvals
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check
       - name: Check later approved observations at their fixed historical source

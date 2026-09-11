@@ -3935,7 +3935,11 @@ fn update(
             response[key] = value.clone();
         }
     }
-    if credentials_changed && plan.disable != Some(true) {
+    // Tokens follow a credential change only for an account that is enabled after this
+    // update: production (recorded 2026-09-12) applies an administrative password
+    // replacement to a disabled account without returning tokens.
+    let enabled_after = store.user(&uid).is_some_and(|u| !u.disabled);
+    if credentials_changed && enabled_after {
         if let Some(provider) = session_provider {
             match issue_tokens_with(store, &uid, None, at, None, Some(provider)) {
                 Ok(tokens) => {

@@ -49,7 +49,7 @@
         "docs/compatibility/auth-blocking-disable-approval.md",
         "spec/compatibility/evidence/auth-blocking-disable/receipt.json"
       ],
-      "nextAction": "Reproduce locally with the same corpus on the current artifact; plan an additional production observation that separates the initial value, the immediate readback, a later readback and a readback that bypasses the hook, with a control; then decide whether persistence must change. Do not close on an assumed propagation delay or on a single false.",
+      "nextAction": "Local re-run of the same corpus on the current artifact is in progress (tools/auth-blocking-disable/blocking_owned.py); then plan the additional production observation that separates the initial value, the immediate readback, a later readback and a hook-bypassing readback, with a control.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -88,17 +88,17 @@
     {
       "id": "AUTH-U01",
       "feature": "AUTH-USERS",
-      "kind": "unobserved",
-      "scope": "Administrative accounts:update of an already disabled account: attribute update outcome, whether tokens are returned, and whether such tokens serve lookup and refresh. Administrative success and end-user authentication success must be recorded separately.",
-      "implementationStatus": "unknown",
-      "localTestStatus": "none",
-      "productionObservationStatus": "none",
-      "comparisonStatus": "none",
+      "kind": "mismatch",
+      "scope": "Administrative accounts:update of an already disabled account. Production (recorded 2026-09-12): password replacement and photo update are accepted and applied, no tokens are returned, the account's own sign-in stays USER_DISABLED, and the new password signs in after re-enablement. fireemu returned tokens for the password change; fixed so tokens follow a credential change only for an account enabled after the update.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "mismatch",
       "evidenceRefs": [
         "tools/auth-disabled-admin-update/README.md"
       ],
-      "nextAction": "Recorder and offline safety tests exist (tools/auth-disabled-admin-update); run it in production once execution is approved, then compare with the local plan-only guard at the update handler.",
-      "blockedReason": "Production execution not yet approved for this corpus.",
+      "nextAction": "Publish the recorded run as a candidate receipt, then re-run the corpus on the current local artifact and record the comparison.",
+      "blockedReason": "",
       "requiresProductionChange": true
     },
     {

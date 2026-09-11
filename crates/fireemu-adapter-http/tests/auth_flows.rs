@@ -4056,6 +4056,52 @@ fn pending_retry_hook_disable_persists_the_whole_response_and_created_accounts()
     assert_eq!(again["error"]["message"], "USER_DISABLED");
 }
 
+/// Production (recorded 2026-09-12, `tools/auth-disabled-admin-update`): an administrative
+/// password replacement of an already disabled account is accepted and applied but
+/// returns no tokens; the account still refuses its own sign-in until re-enabled.
+#[test]
+fn pending_retry_admin_password_update_of_a_disabled_account_returns_no_tokens() {
+    for strict in [false, true] {
+        let (s, _) = oob_authorization_state(strict);
+        let user = sign_up(&s, "admin-update-disabled@example.com");
+        let uid = user["localId"].clone();
+        let (status, disabled) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:update"),
+            &json!({"localId": uid, "disableUser": true}),
+        );
+        assert_eq!(status, 200, "{disabled}");
+        let (status, updated) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:update"),
+            &json!({"localId": uid, "password": "replaced-22"}),
+        );
+        assert_eq!(status, 200, "{updated}");
+        assert!(updated.get("idToken").is_none(), "{updated}");
+        assert!(updated.get("refreshToken").is_none(), "{updated}");
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "admin-update-disabled@example.com", "password": "replaced-22"}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "USER_DISABLED");
+        let (status, enabled) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:update"),
+            &json!({"localId": uid, "disableUser": false}),
+        );
+        assert_eq!(status, 200, "{enabled}");
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "admin-update-disabled@example.com", "password": "replaced-22"}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        assert_eq!(signed["localId"], uid);
+    }
+}
+
 #[test]
 fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
     for strict in [false, true] {

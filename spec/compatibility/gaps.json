@@ -44,13 +44,13 @@
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
       "productionObservationStatus": "recorded",
-      "comparisonStatus": "mismatch",
+      "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
+        "docs/compatibility/auth-blocking-readback-comparison.md",
         "docs/compatibility/auth-blocking-readback.md",
-        "docs/compatibility/auth-blocking-create-disable.md",
         "tools/auth-blocking-readback/README.md"
       ],
-      "nextAction": "Re-run the readback corpus on the fixed local artifact and publish its comparison with the production record; then scope approvals for the revision 2 and readback records.",
+      "nextAction": "Closed for the recorded conditions: the readback corpus on the corrected local artifact agrees with the production record on all eleven rows. Remaining: scope approvals for the revision 2 and readback records; other first-factor paths (email link, IdP, custom token, phone) follow the existing-account rule unobserved.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

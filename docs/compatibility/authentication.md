@@ -112,6 +112,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Hook-applied disable: readback timing, production candidate](auth-blocking-readback.md). Eleven production-only observations on one run's time axis: two accounts refused by the disabling function read back as not disabled before, immediately after, five and thirty seconds after the refusal, and after thirty seconds with no earlier read, while their sign-ins stayed refused under the registered function; the control succeeded. Not approved; this is the observation behind GAP-AUTH-001.
 
+[Hook-applied disable, readback timing: local comparison](auth-blocking-readback-comparison.md). One run of the same corpus on the owned local artifact built after fireemu stopped persisting a hook disable for an existing account's first-factor sign-in: all eleven rows agree with the production candidate (the measured seconds are excluded). A comparison record, not an approval.
+
 [Current lookup authorization regressions](../../tools/auth-lookup-authorization/README.md) separate token-verified self lookup from authenticated Admin identifier search. These local regressions correct the identifier bypass independently of the approved deletion observations; no production error-code parity or complete Auth authorization claim is made.
 
 [Current OOB issuance authorization regressions](../../tools/auth-oob-authorization/README.md) restrict returned action credentials to authenticated Admin routes and require verified end-user identity for verification delivery. These are local regressions, not new production observations or complete Auth authorization coverage.

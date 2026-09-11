@@ -1,0 +1,331 @@
+"""Publish the local-versus-production comparison of the created-then-disabled corpus
+(revision 2).
+
+The approved production receipt is read, never rewritten. The private local report is
+projected to allowlisted fields, its recorder files are checked against the commit that
+produced it, and the two are compared row by row on their semantic projection (elapsed
+milliseconds excluded). The result is a separate record with its own subject.
+"""
+
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools/auth-blocking-create-disable"))
+sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
+from create_contract import (
+    CASES,
+    DIAGNOSTIC,
+    complete,
+    require,
+    semantic_rows,
+    validate_row,
+)
+from create_recorder import digest
+from evidence_common import runtime_inputs
+
+RECEIPT = ROOT / "spec/compatibility/evidence/auth-blocking-create-disable/receipt.json"
+BUNDLE = (
+    ROOT
+    / "spec/compatibility/evidence/auth-blocking-create-disable/local-comparison.json"
+)
+PAGE = ROOT / "docs/compatibility/auth-blocking-create-disable-comparison.md"
+SCOPE = "Row-by-row comparison of the production candidate record of auth-blocking-create-disable revision 2 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-create-disable/function-local served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim beyond these ten cases."
+RECORDER_FILES = (
+    "tools/auth-blocking-create-disable/create_contract.py",
+    "tools/auth-blocking-create-disable/create_recorder.py",
+)
+LOCAL_PROJECTED = (
+    "target",
+    "recordedAt",
+    "probeSourceCommit",
+    "cases",
+    "setup",
+    "hook",
+    "cleanup",
+    "targetRecordExists",
+    "localFunctionFixture",
+    "connection",
+    "runtimeSourceCommit",
+)
+CONFIG_KEYS = ("value", "sha256", "fileSha256")
+ARTIFACT_KEYS = ("sha256", "version", "kind")
+PROCESS_KEYS = ("pid", "exitCode", "stopped", "listenersClosed")
+INSTANCE_KEYS = (
+    "parentPid",
+    "childPid",
+    "nonce",
+    "profile",
+    "version",
+    "wrongTokenStatus",
+)
+BUILD_KEYS = ("command", "exitCode", "artifactSha256", "inputs")
+RUNNER_KEYS = ("path", "sha256")
+
+
+def hex_value(value, length=64):
+    require(
+        isinstance(value, str) and re.fullmatch(r"[0-9a-f]{" + str(length) + "}", value)
+    )
+
+
+def exact_keys(value, keys):
+    require(isinstance(value, dict) and set(value) == set(keys))
+    return {key: value[key] for key in keys}
+
+
+def git_blob_sha256(commit, path):
+    blob = subprocess.check_output(
+        ["git", "show", f"{commit}:{path}"], cwd=ROOT, stderr=subprocess.DEVNULL
+    )
+    return hashlib.sha256(blob).hexdigest()
+
+
+def working_tree_sha256(path):
+    return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+
+
+def publication_contract_sha():
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def project_local(report, recorder_commit):
+    require(
+        report["schemaVersion"] == 1
+        and report["acceptance"] == "candidate"
+        and report["target"] == "local"
+        and report["connection"] == "owned-artifact"
+        and report["project"] == "fireemu-35fe6"
+        and report["projectNumber"] is None
+        and digest(report["corpus"])
+        == digest(
+            {
+                "slice": "auth-blocking-create-disable",
+                "revision": 2,
+                "cases": list(CASES),
+            }
+        )
+        and complete(report)
+    )
+    out = {key: report[key] for key in LOCAL_PROJECTED}
+    out["configuration"] = exact_keys(report["configuration"], CONFIG_KEYS)
+    out["artifact"] = exact_keys(report["artifact"], ARTIFACT_KEYS)
+    out["ownedProcess"] = exact_keys(report["ownedProcess"], PROCESS_KEYS)
+    out["instance"] = exact_keys(report["instance"], INSTANCE_KEYS)
+    # The private build record carries toolchain details beyond the published four.
+    out["build"] = {key: report["build"][key] for key in BUILD_KEYS}
+    out["functionsRunner"] = exact_keys(report["functionsRunner"], RUNNER_KEYS)
+    out["privateReportSha256"] = digest(report)
+    hex_value(recorder_commit, 40)
+    inputs = {path: report["probeInputs"][path] for path in RECORDER_FILES}
+    for path, value in inputs.items():
+        require(git_blob_sha256(recorder_commit, path) == value)
+    out["recordedWith"] = {"recorderCommit": recorder_commit, "recorderInputs": inputs}
+    validate_local(out)
+    return out
+
+
+def validate_local(local):
+    require(
+        set(local)
+        == set(LOCAL_PROJECTED)
+        | {
+            "configuration",
+            "artifact",
+            "ownedProcess",
+            "instance",
+            "build",
+            "functionsRunner",
+            "privateReportSha256",
+            "recordedWith",
+        }
+    )
+    require(local["target"] == "local" and local["connection"] == "owned-artifact")
+    require(
+        complete(
+            {
+                **local,
+                "status": "observed",
+                "functionRemoved": True,
+                "configRestored": True,
+                "configDigestMatches": True,
+            }
+        )
+    )
+    for row, name in zip(local["cases"], CASES, strict=True):
+        validate_row(row, name)
+    hex_value(local["probeSourceCommit"], 40)
+    hex_value(local["runtimeSourceCommit"], 40)
+    hex_value(local["privateReportSha256"])
+    config = exact_keys(local["configuration"], CONFIG_KEYS)
+    require(config["value"] == {"schemaVersion": 1, "profile": "strict"})
+    require(config["sha256"] == digest(config["value"]))
+    hex_value(config["fileSha256"])
+    artifact = exact_keys(local["artifact"], ARTIFACT_KEYS)
+    require(artifact["kind"] == "local-build")
+    require(
+        isinstance(artifact["version"], str)
+        and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", artifact["version"])
+    )
+    hex_value(artifact["sha256"])
+    build = exact_keys(local["build"], BUILD_KEYS)
+    require(
+        build["command"]
+        == ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
+        and build["exitCode"] == 0
+        and build["artifactSha256"] == artifact["sha256"]
+        and build["inputs"] == runtime_inputs(ROOT)
+    )
+    process = exact_keys(local["ownedProcess"], PROCESS_KEYS)
+    instance = exact_keys(local["instance"], INSTANCE_KEYS)
+    require(
+        process["exitCode"] == 0
+        and process["stopped"] is True
+        and process["listenersClosed"] is True
+    )
+    require(
+        instance["parentPid"] == process["pid"]
+        and instance["childPid"] != process["pid"]
+    )
+    require(instance["wrongTokenStatus"] == 403 and instance["profile"] == "strict")
+    require(instance["version"] == artifact["version"])
+    hex_value(instance["nonce"], 32)
+    runner = exact_keys(local["functionsRunner"], RUNNER_KEYS)
+    require(runner["path"] == "tools/runner-node/index.mjs")
+    require(runner["sha256"] == working_tree_sha256(runner["path"]))
+    require(
+        local["localFunctionFixture"]
+        == "tools/auth-blocking-create-disable/function-local"
+    )
+    require(type(local["targetRecordExists"]) is bool)
+    cleanup = exact_keys(local["cleanup"], ("c", "t"))
+    for account in cleanup.values():
+        require(
+            account
+            in (
+                {"uidAbsent": True, "emailAbsent": True},
+                {"recordNeverCreated": True, "emailAbsent": True},
+            )
+        )
+    recorded = exact_keys(local["recordedWith"], ("recorderCommit", "recorderInputs"))
+    hex_value(recorded["recorderCommit"], 40)
+    inputs = exact_keys(recorded["recorderInputs"], RECORDER_FILES)
+    for path, value in inputs.items():
+        require(git_blob_sha256(recorded["recorderCommit"], path) == value)
+
+
+def compare(production_rows, local_rows):
+    rows = []
+    for production, local in zip(production_rows, local_rows, strict=True):
+        require(production["id"] == local["id"])
+        same = semantic_rows([production]) == semantic_rows([local])
+        rows.append({"id": production["id"], "sameSemanticProjection": same})
+    return rows
+
+
+def validate(value):
+    require(
+        set(value)
+        == {
+            "schemaVersion",
+            "acceptance",
+            "scope",
+            "productionSubjectSha256",
+            "publicationContractSha256",
+            "local",
+            "comparison",
+        }
+    )
+    require(
+        value["schemaVersion"] == 1
+        and value["acceptance"] == "candidate"
+        and value["scope"] == SCOPE
+    )
+    receipt = json.loads(RECEIPT.read_bytes())
+    require(value["productionSubjectSha256"] == digest(receipt))
+    require(value["publicationContractSha256"] == publication_contract_sha())
+    validate_local(value["local"])
+    require(
+        value["comparison"]
+        == compare(receipt["production"]["cases"], value["local"]["cases"])
+    )
+    return receipt
+
+
+def render(value):
+    receipt = validate(value)
+    production = {r["id"]: r for r in receipt["production"]["cases"]}
+    local = {r["id"]: r for r in value["local"]["cases"]}
+    lines = [
+        "# Blocking function on the creating request: local comparison (revision 2)",
+        "",
+        "Status: candidate comparison record, not approved. The production candidate record is unchanged; this page adds one run of the same corpus on an owned local artifact and compares the two row by row.",
+        "",
+        SCOPE,
+        "",
+        "| Case | Basis | Production outcome / error | Local outcome / error | Production checks | Local checks | Same semantic projection |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    differing = []
+    for row in value["comparison"]:
+        p, l = production[row["id"]], local[row["id"]]
+        basis = "diagnostic" if row["id"] in DIAGNOSTIC else "control"
+        fmt = lambda r: (
+            ", ".join(f"{k}={v}" for k, v in sorted(r["checks"].items())) or "none"
+        )
+        lines.append(
+            f"| {row['id']} | {basis} | {p['outcome']} / {p['observedError'] or 'none'} | {l['outcome']} / {l['observedError'] or 'none'} | {fmt(p)} | {fmt(l)} | {row['sameSemanticProjection']} |"
+        )
+        if not row["sameSemanticProjection"]:
+            differing.append(row["id"])
+    lines.extend(
+        [
+            "",
+            f"Differing rows: {', '.join(differing) if differing else 'none'}.",
+            "",
+            f"Comparison subject (unapproved): `{digest(value)}`. Production subject compared: `{value['productionSubjectSha256']}`.",
+            "",
+            f"Local artifact `{value['local']['artifact']['version']}` built from `{value['local']['runtimeSourceCommit']}` with recorder files at `{value['local']['recordedWith']['recorderCommit']}`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `{value['local']['functionsRunner']['sha256'][:16]}…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.",
+            "",
+            "The local run has no deployment, trigger registration or configuration change, and reads phone codes from the emulator inspection route, so the `hook`, `functionRemoved` and configuration fields of the local report describe the fixture, not a cloud function. A row that differs is an open gap in the ledger, not a verdict about which side is right; the ledger names the follow-up.",
+            "",
+            "[Comparison record](../../spec/compatibility/evidence/auth-blocking-create-disable/local-comparison.json) · [Production candidate receipt](../../spec/compatibility/evidence/auth-blocking-create-disable/receipt.json) · [Candidate page](auth-blocking-create-disable.md) · [Gap ledger](gaps.md).",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--local", type=Path)
+    parser.add_argument("--recorder-commit")
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    if args.local:
+        require(bool(args.recorder_commit) and not args.check and not BUNDLE.exists())
+        receipt = json.loads(RECEIPT.read_bytes())
+        local = project_local(json.loads(args.local.read_bytes()), args.recorder_commit)
+        value = {
+            "schemaVersion": 1,
+            "acceptance": "candidate",
+            "scope": SCOPE,
+            "productionSubjectSha256": digest(receipt),
+            "publicationContractSha256": publication_contract_sha(),
+            "local": local,
+            "comparison": compare(receipt["production"]["cases"], local["cases"]),
+        }
+        validate(value)
+        BUNDLE.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
+    value = json.loads(BUNDLE.read_bytes())
+    page = render(value)
+    if args.check:
+        require(PAGE.read_text() == page)
+    else:
+        PAGE.write_text(page)
+    print("Auth blocking create-disable comparison checked; subject " + digest(value))

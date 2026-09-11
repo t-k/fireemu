@@ -63,6 +63,7 @@ jobs:
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-create-disable-r1.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-create-disable.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-readback.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-readback-comparison.py --check
       - name: Check immutable historical tools, observations and approvals
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check
       - name: Check later approved observations at their fixed historical source

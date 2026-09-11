@@ -755,11 +755,13 @@ fn custom_claims_via_accounts_update_show_up_in_tokens() {
         decoded.payload.get("role").and_then(|v| v.as_str()),
         Some("admin")
     );
-    let (_, users) = post(
+    let (status, users) = admin(
         &s,
-        &format!("{V1}/accounts:lookup"),
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": uid}),
     );
+    assert_eq!(status, 200);
     assert_eq!(
         users["users"][0]["customAttributes"],
         "{\"role\":\"admin\"}"
@@ -2111,6 +2113,131 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
     );
     assert_eq!(status, 400, "{deleted}");
     assert_eq!(deleted["error"]["message"], "USER_NOT_FOUND");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // The finite authorization matrix shares real account setup.
+fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
+    for s in [state(), strict_state()] {
+        let mut signed = Vec::new();
+        for email in ["lookup-caller@example.test", "lookup-target@example.test"] {
+            let (status, account) = post(
+                &s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": email, "password": "lookup-password", "returnSecureToken": true}),
+            );
+            assert_eq!(status, 200);
+            signed.push(account);
+        }
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": signed[1]["localId"], "phoneNumber": "+16505550123",
+                "linkProviderUserInfo": {"providerId": "google.com", "rawId": "lookup-target-provider"}
+            }),
+        );
+        assert_eq!(status, 200);
+        for account in &signed {
+            let (status, own) = post(
+                &s,
+                &format!("{V1}/accounts:lookup"),
+                &json!({"idToken": account["idToken"]}),
+            );
+            assert_eq!(status, 200);
+            assert_eq!(own["users"].as_array().unwrap().len(), 1);
+            assert_eq!(own["users"][0]["localId"], account["localId"]);
+        }
+        for (field, selector) in [
+            ("localId", json!([signed[1]["localId"]])),
+            ("email", json!(["lookup-target@example.test"])),
+            ("phoneNumber", json!(["+16505550123"])),
+            (
+                "federatedUserId",
+                json!([{"providerId": "google.com", "rawId": "lookup-target-provider"}]),
+            ),
+        ] {
+            let mut query = json!({});
+            query[field] = selector.clone();
+            let (status, found) = admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &query);
+            assert_eq!(status, 200);
+            assert_eq!(found["users"].as_array().unwrap().len(), 1);
+            assert_eq!(found["users"][0]["localId"], signed[1]["localId"]);
+            // Neither a missing Admin credential nor an end-user bearer grants Admin lookup.
+            for authorization in [
+                None,
+                Some(format!("Bearer {}", signed[0]["idToken"].as_str().unwrap())),
+            ] {
+                let headers = RequestHeaders {
+                    authorization,
+                    ..RequestHeaders::default()
+                };
+                let response = handle_with(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:lookup"),
+                    &headers,
+                    &query,
+                );
+                assert_ne!(response.status, 200);
+                assert!(response.body.get("users").is_none());
+            }
+            for value in [selector, json!([]), Value::Null, json!(false)] {
+                for token in [
+                    None,
+                    Some(json!("malformed")),
+                    Some(signed[0]["idToken"].clone()),
+                    Some(signed[1]["idToken"].clone()),
+                ] {
+                    let expected_error = match token.as_ref().and_then(Value::as_str) {
+                        None => "MISSING_ID_TOKEN",
+                        Some("malformed") => "INVALID_ID_TOKEN",
+                        Some(_) => "OPERATION_NOT_ALLOWED",
+                    };
+                    let mut request = json!({"admin": true});
+                    request[field] = value.clone();
+                    if let Some(token) = token {
+                        request["idToken"] = token;
+                    }
+                    let (status, refused) = post(&s, &format!("{V1}/accounts:lookup"), &request);
+                    assert_eq!(
+                        status, 400,
+                        "selector {field} must not bypass end-user identity"
+                    );
+                    assert!(refused.get("users").is_none());
+                    assert_eq!(refused["error"]["message"], expected_error);
+                }
+            }
+            // Even the emulator owner header cannot change an end-user handler's role.
+            query["idToken"] = signed[0]["idToken"].clone();
+            let response = handle_with(
+                &s,
+                "POST",
+                &format!("{V1}/accounts:lookup"),
+                &owner(),
+                &query,
+            );
+            assert_eq!(response.status, 400);
+            assert!(response.body.get("users").is_none());
+        }
+        assert_eq!(
+            post(
+                &s,
+                &format!("{V1}/accounts:delete"),
+                &json!({"idToken": signed[0]["idToken"]})
+            )
+            .0,
+            200
+        );
+        let (status, missing) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed[0]["idToken"]}),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(missing["error"]["message"], "USER_NOT_FOUND");
+    }
 }
 
 #[test]

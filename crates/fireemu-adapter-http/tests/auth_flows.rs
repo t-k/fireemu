@@ -607,11 +607,12 @@ fn phone_sign_in_uses_a_deterministic_code_from_the_inspection_route() {
     );
     assert_eq!(status, 200, "{linked}");
     assert_eq!(linked["localId"], user["localId"]);
-    let (_, lookup) = post(
+    let (status, lookup) = admin(
         &s,
-        &format!("{V1}/accounts:lookup"),
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
         &json!({"phoneNumber": ["+15550000001"]}),
     );
+    assert_eq!(status, 200);
     assert_eq!(lookup["users"][0]["localId"], user["localId"]);
 }
 
@@ -655,11 +656,12 @@ fn fixture_identity_providers_sign_in_link_and_show_up_as_provider_info() {
     assert_eq!(again["isNewUser"], false);
     assert_eq!(again["localId"], signed["localId"]);
     // The provider shows in lookups (by federatedUserId too) and in sign-in methods.
-    let (_, lookup) = post(
+    let (status, lookup) = admin(
         &s,
-        &format!("{V1}/accounts:lookup"),
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
         &json!({"federatedUserId": [{"providerId": "google.com", "rawId": "g-123"}]}),
     );
+    assert_eq!(status, 200);
     let info = &lookup["users"][0]["providerUserInfo"];
     assert!(info
         .as_array()
@@ -1169,11 +1171,12 @@ fn allow_duplicate_emails_applies_to_password_accounts_and_active_lookup() {
     let second = sign_up(&s, "duplicate@example.com");
     assert_ne!(first["localId"], second["localId"]);
 
-    let (_, lookup) = post(
+    let (status, lookup) = admin(
         &s,
-        &format!("{V1}/accounts:lookup"),
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
         &json!({"email": ["duplicate@example.com"]}),
     );
+    assert_eq!(status, 200);
     assert_eq!(lookup["users"][0]["localId"], second["localId"]);
 
     let (status, signed_in) = post(
@@ -1237,11 +1240,12 @@ fn an_unverified_provider_email_never_claims_an_existing_account() {
     assert_eq!(status, 200);
     assert_eq!(silent_refused["needConfirmation"], true);
     assert!(silent_refused.get("idToken").is_none());
-    let (_, lookup) = post(
+    let (status, lookup) = admin(
         &s,
-        &format!("{V1}/accounts:lookup"),
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
         &json!({"email": ["victim@example.com"]}),
     );
+    assert_eq!(status, 200);
     assert_eq!(lookup["users"].as_array().unwrap().len(), 1);
     assert_eq!(lookup["users"][0]["localId"], victim["localId"]);
     assert!(lookup["users"][0]["providerUserInfo"]

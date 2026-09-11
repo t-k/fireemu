@@ -90,7 +90,9 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Deleted-account credentials: corrected artifact recheck](auth-deleted-recheck.md). All 12 semantic observations match unchanged saved production results on the new artifact, including USER_NOT_FOUND for deleted ID/refresh credentials and successful unaffected-account controls. This is an unapproved recheck, not a new production run; the original mismatch remains preserved.
 
-[Deleted-account credentials: scoped approval](auth-deleted-recheck-approval.md). These 12 observations are verified and approved for the recorded artifact, settings and operation order against saved production observations. Identifier-based lookup authorization is explicitly excluded and requires a separate fix; no complete Auth claim follows.
+[Deleted-account credentials: scoped approval](auth-deleted-recheck-approval.md). These 12 observations are verified and approved for the recorded artifact, settings and operation order against saved production observations. Identifier-based lookup authorization is explicitly excluded from this approval; no complete Auth claim follows.
+
+[Current lookup authorization regressions](../../tools/auth-lookup-authorization/README.md) separate token-verified self lookup from authenticated Admin identifier search. These local regressions correct the identifier bypass independently of the approved deletion observations; no production error-code parity or complete Auth authorization claim is made.
 
 [Supplementary-character boundary: scoped human approval](auth-password-unicode-boundary-approval.md). The three recorded patterns are verified and approved: 4095/4096 UTF-16 units accepted, 4097 refused, with credential/state and cleanup controls. Only the pinned subject, artifact and settings are approved; no general Unicode or other-route claim follows.
 

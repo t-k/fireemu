@@ -33,6 +33,7 @@ jobs:
           cargo test --locked -p fireemu-core-auth --test jwt disabled_user
           cargo test --locked -p fireemu-core-auth deleted_refresh
           cargo test --locked -p fireemu-adapter-http --test identity_toolkit deleted_account_credentials
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit lookup_authorization
   offline-acquisition-integrity:
     runs-on: ubuntu-latest
     steps:
@@ -56,11 +57,5 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/disabled_history.py --check
       - name: Check original deletion mismatch and prior approval at their fixed source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/deleted_history.py --check
-      - name: Check corrected deleted-account artifact observation
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_deleted_recheck.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-deleted-recheck.py --check
-      - name: Check scoped deleted-account recheck approval
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/test_deleted_approval.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-deleted-recheck-approval.py --check
+      - name: Check approved deletion recheck at its fixed pre-lookup-fix source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/lookup_history.py --check

@@ -3303,6 +3303,30 @@ fn id_list(body: &Value, key: &str) -> Result<Vec<String>, JsonResponse> {
 }
 
 fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> JsonResponse {
+    if !admin {
+        // Select the trust boundary before parsing any administrator search criteria.
+        // End-user lookup always verifies a token and can return only its subject.
+        let session = match verify_session_with_error(store, body, at, |e| {
+            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                error(400, "USER_NOT_FOUND")
+            } else {
+                jwt_error(e)
+            }
+        }) {
+            Ok(session) => session,
+            Err(response) => return response,
+        };
+        if ["localId", "email", "phoneNumber", "federatedUserId"]
+            .iter()
+            .any(|field| body.get(*field).is_some())
+        {
+            return error(400, "OPERATION_NOT_ALLOWED");
+        }
+        return JsonResponse {
+            status: 200,
+            body: json!({"kind": "identitytoolkit#GetAccountInfoResponse", "users": [user_json(store, &session.uid)]}),
+        };
+    }
     let lists = (|| -> Result<_, JsonResponse> {
         let federated: Vec<(String, String)> =
             match body.get("federatedUserId") {
@@ -3340,32 +3364,12 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         );
     }
     if total == 0 {
-        if admin {
-            return error(
-                400,
-                "MISSING_IDENTIFIER : localId, email, phoneNumber or federatedUserId",
-            );
-        }
-        // Only lookup has a production observation for this error mapping.
-        // Token validation still precedes the user lookup inside the verifier.
-        return match verify_session_with_error(store, body, at, |e| {
-            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
-                error(400, "USER_NOT_FOUND")
-            } else {
-                jwt_error(e)
-            }
-        })
-        .map(|session| session.uid)
-        {
-            Ok(uid) => JsonResponse {
-                status: 200,
-                body: json!({"kind": "identitytoolkit#GetAccountInfoResponse", "users": [user_json(store, &uid)]}),
-            },
-            Err(r) => r,
-        };
+        return error(
+            400,
+            "MISSING_IDENTIFIER : localId, email, phoneNumber or federatedUserId",
+        );
     }
-    // Resolve every identifier, in request order, without duplicates. Federated
-    // identities are never linked in this runtime, so they match nobody.
+    // Authenticated Admin lookup resolves identifiers in request order without duplicates.
     let mut found: Vec<LocalId> = Vec::new();
     let mut push = |uid: LocalId| {
         if !found.contains(&uid) {

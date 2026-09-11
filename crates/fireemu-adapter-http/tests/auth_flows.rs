@@ -3664,6 +3664,96 @@ fn pending_retry_refuses_totp_finalize_and_enrollment_after_the_account_is_disab
     assert!(s.store.lock().unwrap().verification_codes().is_empty());
 }
 
+/// A `beforeSignIn` hook during which an administrator disables the account: the live
+/// store changes while the request holds no lock, as an Admin SDK call would do.
+struct DisableDuringHook {
+    store: Arc<Mutex<AuthStore>>,
+    uid: String,
+}
+
+impl AuthBlockingHook for DisableDuringHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if event == BlockingAuthEvent::BeforeSignIn {
+            let mut store = self.store.lock().unwrap();
+            let user = store.user_by_id(&self.uid).unwrap().local_id.clone();
+            store.user_mut(&user).unwrap().disabled = true;
+        }
+        Ok(json!({}))
+    }
+}
+
+#[test]
+fn pending_retry_survives_a_rejecting_hook_and_honors_a_disable_during_the_hook() {
+    let email = "pending-hook@example.com";
+    let (mut s, user) = pending_expiry_state(false, email);
+    let uid = user["localId"].as_str().unwrap().to_owned();
+    let pending = pending_login(&s, email);
+    let phone = start_phone_code(&s, &pending);
+    advance_clock(&s, 5);
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let count = s.store.lock().unwrap().pending_sign_in_count();
+    let last_login = |s: &AuthState| {
+        let (status, lookup) = admin(
+            s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        lookup["users"][0]["lastLoginAt"].clone()
+    };
+    let login_before = last_login(&s);
+
+    // The hook rejects: the candidate that consumed the code is discarded, so the code and
+    // the pending credential are still there for a retry.
+    s.blocking = Some(Arc::new(RejectBeforeSignInHook { timeout: false }));
+    let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+    assert_eq!(status, 503, "{refused}");
+    assert!(refused.get("idToken").is_none());
+    assert_eq!(get(&s, &format!("{EMU}/verificationCodes")).1, codes);
+    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count);
+    assert_eq!(last_login(&s), login_before);
+
+    // The account is disabled while the hook runs: the commit re-runs the finalize on the
+    // live store and refuses, and nothing is consumed or issued.
+    s.blocking = Some(Arc::new(DisableDuringHook {
+        store: Arc::clone(&s.store),
+        uid: uid.clone(),
+    }));
+    let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    assert!(refused.get("idToken").is_none());
+    assert!(refused.get("refreshToken").is_none());
+    assert_eq!(get(&s, &format!("{EMU}/verificationCodes")).1, codes);
+    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count);
+    assert_eq!(last_login(&s), login_before);
+
+    // Re-enabled with a passing hook, the same pending credential and code succeed once.
+    let (status, updated) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": uid, "disableUser": false}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    s.blocking = Some(Arc::new(PassThroughBlockingHook));
+    let (status, signed) = finalize_phone_step(&s, &pending, &phone);
+    assert_eq!(status, 200, "{signed}");
+    let (status, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["localId"], user["localId"]);
+    assert!(s.store.lock().unwrap().verification_codes().is_empty());
+    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+    assert_ne!(finalize_phone_step(&s, &pending, &phone).0, 200);
+}
+
 #[test]
 fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
     for strict in [false, true] {

@@ -3919,6 +3919,69 @@ fn pending_retry_concurrent_finalizes_of_one_credential_succeed_exactly_once() {
     assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
 }
 
+/// Production (recorded 2026-09-11, `tools/auth-blocking-disable`): when a `beforeSignIn`
+/// function answers `disabled: true`, the same request is refused with `USER_DISABLED`
+/// and no tokens are issued, for a first-factor sign-in and for an MFA finalize alike.
+#[test]
+fn pending_retry_hook_that_disables_the_account_refuses_the_same_request() {
+    let disabling = || -> Arc<dyn AuthBlockingHook> {
+        Arc::new(FixedBeforeSignInHook {
+            response: json!({"userRecord": {"updateMask": "disabled", "disabled": true}}),
+        })
+    };
+    // First factor only.
+    let mut s = state();
+    let user = sign_up(&s, "hook-disable@example.com");
+    s.blocking = Some(disabling());
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "hook-disable@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    assert!(refused.get("idToken").is_none() && refused.get("refreshToken").is_none());
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [user["localId"]]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["disabled"], true);
+    s.blocking = None;
+    let (status, again) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "hook-disable@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{again}");
+    assert_eq!(again["error"]["message"], "USER_DISABLED");
+
+    // Phone MFA finalize: the hook runs after the second factor; the refusal keeps the
+    // pending credential and code (pre-finalization policy) and persists the flag.
+    let email = "hook-disable-mfa@example.com";
+    let (mut s, user) = pending_expiry_state(false, email);
+    let pending = pending_login(&s, email);
+    let phone = start_phone_code(&s, &pending);
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    s.blocking = Some(disabling());
+    let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    assert!(refused.get("idToken").is_none() && refused.get("refreshToken").is_none());
+    assert_eq!(get(&s, &format!("{EMU}/verificationCodes")).1, codes);
+    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 1);
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [user["localId"]]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["disabled"], true);
+    s.blocking = Some(Arc::new(PassThroughBlockingHook));
+    assert_eq!(finalize_phone_step(&s, &pending, &phone).1["error"]["message"], "USER_DISABLED");
+}
+
 #[test]
 fn two_party_mfa_refusal_preserves_owner_code_and_factor() {
     for strict in [false, true] {

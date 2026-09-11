@@ -1883,6 +1883,17 @@ fn dispatch_with_blocking_hook(
                     Err(reason) => return error(400, &reason),
                 }
             }
+            // A hook response that disables the account refuses the very request that
+            // ran it (production, recorded 2026-09-11: USER_DISABLED, no tokens, for a
+            // first-factor sign-in and an MFA finalize alike). The flag is the only part
+            // of the attempt that persists: the consumed credentials and the provisional
+            // refresh session of the committed copy are dropped with it.
+            if issued_session.is_some() && committed.user(&uid).is_some_and(|u| u.disabled) {
+                if let Some(user) = live.user_mut(&uid) {
+                    user.disabled = true;
+                }
+                return error(400, "USER_DISABLED");
+            }
             if let Some(mut session) = issued_session.take() {
                 for name in &persisted_claim_names {
                     session.extra_claims.remove(name);

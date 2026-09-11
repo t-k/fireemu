@@ -45,11 +45,11 @@
   "local": {
     "artifact": {
       "kind": "local-build",
-      "sha256": "cee794fc1d059d4bae7152a2cff1c02889011f19cdc2b797b912d4579772559b",
+      "sha256": "3e5ffe3812295f71893e51c0d6260b61bbc01984c1d15cf7fc3d7604dfde7625",
       "version": "0.7.0"
     },
     "build": {
-      "artifactSha256": "cee794fc1d059d4bae7152a2cff1c02889011f19cdc2b797b912d4579772559b",
+      "artifactSha256": "3e5ffe3812295f71893e51c0d6260b61bbc01984c1d15cf7fc3d7604dfde7625",
       "command": [
         "cargo",
         "build",
@@ -462,7 +462,7 @@
           "refreshTokenPresent": true,
           "uidMatches": true
         },
-        "elapsedMs": 46,
+        "elapsedMs": 19,
         "httpStatus": 200,
         "id": "control-c-signup",
         "observedError": null,
@@ -475,7 +475,7 @@
           "photoUrlPersisted": false,
           "recordExists": true
         },
-        "elapsedMs": 54,
+        "elapsedMs": 22,
         "httpStatus": 200,
         "id": "control-c-signup-readback",
         "observedError": null,
@@ -493,7 +493,7 @@
           "refreshTokenPresent": true,
           "uidMatches": true
         },
-        "elapsedMs": 69,
+        "elapsedMs": 29,
         "httpStatus": 200,
         "id": "control-c-signin",
         "observedError": null,
@@ -502,7 +502,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 89,
+        "elapsedMs": 38,
         "httpStatus": 400,
         "id": "target-t-signup",
         "observedError": "USER_DISABLED",
@@ -511,7 +511,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 89,
+        "elapsedMs": 38,
         "httpStatus": null,
         "id": "target-t-token-lookup",
         "observedError": null,
@@ -520,7 +520,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 89,
+        "elapsedMs": 38,
         "httpStatus": null,
         "id": "target-t-token-refresh",
         "observedError": null,
@@ -532,7 +532,7 @@
           "disabledPersisted": true,
           "recordExists": true
         },
-        "elapsedMs": 95,
+        "elapsedMs": 40,
         "httpStatus": 200,
         "id": "target-t-record-readback",
         "observedError": null,
@@ -541,7 +541,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 101,
+        "elapsedMs": 43,
         "httpStatus": 400,
         "id": "target-t-signin",
         "observedError": "USER_DISABLED",
@@ -550,7 +550,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 108,
+        "elapsedMs": 46,
         "httpStatus": 400,
         "id": "target-t-second-signup",
         "observedError": "EMAIL_EXISTS",
@@ -568,7 +568,7 @@
           "refreshTokenPresent": true,
           "uidMatches": true
         },
-        "elapsedMs": 122,
+        "elapsedMs": 52,
         "httpStatus": 200,
         "id": "control-c-final-signin",
         "observedError": null,
@@ -604,36 +604,41 @@
       "triggerReadback": true
     },
     "instance": {
-      "childPid": 95941,
-      "nonce": "9752b12fd1c54c36a6e7bf6b2c8eaffe",
-      "parentPid": 95933,
+      "childPid": 12246,
+      "nonce": "df8caa16a4fa4c1a96ef3dfed06275ef",
+      "parentPid": 12238,
       "profile": "strict",
       "version": "0.7.0",
       "wrongTokenStatus": 403
     },
     "localFixtureInputs": {
       "tools/auth-blocking-create-disable/function-local/index.js": "1b9e481382e734ee2f76294c005455b10f4a267c769e343d6072989b600ad3a5",
+      "tools/auth-blocking-create-disable/function-local/package-lock.json": "6c6bd6a876a7222690ca73c84b5ef852ad589d0f283e7bec6238c4d7cd77d6d5",
       "tools/auth-blocking-create-disable/function-local/package.json": "b859c62e77a8bbd056ca52f3d53109d874914c0ee39151b23678cd3f1dbc2236"
     },
     "localFunctionFixture": "tools/auth-blocking-create-disable/function-local",
+    "nodeRuntime": {
+      "node": "v24.14.0",
+      "npm": "11.9.0"
+    },
     "ownedProcess": {
       "exitCode": 0,
       "listenersClosed": true,
-      "pid": 95933,
+      "pid": 12238,
       "stopped": true
     },
-    "privateReportSha256": "be425659cb42d409214cb6aef8bfa5ee5b3414ecce43bbaa88f9daca6a4570a6",
-    "probeSourceCommit": "98be37595fcd5b69bdae10dfad06ea0da8e541b8",
-    "recordedAt": "2026-09-11T16:47:30.504535+00:00",
+    "privateReportSha256": "fe1951075bbe248fde57d9795247774976ed8b8af55ae2525725102b09fa6503",
+    "probeSourceCommit": "3cadafe7a42effb58b392897298e583a32e51792",
+    "recordedAt": "2026-09-11T17:00:08.129343+00:00",
     "recordedWith": {
-      "recorderCommit": "5e6f3a32db85e46d9e34a37098e2cabafddf655b",
+      "recorderCommit": "3cadafe7a42effb58b392897298e583a32e51792",
       "recorderInputs": {
         "tools/auth-blocking-create-disable/create_contract.py": "bf12630cef3e94da2b216737c28a6225f83a71fd5e2296d48c16b22cfd63a455",
         "tools/auth-blocking-create-disable/create_recorder.py": "6de902fd800dda202ed39aaba438e1e0cf094443d31edd8dff194ac5bc151cb9"
       }
     },
-    "runtimeInputsCommit": "481b76e844a59721ddb1934ab9a3527bb246be74",
-    "runtimeSourceCommit": "98be37595fcd5b69bdae10dfad06ea0da8e541b8",
+    "runtimeInputsCommit": "3cadafe7a42effb58b392897298e583a32e51792",
+    "runtimeSourceCommit": "3cadafe7a42effb58b392897298e583a32e51792",
     "setup": {
       "c": true
     },
@@ -641,7 +646,7 @@
     "targetRecordExists": true
   },
   "productionSubjectSha256": "206490130d5191df9a25a80634315a2b2c0ba190860cc91f7455931a9c25b362",
-  "publicationContractSha256": "6f639ed4049a5f2096f6dee9197adc3aa16dbb8b108139c94baf4aa02ec0d317",
+  "publicationContractSha256": "ace7062d8b94e513a8c02d9dab84dd28efb1517c7e542975b71007b0952bb812",
   "schemaVersion": 1,
-  "scope": "Row-by-row comparison of the production candidate record of auth-blocking-create-disable revision 2 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-create-disable/function-local served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim beyond these ten cases."
+  "scope": "Row-by-row comparison of the production candidate record of auth-blocking-create-disable revision 2 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-create-disable/function-local served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim beyond these ten cases. Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture supported by fireemu's Functions runner, installed with npm ci from the committed lockfile. This comparison covers the resulting Auth behavior, not first- versus second-generation Functions SDK parity."
 }

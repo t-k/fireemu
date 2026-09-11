@@ -2,7 +2,7 @@
 
 Status: candidate comparison record, not approved. The production candidate record is unchanged; this page adds one run of the same corpus on an owned local artifact and compares the two row by row.
 
-Row-by-row comparison of the production candidate record of auth-blocking-create-disable revision 2 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-create-disable/function-local served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim beyond these ten cases.
+Row-by-row comparison of the production candidate record of auth-blocking-create-disable revision 2 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the local fixture in tools/auth-blocking-create-disable/function-local served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds. This is a comparison record, not a new production run, not an approval, and not a claim beyond these ten cases. Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture supported by fireemu's Functions runner, installed with npm ci from the committed lockfile. This comparison covers the resulting Auth behavior, not first- versus second-generation Functions SDK parity.
 
 | Case | Basis | Production outcome / error | Local outcome / error | Production checks | Local checks | Same semantic projection |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -19,9 +19,9 @@ Row-by-row comparison of the production candidate record of auth-blocking-create
 
 Differing rows: none.
 
-Comparison subject (unapproved): `02d63502dfd09a0125397b35237af27f9577051b6fc4498d8ce137841c1c75df`. Production subject compared: `206490130d5191df9a25a80634315a2b2c0ba190860cc91f7455931a9c25b362`.
+Comparison subject (unapproved): `8d21beb022a6afb5f1bb22aa9d164f9e6a16a469f6fa7379d1e3b5fcb4c8fd9e`. Production subject compared: `206490130d5191df9a25a80634315a2b2c0ba190860cc91f7455931a9c25b362`.
 
-Local artifact `0.7.0` built from the tree at `481b76e844a59721ddb1934ab9a3527bb246be74` (repository HEAD `98be37595fcd5b69bdae10dfad06ea0da8e541b8` at run time) with recorder files at `5e6f3a32db85e46d9e34a37098e2cabafddf655b`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
+Local artifact `0.7.0` built from the tree at `3cadafe7a42effb58b392897298e583a32e51792` (repository HEAD `3cadafe7a42effb58b392897298e583a32e51792` at run time) with recorder files at `3cadafe7a42effb58b392897298e583a32e51792`; strict profile; the Functions runtime served the local fixture through the repository runner at digest `a4a19393c150bf1f…`. Owned process exit 0 with listeners closed; both accounts and the pending state were deleted with absence confirmation.
 
 The local run has no deployment, trigger registration or configuration change, and reads phone codes from the emulator inspection route, so the `hook`, `functionRemoved` and configuration fields of the local report describe the fixture, not a cloud function. A row that differs is an open gap in the ledger, not a verdict about which side is right; the ledger names the follow-up.
 

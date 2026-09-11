@@ -49,11 +49,11 @@
   "local": {
     "artifact": {
       "kind": "local-build",
-      "sha256": "46f2a44100e884fc7f8a197f933a50dd945c2bb82ed8c4e2308817011c1cc2d8",
+      "sha256": "78f31ca03e16e004631537d9a0277df6adfdf074c9fba067096dacd65b84fbb2",
       "version": "0.7.0"
     },
     "build": {
-      "artifactSha256": "46f2a44100e884fc7f8a197f933a50dd945c2bb82ed8c4e2308817011c1cc2d8",
+      "artifactSha256": "78f31ca03e16e004631537d9a0277df6adfdf074c9fba067096dacd65b84fbb2",
       "command": [
         "cargo",
         "build",
@@ -466,7 +466,7 @@
           "refreshTokenPresent": true,
           "uidMatches": true
         },
-        "elapsedMs": 82,
+        "elapsedMs": 56,
         "httpStatus": 200,
         "id": "control-z-signin",
         "observedError": null,
@@ -478,7 +478,7 @@
           "disabledPersisted": false,
           "secondsSinceRefusal": null
         },
-        "elapsedMs": 86,
+        "elapsedMs": 59,
         "httpStatus": 200,
         "id": "x-readback-before",
         "observedError": null,
@@ -487,7 +487,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 91,
+        "elapsedMs": 62,
         "httpStatus": 400,
         "id": "x-first-signin",
         "observedError": "USER_DISABLED",
@@ -499,7 +499,7 @@
           "disabledPersisted": false,
           "secondsSinceRefusal": 0
         },
-        "elapsedMs": 99,
+        "elapsedMs": 67,
         "httpStatus": 200,
         "id": "x-readback-immediate",
         "observedError": null,
@@ -511,7 +511,7 @@
           "disabledPersisted": false,
           "secondsSinceRefusal": 5
         },
-        "elapsedMs": 5103,
+        "elapsedMs": 5082,
         "httpStatus": 200,
         "id": "x-readback-after-5s",
         "observedError": null,
@@ -523,7 +523,7 @@
           "disabledPersisted": false,
           "secondsSinceRefusal": 30
         },
-        "elapsedMs": 30116,
+        "elapsedMs": 30089,
         "httpStatus": 200,
         "id": "x-readback-after-30s",
         "observedError": null,
@@ -532,7 +532,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 30124,
+        "elapsedMs": 30093,
         "httpStatus": 400,
         "id": "x-second-signin",
         "observedError": "USER_DISABLED",
@@ -541,7 +541,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 30131,
+        "elapsedMs": 30097,
         "httpStatus": 400,
         "id": "y-first-signin",
         "observedError": "USER_DISABLED",
@@ -553,7 +553,7 @@
           "disabledPersisted": false,
           "secondsSinceRefusal": 30
         },
-        "elapsedMs": 60142,
+        "elapsedMs": 60111,
         "httpStatus": 200,
         "id": "y-readback-after-30s-unread",
         "observedError": null,
@@ -562,7 +562,7 @@
       },
       {
         "checks": {},
-        "elapsedMs": 60153,
+        "elapsedMs": 60115,
         "httpStatus": 400,
         "id": "y-second-signin",
         "observedError": "USER_DISABLED",
@@ -580,7 +580,7 @@
           "refreshTokenPresent": true,
           "uidMatches": true
         },
-        "elapsedMs": 60171,
+        "elapsedMs": 60121,
         "httpStatus": 200,
         "id": "control-z-final-signin",
         "observedError": null,
@@ -610,36 +610,41 @@
       "triggerReadback": true
     },
     "instance": {
-      "childPid": 95181,
-      "nonce": "b4770d9d28814bd6bb1fd6b4867a4539",
-      "parentPid": 95173,
+      "childPid": 11204,
+      "nonce": "66ece6512ca74aa9a1b74db313acc2a9",
+      "parentPid": 11197,
       "profile": "strict",
       "version": "0.7.0",
       "wrongTokenStatus": 403
     },
     "localFixtureInputs": {
       "tools/auth-blocking-disable/function-local/index.js": "4d228d4aa0b35ee033e36c2ec4b508788a6868d93e50d4c0a9be20d1db6ef984",
+      "tools/auth-blocking-disable/function-local/package-lock.json": "6b851fd39262af25cfcb37d4e79e8dd21ad37fac3d56aaf27e2e75185a5fc87d",
       "tools/auth-blocking-disable/function-local/package.json": "f8d422820176bfedb2b7af6a816567a912a23dcee2c0b483904cd2b582a268b8"
     },
     "localFunctionFixture": "tools/auth-blocking-disable/function-local",
+    "nodeRuntime": {
+      "node": "v24.14.0",
+      "npm": "11.9.0"
+    },
     "ownedProcess": {
       "exitCode": 0,
       "listenersClosed": true,
-      "pid": 95173,
+      "pid": 11197,
       "stopped": true
     },
-    "privateReportSha256": "2d882442c18a3a25464cff38d02880ede4ca0fece403357b57f0f734adaeef3b",
-    "probeSourceCommit": "98be37595fcd5b69bdae10dfad06ea0da8e541b8",
-    "recordedAt": "2026-09-11T16:46:18.664214+00:00",
+    "privateReportSha256": "4d60b8c206267b5680cf9f1d2f65090cb76b1745f944fed620eb8e25de4dc3bb",
+    "probeSourceCommit": "3cadafe7a42effb58b392897298e583a32e51792",
+    "recordedAt": "2026-09-11T16:59:04.944925+00:00",
     "recordedWith": {
-      "recorderCommit": "512b043559ecce10a2614c5cf3ea43f816dab347",
+      "recorderCommit": "3cadafe7a42effb58b392897298e583a32e51792",
       "recorderInputs": {
         "tools/auth-blocking-readback/readback_contract.py": "3afaf7191eca3fbf8e8c68cf88fa708165225f6a7a40f5de9a117d0b3eb2433e",
         "tools/auth-blocking-readback/readback_recorder.py": "0ea007781fe25186c389a2d881aaf5bc5b40931e518d125db8e76b7910070151"
       }
     },
-    "runtimeInputsCommit": "481b76e844a59721ddb1934ab9a3527bb246be74",
-    "runtimeSourceCommit": "98be37595fcd5b69bdae10dfad06ea0da8e541b8",
+    "runtimeInputsCommit": "3cadafe7a42effb58b392897298e583a32e51792",
+    "runtimeSourceCommit": "3cadafe7a42effb58b392897298e583a32e51792",
     "setup": {
       "x": true,
       "y": true,
@@ -648,7 +653,7 @@
     "target": "local"
   },
   "productionSubjectSha256": "81dae6d26f525a31e121abb87669e875026696f50ce44a223fc9c396c9806b9b",
-  "publicationContractSha256": "b416b92bb8f6da1f068b29e571f844b9002aee2e870500bf52666ec854d9aef6",
+  "publicationContractSha256": "45d23ca836c9b6c9e384858520a4002a5915a6337777c4ee6d9bb492e286b84f",
   "schemaVersion": 1,
-  "scope": "Row-by-row comparison of the production candidate record of auth-blocking-readback revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the disabling local fixture from tools/auth-blocking-disable served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds and the measured seconds since the refusal. This is a comparison record, not a new production run, not an approval, and not a claim beyond these eleven cases on one time axis."
+  "scope": "Row-by-row comparison of the production candidate record of auth-blocking-readback revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the disabling local fixture from tools/auth-blocking-disable served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds and the measured seconds since the refusal. This is a comparison record, not a new production run, not an approval, and not a claim beyond these eleven cases on one time axis. Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture supported by fireemu's Functions runner, installed with npm ci from the committed lockfile. This comparison covers the resulting Auth behavior, not first- versus second-generation Functions SDK parity."
 }

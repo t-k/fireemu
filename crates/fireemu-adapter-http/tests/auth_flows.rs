@@ -3908,7 +3908,10 @@ fn pending_retry_concurrent_finalizes_of_one_credential_succeed_exactly_once() {
     });
     let successes: Vec<&Value> = results.iter().filter(|(status, _)| *status == 200).map(|(_, body)| body).collect();
     assert_eq!(successes.len(), 1, "{results:?}");
-    assert!(results.iter().filter(|(status, _)| *status != 200).all(|(_, body)| body.get("idToken").is_none()));
+    assert!(results
+        .iter()
+        .filter(|(status, _)| *status != 200)
+        .all(|(_, body)| body.get("idToken").is_none() && body.get("refreshToken").is_none()));
     let (status, lookup) = post(&s, &format!("{V1}/accounts:lookup"), &json!({"idToken": successes[0]["idToken"]}));
     assert_eq!(status, 200, "{lookup}");
     assert_eq!(lookup["users"][0]["localId"], user["localId"]);

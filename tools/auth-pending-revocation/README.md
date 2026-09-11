@@ -16,3 +16,11 @@ uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/a
 The held credential was accepted: after the `validSince` update and its readback, start and finalize with the credential issued before the update returned 200, the ID token's `auth_time` was at or after the set `validSince`, lookup succeeded and the refresh token was redeemable. The two-second wait precedes the update, not the retry; the run did not measure the gap between the update and the retry (later runs record it) and did not check that a pre-update refresh token was refused. Baseline, fresh and control rows all succeeded, the configuration was restored with a matching digest, and cleanup confirmed absence. This matches the local behavior recorded in `tools/auth-pending-retry/README.md`, where finalization does not compare the pending credential's start time with `validSince`. Earlier attempts in the same session failed before any observation row on the SMS region policy (`OPERATION_NOT_ALLOWED`, region not enabled) and on enforcement lagging the configuration readback; both were resolved in the recorder without changing the observation design.
 
 This covers explicit revocation only: no password change, no tenant, no blocking hook, phone MFA with test numbers, a two-second gap, and one run. It does not cover the pending credential's own expiry, SDK `checkRevoked`, or the precedence of overlapping refusals. Publication as a receipt and page, and any human approval, are separate steps.
+
+## Local run of the same corpus
+
+`revocation_owned.py` builds and owns the strict fireemu artifact and runs the same `observe()` against it with no configuration change and codes read from the emulator inspection route. On 2026-09-12 all eight rows agreed with the approved production record (the held credential is accepted after the validSince update on both sides); the comparison record is published separately.
+
+```sh
+uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-revocation/revocation_owned.py --output /absolute/private/new-local
+```

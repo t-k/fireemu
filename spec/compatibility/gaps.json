@@ -27,12 +27,12 @@
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
       "productionObservationStatus": "approved",
-      "comparisonStatus": "none",
+      "comparisonStatus": "mismatch",
       "evidenceRefs": [
-        "docs/compatibility/auth-blocking-disable-approval.md",
+        "docs/compatibility/auth-blocking-disable-comparison.md",
         "tools/auth-blocking-disable/README.md"
       ],
-      "nextAction": "Run the same corpus against the current local artifact (EVID-U04) and record a separate comparison; the approval covers the production record only.",
+      "nextAction": "Local comparison recorded: the refusal on the same request matches; the immediate readback of the flag differs on one path and is tracked as GAP-AUTH-001.",
       "blockedReason": "",
       "requiresProductionChange": false
     },
@@ -492,15 +492,16 @@
       "id": "EVID-U04",
       "feature": "AUTH-BLOCKING",
       "kind": "untested",
-      "scope": "Local side of the two production-only receipts: the blocking-disable corpus ran on the current local artifact on 2026-09-12 (one readback row differs); the pending-revocation corpus has not run locally yet.",
-      "implementationStatus": "unknown",
+      "scope": "Local side of the two production-only receipts: both corpora ran on the current local artifact on 2026-09-12 and comparison records are published (blocking disable: one readback row differs; pending revocation: all eight rows agree in scope).",
+      "implementationStatus": "implemented",
       "localTestStatus": "passing",
-      "productionObservationStatus": "none",
-      "comparisonStatus": "none",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
-        "docs/compatibility/README.md"
+        "docs/compatibility/auth-blocking-disable-comparison.md",
+        "docs/compatibility/auth-pending-revocation-comparison.md"
       ],
-      "nextAction": "Publish the blocking-disable comparison record; add a local mode to the pending-revocation recorder and run it on a new artifact.",
+      "nextAction": "Closed for these two corpora; the remaining readback difference is tracked as GAP-AUTH-001. Keep future production-only receipts paired with a local comparison.",
       "blockedReason": "",
       "requiresProductionChange": false
     },

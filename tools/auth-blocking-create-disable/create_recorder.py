@@ -236,7 +236,7 @@ def observe(output, origin=None):
         else:
             report["hook"] = {"deployed": True, "triggerReadback": True}
             report["localFunctionFixture"] = (
-                "tools/auth-blocking-disable/function-local"
+                "tools/auth-blocking-create-disable/function-local"
             )
         query = f"?key={urllib.parse.quote(key, safe='')}"
 

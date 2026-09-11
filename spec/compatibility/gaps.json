@@ -499,7 +499,7 @@
       "scope": "Local side of production-only receipts: every production candidate or approved record is paired with a local run of the same corpus and a published comparison record. As of 2026-09-12 all five corpora (blocking disable, pending revocation, readback timing, revision 2 created-then-disabled, disabled-account administrative update) have comparison records bound to their build commits and fixture digests.",
       "implementationStatus": "implemented",
       "localTestStatus": "passing",
-      "productionObservationStatus": "approved",
+      "productionObservationStatus": "recorded",
       "comparisonStatus": "none",
       "evidenceRefs": [
         "docs/compatibility/auth-blocking-disable-comparison.md",
@@ -532,7 +532,7 @@
     {
       "id": "EVID-U04B",
       "feature": "AUTH-SMS-MFA",
-      "kind": "unobserved",
+      "kind": "untested",
       "scope": "Comparison result of the pending-revocation corpus: all eight rows agree in scope between the owned local artifact and the approved production record.",
       "implementationStatus": "implemented",
       "localTestStatus": "passing",
@@ -603,10 +603,11 @@
       "productionObservationStatus": "recorded",
       "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
+        "docs/compatibility/auth-blocking-create-disable-r1.md",
         "tools/auth-blocking-create-disable/README.md",
         "crates/fireemu-adapter-http/tests/auth_flows.rs"
       ],
-      "nextAction": "Publish the revision 1 record as the evidence for this field; nothing else to do.",
+      "nextAction": "None; the revision 1 production record is published (auth-blocking-create-disable-r1) and fireemu keeps ignoring photoUrl at sign-up.",
       "blockedReason": "",
       "requiresProductionChange": true
     }

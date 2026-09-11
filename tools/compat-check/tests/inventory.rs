@@ -222,6 +222,13 @@ fn inventory_mutations_cannot_turn_mapping_into_verification() {
         ("gap with an invented status", "gaps.json", |v| {
             v["gaps"][0]["productionObservationStatus"] = json!("verified");
         }),
+        (
+            "unobserved gap with a production observation",
+            "gaps.json",
+            |v| {
+                v["gaps"][0]["productionObservationStatus"] = json!("recorded");
+            },
+        ),
         ("duplicate feature", "features.json", |v| {
             let row = v["features"][0].clone();
             v["features"].as_array_mut().unwrap().push(row);

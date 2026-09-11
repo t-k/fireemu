@@ -61,6 +61,7 @@ def local_report(tmp_path, monkeypatch):
                 "sha256": "e" * 64,
             },
             "localFixtureInputs": {path: "f" * 64 for path in publisher.FIXTURE_FILES},
+            "nodeRuntime": {"node": "v24.14.0", "npm": "11.6.0"},
             "probeInputs": {path: "9" * 64 for path in publisher.RECORDER_FILES},
         }
     )

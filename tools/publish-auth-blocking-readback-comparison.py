@@ -32,7 +32,7 @@ BUNDLE = (
     ROOT / "spec/compatibility/evidence/auth-blocking-readback/local-comparison.json"
 )
 PAGE = ROOT / "docs/compatibility/auth-blocking-readback-comparison.md"
-SCOPE = "Row-by-row comparison of the production candidate record of auth-blocking-readback revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the disabling local fixture from tools/auth-blocking-disable served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds and the measured seconds since the refusal. This is a comparison record, not a new production run, not an approval, and not a claim beyond these eleven cases on one time axis."
+SCOPE = "Row-by-row comparison of the production candidate record of auth-blocking-readback revision 1 with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth,functions, the disabling local fixture from tools/auth-blocking-disable served by the repository's Functions runner). Semantic projections exclude elapsed milliseconds and the measured seconds since the refusal. This is a comparison record, not a new production run, not an approval, and not a claim beyond these eleven cases on one time axis. Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture supported by fireemu's Functions runner, installed with npm ci from the committed lockfile. This comparison covers the resulting Auth behavior, not first- versus second-generation Functions SDK parity."
 RECORDER_FILES = (
     "tools/auth-blocking-readback/readback_contract.py",
     "tools/auth-blocking-readback/readback_recorder.py",
@@ -65,7 +65,9 @@ RUNNER_KEYS = ("path", "sha256")
 FIXTURE_FILES = (
     "tools/auth-blocking-disable/function-local/index.js",
     "tools/auth-blocking-disable/function-local/package.json",
+    "tools/auth-blocking-disable/function-local/package-lock.json",
 )
+NODE_RUNTIME_KEYS = ("node", "npm")
 
 
 def hex_value(value, length=64):
@@ -144,6 +146,7 @@ def project_local(report, recorder_commit, runtime_commit):
     out["build"] = {key: report["build"][key] for key in BUILD_KEYS}
     out["functionsRunner"] = exact_keys(report["functionsRunner"], RUNNER_KEYS)
     out["localFixtureInputs"] = exact_keys(report["localFixtureInputs"], FIXTURE_FILES)
+    out["nodeRuntime"] = exact_keys(report["nodeRuntime"], NODE_RUNTIME_KEYS)
     out["privateReportSha256"] = digest(report)
     hex_value(recorder_commit, 40)
     hex_value(runtime_commit, 40)
@@ -168,6 +171,7 @@ def validate_local(local):
             "build",
             "functionsRunner",
             "localFixtureInputs",
+            "nodeRuntime",
             "privateReportSha256",
             "recordedWith",
             "runtimeInputsCommit",
@@ -233,6 +237,8 @@ def validate_local(local):
         runner["sha256"]
         == git_blob_sha256(local["runtimeInputsCommit"], runner["path"])
     )
+    node = exact_keys(local["nodeRuntime"], NODE_RUNTIME_KEYS)
+    require(all(re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+", v) for v in node.values()))
     fixture = exact_keys(local["localFixtureInputs"], FIXTURE_FILES)
     for path, value in fixture.items():
         hex_value(value)

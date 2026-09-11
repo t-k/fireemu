@@ -149,8 +149,10 @@ def run(output):
         }
         # fireemu's Functions runtime loads the codebase with Node; the SDK must resolve
         # from the codebase itself, so it is installed into the private copy.
+        # `npm ci` installs exactly the committed lockfile, so the dependency tree the
+        # runtime loads is the one whose digest the record carries.
         install = subprocess.run(
-            ["npm", "install", "--no-audit", "--no-fund", "--loglevel=error"],
+            ["npm", "ci", "--no-audit", "--no-fund", "--loglevel=error"],
             cwd=fixture,
             capture_output=True,
             text=True,
@@ -270,6 +272,12 @@ def run(output):
             }
             report["build"] = build
             report["localFixtureInputs"] = fixture_inputs
+            report["nodeRuntime"] = {
+                tool: subprocess.check_output(
+                    [tool, "--version"], env=environment, text=True, timeout=30
+                ).strip()
+                for tool in ("node", "npm")
+            }
             report["functionsRunner"] = {
                 "path": "tools/runner-node/index.mjs",
                 "sha256": runner_hash,

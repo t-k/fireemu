@@ -709,6 +709,16 @@ impl Inventory {
             {
                 fail(p, "CI-03", id, "a fix needs passing local tests");
             }
+            if text(gap, "kind") == "unobserved"
+                && text(gap, "productionObservationStatus") != "none"
+            {
+                fail(
+                    p,
+                    "CI-03",
+                    id,
+                    "an unobserved gap cannot carry a production observation; change its kind",
+                );
+            }
         }
     }
 }

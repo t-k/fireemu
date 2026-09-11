@@ -4137,10 +4137,11 @@ fn pending_retry_admin_credential_change_tokens_follow_the_enabled_state_after_u
     }
 }
 
-/// `accounts:signUp` accepts `photoUrl` next to `displayName` (REST reference); it is on
-/// the record for lookup and visible to a blocking hook on the creating request.
+/// Production (recorded 2026-09-12, `tools/auth-blocking-create-disable`): a `photoUrl` sent
+/// with `accounts:signUp` is not persisted; it is absent on lookup and a blocking hook on
+/// the creating request does not see it. fireemu keeps ignoring it.
 #[test]
-fn pending_retry_sign_up_stores_the_photo_url_before_the_hook_runs() {
+fn pending_retry_sign_up_does_not_persist_a_photo_url() {
     struct PhotoHook(Arc<Mutex<Vec<Option<String>>>>);
     impl AuthBlockingHook for PhotoHook {
         fn invoke(
@@ -4155,6 +4156,8 @@ fn pending_retry_sign_up_stores_the_photo_url_before_the_hook_runs() {
         }
     }
     let mut s = state();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    s.blocking = Some(Arc::new(PhotoHook(Arc::clone(&seen))));
     let (status, created) = post(
         &s,
         &format!("{V1}/accounts:signUp"),
@@ -4167,18 +4170,9 @@ fn pending_retry_sign_up_stores_the_photo_url_before_the_hook_runs() {
         &format!("{V1}/projects/demo-app/accounts:lookup"),
         &json!({"localId": [created["localId"]]}),
     );
-    assert_eq!(lookup["users"][0]["photoUrl"], "https://example.test/signup.png");
-    // A hook keyed on the photo URL sees it on the creating request.
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    s.blocking = Some(Arc::new(PhotoHook(Arc::clone(&seen))));
-    let (status, second) = post(
-        &s,
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "signup-photo-2@example.com", "password": "hunter22",
-            "photoUrl": "https://example.test/hooked.png", "returnSecureToken": true}),
-    );
-    assert_eq!(status, 200, "{second}");
-    assert_eq!(seen.lock().unwrap().as_slice(), [Some("https://example.test/hooked.png".to_owned())]);
+    assert!(lookup["users"][0].get("photoUrl").is_none(), "{lookup}");
+    assert_eq!(lookup["users"][0]["displayName"], "Photo");
+    assert_eq!(seen.lock().unwrap().as_slice(), [None]);
 }
 
 #[test]

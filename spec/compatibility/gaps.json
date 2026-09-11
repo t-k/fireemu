@@ -40,7 +40,7 @@
       "id": "GAP-AUTH-001",
       "feature": "AUTH-BLOCKING",
       "kind": "mismatch",
-      "scope": "Immediate Admin readback of the disabled flag after a hook-disabled request: production run3 read false for the password sign-in account and true for the MFA account. The same corpus on the current local artifact (2026-09-12, tools/auth-blocking-disable/blocking_owned.py) matched every other row and read true for both accounts.",
+      "scope": "Immediate Admin readback of the disabled flag after a hook-disabled request: production run3 read false for the password sign-in account and true for the MFA account. The same corpus on the current local artifact (2026-09-12, tools/auth-blocking-disable/blocking_owned.py) matched every other row and read true for both accounts. The readback-timing corpus (tools/auth-blocking-readback) ran locally on 2026-09-12: the flag reads true at every point after the refusal on the local artifact; the production run of that corpus is pending approval.",
       "implementationStatus": "implemented",
       "localTestStatus": "passing",
       "productionObservationStatus": "approved",
@@ -106,7 +106,7 @@
       "id": "AUTH-U02",
       "feature": "AUTH-BLOCKING",
       "kind": "unobserved",
-      "scope": "An account created by the request that a blocking function disables: whether the created record persists, beforeCreate versus beforeSignIn order, and differences from existing accounts. fireemu keeps the created, disabled record without a session; unobserved.",
+      "scope": "An account created by the request that a blocking function disables. Revision 1 of the corpus selected on a sign-up photo URL that production does not persist, so the function never matched and the case stays unobserved; revision 2 selects on an email prefix. fireemu keeps the created, disabled record without a session.",
       "implementationStatus": "implemented",
       "localTestStatus": "passing",
       "productionObservationStatus": "none",
@@ -114,8 +114,8 @@
       "evidenceRefs": [
         "tools/auth-blocking-create-disable/README.md"
       ],
-      "nextAction": "Corpus, fixtures, offline safety tests and a local run exist (tools/auth-blocking-create-disable); run it in production once the deployment is approved, then publish the comparison.",
-      "blockedReason": "Production deployment and execution not yet approved for this corpus.",
+      "nextAction": "Run revision 2 in production once its deployment is approved, then publish the comparison.",
+      "blockedReason": "Production deployment and execution of revision 2 not yet approved.",
       "requiresProductionChange": true
     },
     {
@@ -557,16 +557,16 @@
       "id": "GAP-AUTH-002",
       "feature": "AUTH-USERS",
       "kind": "mismatch",
-      "scope": "accounts:signUp ignored the documented photoUrl field, so the record had no photo URL and a blocking hook could not see it on the creating request. Fixed locally: sign-up stores photoUrl before the hook runs. Production confirmation of the persisted field comes with the AUTH-U02 corpus control row.",
+      "scope": "accounts:signUp and photoUrl: the REST reference lists the field, but production does not persist it (recorded 2026-09-12, control row of tools/auth-blocking-create-disable revision 1: absent on lookup, invisible to a blocking hook). fireemu had ignored it; a same-day change to store it was reverted and the regression now pins that it stays ignored.",
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
-      "productionObservationStatus": "none",
-      "comparisonStatus": "none",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
         "tools/auth-blocking-create-disable/README.md",
         "crates/fireemu-adapter-http/tests/auth_flows.rs"
       ],
-      "nextAction": "Confirm with the AUTH-U02 production run (control-c-signup-readback.photoUrlPersisted).",
+      "nextAction": "Publish the revision 1 record as the evidence for this field; nothing else to do.",
       "blockedReason": "",
       "requiresProductionChange": true
     }

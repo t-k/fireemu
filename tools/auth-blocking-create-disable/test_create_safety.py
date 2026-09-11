@@ -6,7 +6,14 @@ import json
 import types
 
 import create_recorder as recorder
-from create_contract import CASES, CONTROL_PHOTO, DIAGNOSTIC, SELECTOR, complete
+from create_contract import (
+    CASES,
+    CONTROL_PHOTO,
+    DIAGNOSTIC,
+    SELECTOR,
+    SELECTOR_PHOTO,
+    complete,
+)
 
 
 class World:
@@ -65,7 +72,7 @@ class World:
                 "_token": f"id-token-secret-{uid}",
                 "_refresh": f"refresh-secret-{uid}",
             }
-            if body.get("photoUrl") == SELECTOR:
+            if body["email"].startswith(SELECTOR):
                 if self.shape == "refused-no-record":
                     return 400, {"error": {"message": "USER_DISABLED"}}
                 user["disabled"] = True
@@ -168,4 +175,4 @@ def test_refused_with_a_disabled_record_completes_and_deletes_it(tmp_path, monke
 
 
 def test_contract_shape():
-    assert len(CASES) == 10 and len(DIAGNOSTIC) == 5 and CONTROL_PHOTO != SELECTOR
+    assert len(CASES) == 10 and len(DIAGNOSTIC) == 5 and CONTROL_PHOTO != SELECTOR_PHOTO

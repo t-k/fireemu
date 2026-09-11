@@ -30,7 +30,7 @@ DIAGNOSTIC = (
     "target-t-signin",
     "target-t-second-signup",
 )
-CORPUS = {"slice": "auth-blocking-create-disable", "revision": 1, "cases": list(CASES)}
+CORPUS = {"slice": "auth-blocking-create-disable", "revision": 2, "cases": list(CASES)}
 ERRORS = {
     "USER_DISABLED",
     "EMAIL_EXISTS",
@@ -46,7 +46,13 @@ SIGNIN_CHECKS = set(tokens({}, "uid", "email")) | {"derivedLookup"}
 SIGNUP_CHECKS = set(tokens({}, "uid", "email")) | {"derivedLookup"}
 READBACK_CHECKS = {"recordExists", "disabledPersisted"}
 CONTROL_READBACK_CHECKS = {"recordExists", "photoUrlPersisted", "notDisabled"}
-SELECTOR = "https://example.test/fireemu-disable-on-create"
+# Revision 1 selected on a sign-up photo URL; production does not persist that field
+# (recorded 2026-09-12), so the hook never matched. Revision 2 selects on a fixed hex
+# prefix of the sign-up email's local part, which stays within the owned-account email
+# shape; the control keeps a random local part. Both sign-ups still send a photo URL so
+# the control readback keeps observing whether sign-up persists it.
+SELECTOR = "fireemu-basic-d15ab1e"
+SELECTOR_PHOTO = "https://example.test/fireemu-disable-on-create"
 CONTROL_PHOTO = "https://example.test/fireemu-control-photo"
 
 

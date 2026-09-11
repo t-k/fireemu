@@ -25,6 +25,7 @@ from create_contract import (
     CONTROL_PHOTO,
     CORPUS,
     SELECTOR,
+    SELECTOR_PHOTO,
     complete,
     error_code,
     require,
@@ -368,8 +369,14 @@ def observe(output, origin=None):
         def new_account(label, selector):
             directory = output / label
             directory.mkdir(mode=0o700)
+            # The target's local part starts with the selector prefix; the rest of the
+            # thirty-two hex characters stays random.
+            local = (
+                SELECTOR[len("fireemu-basic-") :] if selector else ""
+            ) + secrets.token_hex(16)
+            local = local[:32]
             account = {
-                "email": "fireemu-basic-" + secrets.token_hex(16) + "@example.test",
+                "email": "fireemu-basic-" + local + "@example.test",
                 "marker": "fireemu-owned-" + secrets.token_hex(24),
                 "password": "Aa9!" + secrets.token_urlsafe(32),
                 "uid": None,
@@ -398,7 +405,7 @@ def observe(output, origin=None):
             }
             # Both sign-ups carry a photo URL: the selector for the target, a plain one
             # for the control, so the control also observes whether sign-up persists it.
-            body["photoUrl"] = SELECTOR if account["selector"] else CONTROL_PHOTO
+            body["photoUrl"] = SELECTOR_PHOTO if account["selector"] else CONTROL_PHOTO
             return client("signUp", body)
 
         def recover_uid(account):

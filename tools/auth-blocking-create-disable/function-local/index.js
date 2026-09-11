@@ -2,10 +2,11 @@
 // the SDK version fireemu's runner supports). Never deployed anywhere.
 const { beforeUserSignedIn } = require("firebase-functions/v2/identity");
 
-const SELECTOR = "https://example.test/fireemu-disable-on-create";
+const SELECTOR = "fireemu-basic-d15ab1e";
 
 exports.fireemuDisableOnCreate = beforeUserSignedIn((event) => {
-  if (event.data && event.data.photoURL === SELECTOR) {
+  const email = event.data && event.data.email;
+  if (typeof email === "string" && email.startsWith(SELECTOR)) {
     return { disabled: true };
   }
   return {};

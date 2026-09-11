@@ -2954,13 +2954,9 @@ fn sign_up(
             u.display_name = Some(name.to_owned());
         }
     }
-    // `photoUrl` is a documented sign-up field alongside `displayName`; it is stored
-    // before any blocking hook runs so a hook can see it on the new record.
-    if let Some(photo) = str_field(body, "photoUrl") {
-        if let Some(u) = store.user_mut(&uid) {
-            u.photo_url = Some(photo.to_owned());
-        }
-    }
+    // `photoUrl` is listed on the sign-up request but production does not persist it
+    // (recorded 2026-09-12, tools/auth-blocking-create-disable: the control's photo URL
+    // was absent on lookup and invisible to a blocking hook); it stays ignored here.
     store.record_sign_in(&uid, at);
     let display_name = store.user(&uid).and_then(|u| u.display_name.clone());
     match issue_tokens(store, &uid, None, at) {

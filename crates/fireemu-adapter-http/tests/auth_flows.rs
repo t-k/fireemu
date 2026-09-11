@@ -3352,87 +3352,106 @@ fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
     }
 }
 
+/// A verified user with one phone factor, plus closures that sign in (pending), start the
+/// phone step and finalize it against the shared state.
+fn pending_expiry_state(
+    strict: bool,
+    email: &str,
+) -> (AuthState, Value) {
+    let (s, _) = oob_authorization_state(strict);
+    let user = sign_up(&s, email);
+    let (status, seeded) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": user["localId"], "emailVerified": true,
+            "mfa": {"enrollments": [{"phoneInfo": "+15559876543"}]}}),
+    );
+    assert_eq!(status, 200, "{seeded}");
+    (s, user)
+}
+
+fn advance_clock(s: &AuthState, seconds: i64) {
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(seconds))
+        .unwrap();
+}
+
+fn pending_login(s: &AuthState, email: &str) -> Value {
+    let (status, response) = post(
+        s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert!(response.get("idToken").is_none());
+    response
+}
+
+fn start_phone_step(s: &AuthState, pending: &Value) -> (u16, Value) {
+    post(
+        s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+            "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+    )
+}
+
+/// Starts the phone step and returns its `phoneVerificationInfo` from the code listing.
+fn start_phone_code(s: &AuthState, pending: &Value) -> Value {
+    let (status, started) = start_phone_step(s, pending);
+    assert_eq!(status, 200, "{started}");
+    let session = started["phoneResponseInfo"]["sessionInfo"].clone();
+    let (_, codes) = get(s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["sessionInfo"] == session)
+        .map(|c| c["code"].clone())
+        .unwrap();
+    json!({"sessionInfo": session, "code": code})
+}
+
+fn finalize_phone_step(s: &AuthState, pending: &Value, phone: &Value) -> (u16, Value) {
+    finalize_mfa(
+        s,
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": phone}),
+    )
+}
+
 #[test]
-fn pending_retry_survives_sms_expiry_until_the_pending_credential_expires() {
-    use fireemu_core_auth::store::{PENDING_SIGN_IN_TTL_SECONDS, SMS_CODE_TTL_SECONDS};
-    use fireemu_core_types::time::LogicalDuration;
+fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
+    use fireemu_core_auth::store::SMS_CODE_TTL_SECONDS;
     for strict in [false, true] {
-        let (s, _) = oob_authorization_state(strict);
-        let user = sign_up(&s, "pending-expiry@example.com");
-        let (status, seeded) = admin(
-            &s,
-            &format!("{V1}/projects/demo-app/accounts:update"),
-            &json!({"localId": user["localId"], "emailVerified": true,
-                "mfa": {"enrollments": [{"phoneInfo": "+15559876543"}]}}),
-        );
-        assert_eq!(status, 200, "{seeded}");
-        let advance = |seconds: i64| {
-            s.clock
-                .lock()
-                .unwrap()
-                .advance(LogicalDuration::from_seconds(seconds))
-                .unwrap();
-        };
-        let login = || {
-            let (status, response) = post(
-                &s,
-                &format!("{V1}/accounts:signInWithPassword"),
-                &json!({"email": "pending-expiry@example.com", "password": "hunter22"}),
-            );
-            assert_eq!(status, 200, "{response}");
-            assert!(response.get("idToken").is_none());
-            response
-        };
-        let start = |pending: &Value| {
-            let (status, started) = post(
-                &s,
-                &format!("{V2}/accounts/mfaSignIn:start"),
-                &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
-                    "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
-            );
-            assert_eq!(status, 200, "{started}");
-            let session = started["phoneResponseInfo"]["sessionInfo"].clone();
-            let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
-            let code = codes["verificationCodes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|c| c["sessionInfo"] == session)
-                .map(|c| c["code"].clone())
-                .unwrap();
-            json!({"sessionInfo": session, "code": code})
-        };
-        let finalize = |pending: &Value, phone: &Value| {
-            finalize_mfa(
-                &s,
-                &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": phone}),
-            )
-        };
+        let email = "pending-expiry@example.com";
+        let (s, user) = pending_expiry_state(strict, email);
 
         // Exactly at the SMS lifetime the code is still accepted.
-        let pending = login();
-        let phone = start(&pending);
-        advance(SMS_CODE_TTL_SECONDS);
-        let (status, signed) = finalize(&pending, &phone);
+        let pending = pending_login(&s, email);
+        let phone = start_phone_code(&s, &pending);
+        advance_clock(&s, SMS_CODE_TTL_SECONDS);
+        let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
 
         // One second past it the code is refused, but the pending credential is kept: the
         // same pending credential can start a fresh code and finalize with it.
-        let pending = login();
-        let phone = start(&pending);
-        advance(SMS_CODE_TTL_SECONDS + 1);
-        let (status, refused) = finalize(&pending, &phone);
+        let pending = pending_login(&s, email);
+        let phone = start_phone_code(&s, &pending);
+        advance_clock(&s, SMS_CODE_TTL_SECONDS + 1);
+        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(refused.get("idToken").is_none());
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 1);
-        let fresh = start(&pending);
+        let fresh = start_phone_code(&s, &pending);
         assert_ne!(fresh["sessionInfo"], phone["sessionInfo"]);
-        assert_ne!(finalize(&pending, &phone).0, 200, "the expired code stays dead");
-        let (status, signed) = finalize(&pending, &fresh);
+        assert_ne!(finalize_phone_step(&s, &pending, &phone).0, 200, "the expired code stays dead");
+        let (status, signed) = finalize_phone_step(&s, &pending, &fresh);
         assert_eq!(status, 200, "{signed}");
         let (status, lookup) = post(
             &s,
@@ -3442,28 +3461,31 @@ fn pending_retry_survives_sms_expiry_until_the_pending_credential_expires() {
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+    }
+}
 
+#[test]
+fn pending_retry_ends_when_the_pending_credential_expires() {
+    use fireemu_core_auth::store::PENDING_SIGN_IN_TTL_SECONDS;
+    for strict in [false, true] {
+        let email = "pending-lifetime@example.com";
+        let (s, _) = pending_expiry_state(strict, email);
         // At the pending lifetime a fresh code still finalizes; one second past it the
         // pending credential is gone, its code with it, and start is refused as well.
-        let pending = login();
-        advance(PENDING_SIGN_IN_TTL_SECONDS);
-        let phone = start(&pending);
-        let (status, signed) = finalize(&pending, &phone);
+        let pending = pending_login(&s, email);
+        advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS);
+        let phone = start_phone_code(&s, &pending);
+        let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
-        let pending = login();
-        let phone = start(&pending);
-        advance(PENDING_SIGN_IN_TTL_SECONDS + 1);
-        let (status, refused) = finalize(&pending, &phone);
+        let pending = pending_login(&s, email);
+        let phone = start_phone_code(&s, &pending);
+        advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS + 1);
+        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
-        let (status, refused) = post(
-            &s,
-            &format!("{V2}/accounts/mfaSignIn:start"),
-            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
-                "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
-        );
+        let (status, refused) = start_phone_step(&s, &pending);
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "INVALID_MFA_PENDING_CREDENTIAL");
     }

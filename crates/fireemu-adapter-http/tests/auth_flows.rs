@@ -3992,9 +3992,17 @@ fn pending_retry_hook_disable_persists_the_whole_response_and_created_accounts()
             response: json!({"userRecord": {"updateMask": "disabled", "disabled": true}}),
         })
     };
-    // Claims set by the same response are on the record, not only the flag.
+    // Claims set by the same response are on the record, not only the flag, and the
+    // refused attempt records no sign-in time.
     let mut s = state();
     let user = sign_up(&s, "hook-disable-claims@example.com");
+    advance_clock(&s, 5);
+    let before = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [user["localId"]]}),
+    )
+    .1;
     s.blocking = Some(Arc::new(FixedBeforeSignInHook {
         response: json!({"userRecord": {"updateMask": "disabled,customClaims",
             "disabled": true, "customClaims": {"role": "auditor"}}}),
@@ -4012,6 +4020,7 @@ fn pending_retry_hook_disable_persists_the_whole_response_and_created_accounts()
         &json!({"localId": [user["localId"]]}),
     );
     assert_eq!(lookup["users"][0]["disabled"], true);
+    assert_eq!(lookup["users"][0]["lastLoginAt"], before["users"][0]["lastLoginAt"]);
     assert_eq!(
         serde_json::from_str::<Value>(lookup["users"][0]["customAttributes"].as_str().unwrap()).unwrap()["role"],
         "auditor"

@@ -134,7 +134,7 @@
       "evidenceRefs": [
         "tools/auth-pending-retry/README.md"
       ],
-      "nextAction": "Enumerate combinations against the local handlers, then observe the same combinations in production.",
+      "nextAction": "Local enumeration done 2026-09-12 (not evidence of production): disabled account with a wrong SMS code refuses INVALID_CODE (code checked before the account state); expired pending credential with a code valid on its own refuses INVALID_SESSION_INFO (the pending sweep removes the code); invalid idToken with administrator-only fields on the client update refuses INVALID_ID_TOKEN and changes nothing. Next: observe the same combinations in production with one corpus (temporary MFA and test-phone configuration as in auth-pending-revocation, restored afterwards) and encode the observed order.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

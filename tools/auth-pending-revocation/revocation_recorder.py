@@ -43,11 +43,68 @@ CONFIG_URL = (
 )
 MFA_ON = {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}
 MFA_OFF = {"state": "DISABLED"}
-# The oracle blocks SMS in every region; test numbers still pass the region check, so the
-# run allows the US (the fictional +1 555 range) and restores the empty allowlist.
-SMS_REGIONS_OFF = {"allowlistOnly": {}}
+# The oracle blocks SMS in every region; test numbers still pass the region check. The run
+# switches to the allow-by-default policy (every region allowed, none disallowed; an
+# allowlist of only "US" was tried first and refused, possibly for propagation lag) and
+# restores whatever was read. Narrowing to the needed region is a candidate improvement.
 SMS_REGIONS_ON = {"allowByDefault": {"disallowedRegions": []}}
 CONFIG_MASK = "mfa,signIn.phoneNumber,smsRegionConfig"
+# Diagnostic codes for an aborted run: raw error text is never retained.
+ERROR_DETAILS = {
+    "SMS unable to be sent until this region enabled": "SMS_REGION_NOT_ENABLED",
+}
+
+
+def note(report, step, status, response):
+    """Sanitized diagnostics for an aborted run: step, status and classified error."""
+    report["lastStep"] = step
+    report["lastStatus"] = status
+    report["lastError"] = None if status == 200 else error_code(response)
+    message = (
+        (response.get("error") or {}).get("message")
+        if status != 200 and isinstance(response, dict)
+        else None
+    )
+    report["lastErrorDetail"] = next(
+        (
+            code
+            for text, code in ERROR_DETAILS.items()
+            if isinstance(message, str) and text in message
+        ),
+        None,
+    )
+
+
+def restore_body(original):
+    """The configuration to write back: exactly what was read, in PATCH shape."""
+    phone = original["phoneNumber"] or {"enabled": False, "testPhoneNumbers": {}}
+    return {
+        "mfa": original["mfa"],
+        "signIn": {"phoneNumber": phone},
+        "smsRegionConfig": original["smsRegionConfig"],
+    }
+
+
+def restored(raw, original):
+    """The readback after the restore: phone sign-in off with no test numbers (a null
+    original reads back as an empty object), and the other two fields exactly as read."""
+    phone = raw.get("signIn", {}).get("phoneNumber") or {}
+    return (
+        raw.get("mfa") == original["mfa"]
+        and not phone.get("enabled")
+        and not phone.get("testPhoneNumbers")
+        and raw.get("smsRegionConfig") == original["smsRegionConfig"]
+    )
+
+
+def restore_configuration(access, original):
+    status, response = patch(
+        f"{CONFIG_URL}?updateMask={CONFIG_MASK}", restore_body(original), access
+    )
+    require(status == 200 and "error" not in response)
+    status, raw = core.request(CONFIG_URL, token=access, quota=True)
+    require(status == 200 and restored(raw, original))
+    return status, raw
 
 
 def patch(url, body, token):
@@ -132,6 +189,7 @@ def observe(output):
     admin = None
     access = None
     original = None
+    change_attempted = False
     try:
         access, key, report["configReadback"] = core.production_preflight()
         query = f"?key={urllib.parse.quote(key, safe='')}"
@@ -147,15 +205,23 @@ def observe(output):
 
         status, raw = config()
         require(status == 200 and "error" not in raw)
-        original = {
-            "mfa": raw.get("mfa", MFA_OFF),
+        read = {
+            "mfa": raw.get("mfa"),
             "phoneNumber": raw.get("signIn", {}).get("phoneNumber"),
             "smsRegionConfig": raw.get("smsRegionConfig"),
         }
-        # The run needs phone MFA with fixed test codes and an SMS region; all three are
-        # recorded and restored.
-        require(original["mfa"] == MFA_OFF and not original["phoneNumber"])
-        require(original["smsRegionConfig"] == SMS_REGIONS_OFF)
+        # Preconditions come first: an unexpected configuration aborts the run before
+        # anything is written, and nothing is restored either.
+        require(read["mfa"] == MFA_OFF and not read["phoneNumber"])
+        require(read["smsRegionConfig"] == {"allowlistOnly": {}})
+        original = read
+        # The recovery record and the flag precede the attempt, so a change that reached
+        # the server without a readable response is still restored.
+        save(
+            output / "config-recovery.json",
+            {"project": PROJECT, "original": original, "changeAttempted": True},
+        )
+        change_attempted = True
         status, patched = config(
             {
                 "mfa": MFA_ON,
@@ -186,24 +252,12 @@ def observe(output):
             require(action in {"signUp", "signInWithPassword", "lookup"})
             return core.request(f"{identity}/v1/accounts:{action}{query}", body)
 
-        def note(step, status, response):
-            # Sanitized diagnostics for an aborted run: the step, status and error class.
-            report["lastStep"] = step
-            report["lastStatus"] = status
-            report["lastError"] = None if status == 200 else error_code(response)
-            message = (
-                (response.get("error") or {}).get("message") if status != 200 else None
-            )
-            report["lastErrorMessage"] = (
-                message[:200] if isinstance(message, str) else None
-            )
-
         def mfa(action, body):
             require(action in {"mfaSignIn:start", "mfaSignIn:finalize"})
             status, response = core.request(
                 f"{identity}/v2/accounts/{action}{query}", body
             )
-            note(action, status, response)
+            note(report, action, status, response)
             return status, response
 
         def refresh(token):
@@ -232,7 +286,7 @@ def observe(output):
                     "returnSecureToken": True,
                 },
             )
-            note("signInWithPassword", status, response)
+            note(report, "signInWithPassword", status, response)
             require(status == 200 and "error" not in response)
             report["lastPendingShape"] = sorted(
                 k for k in response if k not in {"idToken", "refreshToken"}
@@ -407,6 +461,7 @@ def observe(output):
         # revocation.
         held = pending(target)
         issued_at = int(time.time())
+        # Whole-second validSince must be strictly after the issuance second.
         time.sleep(2)
         require(core.recovery_identity(target["journal"])[1] == target["uid"])
         lookup(target)
@@ -421,6 +476,13 @@ def observe(output):
         report["revocation"] = {"validSinceReadback": True, "controlUnchanged": True}
         report["heldCredentialIssuedBeforeRevocation"] = issued_at < revoke_at
         require(report["heldCredentialIssuedBeforeRevocation"])
+        held_start_at = int(time.time())
+        report["timeline"] = {
+            "heldIssuedAt": issued_at,
+            "validSince": revoke_at,
+            "validSinceReadbackAt": held_start_at,
+            "heldStartAt": held_start_at,
+        }
 
         status, started = start(target, held)
         session = started.get("phoneResponseInfo", {}).get("sessionInfo")
@@ -493,27 +555,13 @@ def observe(output):
             c == {"uidAbsent": True, "emailAbsent": True} for c in clean
         ):
             report["cleanup"] = {"uidAbsent": True, "emailAbsent": True}
-        if access is not None and original is not None:
+        if change_attempted:
             try:
-                status, restored = patch(
-                    f"{CONFIG_URL}?updateMask={CONFIG_MASK}",
-                    {
-                        "mfa": MFA_OFF,
-                        "signIn": {"phoneNumber": phone_config(False)},
-                        "smsRegionConfig": SMS_REGIONS_OFF,
-                    },
-                    access,
-                )
-                require(status == 200 and "error" not in restored)
-                status, raw = core.request(CONFIG_URL, token=access, quota=True)
-                require(status == 200 and raw.get("mfa") == MFA_OFF)
-                phone = raw.get("signIn", {}).get("phoneNumber") or {}
-                require(not phone.get("enabled") and not phone.get("testPhoneNumbers"))
-                require(raw.get("smsRegionConfig") == SMS_REGIONS_OFF)
+                status, raw = restore_configuration(access, original)
                 report["configRestored"] = True
                 report["configRestoredReadback"] = {
                     "mfa": raw.get("mfa"),
-                    "phoneNumber": phone,
+                    "phoneNumber": raw.get("signIn", {}).get("phoneNumber") or {},
                     "smsRegionConfig": raw.get("smsRegionConfig"),
                 }
                 projection = core.config_projection(status, raw)
@@ -531,8 +579,18 @@ if __name__ == "__main__":
     parser.add_argument("--production", action="store_true", required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--recover", type=Path)
+    parser.add_argument("--restore-config", type=Path)
     args = parser.parse_args()
-    if args.recover:
+    if args.restore_config:
+        # Restore the project configuration recorded before an interrupted change.
+        value = json.loads(args.restore_config.read_bytes())
+        require(
+            value.get("project") == PROJECT and value.get("changeAttempted") is True
+        )
+        access, _, _ = core.production_preflight()
+        restore_configuration(access, value["original"])
+        print(json.dumps({"configRestored": True}))
+    elif args.recover:
         try:
             print(json.dumps(core.reconcile(args.recover)))
         except Exception:

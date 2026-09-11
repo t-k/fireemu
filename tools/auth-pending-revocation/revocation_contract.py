@@ -135,7 +135,15 @@ def complete(report):
         require(report["heldCredentialIssuedBeforeRevocation"] is True)
         require(report["cleanup"] == {"uidAbsent": True, "emailAbsent": True})
         require(report["configRestored"] is True)
-        require(type(report["configDigestMatches"]) is bool)
+        require(report["configDigestMatches"] is True)
+        held = {r["id"]: r for r in report["cases"] if r["id"] in DIAGNOSTIC}
+        start, finalize, lookup, refresh = (held[name] for name in DIAGNOSTIC)
+        # The held credential is always tried; each later step runs exactly when the
+        # previous one was accepted.
+        require(not start["skipped"])
+        require(finalize["skipped"] == (start["outcome"] != "accepted"))
+        require(lookup["skipped"] == (finalize["outcome"] != "accepted"))
+        require(refresh["skipped"] == (finalize["outcome"] != "accepted"))
     except (KeyError, TypeError, ValueError):
         return False
     return True

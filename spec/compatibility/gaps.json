@@ -125,18 +125,18 @@
     {
       "id": "AUTH-U03",
       "feature": "AUTH-SMS-MFA",
-      "kind": "mismatch",
-      "scope": "Precedence of overlapping refusals on MFA finalize and on a client accounts:update. Production (recorded 2026-09-12, candidate): a disabled account holding an SMS session is refused INVALID_CODE with a wrong code and USER_DISABLED with the correct code, so the verification code is checked before the account state, and both held credentials complete after re-enablement (neither refusal consumes them); a client update carrying a tampered ID token and an administrator-only field is refused INVALID_ID_TOKEN with nothing applied, so the token is verified before the privileged field is judged. fireemu agrees on the finalize rows but refuses the tampered-token update OPERATION_NOT_ALLOWED, rejecting the privileged field before verifying the token. Expired-pending precedence is unobserved.",
+      "kind": "unobserved",
+      "scope": "MFA finalize refusal precedence. Production (recorded and approved 2026-09-12, auth-refusal-precedence revision 1): a disabled account holding an SMS session is refused INVALID_CODE with a wrong code and USER_DISABLED with the correct code, so the verification code is checked before the account state, and the same held pending credential and session complete after re-enablement, so neither refusal consumes them. fireemu already matched on these rows. The remaining precedence is unobserved: an expired pending credential against a code valid on its own, and mfaSignIn:start on a disabled account.",
       "implementationStatus": "unknown",
       "localTestStatus": "none",
-      "productionObservationStatus": "recorded",
+      "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
+        "docs/compatibility/auth-refusal-precedence-approval.md",
         "docs/compatibility/auth-refusal-precedence.md",
-        "tools/auth-refusal-precedence/README.md",
         "tools/auth-pending-retry/README.md"
       ],
-      "nextAction": "Divergence on the tampered-token row only: to match the recorded production order, verify the ID token before rejecting the presence of an administrator-only field on the unprivileged accounts:update route, leaving the valid-token rejection (OPERATION_NOT_ALLOWED, unobserved) and the finalize order unchanged; the change touches authorization ordering, so it needs a security review, a regression, and a local comparison bound to the new artifact. Pending a scoped approval of this production candidate. The finalize precedence (code before account state) and the survival of held credentials across disable and re-enable already agree with production. Expired-pending precedence stays for a later revision.",
+      "nextAction": "The observed overlaps match fireemu and are approved through the auth-refusal-precedence receipt; no MFA change is made. The tampered-token accounts:update divergence is tracked separately as GAP-AUTH-003 (AUTH-USERS). Next for AUTH-U03: a later revision observing an expired pending credential against an independently valid code (needs the production pending lifetime, so a separate corpus) and mfaSignIn:start on a disabled account. Do not generalize the observed order to TOTP or expiry.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -610,6 +610,25 @@
         "crates/fireemu-adapter-http/tests/auth_flows.rs"
       ],
       "nextAction": "None; the revision 1 production record is published (auth-blocking-create-disable-r1) and fireemu keeps ignoring photoUrl at sign-up.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "GAP-AUTH-003",
+      "feature": "AUTH-USERS",
+      "kind": "mismatch",
+      "scope": "Authentication versus authorization order on the end-user accounts:update route. Production (recorded and approved 2026-09-12, auth-refusal-precedence revision 1): a client accounts:update carrying a tampered ID token and an administrator-only field is refused INVALID_ID_TOKEN with nothing applied, so the session is verified before the administrator-only field is judged. fireemu refused OPERATION_NOT_ALLOWED, rejecting the field before verifying the session; it now verifies the session first on the end-user route. A valid session carrying such a field is still refused OPERATION_NOT_ALLOWED (local policy, unobserved for a valid token), the OOB route still rejects the field before consuming the code, and the localId selector is still refused.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/auth-refusal-precedence-approval.md",
+        "docs/compatibility/auth-refusal-precedence.md",
+        "tools/auth-update-authorization/README.md",
+        "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+      ],
+      "nextAction": "Session authentication now precedes administrator-only-field authorization on the end-user accounts:update route. Exact production precedence is established for the recorded tampered-signature case only; expired, revoked, disabled, deleted and project-mismatch token overlaps with an administrator-only field, and a valid token with such a field, remain unobserved (see AUTH-U13). Next: run auth-refusal-precedence revision 1 on the corrected owned local artifact and publish a production-versus-local comparison as a separate subject and approval.",
       "blockedReason": "",
       "requiresProductionChange": true
     }

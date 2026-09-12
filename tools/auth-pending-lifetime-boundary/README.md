@@ -1,61 +1,36 @@
 # MFA pending credential lifetime: boundary probe (AUTH-U03, revision 2)
 
-Revision 2 of `auth-pending-lifetime`. Revision 1 confirmed a 300-second survival lower
-bound; this revision extends the sampled ages to straddle the boundary where a pending
-credential stops being usable, so a run can observe a refusal at a large age and record the
-usability window as an interval rather than only a lower bound. It is a separate corpus:
-revision 1's contract, recorder and receipt stay pinned and untouched.
+Revision 2 samples 600, 1800, 3300 and 3900 seconds using six independent owned accounts (four age samples and two fresh controls). It is a separate corpus; revision 1's contract, recorder and published receipt stay pinned. Production execution remains subject to separate pre-run approval.
 
-Sampled ages (revision 2): 600, 1800, 3300 and 3900 seconds. The first three re-confirm
-usability well past revision 1's 300 seconds; the last two straddle the 3600-second
-fireemu-local pending lifetime, so an owned local run observes a refusal at 3900 seconds and
-the window's upper bound. Everything else follows revision 1: one independent owned account
-per age, each pending obtained near a common origin and left untouched until its diagnostic,
-a fresh SMS session opened at each diagnostic, the pending age at start and the session age
-at finalize recorded as separate intervals, and a wall-clock observation budget that a long
-run cannot silently exceed (a guard on every request path, a recovery reserve, and
-`recoveryIncomplete` when deletion cannot be confirmed within budget).
+Each pending credential stays untouched until its diagnostic. Start obtains a fresh SMS session; finalize verifies the returned identity through claims and lookup. Pending acquisition, start and finalize record request/response timing intervals. Production uses real waiting; the owned local run advances its instance's virtual clock.
 
-Two things are new because a production run ages by real waiting to about 3900 seconds (~65
-minutes), which outlives a single admin access token:
+## Interpretation
 
-- **Admin-credential refresh.** The ADC access token used for the privileged account
-  requests (setup and cleanup) is refreshed once it is older than 40 minutes, comfortably
-  under both its ~1-hour lifetime and the budget's `adminTokenMaxAgeSeconds` (50 minutes).
-  The recorder records each token age at use in `adminTokenAges`, and `complete()` requires
-  every one to be within the budget, so a long run never issues an admin request with a
-  token older than allowed. The owned local run uses the fixed strict-profile token, so it
-  records no token ages.
-- **Long-run budget.** `totalBudgetSeconds` and `configHoldMaxSeconds` cover the largest age
-  plus setup and a larger cleanup reserve; `maxRequests` and the recovery reserve are raised
-  for six accounts.
+`lowerBoundSeconds` is the largest target age with fully verified MFA completion. The validator checks that the measured pending age at start is at least that target. This is an observed survival point for the recorded method and configuration, not a universal guarantee across accounts.
 
-## What it establishes
+`refusalObservations` preserves every refused stage, error and actual pending-age interval. `startAcceptedAges` stays separate from complete MFA success. `MISSING_MFA_PENDING_CREDENTIAL` and `MFA_ENROLLMENT_NOT_FOUND` are classified as possible input/account-state problems and never generate expiry candidates.
 
-The largest age at which a fully-verified MFA completion still succeeds is a lower bound on
-the usability window. An upper bound is established only when an expiry-class refusal
-(`INVALID_MFA_PENDING_CREDENTIAL`, `MISSING_MFA_PENDING_CREDENTIAL`, `MFA_ENROLLMENT_NOT_FOUND`)
-is observed at an age strictly above a verified success; it is then the interval between
-them. That upper bound is on the start-acceptance / usability window for this configuration,
-method and single run, not the exact TTL, and not the AUTH-U03 residual (an expired pending
-against an independently valid code, a later corpus). A refusal with any other error, or
-below every success, leaves the upper bound undetermined.
+A later `INVALID_MFA_PENDING_CREDENTIAL` can produce a `boundaryCandidates` entry, with the fully verified success point as `lowerSeconds` and the refused request's measured interval upper endpoint as `upperSeconds`. Start refusal uses `pendingAgeAtStart`; finalize refusal uses `pendingAgeAtFinalize`. A target of 3900 seconds observed at [3900, 3903] therefore yields a candidate endpoint of 3903, not 3900. Candidates do not establish causality: equivalent account conditions, unchanged inputs/enrollment and monotonic usability remain unproven assumptions. Refusal followed by a later verified success sets `nonMonotonic=true` and suppresses single-boundary candidates.
 
-## Offline verification
+`upperBoundEstablished` and `ageCausedExpiryEstablished` always remain false; `upperBoundSeconds` remains null. Neither a refusal's error name nor one run proves a shared TTL. Start acceptance and MFA completion are different observations. AUTH-U03's expired-pending/fresh-valid-code residual remains outside this corpus.
 
-On 2026-09-12 the owned local run (strict profile, `--only auth`, virtual-clock aging)
-accepted 600, 1800 and 3300 seconds and refused 3900 seconds with
-`INVALID_MFA_PENDING_CREDENTIAL`, giving `lowerBoundSeconds=3300` and an upper bound of
-(3300, 3900] -- capturing the 3600-second fireemu-local pending lifetime. The scripted
-two-clock safety suite additionally covers: all-ages-usable as a lower bound only; a
-non-expiry refusal (or a refusal below a later success) not establishing the upper bound;
-the admin token being refreshed with every recorded age within budget; timing intervals
-checked against their raw timestamps; a dirty checkout refused; and no credential in any
-file. This is the local behavior; the production run is a separate pre-review.
+## Credential and recovery budget
+
+The wall budget is 4800 seconds, including a 300-second recovery reserve. HTTP operations reserve 20 seconds under the inherited trusted-oracle socket-timeout model; this is not a hard total-response deadline. Credential refresh reserves the command's 60-second timeout, tokeninfo's 20 seconds and the following request's 20 seconds before starting. Every operation checks its phase deadline again before sending.
+
+The preflight token and each newly acquired token are checked using the documented [Google tokeninfo request](https://docs.cloud.google.com/sdk/gcloud/reference/auth/application-default/print-access-token). `expires_in` is converted to a conservative monotonic expiry from the tokeninfo request's send time, subtracting one second for precision. Tokens need at least the next request's reserved time remaining. Acquisition age is only an additional refresh trigger (2400 seconds), not a lifetime assumption. Token values and raw tokeninfo responses are never recorded.
+
+At most two refresh attempts are allowed per phase. Any refresh or expiry-verification failure latches authentication unavailable for the rest of the run: there is no automatic retry and no fallback to an old token. Configuration operations and account operations use the same credential path. `privilegedRequests` associates each request with phase, operation, sequence, acquisition age, verified expiry and remaining time; `complete()` checks this evidence against request counts and deadlines. Preflight project/config reads also use this path; its three CLI discovery commands each reserve 60 seconds before starting. Revision 2 keeps the existing project identity, baseline configuration, empty-functions and API-key ownership checks in its own preflight implementation.
+
+Recovery restores configuration with readback/digest checks, then verifies ownership before account deletion. Missing credentials or exhausted time leave configuration recovery unconfirmed, count unrecovered accounts and retain their journals. The corpus remains incomplete until recovery is confirmed.
+
+## Verification
+
+The offline safety suite drives the actual `observe()` and contract against an executable two-clock backend, including real expiry metadata, delayed/failed refresh, tokeninfo failure, insufficient reserve, malformed initial expiry, evidence deletion/tampering, nonmonotonic observations and issuance latency. Its production-mode fixtures perform no network or gcloud operation. The owned runner separately exercises the real strict Auth artifact and verifies child-process cleanup.
 
 ```sh
-uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-lifetime-boundary -q
+uv run --project tools/compat-inventory --locked --python 3.12 python -m pytest tools/auth-pending-lifetime-boundary -q -p no:cacheprovider
 uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-lifetime-boundary/boundary_owned.py --output /absolute/private/new-local
-# Production is a separate pre-review; when approved:
-uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-lifetime-boundary/boundary_recorder.py --production --output /absolute/private/new-production
 ```
+
+The pre-review local run at `cea9e674` observed success at 600/1800/3300 and rejection at 3900. Its earlier upper-bound interpretation is superseded by the candidate-only interpretation above; it is not evidence of production behavior or approval to run in production.

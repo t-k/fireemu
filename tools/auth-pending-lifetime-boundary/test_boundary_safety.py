@@ -1,11 +1,9 @@
-"""Offline drive of the revision-2 (boundary) observe() against a scripted Identity Platform.
+"""Offline executable two-clock backend for revision-2 safety regressions.
 
-Reuses revision 1's two-clock harness (a WALL clock enforcing the budget, a VIRTUAL clock
-aging pendings) and adds the revision-2 concerns: aging past the local pending lifetime so a
-refusal is observed and the usability-window upper bound is recorded; an expiry-class refusal
-above a verified success establishes that bound while a non-expiry refusal does not; and the
-admin access token is refreshed across a long run so no admin request uses one older than the
-budget. No credential reaches any file."""
+The fixture models pending issuance latency, actual admin expiry, refresh failure and
+phase deadlines. Contract mutations check missing/tampered request evidence. No production
+operation is performed and no credential reaches an artifact.
+"""
 
 import base64
 import copy
@@ -89,9 +87,7 @@ class World:
         self.counts = {}
         self.deleted = []
         self.token_refreshes = 0
-
-    def preflight(self):
-        return ACCESS_TOKEN, "key-secret-value", {"sha256": CONFIG_SHA}
+        self.access_expires = wall.now() + 3600
 
     def command(self, argv):
         # git status / rev-parse, plus the admin-token refresh (gcloud print-access-token).
@@ -102,9 +98,17 @@ class World:
             return "deadbeef"
         if argv == ["gcloud", "auth", "application-default", "print-access-token"]:
             self.token_refreshes += 1
+            self.access_expires = self.wall.now() + 3600
             return (
                 ACCESS_TOKEN  # a fresh token, same value so the router still accepts it
             )
+        if argv[:3] == ["gcloud", "functions", "list"]:
+            self.wall.advance(self.delay.get("preflight", 0))
+            return "[]"
+        if argv[:4] == ["gcloud", "services", "api-keys", "list"]:
+            return f"projects/{recorder.NUMBER}/locations/global/keys/test"
+        if argv[:4] == ["gcloud", "services", "api-keys", "get-key-string"]:
+            return "key-secret-value"
         raise AssertionError(argv)
 
     def count(self, action):
@@ -136,6 +140,7 @@ class World:
 
     def patch(self, url, body, token):
         assert token == ACCESS_TOKEN
+        assert self.wall.now() + 20 <= self.access_expires
         base, _, query = url.partition("?")
         assert base == recorder.CONFIG_URL
         assert urllib.parse.parse_qs(query) == {"updateMask": [recorder.CONFIG_MASK]}
@@ -222,7 +227,7 @@ class World:
         if action == "mfaSignIn:start":
             age = self.aging.now() - entry["born"]
             if age > self.ttl:
-                # A pending older than the lifetime: gone/invalid, an expiry-class refusal.
+                # This fixture knows expiry caused the refusal; the observer does not.
                 return self.error("INVALID_MFA_PENDING_CREDENTIAL")
             session = "session-secret-" + str(self.session_counter)
             self.session_counter += 1
@@ -247,6 +252,22 @@ class World:
 
 def router(world):
     def request(url, body=None, token=None, quota=False, form=False):
+        if (
+            url
+            == f"https://cloudresourcemanager.googleapis.com/v1/projects/{recorder.PROJECT}"
+        ):
+            assert token == ACCESS_TOKEN and quota
+            return 200, {
+                "projectId": recorder.PROJECT,
+                "projectNumber": recorder.NUMBER,
+            }
+        if url == recorder.TOKEN_INFO_URL:
+            assert form and body == {"access_token": ACCESS_TOKEN} and token is None
+            return 200, {
+                "expires_in": max(0, int(world.access_expires - world.wall.now()))
+            }
+        if token == ACCESS_TOKEN:
+            assert world.wall.now() + 20 <= world.access_expires
         if url == recorder.CONFIG_URL and body is None:
             assert token == ACCESS_TOKEN and quota
             return world.config_get()
@@ -277,7 +298,6 @@ def router(world):
 def wire(world, monkeypatch, budget=None):
     if budget is not None:
         monkeypatch.setattr(recorder, "BUDGET", budget)
-    monkeypatch.setattr(recorder.core, "production_preflight", world.preflight)
     monkeypatch.setattr(recorder.core, "request", router(world))
     monkeypatch.setattr(recorder.revocation, "patch", world.patch)
     monkeypatch.setattr(recorder.core, "command", world.command)
@@ -325,11 +345,11 @@ def test_all_ages_usable_is_a_lower_bound_only(tmp_path, monkeypatch):
     assert summary["upperBoundSeconds"] is None
 
 
-def test_expiry_past_the_local_lifetime_establishes_the_window_upper_bound(
+def test_refusal_past_local_lifetime_is_only_a_boundary_candidate(
     tmp_path, monkeypatch
 ):
     # 600/1800/3300 s below the 3600 s lifetime are usable; 3900 s is refused with an
-    # expiry-class error, so the usability window's upper bound is (3300, 3900].
+    # invalid-pending error, so the measured interval is only a boundary candidate.
     _world, report, saved = run(tmp_path, monkeypatch, ttl=LOCAL_TTL)
     assert report["status"] == "observed", report.get("lastStep")
     assert complete(saved)
@@ -346,8 +366,9 @@ def test_expiry_past_the_local_lifetime_establishes_the_window_upper_bound(
     assert summary["usableAges"] == [600, 1800, 3300]
     assert summary["refusedAges"] == [3900]
     assert summary["lowerBoundSeconds"] == 3300
-    assert summary["upperBoundEstablished"] is True
-    assert summary["upperBoundSeconds"] == 3900
+    assert summary["upperBoundEstablished"] is False
+    assert summary["upperBoundSeconds"] is None
+    assert summary["boundaryCandidates"][0]["upperSeconds"] == 3900
 
 
 def test_a_non_expiry_refusal_does_not_establish_an_upper_bound(tmp_path, monkeypatch):
@@ -429,7 +450,8 @@ def test_owned_local_run_observes_the_boundary(tmp_path, monkeypatch):
     assert saved["adminTokenAges"] == []
     summary = lifetime_summary(saved)
     assert summary["usableAges"] == [600, 1800, 3300]
-    assert summary["upperBoundSeconds"] == 3900
+    assert summary["upperBoundSeconds"] is None
+    assert summary["boundaryCandidates"][0]["upperSeconds"] == 3900
 
 
 def test_dirty_checkout_is_refused_before_any_write(tmp_path, monkeypatch):
@@ -468,3 +490,215 @@ def test_no_expected_secret_marker_would_be_a_false_negative():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_refresh_failure_is_latched_and_expired_token_is_not_used(
+    tmp_path, monkeypatch
+):
+    world = World(
+        tmp_path / "run",
+        Clock(),
+        Clock(),
+        delay={"preflight": 100, "admin:lookup": 19, "admin:update": 19, "signUp": 19},
+    )
+    wire(world, monkeypatch)
+    original_command = world.command
+    starts = []
+
+    def command(argv):
+        if (
+            argv == ["gcloud", "auth", "application-default", "print-access-token"]
+            and world.wall.now() - 1000 > 3600
+        ):
+            starts.append(world.wall.now() - 1000)
+            world.wall.advance(60)
+            raise TimeoutError("refresh failed")
+        return original_command(argv)
+
+    monkeypatch.setattr(recorder.core, "command", command)
+    report = recorder.observe(world.output)
+    assert len(starts) == 1
+    assert all(t + 60 <= recorder.BUDGET["totalBudgetSeconds"] for t in starts)
+    assert report["wallElapsedSeconds"] <= recorder.BUDGET["totalBudgetSeconds"]
+    assert len(world.patches) == 1
+    assert report["unrecoveredCount"] == 6
+    assert report["recoveryIncomplete"] is True
+    assert len(list(world.output.rglob("recovery.json"))) == 6
+    assert not complete(report)
+
+
+def test_production_requires_complete_privileged_auth_evidence(tmp_path, monkeypatch):
+    _, _, saved = run(tmp_path, monkeypatch)
+    saved["adminTokenAges"] = []
+    assert not complete(saved)
+
+
+def test_latency_boundary_candidate_uses_refusal_interval(tmp_path, monkeypatch):
+    _, _, saved = run(tmp_path, monkeypatch, ttl=3901, delay={"signInWithPassword": 3})
+    assert complete(saved)
+    summary = lifetime_summary(saved)
+    assert summary["upperBoundEstablished"] is False
+    candidate = summary["boundaryCandidates"][0]
+    assert candidate["stage"] == "start"
+    assert candidate["pendingAge"] == {"lower": 3900, "upper": 3903}
+    assert candidate["upperSeconds"] >= 3901
+
+
+@pytest.mark.parametrize(
+    "error", ["MISSING_MFA_PENDING_CREDENTIAL", "MFA_ENROLLMENT_NOT_FOUND"]
+)
+def test_input_state_errors_are_not_expiry_evidence(tmp_path, monkeypatch, error):
+    _, _, saved = run(tmp_path, monkeypatch, ttl=LOCAL_TTL)
+    rows_of(saved)["age-3900s-start"]["observedError"] = error
+    summary = lifetime_summary(saved)
+    assert not summary["upperBoundEstablished"]
+    assert summary["boundaryCandidates"] == []
+    assert (
+        summary["refusalObservations"][0]["classification"] == "input-or-account-state"
+    )
+
+
+def test_nonmonotonic_observations_disqualify_single_boundary(tmp_path, monkeypatch):
+    _, _, saved = run(tmp_path, monkeypatch, ttl=LOCAL_TTL)
+    rows = rows_of(saved)
+    rows["age-600s-start"].update(
+        outcome="refused",
+        httpStatus=400,
+        observedError="INVALID_MFA_PENDING_CREDENTIAL",
+        checks={},
+    )
+    rows["age-600s-finalize"].update(
+        outcome="skipped",
+        httpStatus=None,
+        observedError=None,
+        checks={},
+        skipped=True,
+        timing={},
+    )
+    assert complete(saved)
+    summary = lifetime_summary(saved)
+    assert not summary["upperBoundEstablished"]
+    assert summary["nonMonotonic"] is True
+    assert summary["boundaryCandidates"] == []
+
+
+def test_finalize_refusal_is_separate_from_start_acceptance(tmp_path, monkeypatch):
+    _, _, saved = run(tmp_path, monkeypatch)
+    rows_of(saved)["age-3900s-finalize"].update(
+        outcome="refused",
+        httpStatus=400,
+        observedError="INVALID_MFA_PENDING_CREDENTIAL",
+        checks={},
+    )
+    assert complete(saved)
+    summary = lifetime_summary(saved)
+    assert summary["startAcceptedAges"] == list(AGE_SECONDS)
+    assert summary["boundaryCandidates"][0]["stage"] == "finalize"
+    assert not summary["upperBoundEstablished"]
+
+
+@pytest.mark.parametrize("remaining", [0, 20, "unknown", True])
+def test_unverified_initial_expiry_prevents_configuration_changes(
+    tmp_path, monkeypatch, remaining
+):
+    world = World(tmp_path / "run", Clock(), Clock())
+    wire(world, monkeypatch)
+    transport = router(world)
+
+    def request(url, *args, **kwargs):
+        if url == recorder.TOKEN_INFO_URL:
+            return 200, {"expires_in": remaining}
+        return transport(url, *args, **kwargs)
+
+    monkeypatch.setattr(recorder.core, "request", request)
+    report = recorder.observe(world.output)
+    assert not world.patches and not world.users
+    assert not complete(report)
+
+
+def test_refresh_tokeninfo_failure_does_not_fallback(tmp_path, monkeypatch):
+    world = World(tmp_path / "run", Clock(), Clock())
+    wire(world, monkeypatch)
+    transport = router(world)
+
+    def request(url, *args, **kwargs):
+        if url == recorder.TOKEN_INFO_URL and world.token_refreshes > 1:
+            world.wall.advance(20)
+            raise TimeoutError("verification failed")
+        return transport(url, *args, **kwargs)
+
+    monkeypatch.setattr(recorder.core, "request", request)
+    report = recorder.observe(world.output)
+    assert world.token_refreshes == 2
+    assert len(world.patches) == 1
+    assert report["unrecoveredCount"] == 6
+    assert not complete(report)
+
+
+def test_refresh_does_not_start_without_full_reserved_time(tmp_path, monkeypatch):
+    world = World(tmp_path / "run", Clock(), Clock())
+    wire(world, monkeypatch)
+    transport = router(world)
+
+    def request(url, *args, **kwargs):
+        result = transport(url, *args, **kwargs)
+        if "/v2/accounts/mfaSignIn:finalize" in url and world.aging.now() - 1000 > 3900:
+            # A late transport response leaves less than the credential-refresh reserve.
+            world.wall.t = 1000 + recorder.BUDGET["totalBudgetSeconds"] - 59
+        return result
+
+    monkeypatch.setattr(recorder.core, "request", request)
+    report = recorder.observe(world.output)
+    assert world.token_refreshes == 1
+    assert len(world.patches) == 1
+    assert report["unrecoveredCount"] == 6
+    assert not complete(report)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-config",
+        "missing-account",
+        "remaining",
+        "expiry",
+        "phase",
+        "refresh-count",
+    ],
+)
+def test_auth_evidence_mutations_are_rejected(tmp_path, monkeypatch, mutation):
+    _, _, saved = run(tmp_path, monkeypatch)
+    assert complete(saved)
+    evidence = saved["privilegedRequests"]
+    if mutation.startswith("missing-"):
+        prefix = "config:" if mutation == "missing-config" else "admin:"
+        evidence.remove(next(e for e in evidence if e["action"].startswith(prefix)))
+    elif mutation == "remaining":
+        evidence[0]["remainingSeconds"] = 19
+        evidence[0]["verifiedExpiry"] = evidence[0]["started"] + 19
+    elif mutation == "expiry":
+        evidence[0]["verifiedExpiry"] = evidence[0]["started"]
+    elif mutation == "phase":
+        evidence[0]["phase"] = "recovery"
+    else:
+        saved["authRefreshAttempts"]["recovery"] = 0
+    assert not complete(saved)
+
+
+def test_admin_evidence_cannot_be_erased_with_its_duplicate_counts(
+    tmp_path, monkeypatch
+):
+    _, _, saved = run(tmp_path, monkeypatch)
+    saved["privilegedRequests"] = [
+        e for e in saved["privilegedRequests"] if not e["action"].startswith("admin:")
+    ]
+    saved["adminTokenAges"] = [
+        e["tokenAgeSeconds"] for e in saved["privilegedRequests"]
+    ]
+    for i, e in enumerate(saved["privilegedRequests"]):
+        e["sequence"] = i + 1
+    saved["privilegedRequestCount"] = {
+        p: sum(e["phase"] == p for e in saved["privilegedRequests"])
+        for p in ("observation", "recovery")
+    }
+    assert not complete(saved)

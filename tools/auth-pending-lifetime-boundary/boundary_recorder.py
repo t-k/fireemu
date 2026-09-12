@@ -1,24 +1,9 @@
-"""Sample an MFA pending credential's usability toward its boundary, observe, clean up.
+"""Observe revision-2 MFA pending usability and retain recovery journals on failure.
 
-Revision 2 of auth-pending-lifetime: same machinery as revision 1, but the sampled ages
-extend past revision 1's 300-second lower bound to straddle the boundary where a pending
-credential stops being usable, so a run can observe a refusal at a large age and record the
-usability window as an interval. One independent owned account per sampled age; each
-pending obtained near a common origin and left untouched until its diagnostic; a fresh SMS
-session at the diagnostic; pending age and session age recorded as separate intervals.
-Production ages by real waiting within a declared observation budget; the owned local run
-ages by advancing the virtual clock, so it samples past the local pending lifetime
-deterministically.
-
-Two clocks are kept apart. The AGING clock measures a pending credential's age: real
-monotonic time in production, the shared virtual clock locally. The WALL clock (always real
-monotonic time) enforces the observation budget, so a local run's instantaneous virtual
-aging never trips a wall-time budget, and a production run's real waiting does. Because a
-~65-minute production run outlives one admin access token, the recorder refreshes the admin
-credential when it ages and records each token age at use, which the contract checks against
-the budget. Every row carries a timing region on the aging clock, saved on acceptance and
-refusal alike. Tokens, pending credentials, session identifiers, codes and passwords stay in
-memory.
+The aging clock is real in production and virtual locally; the wall clock enforces
+observation/recovery budgets. Privileged account and configuration requests share
+expiry-verified credentials. Refresh failures disable further privileged operations.
+Secrets remain in memory; evidence stores only timing, operation names and counts.
 """
 
 # ruff: noqa: BLE001 -- Never expose raw exceptions or credentials.
@@ -92,9 +77,7 @@ BUDGET = {
     "cleanupReserveSeconds": 300,
     "adminTokenMaxAgeSeconds": 3000,
 }
-# Refresh the admin access token once it is older than this, comfortably under both the
-# ~1-hour ADC token lifetime and adminTokenMaxAgeSeconds, so no admin request is ever issued
-# with a token older than the budget allows even across the long aging waits.
+# Acquisition age is an extra refresh trigger, never evidence of remaining validity.
 ADMIN_TOKEN_REFRESH_SECONDS = 2400
 # The shared transport's socket timeout (maximum_recorder.request / revocation.patch open
 # with timeout=20). Every request path reserves this before sending, so against the trusted
@@ -104,6 +87,9 @@ ADMIN_TOKEN_REFRESH_SECONDS = 2400
 # transport is not modified); it is not a hard total-request deadline, so a pathologically
 # slow server could still exceed it, which is out of scope for the trusted-oracle model.
 REQUEST_BUDGET_SECONDS = 20
+AUTH_COMMAND_SECONDS = 60
+TOKEN_INFO_URL = "https://www.googleapis.com/oauth2/v1/tokeninfo"
+MAX_REFRESH_ATTEMPTS_PER_PHASE = 2
 
 
 def patch(url, body, token):
@@ -112,6 +98,10 @@ def patch(url, body, token):
 
 class Terminated(BaseException):
     """SIGTERM or SIGHUP during a run: unwinds through `finally`."""
+
+
+class AuthenticationUnavailable(Exception):
+    """No verified credential remains; do not retry per account."""
 
 
 class BudgetExhausted(Exception):
@@ -156,6 +146,64 @@ def inputs():
     return {**revocation.inputs(), **own}
 
 
+def production_preflight(command, request):
+    status, project = request(
+        f"https://cloudresourcemanager.googleapis.com/v1/projects/{PROJECT}",
+    )
+    require(
+        status == 200
+        and project.get("projectId") == PROJECT
+        and str(project.get("projectNumber")) == NUMBER
+    )
+    config = core.config_projection(
+        *request(
+            f"https://identitytoolkit.googleapis.com/admin/v2/projects/{PROJECT}/config",
+        )
+    )
+    functions = json.loads(
+        command(
+            [
+                "gcloud",
+                "functions",
+                "list",
+                f"--project={PROJECT}",
+                "--format=json(name)",
+            ]
+        )
+    )
+    require(functions == [])
+    names = command(
+        [
+            "gcloud",
+            "services",
+            "api-keys",
+            "list",
+            f"--project={PROJECT}",
+            "--format=value(name)",
+        ]
+    ).splitlines()
+    require(
+        bool(names)
+        and all(
+            name.startswith(f"projects/{NUMBER}/locations/global/keys/")
+            for name in names
+        )
+    )
+    key = command(
+        [
+            "gcloud",
+            "services",
+            "api-keys",
+            "get-key-string",
+            names[0],
+            f"--project={PROJECT}",
+            "--format=value(keyString)",
+        ]
+    )
+    require(bool(key))
+    return key, config
+
+
 def observe(output, origin=None, clock_control=None):
     """Production when origin is None (real-time aging); otherwise an owned local fireemu
     at origin, aged through clock_control=(control_origin, token) via the control clock."""
@@ -182,9 +230,14 @@ def observe(output, origin=None, clock_control=None):
         "cleanup": {},
         "stopReason": "error",
         "requestCount": {"observation": 0, "recovery": 0, "config": 0},
+        "publicRequestCount": {"observation": 0, "recovery": 0},
         "wallElapsedSeconds": 0.0,
         "configHoldSeconds": 0.0,
         "adminTokenAges": [],
+        "privilegedRequests": [],
+        "privilegedRequestCount": {"observation": 0, "recovery": 0},
+        "authRefreshAttempts": {"observation": 0, "recovery": 0},
+        "authOperations": [],
     }
     accounts: dict = {}
     admin = None
@@ -198,6 +251,8 @@ def observe(output, origin=None, clock_control=None):
     # refreshed when it ages past ADMIN_TOKEN_REFRESH_SECONDS so a long run never uses one
     # older than the budget allows.
     admin_token_acquired = [None]
+    admin_token_expiry = [None]
+    auth_failed = [False]
     config_enabled_wall = None
     previous = {s: signal.signal(s, terminate) for s in (signal.SIGTERM, signal.SIGHUP)}
     try:
@@ -228,12 +283,102 @@ def observe(output, origin=None, clock_control=None):
                 < run_started + BUDGET["totalBudgetSeconds"]
             )
 
-        def time_guard():
+        def time_guard(reserve=REQUEST_BUDGET_SECONDS):
             # Reserve the transport's worst-case timeout: only start a request (or continue
             # aging toward the next one) if it can finish before the phase deadline.
-            if time.monotonic() + REQUEST_BUDGET_SECONDS > deadline():
+            if time.monotonic() + reserve > deadline():
                 raise BudgetExhausted(
                     "config-hold-budget" if config_binds() else "time-budget"
+                )
+
+        def token_expiry(token):
+            time_guard()
+            sent = time.monotonic()
+            report["authOperations"].append(
+                {
+                    "phase": phase[0],
+                    "operation": "tokeninfo",
+                    "started": sent - run_started,
+                    "reserveSeconds": REQUEST_BUDGET_SECONDS,
+                }
+            )
+            status, info = core.request(
+                TOKEN_INFO_URL, {"access_token": token}, form=True
+            )
+            require(status == 200)
+            seconds = info.get("expires_in")
+            require(type(seconds) in (str, int) and str(seconds).isdigit())
+            expiry = sent + int(str(seconds)) - 1
+            require(expiry >= time.monotonic() + REQUEST_BUDGET_SECONDS)
+            return expiry
+
+        def admin_access():
+            nonlocal access
+            if not production:
+                return access
+            if auth_failed[0]:
+                raise AuthenticationUnavailable()
+            time_guard()
+            now = time.monotonic()
+            acquired = admin_token_acquired[0]
+            if (
+                admin_token_expiry[0] is None
+                or acquired is None
+                or now + REQUEST_BUDGET_SECONDS > admin_token_expiry[0]
+                or now - acquired > ADMIN_TOKEN_REFRESH_SECONDS
+            ):
+                try:
+                    time_guard(AUTH_COMMAND_SECONDS + 2 * REQUEST_BUDGET_SECONDS)
+                    attempts = report["authRefreshAttempts"]
+                    require(attempts[phase[0]] < MAX_REFRESH_ATTEMPTS_PER_PHASE)
+                    attempts[phase[0]] += 1
+                    report["authOperations"].append(
+                        {
+                            "phase": phase[0],
+                            "operation": "refresh",
+                            "started": time.monotonic() - run_started,
+                            "reserveSeconds": AUTH_COMMAND_SECONDS,
+                        }
+                    )
+                    token = core.command(
+                        ["gcloud", "auth", "application-default", "print-access-token"]
+                    )
+                    acquired = time.monotonic()
+                    expiry = token_expiry(token)
+                    access, admin_token_acquired[0], admin_token_expiry[0] = (
+                        token,
+                        acquired,
+                        expiry,
+                    )
+                except Exception as error:
+                    access = None
+                    admin_token_expiry[0] = None
+                    auth_failed[0] = True
+                    report["adminTokenRefreshFailure"] = type(error).__name__
+                    raise AuthenticationUnavailable() from None
+            time_guard()
+            require(time.monotonic() + REQUEST_BUDGET_SECONDS <= admin_token_expiry[0])
+            return access
+
+        def privileged_evidence(action):
+            if production:
+                now = time.monotonic()
+                acquired, expiry = admin_token_acquired[0], admin_token_expiry[0]
+                if acquired is None or expiry is None:
+                    raise AuthenticationUnavailable()
+                age = now - acquired
+                report["adminTokenAges"].append(age)
+                report["privilegedRequestCount"][phase[0]] += 1
+                report["privilegedRequests"].append(
+                    {
+                        "sequence": len(report["privilegedRequests"]) + 1,
+                        "phase": phase[0],
+                        "action": action,
+                        "started": now - run_started,
+                        "tokenAgeSeconds": age,
+                        "verifiedExpiry": expiry - run_started,
+                        "remainingSeconds": expiry - now,
+                    }
                 )
 
         if production:
@@ -244,19 +389,46 @@ def observe(output, origin=None, clock_control=None):
             time_guard()
             require(committed_checkout())
             report["committedCheckout"] = True
-            access, key, report["configReadback"] = core.production_preflight()
-            admin_token_acquired[0] = time.monotonic()
-            time_guard()
 
-            def config(patch_body=None, mask=None):
+            def preflight_command(argv):
+                time_guard(AUTH_COMMAND_SECONDS)
+                report["authOperations"].append(
+                    {
+                        "phase": phase[0],
+                        "operation": "preflight-command",
+                        "started": time.monotonic() - run_started,
+                        "reserveSeconds": AUTH_COMMAND_SECONDS,
+                    }
+                )
+                return core.command(argv)
+
+            def preflight_request(url):
+                token = admin_access()
+                time_guard()
+                if url == CONFIG_URL:
+                    config_counted()
+                    privileged_evidence("config:read")
+                else:
+                    privileged_evidence("project:read")
+                return core.request(url, token=token, quota=True)
+
+            key, report["configReadback"] = production_preflight(
+                preflight_command, preflight_request
+            )
+
+            def config(patch_body=None, mask=""):
+                token = admin_access()
                 time_guard()
                 config_counted()
+                privileged_evidence(
+                    "config:read" if patch_body is None else "config:patch"
+                )
                 if patch_body is None:
-                    return core.request(CONFIG_URL, token=access, quota=True)
+                    return core.request(CONFIG_URL, token=token, quota=True)
                 return patch(
                     f"{CONFIG_URL}?updateMask={urllib.parse.quote(mask, safe=',')}",
                     patch_body,
-                    access,
+                    token,
                 )
 
             status, raw = config()
@@ -317,28 +489,11 @@ def observe(output, origin=None, clock_control=None):
                 raise BudgetExhausted("request-budget")
             request_count[current] += 1
 
-        def admin_access():
-            # Production only: the ADC access token outlives neither ~1 hour nor a ~65-minute
-            # aging run, so refresh it before it ages past the threshold and record its age at
-            # each use, which complete() checks against adminTokenMaxAgeSeconds. Local uses the
-            # fixed "owner" token, which never expires.
-            nonlocal access
-            if not production:
-                return access
-            age = time.monotonic() - admin_token_acquired[0]
-            if age > ADMIN_TOKEN_REFRESH_SECONDS:
-                access = core.command(
-                    ["gcloud", "auth", "application-default", "print-access-token"]
-                )
-                admin_token_acquired[0] = time.monotonic()
-                age = 0.0
-            report["adminTokenAges"].append(age)
-            return access
-
         def admin(action, body):
             require(action in {"lookup", "update", "delete"})
             token = admin_access()
             counted()
+            privileged_evidence(f"admin:{action}")
             begin(report, f"admin:{action}")
             status, response = core.request(
                 f"{identity}/v1/projects/{PROJECT}/accounts:{action}",
@@ -352,6 +507,7 @@ def observe(output, origin=None, clock_control=None):
         def client(action, body):
             require(action in {"signUp", "signInWithPassword", "lookup"})
             counted()
+            report["publicRequestCount"][phase[0]] += 1
             begin(report, action)
             status, response = core.request(
                 f"{identity}/v1/accounts:{action}{query}", body
@@ -362,6 +518,7 @@ def observe(output, origin=None, clock_control=None):
         def mfa(action, body):
             require(action in {"mfaSignIn:start", "mfaSignIn:finalize"})
             counted()
+            report["publicRequestCount"][phase[0]] += 1
             begin(report, action)
             status, response = core.request(
                 f"{identity}/v2/accounts/{action}{query}", body
@@ -743,33 +900,16 @@ def observe(output, origin=None, clock_control=None):
         # counted and the run never runs past the total budget. Whatever cannot be confirmed
         # within budget is left with its recovery journal for a later `--recover`.
         phase[0] = "recovery"
-        # After a long aging run the admin token has expired; refresh it once so the config
-        # restore and the account deletions below use a live credential. A failed refresh is
-        # swallowed here; the restore and cleanup report their own failures.
-        if production and admin_token_acquired[0] is not None:
-            try:
-                access = core.command(
-                    ["gcloud", "auth", "application-default", "print-access-token"]
-                )
-                admin_token_acquired[0] = time.monotonic()
-            except Exception as error:
-                report["adminTokenRefreshFailure"] = type(error).__name__
         if not production:
             report["configRestored"] = True
             report["configDigestMatches"] = True
         if change_attempted:
             try:
-                time_guard()
-                config_counted()
-                status, response = patch(
-                    f"{CONFIG_URL}?updateMask={urllib.parse.quote(CONFIG_MASK, safe=',')}",
-                    revocation.restore_body(original),
-                    access,
+                status, response = config(
+                    revocation.restore_body(original), CONFIG_MASK
                 )
                 require(status == 200 and "error" not in response)
-                time_guard()
-                config_counted()
-                status, raw = core.request(CONFIG_URL, token=access, quota=True)
+                status, raw = config()
                 require(status == 200 and revocation.restored(raw, original))
                 report["configRestored"] = True
                 report["configRestoredReadback"] = {
@@ -783,6 +923,7 @@ def observe(output, origin=None, clock_control=None):
                 )
             except Exception as error:
                 report["configRestoreFailure"] = type(error).__name__
+                report["recoveryIncomplete"] = True
         if production and config_enabled_wall is not None:
             report["configHoldSeconds"] = time.monotonic() - config_enabled_wall
         cleaned = []
@@ -802,12 +943,13 @@ def observe(output, origin=None, clock_control=None):
                         account["journal"],
                     )
                 )
-            except BudgetExhausted:
+            except (BudgetExhausted, AuthenticationUnavailable):
                 # No budget left to confirm this account; leave it and its recovery journal
                 # for a later `--recover` rather than spin on the exhausted budget.
                 unrecovered += 1
                 stopped = True
             except Exception as error:
+                unrecovered += 1
                 report["cleanupFailure"] = type(error).__name__
         if unrecovered:
             report["recoveryIncomplete"] = True

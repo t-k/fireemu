@@ -1,23 +1,8 @@
-"""Finite observations of an MFA pending credential's usability toward its boundary.
+"""Revision 2: finite MFA usability observations, never a proof of a common TTL.
 
-This is auth-pending-lifetime revision 2, a separate corpus from revision 1 (whose contract
-and receipt stay pinned): it extends the sampled ages past revision 1's 300-second lower
-bound to straddle the boundary where a pending credential stops being usable, so the run can
-observe a refusal at a large age and record the usability window as an interval, not a
-pinned TTL. It keeps revision 1's structure and safeguards: one independent owned account
-per age, each pending obtained near a common origin and left untouched until its diagnostic,
-a fresh SMS session opened at the diagnostic, pending age and session age recorded as
-separate intervals, and a wall-clock observation budget that a long run cannot silently
-exceed. Because a long run outlives a single admin access token, the recorder re-acquires
-the admin credential when it ages; this contract records the refreshes but pins no timing.
-
-What it establishes: the largest age at which a fully-verified MFA completion still succeeds
-(a lower bound on the usability window) and, when a refusal is observed at a larger age with
-a verified success below it, the window's upper bound as the interval between them. That
-upper bound is on the START-ACCEPTANCE / usability window for this configuration, method and
-single run, not the exact TTL and not the AUTH-U03 residual (an expired pending against an
-independently valid code, still a later corpus). A refusal that is not an expiry-class error
-records its age and error but does not establish the boundary.
+Independent accounts sample 600/1800/3300/3900 seconds. A verified completion supplies
+an observed lower bound; later refusals supply measured, stage-specific candidates.
+Age causality, account equivalence and monotonicity remain unproven. Revision 1 stays pinned.
 """
 
 import itertools
@@ -27,11 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "auth-password-maximum"))
 from maximum_contract import require
 
-# Revision 2 straddles the boundary. The two smaller ages re-confirm usability well past
-# revision 1's 300 s; the two larger ones cross the 3600 s fireemu-local pending lifetime,
-# so an owned local run observes a refusal and the window's upper bound. Production ages the
-# same set by real waiting, which outlives one admin token (hence the refresh) and needs a
-# long observation budget; the exact production boundary is whatever the run observes.
+# Fixed sampling schedule; target ages are not refusal interval endpoints.
 AGE_SECONDS = (600, 1800, 3300, 3900)
 CASES = (
     "baseline-fresh-finalize",
@@ -62,16 +43,8 @@ ERRORS = {
 CLASSIFIED_STATUSES = {400, 403}
 TRANSIENT_ERRORS = {"TOO_MANY_ATTEMPTS_TRY_LATER", "QUOTA_EXCEEDED"}
 COMPLETING_ERRORS = ERRORS - TRANSIENT_ERRORS
-# The errors consistent with the pending credential itself no longer being usable: the
-# server reports the pending gone/invalid or its enrollment missing. Only a refusal in this
-# set, at an age above a verified success, establishes the usability-window upper bound; any
-# other refusal (a disabled account, a captcha failure, a throttle) records its age and error
-# without asserting the boundary.
-EXPIRY_ERRORS = {
-    "INVALID_MFA_PENDING_CREDENTIAL",
-    "MISSING_MFA_PENDING_CREDENTIAL",
-    "MFA_ENROLLMENT_NOT_FOUND",
-}
+# These names indicate an input/account-state problem, not age-caused expiry.
+INPUT_STATE_ERRORS = {"MISSING_MFA_PENDING_CREDENTIAL", "MFA_ENROLLMENT_NOT_FOUND"}
 
 FINALIZE_CHECKS = {
     "noError",
@@ -290,11 +263,87 @@ def _budget_respected(report):
         _number(report["configHoldSeconds"])
         and report["configHoldSeconds"] <= budget["configHoldMaxSeconds"]
     )
-    # The admin credential was never used older than the declared maximum: every recorded
-    # admin-token age is within the budget, so a long run refreshed the token in time.
     ages = report["adminTokenAges"]
     require(isinstance(ages, list) and all(_number(a) for a in ages))
     require(all(a <= budget["adminTokenMaxAgeSeconds"] for a in ages))
+    evidence = report["privilegedRequests"]
+    counts = report["privilegedRequestCount"]
+    require(set(counts) == {"observation", "recovery"})
+    require(all(type(n) is int and n >= 0 for n in counts.values()))
+    if report["target"] == "production":
+        require(bool(evidence) and len(evidence) == len(ages) == sum(counts.values()))
+        require(
+            sum(e["action"].startswith("config:") for e in evidence)
+            == report["requestCount"]["config"]
+        )
+        for phase in counts:
+            require(sum(e["phase"] == phase for e in evidence) == counts[phase])
+        for i, entry in enumerate(evidence):
+            require(entry["sequence"] == i + 1 and entry["tokenAgeSeconds"] == ages[i])
+            require(
+                entry["action"]
+                in {
+                    "config:read",
+                    "config:patch",
+                    "admin:lookup",
+                    "admin:update",
+                    "admin:delete",
+                    "project:read",
+                }
+            )
+            require(
+                all(
+                    _number(entry[k])
+                    for k in ("started", "verifiedExpiry", "remainingSeconds")
+                )
+            )
+            require(
+                entry["remainingSeconds"] == entry["verifiedExpiry"] - entry["started"]
+            )
+            require(entry["remainingSeconds"] >= 20)
+            limit = budget["totalBudgetSeconds"] - (
+                budget["cleanupReserveSeconds"]
+                if entry["phase"] == "observation"
+                else 0
+            )
+            require(entry["started"] + 20 <= limit)
+        public = report["publicRequestCount"]
+        require(set(public) == {"observation", "recovery"})
+        for phase in public:
+            require(type(public[phase]) is int and public[phase] >= 0)
+            require(
+                sum(
+                    e["action"].startswith("admin:") and e["phase"] == phase
+                    for e in evidence
+                )
+                + public[phase]
+                == report["requestCount"][phase]
+            )
+        require(sum(e["action"] == "project:read" for e in evidence) == 1)
+        attempts = report["authRefreshAttempts"]
+        require(set(attempts) == {"observation", "recovery"})
+        for phase, n in attempts.items():
+            require(type(n) is int and 0 <= n <= 2)
+            require(
+                sum(
+                    e["operation"] == "refresh" and e["phase"] == phase
+                    for e in report["authOperations"]
+                )
+                == n
+            )
+        for entry in report["authOperations"]:
+            require(entry["phase"] in attempts)
+            require(entry["operation"] in {"refresh", "tokeninfo", "preflight-command"})
+            reserve = 20 if entry["operation"] == "tokeninfo" else 60
+            require(entry["reserveSeconds"] == reserve and _number(entry["started"]))
+            limit = budget["totalBudgetSeconds"] - (
+                budget["cleanupReserveSeconds"]
+                if entry["phase"] == "observation"
+                else 0
+            )
+            require(entry["started"] + reserve <= limit)
+    else:
+        require(ages == [] and evidence == [] and sum(counts.values()) == 0)
 
 
 def complete(report):
@@ -357,47 +406,76 @@ def _verified_success(start, finalize):
 
 
 def lifetime_summary(report):
-    """Classify each sampled age, then bound the usability window from what was observed.
-
-    - usableAges: a fully-verified success (session, finalize, every identity check).
-    - refusedAges / refusalReasons: start or finalize was refused; the error is recorded.
-    - indeterminateAges: accepted but not fully verified (an HTTP 200 with no usable token).
-
-    lowerBoundSeconds is the largest usable age. An upper bound is established ONLY when an
-    expiry-class refusal (EXPIRY_ERRORS) is observed at an age strictly above a verified
-    success; it is then the interval (largest usable age, smallest such refusal] on the
-    usability window -- not the exact TTL, and not the AUTH-U03 finalize residual. A refusal
-    with any other error, or below every success, leaves the upper bound undetermined.
-    """
+    """Report successes and measured refusal candidates; never establish age causality."""
     rows = {r["id"]: r for r in report["cases"]}
-    usable, refused, indeterminate, reasons = [], [], [], {}
+    usable, refused, indeterminate, reasons, observations, starts = (
+        [],
+        [],
+        [],
+        {},
+        [],
+        [],
+    )
     for a in AGE_SECONDS:
         start, finalize = rows[f"age-{a}s-start"], rows[f"age-{a}s-finalize"]
+        if (
+            start["outcome"] == "accepted"
+            and start["checks"].get("sessionInfoPresent") is True
+        ):
+            starts.append(a)
         if _verified_success(start, finalize):
             usable.append(a)
-        elif start["outcome"] == "refused":
+        elif start["outcome"] == "refused" or finalize["outcome"] == "refused":
+            stage = "start" if start["outcome"] == "refused" else "finalize"
+            row = start if stage == "start" else finalize
+            error = row["observedError"]
             refused.append(a)
-            reasons[str(a)] = start["observedError"]
-        elif finalize["outcome"] == "refused":
-            refused.append(a)
-            reasons[str(a)] = finalize["observedError"]
+            reasons[str(a)] = error
+            observations.append(
+                {
+                    "targetAgeSeconds": a,
+                    "stage": stage,
+                    "error": error,
+                    "pendingAge": dict(
+                        row["timing"]["pendingAgeAt" + stage.capitalize()]
+                    ),
+                    "classification": "input-or-account-state"
+                    if error in INPUT_STATE_ERRORS
+                    else "cause-unestablished",
+                }
+            )
         else:
             indeterminate.append(a)
     lower = max(usable) if usable else None
-    expiry_refusals = [
-        a
-        for a in refused
-        if reasons[str(a)] in EXPIRY_ERRORS and (lower is None or a > lower)
-    ]
-    upper = min(expiry_refusals) if (expiry_refusals and lower is not None) else None
+    nonmonotonic = any(a < success for a in refused for success in usable)
+    candidates = []
+    if lower is not None and not nonmonotonic:
+        for refusal in observations:
+            if (
+                refusal["error"] == "INVALID_MFA_PENDING_CREDENTIAL"
+                and refusal["pendingAge"]["lower"] > lower
+            ):
+                candidates.append(
+                    {
+                        **refusal,
+                        "lowerSeconds": lower,
+                        "upperSeconds": refusal["pendingAge"]["upper"],
+                        "assessment": "candidate",
+                    }
+                )
     return {
         "usableAges": usable,
+        "startAcceptedAges": starts,
         "refusedAges": refused,
         "refusalReasons": reasons,
+        "refusalObservations": observations,
         "indeterminateAges": indeterminate,
         "lowerBoundSeconds": lower,
-        "upperBoundEstablished": upper is not None,
-        "upperBoundSeconds": upper,
+        "upperBoundEstablished": False,
+        "upperBoundSeconds": None,
+        "ageCausedExpiryEstablished": False,
+        "nonMonotonic": nonmonotonic,
+        "boundaryCandidates": candidates,
     }
 
 

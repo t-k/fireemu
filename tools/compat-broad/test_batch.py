@@ -303,6 +303,7 @@ def test_valid_permission_and_each_binding_rejection():
     m = c.candidate()
     permission = {
         "kind": "owner-execution-permission",
+        "comparisonContractDigest": c.digest(__import__("batch_pair").binding(m)),
         "manifestSha256": c.digest(m),
         "observerSha256": "b" * 64,
         "nonce": "a" * 32,

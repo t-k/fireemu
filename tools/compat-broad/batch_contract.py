@@ -158,9 +158,12 @@ class Budget:
 
 
 def approve(manifest, approval, nonce, observer_sha, now):
+    from batch_pair import binding
+
     compile_firestore(manifest, nonce)
     required = {
         "kind": "owner-execution-permission",
+        "comparisonContractDigest": digest(binding(manifest)),
         "manifestSha256": digest(manifest),
         "observerSha256": observer_sha,
         "nonce": nonce,

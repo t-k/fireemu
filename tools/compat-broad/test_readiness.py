@@ -97,6 +97,12 @@ def test_mapping_cli_report_check_and_incomplete_exit_codes(tmp_path):
         (ROOT / "spec/compatibility/broad-runs/0a7a55ce-mapped-batch.json").read_bytes()
     )["batch"]
     baseline = ROOT / "spec/compatibility/broad-runs/bf12f631-expanded.json"
+    from batch_contract import candidate
+    from broad_contract import digest
+
+    original["manifestDigest"] = digest(
+        candidate()
+    )  # Input fixture, not revised historical evidence.
     changed = copy.deepcopy(original)
     next(row for row in changed["rows"] if row["id"].startswith("auth:"))["status"] = (
         "fail"

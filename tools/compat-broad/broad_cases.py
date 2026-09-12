@@ -165,7 +165,7 @@ def auth_cases(origin, seed=SEED):
     return auth_scenario(call, seed)
 
 
-def auth_scenario(call, seed=SEED):
+def auth_scenario(call, seed=SEED, *, on_row=None):
     """One operation sequence shared by local and admission-controlled transports."""
     results = []
     client = "/identitytoolkit.googleapis.com/v1/accounts:"
@@ -190,6 +190,9 @@ def auth_scenario(call, seed=SEED):
                 "checks": checks,
             }
         )
+
+        if on_row is not None:
+            on_row(results[-1], body)
 
     users = []
     for label in ("a", "b"):

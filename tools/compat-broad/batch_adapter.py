@@ -25,7 +25,7 @@ from batch_contract import (
     database_evidence,
     recording_exit_code,
 )
-from broad_contract import digest, local_origin
+from broad_contract import ROOT, digest, local_origin
 
 HERE = Path(__file__).resolve().parent
 HOSTS = {
@@ -97,6 +97,15 @@ class Adapter:
         self.permission = permission
         if local_origins is None:
             approve(manifest, permission or {}, nonce, observer_digest(), time.time())
+            frozen = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+            ).strip()
+            if (permission or {}).get(
+                "frozenCommit"
+            ) != frozen or subprocess.check_output(
+                ["git", "status", "--porcelain"], cwd=ROOT
+            ).strip():
+                raise ValueError("approved frozen checkout required")
             if not os.environ.get("PRODUCTION_ORACLE_API_KEY"):
                 raise ValueError("API key required")
             state = Path.home() / ".local/state/fireemu-broad/consumed"
@@ -124,6 +133,9 @@ class Adapter:
         self.last_request = 0
         self.documents = set()
         self.accounts = {}
+        self.token_roles = {}
+        self.last_observation = None
+        self.last_auth_operation = None
         self.tokens = set()
         self.refresh_tokens = set()
         self.emails = {
@@ -236,13 +248,41 @@ class Adapter:
                 if service == "firestore"
                 else "https://" + path
             )
-        status, result, _content_type = wire(
+        status, result, content_type = wire(
             url,
             method,
             urllib.parse.urlencode(body or {}) if form else body,
             headers,
             local=bool(self.local),
         )
+        observation = {
+            "httpStatus": status,
+            "mediaType": content_type.split(";", 1)[0].strip().lower(),
+            "body": result,
+        }
+        self.last_observation = observation
+        # Private bounded responses survive even when a stop condition prevents a row.
+        fd = os.open(
+            self.output / "responses.jsonl",
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+            0o600,
+        )
+        with os.fdopen(fd, "a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "service": service,
+                        "route": path.split("?", 1)[0],
+                        "phase": "recovery" if self.budget.recovery else "observation",
+                        "response": observation,
+                        "digest": digest(observation),
+                    },
+                    allow_nan=False,
+                )
+                + "\n"
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
         if privileged and status in {401, 403}:
             self.credential.fail()
             raise ValueError("administrator credential rejected")
@@ -293,8 +333,70 @@ class Adapter:
                         "status": status,
                         "body": result,
                         "mappedParent": program["parent"],
+                        "principal": "administrator",
+                        "operation": self.normal_operation(
+                            step["path"], step["method"], step.get("body"), "firestore"
+                        ),
+                        "observation": self.normal_observation("firestore"),
                     }
                 )
+
+    def names(self):
+        from batch_pair import namespace
+
+        return namespace(self.manifest, self.nonce, self.accounts)
+
+    def normal_observation(self, service):
+        from batch_pair import normalize
+
+        if self.last_observation is None:
+            raise ValueError("missing response")
+        return {
+            **self.last_observation,
+            "body": normalize(
+                self.last_observation["body"], self.names(), service=service
+            ),
+        }
+
+    def normal_operation(self, path, method, body, service):
+        names = self.names()
+
+        def transform(value):
+            if isinstance(value, str):
+                if value in self.token_roles:
+                    return {"$credential": self.token_roles[value]}
+                for role, uid in names["authUids"].items():
+                    if value == uid:
+                        return {"$account": role}
+                for role, email in names["authEmails"].items():
+                    if value == email:
+                        return {"$email": role}
+                for role, parent in names["firestoreParents"].items():
+                    value = value.replace(parent, "documents/" + role)
+                return value
+            if isinstance(value, dict):
+                return {k: transform(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [transform(v) for v in value]
+            return value
+
+        return {
+            "path": transform(path.split("?", 1)[0]),
+            "method": method,
+            "body": transform(body),
+            "service": service,
+        }
+
+    def emit_auth(self, row, body):
+        if self.last_auth_operation is None:
+            raise ValueError("missing Auth operation")
+        self.rows.append(
+            {
+                **row,
+                **self.last_auth_operation,
+                "observation": self.normal_observation("auth"),
+            }
+        )
 
     def lookup(self, email):
         if email not in self.emails:
@@ -392,7 +494,28 @@ class Adapter:
         if "?" in path:
             key = self.api_key
             path = route + "?" + urllib.parse.urlencode({"key": key})
+        role = next(
+            (
+                r
+                for r, email in self.names()["authEmails"].items()
+                if body.get("email") == email
+            ),
+            None,
+        )
+        principal = (
+            "administrator"
+            if admin
+            else self.token_roles.get(body.get("idToken"))
+            if "idToken" in body
+            else self.token_roles.get(body.get("refresh_token"))
+            if form
+            else "password:" + role
+            if action == "signInWithPassword" and role
+            else "anonymous"
+        )
+        operation = self.normal_operation(path, "POST", body, "auth")
         status, result = self.request("auth", path, body, privileged=admin, form=form)
+        self.last_auth_operation = {"principal": principal, "operation": operation}
         if status == 200:
             if action == "signUp":
                 uid = result.get("localId")
@@ -405,9 +528,23 @@ class Adapter:
             for key in ("idToken", "id_token"):
                 if isinstance(result.get(key), str):
                     self.tokens.add(result[key])
+                    owner_role = role or (
+                        principal.split(":", 1)[1]
+                        if isinstance(principal, str) and ":" in principal
+                        else None
+                    )
+                    if owner_role is not None:
+                        self.token_roles[result[key]] = "self:" + owner_role
             for key in ("refreshToken", "refresh_token"):
                 if isinstance(result.get(key), str):
                     self.refresh_tokens.add(result[key])
+                    owner_role = role or (
+                        principal.split(":", 1)[1]
+                        if isinstance(principal, str) and ":" in principal
+                        else None
+                    )
+                    if owner_role is not None:
+                        self.token_roles[result[key]] = "refresh:" + owner_role
         return status, result
 
     def cleanup(self):
@@ -519,7 +656,7 @@ class Adapter:
         try:
             self.preflight()
             self.firestore()
-            self.rows.extend(auth_scenario(self.auth_call, self.nonce))
+            auth_scenario(self.auth_call, self.nonce, on_row=self.emit_auth)
         except Exception as error:
             failure = type(error).__name__
         finally:
@@ -532,7 +669,12 @@ class Adapter:
             except Exception:
                 unchanged = False
                 failure = failure or "MetadataDriftOrUnconfirmed"
+        from batch_pair import binding, row_table
+
         report = {
+            "schemaVersion": 2,
+            "comparisonBinding": binding(self.manifest),
+            "namespace": self.names(),
             "configurationUnchanged": unchanged,
             "databaseObservations": self.database_observations,
             "manifestDigest": digest(self.manifest),
@@ -545,16 +687,74 @@ class Adapter:
             "privilegedRequests": self.auth_evidence,
             "completed": failure is None
             and not self.unrecovered
-            and len(self.rows) == 46,
+            and [row["id"] for row in self.rows]
+            == [row["id"] for row in row_table(self.manifest)],
         }
         (self.output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
+
+
+def execution_inputs(manifest):
+    from batch_contract import DATABASE_PROJECTION, LIMITS
+    from batch_pair import binding
+
+    frozen = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
+        raise ValueError("freeze checkout before preparing execution inputs")
+    return {
+        "kind": "prepared-execution-inputs-not-permission",
+        "productionExecuted": False,
+        "frozenCommit": frozen,
+        "observerSha256": observer_digest(),
+        "manifestSha256": digest(manifest),
+        "manifest": manifest,
+        "comparisonContract": binding(manifest),
+        "comparisonContractDigest": digest(binding(manifest)),
+        "databaseProjectionContract": DATABASE_PROJECTION,
+        "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
+        "project": PROJECT,
+        "projectNumber": NUMBER,
+        "limits": LIMITS,
+        "recovery": {
+            "reservedSeconds": 300,
+            "reservedRequests": 300,
+            "totalSeconds": 1200,
+            "refreshAttempts": 2,
+            "credentialFailure": "latched; no stale fallback",
+            "unrecovered": "retain private ownership journal; report incomplete and stop",
+        },
+        "ownerInputs": {
+            key: None
+            for key in [
+                "ownerIdentity",
+                "permissionReference",
+                "issuedAt",
+                "expiresAt",
+                "nonce",
+                "databaseProjection",
+                "databaseProjectionDigest",
+                "authConfigDigest",
+                "pricingLocation",
+                "pricingCheckedAt",
+                "tariffsConfirmedBelowPlanningCeilings",
+            ]
+        },
+        "missingInputs": [
+            "current database identity/settings projection and Auth config baseline",
+            "target location and current applicable tariffs checked against manifest planning ceilings",
+            "owner identity/reference, explicit permission, validity window and unused 32-hex nonce",
+        ],
+        "permission": None,
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--write-candidate", action="store_true")
+    parser.add_argument("--prepare-inputs", type=Path)
     parser.add_argument("--approval", type=Path)
     parser.add_argument("--nonce")
     parser.add_argument("--output", type=Path)
@@ -563,6 +763,15 @@ def main():
         args.manifest.write_text(json.dumps(candidate(), indent=2) + "\n")
         return
     manifest = json.loads(args.manifest.read_bytes())
+    if args.prepare_inputs is not None:
+        if args.approval is not None or digest(manifest) != digest(candidate()):
+            raise ValueError(
+                "offline preparation requires current candidate without permission"
+            )
+        args.prepare_inputs.write_text(
+            json.dumps(execution_inputs(manifest), indent=2) + "\n"
+        )
+        return
     if args.approval is None:
         if digest(manifest) != digest(candidate()):
             raise ValueError("candidate drift")

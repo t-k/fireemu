@@ -1,5 +1,6 @@
 """Run bounded partition invariants on a retained, input-matched local artifact."""
 
+# ruff: noqa: BLE001 -- Preserve independent final checks after any execution/cleanup failure.
 from __future__ import annotations
 
 import argparse
@@ -86,6 +87,68 @@ def child(output, nonce):
                     process.wait(timeout=5)
 
 
+def supervise_partition(command, output, nonce, report, verify_inputs, *, timeout=150):
+    """Always persist the final failure, owned cleanup and input-verification evidence."""
+    process = None
+    result = {}
+    report.update(status="incomplete", recordingComplete=False, inputsStable=False)
+    try:
+        with (output / "stderr.log").open("w") as errors:
+            process = subprocess.Popen(
+                command,
+                cwd=output,
+                env=sanitized_environment(dict(os.environ)),
+                stdout=subprocess.DEVNULL,
+                stderr=errors,
+            )
+            report["exitCode"] = process.wait(timeout=timeout)
+    except (Exception, KeyboardInterrupt) as error:
+        report["executionFailure"] = type(error).__name__
+    finally:
+        try:
+            if process is not None:
+                cleanup_run(process, output, nonce, report)
+        except Exception as error:
+            report["cleanupFailure"] = type(error).__name__
+        report["ownedProcess"] = {
+            "pid": process.pid if process else None,
+            "stopped": process is not None and process.poll() is not None,
+            "listenersClosed": False,
+        }
+        try:
+            instance = json.loads((output / "instance.json").read_bytes())
+            report["ownedProcess"]["listenersClosed"] = bool(
+                instance["origins"]
+            ) and all(socket_closed(origin) for origin in instance["origins"])
+        except Exception as error:
+            report["listenerVerificationFailure"] = type(error).__name__
+        try:
+            report["inputsStable"] = bool(verify_inputs())
+        except Exception as error:
+            report["inputVerificationFailure"] = type(error).__name__
+        try:
+            result = json.loads((output / "cases.json").read_bytes())
+            report["recordingComplete"] = (
+                report.get("exitCode") == 0
+                and result.get("status") == "pass"
+                and len(result.get("cases", [])) == 30
+                and all(row.get("status") == "pass" for row in result["cases"])
+            )
+        except Exception as error:
+            report["recordingFailure"] = type(error).__name__
+        if (
+            report["recordingComplete"]
+            and report["inputsStable"]
+            and all(
+                report["ownedProcess"][key] for key in ("stopped", "listenersClosed")
+            )
+            and not any(key.endswith("Failure") for key in report)
+        ):
+            report["status"] = "pass"
+        save(output / "manifest.json", report)
+    return result
+
+
 def run(binary, receipt, output):
     inputs = runtime_inputs(ROOT)
     build = retained_artifact(binary, receipt, inputs)
@@ -145,53 +208,20 @@ def run(binary, receipt, output):
         "configuration": config,
         "command": command,
     }
-    with (output / "stderr.log").open("w") as errors:
-        process = subprocess.Popen(
-            command,
-            cwd=output,
-            env=sanitized_environment(dict(os.environ)),
-            stdout=subprocess.DEVNULL,
-            stderr=errors,
+
+    def verify_inputs():
+        current_observers = source_inputs()
+        current_observers[str(helper.relative_to(ROOT))] = hashlib.sha256(
+            helper.read_bytes()
+        ).hexdigest()
+        return (
+            inputs == runtime_inputs(ROOT)
+            and observers == current_observers
+            and hashlib.sha256(binary.read_bytes()).hexdigest()
+            == build["artifactSha256"]
         )
-        try:
-            report["exitCode"] = process.wait(timeout=150)
-        finally:
-            cleanup_run(process, output, nonce, report)
-    instance = (
-        json.loads((output / "instance.json").read_bytes())
-        if (output / "instance.json").exists()
-        else None
-    )
-    report["ownedProcess"] = {
-        "pid": process.pid,
-        "stopped": process.poll() is not None,
-        "listenersClosed": bool(instance)
-        and all(socket_closed(origin) for origin in instance["origins"]),
-    }
-    current_observers = source_inputs()
-    current_observers[str(helper.relative_to(ROOT))] = hashlib.sha256(
-        helper.read_bytes()
-    ).hexdigest()
-    stable = (
-        inputs == runtime_inputs(ROOT)
-        and observers == current_observers
-        and hashlib.sha256(binary.read_bytes()).hexdigest() == build["artifactSha256"]
-    )
-    result = (
-        json.loads((output / "cases.json").read_bytes())
-        if (output / "cases.json").exists()
-        else {}
-    )
-    report["inputsStable"] = stable
-    if (
-        report.get("exitCode") == 0
-        and result.get("status") == "pass"
-        and stable
-        and all(report["ownedProcess"][key] for key in ("stopped", "listenersClosed"))
-        and not report.get("cleanupFailure")
-    ):
-        report["status"] = "pass"
-    save(output / "manifest.json", report)
+
+    result = supervise_partition(command, output, nonce, report, verify_inputs)
     print(
         json.dumps(
             {

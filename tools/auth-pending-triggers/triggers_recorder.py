@@ -501,6 +501,19 @@ def observe(trigger, output, origin=None):
         # --- Snapshot the account, then fire exactly one trigger -----------------------
         before_trigger = account_projection(lookup())
 
+        def token_return_checks(response):
+            """Each token field of a transition response as a boolean: key present and a
+            non-empty string. Distinguishes 'no idToken' from an unexpected refreshToken
+            or expiresIn; no secret value is stored."""
+            return {
+                "idTokenReturned": isinstance(response.get("idToken"), str)
+                and bool(response["idToken"]),
+                "refreshTokenReturned": isinstance(response.get("refreshToken"), str)
+                and bool(response["refreshToken"]),
+                "expiresInReturned": isinstance(response.get("expiresIn"), str)
+                and bool(response["expiresIn"]),
+            }
+
         def password_trigger_row(status, response):
             record = lookup()
             checks = None
@@ -508,8 +521,7 @@ def observe(trigger, output, origin=None):
                 checks = {
                     "noError": "error" not in response,
                     "accountPresent": record.get("localId") == account["uid"],
-                    "tokensReturned": isinstance(response.get("idToken"), str)
-                    and bool(response["idToken"]),
+                    **token_return_checks(response),
                 }
             row("trigger", status, response, checks)
 
@@ -576,8 +588,7 @@ def observe(trigger, output, origin=None):
                     "noError": "error" not in response,
                     "providerAbsentAfter": LINK_PROVIDER not in providers,
                     "otherStateUnchanged": after == before_trigger,
-                    "tokensReturned": isinstance(response.get("idToken"), str)
-                    and bool(response["idToken"]),
+                    **token_return_checks(response),
                 }
             row("trigger", status, response, checks)
 
@@ -604,10 +615,15 @@ def observe(trigger, output, origin=None):
             signed,
             token_checks(signed, diagnostic=True) if status == 200 else None,
         )
-        if held_finalize["outcome"] != "accepted":
-            skipped("held-lookup")
-            skipped("held-refresh")
-        else:
+        # A held row runs only when its prerequisite token is actually present in the
+        # accepted finalize response: lookup needs the ID token, refresh the refresh
+        # token. A missing token is left as the finalize check that is already false and
+        # the dependent row is skipped as unexecuted, never synthesized into a refusal, so
+        # "the request was not sent" is never confused with "the server refused it".
+        finalize_checks = (
+            held_finalize["checks"] if held_finalize["outcome"] == "accepted" else {}
+        )
+        if finalize_checks.get("idTokenPresent") is True:
             status, seen = client("lookup", {"idToken": signed["idToken"]})
             checks = None
             if status == 200:
@@ -621,16 +637,19 @@ def observe(trigger, output, origin=None):
                     == account["uid"]
                 }
             row("held-lookup", status, seen, checks)
-            status, renewed = (
-                refresh(signed["refreshToken"])
-                if isinstance(signed.get("refreshToken"), str)
-                else (400, {"error": {"message": "INVALID_REFRESH_TOKEN"}})
-            )
+        else:
+            skipped("held-lookup")
+        if finalize_checks.get("refreshTokenPresent") is True:
+            status, renewed = refresh(signed["refreshToken"])
             checks = None
             if status == 200:
                 checks = tokens(renewed, account["uid"], account["email"], True)
-                checks["derivedLookup"] = derived_lookup_ok(renewed["id_token"])
+                checks["derivedLookup"] = checks[
+                    "idTokenPresent"
+                ] and derived_lookup_ok(renewed["id_token"])
             row("held-refresh", status, renewed, checks)
+        else:
+            skipped("held-refresh")
 
         # --- Final control -------------------------------------------------------------
         _ = held_start

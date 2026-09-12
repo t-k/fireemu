@@ -64,6 +64,7 @@ class World:
             "reject_post_trigger_sessions", False
         )
         self.bump_volatile_on_unlink = options.pop("bump_volatile_on_unlink", False)
+        self.held_finalize_no_refresh = options.pop("held_finalize_no_refresh", False)
         assert not options, options
         self.trigger_fired = False
         self.users = {}
@@ -309,8 +310,13 @@ class World:
         if info["code"] != TEST_CODE:
             return self.error("INVALID_CODE")
         session["consumed"] = True
+        held = self.trigger_fired and not pending["after_trigger"]
         self.pendings.pop(body["mfaPendingCredential"])
-        return 200, self.issue(self.users[pending["uid"]], True)
+        resp = self.issue(self.users[pending["uid"]], True)
+        if self.held_finalize_no_refresh and held:
+            # An accepted finalize that returns an ID token but no refresh token.
+            resp.pop("refreshToken")
+        return 200, resp
 
 
 def git(dirty):
@@ -349,6 +355,18 @@ def run(
                 assert marker not in text, (path.name, marker)
     assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
     return world, report, saved
+
+
+def recorder_token_return_checks(response):
+    """Mirror of the recorder's token_return_checks for a unit assertion."""
+    return {
+        "idTokenReturned": isinstance(response.get("idToken"), str)
+        and bool(response.get("idToken")),
+        "refreshTokenReturned": isinstance(response.get("refreshToken"), str)
+        and bool(response.get("refreshToken")),
+        "expiresInReturned": isinstance(response.get("expiresIn"), str)
+        and bool(response.get("expiresIn")),
+    }
 
 
 def rows_of(saved):
@@ -570,15 +588,20 @@ def skipped(name):
 
 def complete_report(trigger="admin-password-update"):
     finalize = dict.fromkeys(FINALIZE_CHECKS, True)
+    token_returns = {
+        "idTokenReturned": True,
+        "refreshTokenReturned": True,
+        "expiresInReturned": False,
+    }
     trig = (
         {
             "noError": True,
             "providerAbsentAfter": True,
             "otherStateUnchanged": True,
-            "tokensReturned": False,
+            **token_returns,
         }
         if trigger == "provider-unlink"
-        else {"noError": True, "accountPresent": True, "tokensReturned": True}
+        else {"noError": True, "accountPresent": True, **token_returns}
     )
     rows = {
         "baseline-fresh-finalize": accepted("baseline-fresh-finalize", finalize),
@@ -692,6 +715,67 @@ def test_a_throttled_or_server_errored_diagnostic_is_recorded_but_not_complete()
         for r in report["cases"]
     ]
     assert complete(report)
+
+
+def test_a_finalize_without_a_refresh_token_skips_refresh_and_sends_no_request(
+    tmp_path, monkeypatch
+):
+    # The held finalize is accepted but returns no refresh token: held-refresh is skipped
+    # as unexecuted (no synthesized refusal, no request sent) and the run still completes.
+    world, report, saved = run(
+        "client-password-change", tmp_path, monkeypatch, held_finalize_no_refresh=True
+    )
+    assert report["status"] == "observed", report.get("lastStep")
+    assert complete(saved)
+    rows = rows_of(saved)
+    assert rows["held-finalize"]["outcome"] == "accepted"
+    assert rows["held-finalize"]["checks"]["refreshTokenPresent"] is False
+    assert rows["held-finalize"]["checks"]["idTokenPresent"] is True
+    assert rows["held-lookup"]["outcome"] == "accepted"
+    assert rows["held-refresh"]["skipped"] is True
+    assert rows["held-refresh"]["observedError"] is None
+    assert world.counts.get("token", 0) == 0
+
+
+def test_a_transient_diagnostic_refusal_is_never_complete():
+    for status in (400, 403, 429):
+        for error in ("TOO_MANY_ATTEMPTS_TRY_LATER", "QUOTA_EXCEEDED"):
+            report = complete_report()
+            row = refused("held-start", error, status)
+            validate_row(
+                row, "held-start", "admin-password-update"
+            )  # recorded, no raise
+            report["cases"] = [
+                row if r["id"] == "held-start" else r for r in report["cases"]
+            ]
+            assert complete(report) is False, (status, error)
+    # A completing (non-transient) error at a validation status still completes.
+    report = complete_report()
+    report["cases"] = [
+        refused("held-start", "INVALID_MFA_PENDING_CREDENTIAL", 400)
+        if r["id"] == "held-start"
+        else r
+        for r in report["cases"]
+    ]
+    assert complete(report)
+
+
+def test_trigger_row_records_each_token_field_separately():
+    # A response with an unexpected refresh token but no ID token is not the same
+    # observation as an empty response (revision 2, GAP-AUTH-004 detection power).
+    empty = recorder_token_return_checks({})
+    partial = recorder_token_return_checks({"refreshToken": "x", "expiresIn": "3600"})
+    assert empty == {
+        "idTokenReturned": False,
+        "refreshTokenReturned": False,
+        "expiresInReturned": False,
+    }
+    assert partial == {
+        "idTokenReturned": False,
+        "refreshTokenReturned": True,
+        "expiresInReturned": True,
+    }
+    assert empty != partial
 
 
 def test_control_rows_may_not_be_refused():

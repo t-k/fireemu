@@ -39,3 +39,7 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pendin
 ```
 
 Each production run, its publication as a receipt and page, and any human approval are separate steps that each need their own decision, one trigger at a time.
+
+## Revision 2
+
+Revision 2 records each token field of the transition response separately (`idTokenReturned`, `refreshTokenReturned`, `expiresInReturned`) instead of a single `tokensReturned`, so an unexpected refresh token or expiry is distinguished from a missing ID token (GAP-AUTH-004). A held row runs only when the accepted finalize actually returned the token it needs; a missing token skips the dependent row as unexecuted rather than synthesizing a refusal. A throttle or quota refusal is recorded but never completes a run, whatever its HTTP status. The receipt binds a broader dependency manifest (the trigger contract and recorder, the shared revocation and password-maximum recorders and contracts) to the recorder commit. Revision-1 observations are retained as history (`*-r1.md`).

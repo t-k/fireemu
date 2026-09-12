@@ -55,6 +55,10 @@ ERRORS = {
     "QUOTA_EXCEEDED",
 }
 CLASSIFIED_STATUSES = {400, 403}
+# Transient errors may be recorded as observations but never complete a run: a throttle
+# or quota answer is not a semantic result to compare, whatever its HTTP status.
+TRANSIENT_ERRORS = {"TOO_MANY_ATTEMPTS_TRY_LATER", "QUOTA_EXCEEDED"}
+COMPLETING_ERRORS = ERRORS - TRANSIENT_ERRORS
 
 FINALIZE_CHECKS = {
     "noError",
@@ -67,12 +71,17 @@ FINALIZE_CHECKS = {
 }
 # The trigger row records the transition and a readback as booleans; an accepted trigger
 # must at least have carried no error. Which keys are present depends on the trigger.
-PASSWORD_TRIGGER_CHECKS = {"noError", "accountPresent", "tokensReturned"}
+# The transition's token response is recorded field by field (key present and a non-empty
+# string), so "no idToken" and "an unexpected refreshToken or expiresIn" are distinct
+# observations. Revision 2 (GAP-AUTH-004): revision 1 recorded only a single tokensReturned
+# derived from idToken and is retained as history.
+TOKEN_RETURN_CHECKS = {"idTokenReturned", "refreshTokenReturned", "expiresInReturned"}
+PASSWORD_TRIGGER_CHECKS = {"noError", "accountPresent", *TOKEN_RETURN_CHECKS}
 UNLINK_TRIGGER_CHECKS = {
     "noError",
     "providerAbsentAfter",
     "otherStateUnchanged",
-    "tokensReturned",
+    *TOKEN_RETURN_CHECKS,
 }
 TEST_PHONE = "+15555550100"
 TEST_CODE = "135790"
@@ -92,7 +101,7 @@ def corpus(trigger):
     require(trigger in TRIGGERS)
     return {
         "slice": f"auth-pending-trigger-{trigger}",
-        "revision": 1,
+        "revision": 2,
         "cases": list(CASES),
     }
 
@@ -174,9 +183,11 @@ def validate_row(row, name, trigger):
 
 
 def classified(row):
-    """A refused row whose class and status a receipt can rely on."""
+    """A refused row whose class and status a receipt can rely on: a validation status
+    with a completing (non-transient) error. A transient error never completes a run."""
     return row["outcome"] != "refused" or (
-        row["httpStatus"] in CLASSIFIED_STATUSES and row["observedError"] in ERRORS
+        row["httpStatus"] in CLASSIFIED_STATUSES
+        and row["observedError"] in COMPLETING_ERRORS
     )
 
 
@@ -208,8 +219,15 @@ def complete(report):
         finalize = rows["held-finalize"]
         require(not finalize["skipped"])
         accepted = finalize["outcome"] == "accepted"
-        require(rows["held-lookup"]["skipped"] == (not accepted))
-        require(rows["held-refresh"]["skipped"] == (not accepted))
+        # lookup and refresh run exactly when the finalize was accepted and carried the
+        # token each needs; a missing prerequisite token skips the dependent row rather
+        # than sending or synthesizing a doomed request.
+        id_present = accepted and finalize["checks"].get("idTokenPresent") is True
+        refresh_present = (
+            accepted and finalize["checks"].get("refreshTokenPresent") is True
+        )
+        require(rows["held-lookup"]["skipped"] == (not id_present))
+        require(rows["held-refresh"]["skipped"] == (not refresh_present))
         if report["target"] == "production":
             require(report["committedCheckout"] is True)
     except (KeyError, TypeError, ValueError):

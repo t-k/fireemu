@@ -39,6 +39,8 @@ RECORDER_FILES = (
     "tools/auth-pending-triggers/triggers_contract.py",
     "tools/auth-pending-triggers/triggers_recorder.py",
     "tools/auth-pending-revocation/revocation_recorder.py",
+    "tools/auth-password-maximum/maximum_contract.py",
+    "tools/auth-password-maximum/maximum_recorder.py",
 )
 PROJECTED = (
     "target",

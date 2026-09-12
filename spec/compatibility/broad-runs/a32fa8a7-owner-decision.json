@@ -229,8 +229,8 @@
   "databaseRawResponseSha256": "05fc90573f9cff8a92d9e8ddd031d47a408e255bf836a24ca9a2dff5980852d3",
   "databaseAcquiredAt": "2026-09-12T13:57:54.552050+00:00",
   "remainingInputs": [
-    "Explicit API-key project ownership lookup (key is available only in private successful Auth response)",
-    "Resolve quota-header requirement for the unchanged frozen production transport; do not silently replace a32fa8a7",
+    "Independent API-key ownership remains unconfirmed: API Keys API lookup returned403 disabled/not-used. API enablement is outside all granted permissions.",
+    "Resolve quota-header requirement for unchanged frozen production transport; do not silently replace a32fa8a7",
     "Owner acceptance of collected settings and billing conditions",
     "Production ownerIdentity/permissionReference, validity window and unused nonce"
   ],
@@ -252,7 +252,10 @@
     "tokeninfoRequests": 1,
     "automaticRetries": 0,
     "wallSeconds": 180,
-    "permission": null,
+    "permission": {
+      "status": "used-once-and-stopped",
+      "source": "User \u8a31\u53ef response authorizing the new key-only read window; no reusable retry or API-enablement permission"
+    },
     "dataOrConfigMutation": false,
     "iamMutation": false,
     "repeatProjectDatabaseAuthReads": false
@@ -312,5 +315,51 @@
     "emailPasswordEnabled": true,
     "anonymousEnabled": true,
     "blockingTriggerCount": 0
-  }
+  },
+  "keyOwnershipReadResult": {
+    "independentWindow": true,
+    "authorizedWallSeconds": 180,
+    "quotaProject": "fireemu-35fe6",
+    "authorizationSource": "User replied \u8a31\u53ef to one saved-key ownership lookup plus necessary ADC/expiry verification in a new180s window, without retries.",
+    "startedAt": "2026-09-12T14:13:22.465971+00:00",
+    "elapsedSeconds": 2.7575553751084954,
+    "adcCommandAttempts": 1,
+    "httpRequestAttempts": 2,
+    "adcInternalNetworkRequests": "not separately instrumented; one command invocation",
+    "requests": [
+      {
+        "label": "tokeninfo",
+        "quotaProject": null,
+        "requestedAt": "2026-09-12T14:13:23.988583+00:00",
+        "receivedAt": "2026-09-12T14:13:24.152240+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "4e43b150d39aa0943c6e32388a806f0690df2b79c68074edea531da1d32bf9e9",
+        "parsedResponseDigest": "f0e513efeef7165b2cd102e005a09752a871efed20226370287b1463b934a266"
+      },
+      {
+        "label": "api-key-ownership",
+        "quotaProject": "fireemu-35fe6",
+        "requestedAt": "2026-09-12T14:13:24.152773+00:00",
+        "receivedAt": "2026-09-12T14:13:25.201935+00:00",
+        "httpStatus": 403,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "39519b2a17edecab25820250ab64c3139ebb0180ecabd66c0fd86fafd0637fcf",
+        "parsedResponseDigest": "c937bc6dc61f6533e25ef3665d6390dd366f6dc7771f90f8d819114af92d02d6"
+      }
+    ],
+    "completed": false,
+    "apiKeyOwnershipConfirmed": false,
+    "stopReason": "API Keys API reported not previously used or disabled; lookup returned403 PERMISSION_DENIED",
+    "errorCode": 403,
+    "errorStatus": "PERMISSION_DENIED",
+    "automaticRetries": 0,
+    "dataMutations": 0,
+    "persistentConfigurationMutations": 0,
+    "apiEnablementChanges": 0,
+    "iamChanges": 0,
+    "principalSwitches": 0
+  },
+  "currentStatus": "blocked-before-production-permission; API-key ownership unconfirmed; all granted read windows ended",
+  "apiKeyOwnershipConfirmed": false
 }

@@ -1,5 +1,7 @@
 # Initial46 owner decision draft
 
+Current status: API-key ownership lookup was refused because API Keys API is unavailable for this project. Successful Database/Auth acquisitions remain recorded, but all authorized read windows have ended and production execution remains unapproved.
+
 The [single decision draft](../../spec/compatibility/broad-runs/a32fa8a7-owner-decision.json) references the immutable a32fa8a7 execution-input package and records the partial authorized metadata acquisition. It is not a production execution permission. Execution source remains a32fa8a7; b76b96b9 remains its original report publication, and subsequent input records do not replace either.
 
 On 2026-09-12 at 13:57:52–13:57:54 UTC, one ADC acquisition and four HTTP requests were performed: tokeninfo 200, project 200, Database 200, Auth configuration 403. No automatic retry followed. API-key ownership was not requested because the Auth read failed and no approved key was available in the environment. No data or configuration mutation occurred. The acquisition stopped in 5.18 seconds, below the authorized 180-second bound.
@@ -39,3 +41,11 @@ The retrieved configuration enables email/password and anonymous sign-in and lis
 The single decision JSON now combines the successful project/Database and Auth observations, price calculations, immutable source bindings and remaining gaps. It still has no production permission. The remaining metadata operation is one API-key ownership lookup, with fresh credential/expiry verification if separately authorized, without repeating successful project/Database/Auth reads. The prior window is closed rather than extended.
 
 The successful quota-header request does not change frozen a32fa8a7's transport: it still lacks that header. Any necessary production-source delta must be narrowly reviewed and its execution binding explicitly resolved; a32fa8a7 must not be silently substituted. The 46-row batch, resource mutations, revision 3 and other production observations remain unexecuted.
+
+## Final key-only read window: blocked by API availability
+
+A new 180-second key-only window was explicitly authorized after the stopped helper run. At 2026-09-12T14:13:23–14:13:25 UTC, one existing-ADC command and two direct HTTP requests ran: tokeninfo 200 and API-key lookup 403. The management request specified `x-goog-user-project: fireemu-35fe6`. It used the existing key from the private successful Auth response and did not reread project, Database or Auth configuration. The run stopped after 2.7576 seconds.
+
+The lookup returned `PERMISSION_DENIED`, stating that API Keys API had not been used in this project or was disabled. Its raw response hash `39519b2a17edecab25820250ab64c3139ebb0180ecabd66c0fd86fafd0637fcf` is refusal evidence, not ownership confirmation or a settings digest. No retries, API enablement, IAM changes, principal switch, persistent quota configuration or oracle data mutation followed. API-key ownership remains unconfirmed.
+
+The [single decision draft](../../spec/compatibility/broad-runs/a32fa8a7-owner-decision.json) retains all three distinct read windows, successful Database/Auth baselines and hashes, pricing conditions, and this final blocker. All granted read windows have ended. API enablement is explicitly outside the granted scope and requires a separate owner decision; it is not implied by the API's error message. The unchanged frozen production adapter also still needs its quota-header execution binding resolved. Therefore the initial 46-row production batch is not ready for execution permission, and no production-batch recording/cleanup/compatibility result is claimed.

@@ -1,0 +1,760 @@
+{
+  "kind": "initial46-production-candidate",
+  "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+  "observerSha256": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+  "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+  "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+  "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+  "approval": {
+    "frozenCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+    "observerSha256": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+    "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+    "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+    "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+    "quotaProject": "fireemu-35fe6",
+    "databaseProjection": {
+      "name": "projects/fireemu-35fe6/databases/(default)",
+      "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+      "createTime": "2026-09-02T12:56:28.522410Z",
+      "updateTime": "2026-09-02T12:56:28.522410Z",
+      "locationId": "us-central1",
+      "type": "FIRESTORE_NATIVE",
+      "concurrencyMode": "PESSIMISTIC",
+      "versionRetentionPeriod": "3600s",
+      "appEngineIntegrationMode": "DISABLED",
+      "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+      "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+      "databaseEdition": "STANDARD",
+      "freeTier": true,
+      "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+      "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+    },
+    "databaseProjectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+    "authConfigDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2",
+    "nonce": "377db86cda534573b00d4422bd81db77",
+    "kind": "owner-execution-permission",
+    "project": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "ownerIdentity": "Owner participating in this conversation (user)",
+    "permissionReference": "User message: ok, responding to bc38f392 single-run proposal published at8c3b5929, one-hour validity and unused bound nonce",
+    "issuedAt": 1789224661.188821,
+    "pricingLocation": "us-central1",
+    "pricingCheckedAt": "2026-09-12",
+    "tariffsConfirmedBelowPlanningCeilings": true,
+    "expiresAt": 1789228261.188821
+  },
+  "productionExecuted": true,
+  "recordingComplete": true,
+  "cleanupComplete": true,
+  "configurationUnchanged": true,
+  "compatibility": "mismatch",
+  "bindingsValid": true,
+  "rows": 46,
+  "rowCounts": {
+    "match": 35,
+    "mismatch": 11
+  },
+  "counts": {
+    "total": 101,
+    "auth": 31,
+    "firestore": 60,
+    "metadata": 10,
+    "recovery": 33
+  },
+  "adcCommands": 1,
+  "directHttpRequests": 100,
+  "adcInternalRequests": "not separately instrumented",
+  "startedAt": 1789224661.214817,
+  "endedAt": 1789224745.9139452,
+  "elapsedSeconds": 84.69912815093994,
+  "adapterExitCode": 0,
+  "comparisonCheckExitCode": 1,
+  "automaticReruns": 0,
+  "unrecovered": [],
+  "ownershipJournalCounts": {
+    "document-attempt": 8,
+    "account-attempt": 3,
+    "account-created": 2,
+    "document-absent": 8,
+    "account-absent": 3
+  },
+  "databaseObservations": [
+    {
+      "responseDigest": "6a50a35c740d5a0588184ec313585154971efcd2177a9c79f0cdbdfd4043234d",
+      "projection": {
+        "name": "projects/fireemu-35fe6/databases/(default)",
+        "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+        "createTime": "2026-09-02T12:56:28.522410Z",
+        "updateTime": "2026-09-02T12:56:28.522410Z",
+        "locationId": "us-central1",
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "PESSIMISTIC",
+        "versionRetentionPeriod": "3600s",
+        "appEngineIntegrationMode": "DISABLED",
+        "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+        "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+        "databaseEdition": "STANDARD",
+        "freeTier": true,
+        "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+        "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+      },
+      "projectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+      "contract": {
+        "version": "database-settings-v2",
+        "excludedResponseFields": [
+          "earliestVersionTime",
+          "etag"
+        ],
+        "retainedFields": "all other fields, including unknown fields and field presence/types",
+        "requiredIdentityFields": [
+          "name",
+          "uid",
+          "databaseEdition",
+          "type",
+          "locationId"
+        ],
+        "hashEncoding": "canonical typed JSON SHA256"
+      },
+      "contractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+      "phase": "observation"
+    },
+    {
+      "responseDigest": "74cdbbdccf3cb7df92b1530aa1d993c41611a887953bb6722de369606e75492b",
+      "projection": {
+        "name": "projects/fireemu-35fe6/databases/(default)",
+        "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+        "createTime": "2026-09-02T12:56:28.522410Z",
+        "updateTime": "2026-09-02T12:56:28.522410Z",
+        "locationId": "us-central1",
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "PESSIMISTIC",
+        "versionRetentionPeriod": "3600s",
+        "appEngineIntegrationMode": "DISABLED",
+        "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+        "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+        "databaseEdition": "STANDARD",
+        "freeTier": true,
+        "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+        "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+      },
+      "projectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+      "contract": {
+        "version": "database-settings-v2",
+        "excludedResponseFields": [
+          "earliestVersionTime",
+          "etag"
+        ],
+        "retainedFields": "all other fields, including unknown fields and field presence/types",
+        "requiredIdentityFields": [
+          "name",
+          "uid",
+          "databaseEdition",
+          "type",
+          "locationId"
+        ],
+        "hashEncoding": "canonical typed JSON SHA256"
+      },
+      "contractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+      "phase": "recovery"
+    }
+  ],
+  "privilegedRequests": [
+    {
+      "operation": "cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3596.7478456248064,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "firestore.googleapis.com/v1/projects/fireemu-35fe6/databases/(default)",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3595.995203708997,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3594.8561809589155,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "apikeys.googleapis.com/v2/keys:lookupKey",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3594.3745544168632,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0/broad/one",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3593.2943234168924,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0/broad/one",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3592.2441959169228,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0/broad/one",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3591.1801627089735,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0/broad/one",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3590.106228708988,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0/broad/one",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3589.078377958853,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3588.013798791915,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0:runQuery",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3586.951084166998,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0:runQuery",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3585.89564454183,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0/broad/one",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3584.8504019589163,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/created",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3583.760378124891,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/doc",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3582.7999130839016,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/dup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3581.792301791953,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/extrema",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3580.7615066249855,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/nan",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3579.653605333995,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/none",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3578.6594859589823,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/sat",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3577.624589874875,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/doc",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3576.614758874988,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3575.6205849589314,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/doc",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3574.51527033397,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3573.467226999812,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/doc",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3572.366478791926,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3571.2780915838666,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/extrema",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3570.2050195839256,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3569.1368371248245,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/doc",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3568.04938541702,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3567.056265000021,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/created",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3565.9744748338126,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3565.645807459019,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3564.587338833837,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3563.564030458918,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3562.49455266702,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/doc",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3561.365870791953,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3560.264034416992,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/sat",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3559.2280122919474,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3558.175999125,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3557.1210138748866,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/dup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3556.0493584168144,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3555.007172083948,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3554.0159032088704,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3553.002024249872,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3552.097504624864,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3550.2784271249548,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3549.7326402089093,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3549.344607166946,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:update",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3548.9341199169867,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3546.196559666889,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:delete",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3545.7592814168893,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3545.154637666885,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3544.7940126669127,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:delete",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3544.392075459007,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "observation",
+      "verifiedRemainingSeconds": 3543.7880773749202,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0/broad/one",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3543.3691012088675,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0/broad/one",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3542.3424825419206,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-0/broad/one",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3541.247471083887,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/created",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3540.247530166991,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/created",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3539.2232407089323,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/created",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3537.540857124841,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/doc",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3536.5900481250137,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/doc",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3535.5424082088284,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/doc",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3534.471206249902,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/dup",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3533.5215181668755,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/dup",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3532.5775969589595,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/dup",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3531.523151416797,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/extrema",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3530.5208474169485,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/extrema",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3529.5444984999485,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/extrema",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3528.476323166862,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/nan",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3527.539814083837,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/nan",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3526.503917583963,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/nan",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3525.492115916917,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/none",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3524.5584409169387,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/none",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3523.598807374947,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/sat",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3522.5962043339387,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/sat",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3521.6731272498146,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "/v1/projects/fireemu-35fe6/databases/(default)/documents/broad_runs/377db86cda534573b00d4422bd81db77-1/tf/sat",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3520.6842376668938,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3519.63640387496,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3519.2554842499085,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3518.8893566248007,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3518.5377069998067,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3518.179863499943,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3517.817832249915,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3517.4596799169667,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "firestore.googleapis.com/v1/projects/fireemu-35fe6/databases/(default)",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3516.733296792023,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3515.6829699999653,
+      "basis": "tokeninfo"
+    },
+    {
+      "operation": "apikeys.googleapis.com/v2/keys:lookupKey",
+      "phase": "recovery",
+      "verifiedRemainingSeconds": 3515.235051416792,
+      "basis": "tokeninfo"
+    }
+  ],
+  "causeCandidateGroups": [
+    {
+      "id": "query-error-envelope",
+      "firstDivergentRows": [
+        "firestore:broad/refusal-preserves-state#negative-limit"
+      ],
+      "observation": "Both400 INVALID_ARGUMENT; production body is a one-element array of errors, local body is an error object",
+      "minimalCandidate": "Owned query with limit -1; saved exact operation and response available",
+      "impact": "REST streaming-query error envelope",
+      "fixStatus": "candidate runtime adapter fix; not implemented in this execution step"
+    },
+    {
+      "id": "client-update-input-handling",
+      "firstDivergentRows": [
+        "auth:broad/self-admin-field",
+        "auth:broad/other-user-selector"
+      ],
+      "observation": "Production accepts displayName updates while emailVerified remains false and a supplied foreign localId does not change token ownership. Local rejects both with OPERATION_NOT_ALLOWED",
+      "minimalCandidate": "Create users A/B; valid A token plus emailVerified true and displayName; valid B token plus localId A and displayName; read back both users",
+      "impact": "Client update acceptance and stored displayName; later admin-update/password/sign-in displayName differences descend from these first divergences",
+      "source": "crates/fireemu-adapter-http/src/identity_toolkit.rs:update",
+      "fixStatus": "Requires bounded authentication/authorization regression and security review; do not generalize to customAttributes/MFA/OOB or allow foreign ownership"
+    },
+    {
+      "id": "unauthenticated-update-error",
+      "firstDivergentRows": [
+        "auth:broad/unauthenticated-update"
+      ],
+      "observation": "Production INVALID_REQ_TYPE versus local MISSING_ID_TOKEN; both400",
+      "minimalCandidate": "Client accounts:update with only displayName and API key",
+      "impact": "Machine-readable error code",
+      "fixStatus": "Candidate route-specific error handling; do not generalize all missing-token requests"
+    },
+    {
+      "id": "lookup-last-refresh-field",
+      "firstDivergentRows": [
+        "auth:broad/refusal-state-a",
+        "auth:broad/refusal-state-b"
+      ],
+      "observation": "Production lookup contains lastRefreshAt; local omits it. This remains distinct from inherited displayName differences",
+      "minimalCandidate": "Create/sign-in then accounts:lookup; current saved sequence contains additional updates and has not been independently minimized",
+      "impact": "Response field presence; actual absolute timestamp was not normalized by this contract",
+      "fixStatus": "Separate response/state evidence needed for update semantics; no expectation or normalizer relaxation made"
+    },
+    {
+      "id": "refresh-project-identity",
+      "firstDivergentRows": [
+        "auth:broad/refresh-after-change"
+      ],
+      "observation": "Production project_id is592603257417, local isfireemu-35fe6",
+      "minimalCandidate": "Owned password sign-in then refresh; current corpus includes password change",
+      "impact": "Project number versus project ID representation",
+      "source": "crates/fireemu-adapter-http/src/identity_toolkit.rs refresh response uses store.project_id()",
+      "fixStatus": "Configuration/model mapping investigation required; do not hard-code the oracle number or automatically count configuration mismatch as a confirmed runtime bug"
+    }
+  ],
+  "newConfirmedIndependentRuntimeGapCount": "not assigned from row count; candidate groups require scoped reproduction/review",
+  "runtimeFixes": [],
+  "old07feab41Result": "unchanged and incomplete",
+  "candidateNotResultApproval": true,
+  "privateEvidenceSha256": {
+    "approval.json": "fe2daeead91363386aedb0510a6686bbde5f37ac5ebec69e1c43701fd7271417",
+    "invocation.json": "8572a9ab2f008d8481b08262816efc408e0f0163f21c16c4dc0eb082884648a0",
+    "production/result.json": "174dcc8c7615197fceb820f084cd61aefe4fa11acca86bb87a01e2a6b3369cd9",
+    "production/responses.jsonl": "69462bad092f3088198682811f971a6fe3f55952f327e7a0e662fd4eb369070b",
+    "production/ownership.jsonl": "417445ed18199d1c1924398e6631dce1921b4a02d5f00aa624aba02bd8084e9f",
+    "comparison.json": "11fc7072bc70f19c541d200b92b2babb4a502b89348b9e856dcfab56f5d02187"
+  },
+  "localBatchSha256": "07285ef50aa8002d6f9906f79e30f38786debaf85cf65faa9cc02b4fe90723bc"
+}

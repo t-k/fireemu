@@ -136,3 +136,33 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broa
 ```
 
 The local command ran under portctl with the existing owned-process wrapper and OS-assigned listener ports. Initial TDD execution failed on the expected v1/v2 contract difference; the final suite passed after the two-line production-contract correction. No full Rust regression suite, lifetime suite or publisher rerun was performed for this delta. Preparation/publication commits do not replace the stated frozen execution commit.
+
+
+## Authorized bc38f392 production result
+
+The owner replied “ok” to the v2 frozen proposal, including the one-hour window and proposed unused nonce. The adapter ran exactly once from detached `bc38f392077784509f7fbb8993d5be66c1a8be14`. The permission and nonce were consumed. Full authorization bindings and timings are in the [candidate execution receipt](../../spec/compatibility/broad-runs/bc38f392-execution-result.json); this receipt is not owner approval of the results. No automatic rerun, configuration update, IAM/API enablement action or baseline adoption occurred.
+
+The invocation completed all46 rows in approximately84.7 seconds with exit0. `recordingComplete=true`, `cleanupComplete=true`, and `configurationUnchanged=true`. The budget counted101 operations, including one ADC acquisition reservation:31 Auth,60 Firestore,10 metadata;33 of these were recovery operations. Direct HTTP requests totaled100 (99 recorded service responses plus one tokeninfo); ADC-internal network traffic was not separately instrumented. Eight document targets and three attempted account emails were confirmed absent; two account creations had succeeded and the weak-password attempt had not created an account. No unrecovered resources remain. The frozen preflight/postflight confirmed the v2 Database projection, Auth digest and independent API-key membership. This invocation made no persistent settings changes.
+
+The existing frozen comparator ran against the prepared bc38f392 local46 record: **35 matches and11 mismatches**, with no missing or indeterminate rows. Bindings were valid. Check mode exited1 because `compatibility=mismatch`; that is distinct from collection or cleanup failure. The [comparison JSON](../../spec/compatibility/broad-runs/bc38f392-production-local-comparison.json) and [normalized paired observations](../../spec/compatibility/broad-runs/bc38f392-paired-observations.json) preserve actual production responses, including refusals and unexpected success. No expected values or normalization rules were changed to improve the result.
+
+The11 differing rows are not11 independent bugs. Initial triage identifies five overlapping cause groups:
+
+| Cause candidate | First divergence and observed consequence | Scope and remaining work |
+| --- | --- | --- |
+| Firestore query error envelope | Negative limit returns400 INVALID_ARGUMENT on both sides; production returns an array containing an error, local returns an error object | Exact one-query input available; review the REST query envelope implementation |
+| Auth client update input handling | With a valid token, production ignores client emailVerified and foreign localId selectors while applying displayName to the token owner; local rejects the requests | Two related input-handling branches; subsequent displayName differences inherit these divergences. Do not generalize to custom claims, MFA, OOB, or cross-account authority |
+| Auth unauthenticated update error | Production INVALID_REQ_TYPE versus local MISSING_ID_TOKEN for displayName-only update | Exact input available; a route-specific code difference, not permission to relax authentication |
+| Auth lookup lastRefreshAt | Production includes the field, local omits it; overlaps lookup rows already affected by displayName | Presence difference is separate; timestamp update semantics and independent minimization remain unknown |
+| Refresh project identity | Production project_id is the numeric project number; local uses the project ID | Runtime source returns store.project_id(); investigate environment/model mapping before declaring or fixing a general rule. Never hard-code the oracle number |
+
+The existing source inspection located the client update field/selector refusals and refresh project_id construction in `crates/fireemu-adapter-http/src/identity_toolkit.rs`. This execution step made no runtime fixes or new general semantic claims. The saved concrete inputs and first divergent operations support follow-up minimal regressions and narrow fixes; no additional production acquisition is automatically authorized. A security review is required before changing client update authorization behavior.
+
+Actual execution entry points used private permission/key handling:
+
+```sh
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_adapter.py --manifest spec/compatibility/broad-batch-candidate.json --approval <private>/approval.json --nonce 377db86cda534573b00d4422bd81db77 --output <private>/production
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_pair.py --production <private>/production/result.json --local <private>/bc38f392-local/batch/result.json --output <private>/comparison.json --check
+```
+
+No local server was started in this production-only step; the prepared local artifact's process and listeners were already stopped. No Rust tests, lifetime tests, publisher checks or new local46 rerun were needed or claimed here. The earlier07feab41 preflight stop remains incomplete, and the old193 historical matches,26 local checks,23 indeterminate cases and SDK/Rules/Listen evidence are not added to or relabeled by this46-row result. Revision3 and TTL investigations remain independent.

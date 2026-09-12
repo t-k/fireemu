@@ -729,6 +729,312 @@ async fn state_with_functions() -> (
     (Arc::new(state), runtime)
 }
 
+/// A runner that hosts an HTTP echo server (so HTTP / callable functions and task dispatch
+/// have somewhere to go) and speaks the fireemu protocol. A POST whose path names the task
+/// queue is recorded to `FIREEMU_UI_TASK_PROBE` and acknowledged with `204`; every other
+/// request is echoed as JSON so an invocation's forwarding can be asserted from the outside.
+const INLINE_HTTP_RUNNER: &str = r#"
+import http.server, json, os, sys, threading
+
+def send(m):
+    p = json.dumps(m).encode()
+    sys.stdout.buffer.write(f"{len(p)}\n".encode())
+    sys.stdout.buffer.write(p)
+    sys.stdout.buffer.flush()
+
+probe = os.environ.get("FIREEMU_UI_TASK_PROBE", "")
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def _handle(self):
+        length = int(self.headers.get("content-length") or 0)
+        body = self.rfile.read(length) if length else b""
+        if probe and self.path.endswith("/countJob"):
+            with open(probe, "a", encoding="utf-8") as f:
+                f.write(body.decode("utf-8", "replace") + "\n")
+            self.send_response(204)
+            self.end_headers()
+            return
+        payload = json.dumps({
+            "method": self.command,
+            "path": self.path,
+            "body": body.decode("utf-8", "replace"),
+        }).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+    do_GET = _handle
+    do_POST = _handle
+    def log_message(self, *args):
+        pass
+
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+send({"type": "hello", "runner": "ui-http", "httpPort": srv.server_address[1], "manifest": {"functions": [
+    {"name": "echo", "trigger": {"type": "http", "callable": False}},
+    {"name": "add", "trigger": {"type": "http", "callable": True, "enforceAppCheck": False, "consumeAppCheckToken": "disabled"}},
+    {"name": "mirror", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created", "document": "todos/{id}"}}
+]}})
+while True:
+    line = sys.stdin.buffer.readline()
+    if not line:
+        break
+    msg = json.loads(sys.stdin.buffer.read(int(line.strip())))
+    if msg.get("type") == "shutdown":
+        break
+    if msg.get("type") == "invoke":
+        send({"type": "result", "invocationId": msg["invocationId"], "ok": True})
+"#;
+
+/// The UI state with a real Functions port bound in front of an HTTP-capable runner, so the
+/// invoke and enqueue fronts can be driven end to end. Returns the state, the runtime, and
+/// the path the task handler records dispatched tasks to.
+async fn state_with_http_functions() -> (
+    Arc<UiState>,
+    Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
+    std::path::PathBuf,
+) {
+    use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+    use fireemu_adapter_functions::runtime::{CatchUpPolicy, FunctionsConfig, OverlapPolicy};
+    use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig, Trigger};
+
+    let dir = std::env::temp_dir().join(format!("fireemu-ui-invoke-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("tasks");
+    let _ = std::fs::remove_file(&probe);
+
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            "-c".to_owned(),
+            INLINE_HTTP_RUNNER.to_owned(),
+        ],
+        cwd: None,
+        env: vec![(
+            "FIREEMU_UI_TASK_PROBE".to_owned(),
+            probe.display().to_string(),
+        )],
+        hello_timeout: std::time::Duration::from_secs(20),
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let mut manifest = fireemu_adapter_functions::manifest_json::parse_manifest(
+        runner.hello().manifest.as_ref().unwrap(),
+    )
+    .unwrap();
+    // A task-queue function, cloning the HTTP template so it shares the region and runner.
+    let mut count_job = manifest.get("echo").unwrap().clone();
+    "countJob".clone_into(&mut count_job.name);
+    "countJob".clone_into(&mut count_job.entry_point);
+    count_job.trigger = Trigger::TaskQueue {
+        retry: TaskRetryConfig::default(),
+        rate_limits: TaskRateLimits::default(),
+    };
+    manifest.functions.push(count_job);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let runtime = fireemu_adapter_functions::runtime::FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig {
+            project: "demo-app".into(),
+            default_bucket: "demo-app.appspot.com".into(),
+            location: "nam5".into(),
+            session: fireemu_core_types::ids::SessionId::new(7),
+            max_running: 4,
+            debug_mode: false,
+            retry_attempts: 4,
+            max_catch_up_runs: 1000,
+            runner_secret: "s".into(),
+            overlap: OverlapPolicy::Allow,
+            catch_up: CatchUpPolicy::All,
+            functions_host: Some(addr.clone()),
+        },
+        clock,
+        Arc::new(runner),
+        None,
+    );
+    tokio::spawn(runtime.clone().dispatch_loop());
+    tokio::spawn(fireemu_adapter_functions::http::serve_functions(
+        listener,
+        runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
+    ));
+
+    let mut state = Arc::try_unwrap(state())
+        .ok()
+        .expect("the state is unshared");
+    state.info.functions_addr = Some(addr);
+    state.functions = Some(runtime.clone());
+    (Arc::new(state), runtime, probe)
+}
+
+/// Waits for the task probe to hold at least `expected` recorded dispatches.
+async fn wait_for_probe(probe: &std::path::Path, expected: usize) -> Vec<String> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let lines = std::fs::read_to_string(probe)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if lines.len() >= expected {
+                return lines;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the probe reached the expected number of dispatches")
+}
+
+#[tokio::test]
+async fn invoking_an_on_request_function_forwards_through_the_port_and_returns_its_response() {
+    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (status, body) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/echo:invoke",
+                &json!({"method": "post", "path": "/greet", "query": "x=1", "body": "{\"hi\":true}"}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["status"], 200);
+    assert_eq!(body["bodyEncoding"], "utf8");
+    // The runner echoed exactly the method, route and body the console asked it to forward.
+    let echoed: Value = serde_json::from_str(body["body"].as_str().unwrap()).unwrap();
+    assert_eq!(echoed["method"], "POST");
+    assert_eq!(echoed["path"], "/demo-app/us-central1/echo/greet?x=1");
+    assert_eq!(echoed["body"], "{\"hi\":true}");
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn invoking_refuses_a_non_http_function_an_unknown_name_and_a_bad_method() {
+    let (s, runtime, _probe) = state_with_http_functions().await;
+    // A Firestore trigger is not HTTP-invokable.
+    let (status, _) = call(
+        &s,
+        browser(
+            request("POST", "/ui/api/functions/mirror:invoke", &json!({})),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 400);
+    // An unknown function.
+    let (status, _) = call(
+        &s,
+        browser(
+            request("POST", "/ui/api/functions/nope:invoke", &json!({})),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 404);
+    // A method that could not be framed safely is refused before anything is sent.
+    let (status, _) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/echo:invoke",
+                &json!({"method": "GET DELETE"}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 400);
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn enqueuing_a_task_dispatches_it_to_the_queue_handler() {
+    let (s, runtime, probe) = state_with_http_functions().await;
+    let (status, body) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/countJob:enqueue",
+                &json!({"data": {"n": 7}, "id": "job-1"}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["task"]["name"],
+        "projects/demo-app/locations/us-central1/queues/countJob/tasks/job-1"
+    );
+    // The accepted response echoes the decoded body, as the Admin SDK's does.
+    assert_eq!(body["task"]["httpRequest"]["body"], json!({"data": {"n": 7}}));
+    // The task actually reached the handler over the port with the wrapped payload.
+    let entries = wait_for_probe(&probe, 1).await;
+    let dispatched: Value = serde_json::from_str(&entries[0]).unwrap();
+    assert_eq!(dispatched, json!({"data": {"n": 7}}));
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn enqueuing_refuses_a_non_task_function_and_a_bad_id() {
+    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (status, _) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/echo:enqueue",
+                &json!({"data": {}}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 400, "echo is not a task-queue function");
+    let (status, body) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/countJob:enqueue",
+                &json!({"data": {}, "id": "bad id"}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 400, "{body}");
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn the_functions_overview_reports_the_clock_and_a_schedule_next_run() {
+    let (s, runtime) = state_with_functions().await;
+    let (status, body) = call(&s, request("GET", "/ui/api/functions", &Value::Null)).await;
+    assert_eq!(status, 200);
+    // The runtime clock starts at 12:01:00Z; "every 5 minutes" next runs at 12:05:00Z.
+    assert_eq!(body["clock"], "2026-08-29T12:01:00Z");
+    let tick = body["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "tick")
+        .expect("the tick schedule is listed");
+    assert_eq!(tick["nextRun"], "2026-08-29T12:05:00Z");
+    runtime.runner().shutdown().await;
+}
+
 /// The next server-sent event of a stream, keep-alive comments skipped.
 async fn next_sse(rx: &mut tokio::sync::mpsc::Receiver<bytes::Bytes>) -> (String, Value) {
     loop {

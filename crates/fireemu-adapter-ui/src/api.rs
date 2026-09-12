@@ -38,6 +38,18 @@ pub async fn route(state: &Arc<UiState>, rest: &str, req: &UiRequest) -> UiRespo
     if rest == "functions/alerts" {
         return alerts(state, req);
     }
+    if let Some(name) = rest
+        .strip_prefix("functions/")
+        .and_then(|r| r.strip_suffix(":invoke"))
+    {
+        return invoke_function(state, name, req).await;
+    }
+    if let Some(name) = rest
+        .strip_prefix("functions/")
+        .and_then(|r| r.strip_suffix(":enqueue"))
+    {
+        return enqueue_task(state, name, req);
+    }
     if let Some(path) = rest.strip_prefix("appcheck/") {
         return app_check(state, path, req);
     }
@@ -371,12 +383,13 @@ fn functions(state: &UiState) -> UiResponse {
             &json!({"configured": false, "functions": [], "history": [], "deadLetters": []}),
         );
     };
+    let now = runtime.now();
     let functions: Vec<Value> = runtime
         .manifest()
         .functions
         .iter()
         .map(|f| {
-            json!({
+            let mut entry = json!({
                 "name": f.name,
                 "region": f.region,
                 "entryPoint": f.entry_point,
@@ -385,7 +398,24 @@ fn functions(state: &UiState) -> UiResponse {
                 "retry": f.retry,
                 "concurrency": f.effective_concurrency(),
                 "configuredConcurrency": f.concurrency,
-            })
+            });
+            // A scheduled function reports when it next runs on the virtual clock, so the
+            // console can offer to advance the clock straight to it.
+            if let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = &f.trigger
+            {
+                if let Some(next) = crate::functions_actions::next_run_rfc3339(
+                    schedule,
+                    time_zone.as_deref(),
+                    now,
+                ) {
+                    entry["nextRun"] = Value::String(next);
+                }
+            }
+            entry
         })
         .collect();
     let logs = runtime.runner().logs_since(None);
@@ -403,6 +433,12 @@ fn functions(state: &UiState) -> UiResponse {
             "configured": true,
             "project": runtime.project(),
             "source": state.info.functions_source,
+            // The current virtual clock, so the console can show a schedule's next run
+            // relative to now and offer to advance to it.
+            "clock": now.to_rfc3339().unwrap_or_else(|_| now.to_string()),
+            // Whether an HTTP / callable function can be invoked from here: the front forwards
+            // to the Functions port, which is only bound when a codebase is loaded.
+            "functionsAddr": state.info.functions_addr,
             "functions": functions,
             "status": runtime.status(),
             "history": runtime.history().iter().map(record_json).collect::<Vec<_>>(),
@@ -410,6 +446,131 @@ fn functions(state: &UiState) -> UiResponse {
             "logs": lines,
         }),
     )
+}
+
+/// `POST functions/{name}:invoke`: invokes an HTTP or callable function by forwarding the
+/// caller's request to the Functions port over loopback, so the callable trust boundary (App
+/// Check, ID-token verification, CORS) is exercised exactly as it is for an SDK client. The
+/// response is the function's own, with its body rendered as UTF-8 or base64.
+async fn invoke_function(state: &UiState, name: &str, req: &UiRequest) -> UiResponse {
+    let Some(runtime) = &state.functions else {
+        return UiResponse::error(404, "NOT_FOUND : no functions runtime is configured");
+    };
+    if req.method != "POST" {
+        return UiResponse::error(405, "METHOD_NOT_ALLOWED");
+    }
+    let body = match json_body(req) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    // The function must exist and be HTTP-invokable; its region is resolved here so the caller
+    // never has to name it.
+    let Some(spec) = runtime.manifest().get(name) else {
+        return UiResponse::error(404, &format!("NOT_FOUND : no function named {name:?}"));
+    };
+    if !matches!(spec.trigger, Trigger::Http { .. }) {
+        return UiResponse::error(
+            400,
+            &format!("INVALID_ARGUMENT : {name:?} is not an HTTP or callable function"),
+        );
+    }
+    let Some(addr) = state.info.functions_addr.clone() else {
+        return UiResponse::error(
+            503,
+            "UNAVAILABLE : the Functions port is not bound, so no function can be invoked",
+        );
+    };
+    let plan = match crate::functions_actions::build_invoke(
+        runtime.project(),
+        &spec.region,
+        name,
+        &body,
+    ) {
+        Ok(plan) => plan,
+        Err(message) => return UiResponse::error(400, &format!("INVALID_ARGUMENT : {message}")),
+    };
+    let started = std::time::Instant::now();
+    match fireemu_adapter_functions::http::forward(
+        &addr,
+        &plan.method,
+        &plan.path_and_query,
+        &plan.headers,
+        &plan.body,
+    )
+    .await
+    {
+        Ok(response) => UiResponse::json(
+            200,
+            &crate::functions_actions::encode_response(
+                response.status,
+                &response.headers,
+                &response.body,
+                started.elapsed().as_millis(),
+            ),
+        ),
+        Err(message) => UiResponse::error(502, &format!("BAD_GATEWAY : {message}")),
+    }
+}
+
+/// `POST functions/{name}:enqueue`: enqueues a Cloud Task onto an `onTaskDispatched` queue
+/// with `{data, id?, headers?}`, building the Admin SDK's own request body so the runtime
+/// accepts it unchanged and dispatches it to the handler on the virtual clock.
+fn enqueue_task(state: &UiState, name: &str, req: &UiRequest) -> UiResponse {
+    let Some(runtime) = &state.functions else {
+        return UiResponse::error(404, "NOT_FOUND : no functions runtime is configured");
+    };
+    if req.method != "POST" {
+        return UiResponse::error(405, "METHOD_NOT_ALLOWED");
+    }
+    let body = match json_body(req) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(spec) = runtime.manifest().get(name) else {
+        return UiResponse::error(404, &format!("NOT_FOUND : no function named {name:?}"));
+    };
+    if !matches!(spec.trigger, Trigger::TaskQueue { .. }) {
+        return UiResponse::error(
+            400,
+            &format!("INVALID_ARGUMENT : {name:?} is not a task-queue function"),
+        );
+    }
+    let region = spec.region.clone();
+    let data = body.get("data").cloned().unwrap_or(Value::Null);
+    let id = match body.get("id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(id)) => Some(id.clone()),
+        Some(_) => return UiResponse::error(400, "INVALID_ARGUMENT : id must be a string"),
+    };
+    let headers = match body.get("headers") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(map)) => Some(map.clone()),
+        Some(_) => {
+            return UiResponse::error(400, "INVALID_ARGUMENT : headers must be an object of strings")
+        }
+    };
+    let task_body = match crate::functions_actions::build_task_body(
+        runtime.project(),
+        &region,
+        name,
+        &data,
+        id.as_deref(),
+        headers.as_ref(),
+    ) {
+        Ok(body) => body,
+        Err(message) => return UiResponse::error(400, &format!("INVALID_ARGUMENT : {message}")),
+    };
+    match runtime.enqueue_task(runtime.project(), &region, name, &task_body) {
+        Ok(answer) => UiResponse::json(200, &answer),
+        Err(refusal) => {
+            let status = if (100..600).contains(&refusal.status) {
+                refusal.status
+            } else {
+                400
+            };
+            UiResponse::error(status, &refusal.body)
+        }
+    }
 }
 
 /// The same response with `Cache-Control: no-store`: what it carries is privileged and, for

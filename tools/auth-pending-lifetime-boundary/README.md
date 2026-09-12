@@ -45,3 +45,5 @@ The owned local artifact at the same execution commit accepted and fully verifie
 Recovery refreshed the administrative token successfully; all privileged requests retained verified expiry evidence. Configuration readback and digest matched the baseline, and every account was confirmed absent by UID and email. A separate read-only post-run check reconfirmed the configuration digest and all six accounts' absence. Raw reports and recovery journals remain private.
 
 [Production receipt and measured intervals](../../docs/compatibility/auth-pending-lifetime-boundary.md) and [owned local comparison](../../docs/compatibility/auth-pending-lifetime-boundary-comparison.md) are candidate records, not result approvals. Revision 1's published subjects are unchanged.
+
+See the [session clarification](../../docs/compatibility/auth-pending-lifetime-boundary-clarification.md): the design finalizes a fresh session only after an accepted start. In the recorded production aged rows, no session was returned and every finalize was skipped. The pinned production page and receipt remain unchanged.

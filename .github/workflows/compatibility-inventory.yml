@@ -100,6 +100,17 @@ jobs:
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-disable-comparison-approval.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-readback-comparison-approval.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-create-disable-comparison-approval.py --check
+      - name: Check lifetime corpora and published candidates
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-lifetime tools/auth-pending-lifetime-boundary -q
+          for publisher in \
+            publish-auth-pending-lifetime \
+            publish-auth-pending-lifetime-comparison \
+            publish-auth-pending-lifetime-boundary \
+            publish-auth-pending-lifetime-boundary-comparison
+          do
+            uv run --project tools/compat-inventory --locked --python 3.12 "tools/${publisher}.py" --check
+          done
       - name: Check immutable historical tools, observations and approvals
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check
       - name: Check later approved observations at their fixed historical source

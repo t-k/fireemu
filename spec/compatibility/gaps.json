@@ -132,11 +132,11 @@
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
-        "tools/auth-mfa-start-disabled/README.md",
+        "docs/compatibility/auth-mfa-start-disabled.md",
         "docs/compatibility/auth-refusal-precedence-approval.md",
-        "tools/auth-pending-retry/README.md"
+        "tools/auth-mfa-start-disabled/README.md"
       ],
-      "nextAction": "The finalize-precedence overlaps are observed and approved (auth-refusal-precedence). Remaining: (1) mfaSignIn:start on a disabled account. Its recorder (tools/auth-mfa-start-disabled) is built with offline safety tests and validated on an owned local artifact: fireemu refuses the disabled start with USER_DISABLED, skips the finalize, and the same held pending credential starts and finalizes after re-enablement. Next: a production run under a separate execution approval, then publication, comparison and approval. (2) An expired pending credential against an independently valid code stays a separate later corpus (needs the production pending lifetime and a way to prove code validity without consuming it).",
+      "nextAction": "The finalize-precedence overlaps are observed and approved (auth-refusal-precedence). mfaSignIn:start on a disabled account is now observed (auth-mfa-start-disabled, candidate): production accepts the start and enforces USER_DISABLED at finalize, while fireemu refuses at start; the held pending survives re-enablement on both sides. That divergence is tracked as GAP-AUTH-005 and gates this corpus's approval. Remaining: an expired pending credential against an independently valid code (a separate later corpus needing the production pending lifetime and a way to prove code validity without consuming it).",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -652,6 +652,24 @@
         "crates/fireemu-adapter-http/tests/auth_flows.rs"
       ],
       "nextAction": "Closed for the recorded conditions: a privileged administrative accounts:update that changes the password issues no ID token, refresh token or expiry, matching production for an enabled account as for a disabled one; the self-service password change still returns all three. The revision-2 production candidate and local comparison each carry a scoped approval (all seven rows agree, every token field false on both sides), and the auth_flows regression fences both directions. Not established for a valid token with an administrator-only field or other privileged update fields (see AUTH-U13).",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "GAP-AUTH-005",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "mismatch",
+      "scope": "Where the disabled-account check falls on the MFA sign-in. Production (recorded 2026-09-12, auth-mfa-start-disabled): mfaSignIn:start on an account disabled after its pending credential was issued is accepted and returns a session; the disabled state is enforced at mfaSignIn:finalize (USER_DISABLED). fireemu refuses at mfaSignIn:start with USER_DISABLED (identity_toolkit.rs mfa_sign_in_start), on the assumption that no code is issued for a disabled account. The held pending credential survives disable and re-enablement on both sides. The finalize-time USER_DISABLED enforcement already matches (GAP-AUTH-FIXED-001).",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "mismatch",
+      "evidenceRefs": [
+        "docs/compatibility/auth-mfa-start-disabled.md",
+        "docs/compatibility/auth-mfa-start-disabled-comparison.md",
+        "tools/auth-mfa-start-disabled/README.md"
+      ],
+      "nextAction": "Proposed fix: remove the disabled-account check from mfa_sign_in_start so a disabled account's mfaSignIn:start is accepted and issues a code, matching production, and rely on the existing finalize-time USER_DISABLED enforcement. Update the auth_flows regression that currently asserts start is refused on a disabled account (pending_retry_refuses_finalize_after_the_account_is_disabled), check the TOTP start-step equivalent, regenerate CompatibilitySelection Quint evidence, and add a regression pinning accept-at-start/refuse-at-finalize. Needs a security review (MFA on a disabled account can request an SMS code) and, after the fix, a re-run and comparison on the corrected artifact, then approvals. Awaiting the user's decision.",
       "blockedReason": "",
       "requiresProductionChange": true
     }

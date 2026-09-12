@@ -144,7 +144,7 @@
       "id": "AUTH-U04",
       "feature": "AUTH-SMS-MFA",
       "kind": "mismatch",
-      "scope": "Other revocation triggers against an existing pending credential: password change, password reset, administrative password update, provider unlink. Only the explicit validSince update is observed and approved.",
+      "scope": "Other revocation triggers against an existing MFA pending credential: client password change, administrative password update, password reset, provider unlink. Observed and approved at revision 2 (2026-09-12): the held pending credential and SMS session survive every one of these transitions in production, matching fireemu. The explicit validSince update is covered separately by auth-pending-revocation.",
       "implementationStatus": "unknown",
       "localTestStatus": "none",
       "productionObservationStatus": "approved",

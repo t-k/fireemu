@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "82cc38fa727e00b1e67dc1fa02698b39dca06eeb52af51bc70975378d6194d87",
+  "sourceCommit": "d3c2f4fc3772af8cd9a5095c481e42bc4ee4d299",
+  "scope": "Seven production-only observations projected without secrets from the saved 2026-09-12 run of the provider-unlink trigger (auth-pending-trigger), recorded from a committed checkout. A pending MFA credential and SMS session held from before the transition are presented after it; whether they still start and finalize is the observed outcome, with a baseline and a final fresh completion as controls, the configuration restored with a matching whole-configuration digest, and the account deleted with UID/email absence. The approval does not extend to a production/local comparison of this corpus, to any other trigger, to a rule about revocation, to tenants, SDK or Rules.",
+  "cases": [
+    "baseline-fresh-finalize",
+    "trigger",
+    "held-start",
+    "held-finalize",
+    "held-lookup",
+    "held-refresh",
+    "final-fresh-finalize"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-12",
+  "decision": "approve"
+}

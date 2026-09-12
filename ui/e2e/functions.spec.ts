@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { api, gotoApp, resetSession } from "./helpers";
+import { api, gotoApp, resetSession, waitForFunctionsRunner } from "./helpers";
 
 const DOCS = "firestore/v1/projects/demo-app/databases/(default)/documents";
 
@@ -45,7 +45,8 @@ test.describe("Functions", () => {
     await expect(page.getByTestId("function-logs")).toContainText("mirrorTodo");
   });
 
-  test("invokes an onRequest function and shows its response", async ({ page }) => {
+  test("invokes an onRequest function and shows its response", async ({ page, request }) => {
+    await waitForFunctionsRunner(request);
     await gotoApp(page, "/functions");
     await page.getByTestId("invoke-echo-toggle").click();
     // The onRequest form: a header and a JSON body are echoed back by the function.
@@ -59,7 +60,8 @@ test.describe("Functions", () => {
     await expect(body).toContainText('"ping":1');
   });
 
-  test("invokes a callable and shows its result envelope", async ({ page }) => {
+  test("invokes a callable and shows its result envelope", async ({ page, request }) => {
+    await waitForFunctionsRunner(request);
     await gotoApp(page, "/functions");
     await page.getByTestId("invoke-add-toggle").click();
     await page.getByTestId("invoke-add-data").fill('{"a":2,"b":3}');
@@ -70,6 +72,7 @@ test.describe("Functions", () => {
   });
 
   test("enqueues a task that reaches its onTaskDispatched handler", async ({ page, request }) => {
+    await waitForFunctionsRunner(request);
     await gotoApp(page, "/functions");
     await page.getByTestId("enqueue-countJob-toggle").click();
     await page.getByTestId("enqueue-countJob-data").fill('{"id":"ui-task-1","n":42}');
@@ -77,12 +80,13 @@ test.describe("Functions", () => {
     await expect(
       page.getByRole("status").filter({ hasText: "Enqueued a task onto countJob" }),
     ).toBeVisible();
-    await page.getByTestId("await-idle").click();
-    // The handler writes tasks/{data.id} with the task's payload.
-    const doc = (await api(request, "GET", `${DOCS}/tasks/ui-task-1`)) as {
-      fields?: { n?: { integerValue?: string } };
-    };
-    expect(doc.fields?.n?.integerValue).toBe("42");
+    // The handler writes tasks/{data.id} with the task's payload; poll until it lands.
+    await expect(async () => {
+      const doc = (await api(request, "GET", `${DOCS}/tasks/ui-task-1`)) as {
+        fields?: { n?: { integerValue?: string } };
+      };
+      expect(doc.fields?.n?.integerValue).toBe("42");
+    }).toPass({ timeout: 10000 });
   });
 
   test("shows a schedule's next run and advances the clock to it", async ({ page }) => {

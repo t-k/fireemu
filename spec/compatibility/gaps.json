@@ -132,11 +132,11 @@
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
+        "tools/auth-mfa-start-disabled/README.md",
         "docs/compatibility/auth-refusal-precedence-approval.md",
-        "docs/compatibility/auth-refusal-precedence.md",
         "tools/auth-pending-retry/README.md"
       ],
-      "nextAction": "The observed overlaps match fireemu and are approved through the auth-refusal-precedence receipt; no MFA change is made. The tampered-token accounts:update divergence is tracked separately as GAP-AUTH-003 (AUTH-USERS). Next for AUTH-U03: a later revision observing an expired pending credential against an independently valid code (needs the production pending lifetime, so a separate corpus) and mfaSignIn:start on a disabled account. Do not generalize the observed order to TOTP or expiry.",
+      "nextAction": "The finalize-precedence overlaps are observed and approved (auth-refusal-precedence). Remaining: (1) mfaSignIn:start on a disabled account. Its recorder (tools/auth-mfa-start-disabled) is built with offline safety tests and validated on an owned local artifact: fireemu refuses the disabled start with USER_DISABLED, skips the finalize, and the same held pending credential starts and finalizes after re-enablement. Next: a production run under a separate execution approval, then publication, comparison and approval. (2) An expired pending credential against an independently valid code stays a separate later corpus (needs the production pending lifetime and a way to prove code validity without consuming it).",
       "blockedReason": "",
       "requiresProductionChange": true
     },

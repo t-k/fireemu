@@ -39,6 +39,10 @@ def test_changed_source_or_namespace_cannot_be_compiled():
     m["firestorePrograms"][0]["steps"][0]["path"] += "/foreign"
     with pytest.raises(ValueError):
         c.compile_firestore(m, "a" * 32)
+    changed = c.candidate()
+    changed["firestorePrograms"][0]["seed"][0]["fields"]["n"]["integerValue"] = "999"
+    with pytest.raises(ValueError, match="unrecognized candidate"):
+        c.compile_firestore(changed, "a" * 32)
     for nonce in ["", "../outside", "a" * 31, "A" * 32]:
         with pytest.raises(ValueError):
             c.compile_firestore(c.candidate(), nonce)
@@ -120,8 +124,10 @@ def test_real_transport_bounds_redirect_body_and_total_deadline():
             "ok": True
         }
         for suffix in ("/redirect", "/large", "/slow"):
+            started = time.monotonic()
             with pytest.raises(ValueError):
                 adapter.wire(origin + suffix, "GET", None, {}, local=True, timeout=0.4)
+            assert time.monotonic() - started < 0.8
         with pytest.raises(ValueError):
             adapter.wire("https://example.com/", "GET", None, {}, local=True)
     finally:

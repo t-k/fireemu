@@ -229,8 +229,8 @@
   "databaseRawResponseSha256": "05fc90573f9cff8a92d9e8ddd031d47a408e255bf836a24ca9a2dff5980852d3",
   "databaseAcquiredAt": "2026-09-12T13:57:54.552050+00:00",
   "remainingInputs": [
-    "Resolve quota-header requirement for unchanged frozen production transport; do not silently replace a32fa8a7",
-    "Owner acceptance of collected settings and billing conditions",
+    "Owner approval replacing execution binding a32fa8a7 with7be6cf08 quota-only candidate",
+    "Owner acceptance of collected settings and applicable billing conditions",
     "Production ownerIdentity/permissionReference, validity window and unused nonce"
   ],
   "executionBlocker": {
@@ -359,7 +359,7 @@
     "iamChanges": 0,
     "principalSwitches": 0
   },
-  "currentStatus": "All required metadata obtained; quota-header candidate being prepared; production batch unapproved",
+  "currentStatus": "Metadata complete; narrowly reviewed quota candidate7be6cf08 proposed for owner decision; production batch unapproved",
   "apiKeyOwnershipConfirmed": true,
   "apiEnablementResult": {
     "authorizationSource": "User asked assistant to enable the required API; scope limited to API Keys API on fireemu-35fe6 and verification, without IAM changes or production batch permission.",
@@ -481,5 +481,29 @@
     "configurationMutations": 0,
     "adcInternalNetworkRequests": "not separately instrumented; one command invocation"
   },
-  "apiKeyOwnershipAcquiredAt": "2026-09-12T14:23:29.511418+00:00"
+  "apiKeyOwnershipAcquiredAt": "2026-09-12T14:23:29.511418+00:00",
+  "proposedExecutionReplacement": {
+    "status": "proposed-not-owner-approved",
+    "frozenCommit": "7be6cf08f1e9b1620eb0b7675b8352470b0968f5",
+    "executionInputsPath": "spec/compatibility/broad-runs/7be6cf08-execution-inputs.json",
+    "observerSha256": "dcab73c44e07152d21bd22897d18c296908bd2ab88b9eed4a31e41edffc60603",
+    "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+    "comparisonContractDigest": "453565e1eb4f74219d8648f3409ee996a0514d83222669f3edf29d8f7feb6434",
+    "quotaProject": "fireemu-35fe6",
+    "reason": "Explicit request quota header required by existing ADC; original a32fa8a7 preserved",
+    "scopeChange": "none; same46 rows, resources, budgets and comparison contract",
+    "technicalReview": {
+      "mustFix": [],
+      "shouldFix": [],
+      "scope": "quota header and admission binding only"
+    },
+    "verification": {
+      "broadTestsPassed": 50,
+      "postFormatFocusedTestsPassed": 14,
+      "ruffLint": "passed",
+      "ty": "passed",
+      "productionExecuted": false,
+      "newCandidateLocal46Run": "not yet executed; required for paired results under new observer"
+    }
+  }
 }

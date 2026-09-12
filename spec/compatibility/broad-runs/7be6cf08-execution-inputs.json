@@ -1,0 +1,1091 @@
+{
+  "kind": "prepared-execution-inputs-not-permission",
+  "productionExecuted": false,
+  "frozenCommit": "7be6cf08f1e9b1620eb0b7675b8352470b0968f5",
+  "observerSha256": "dcab73c44e07152d21bd22897d18c296908bd2ab88b9eed4a31e41edffc60603",
+  "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+  "manifest": {
+    "schemaVersion": 1,
+    "project": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "databaseType": "FIRESTORE_NATIVE",
+    "diagnosticRows": {
+      "auth": 19,
+      "firestore": 27
+    },
+    "firestorePrograms": [
+      {
+        "id": "broad/refusal-preserves-state",
+        "area": "writes-and-queries",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one",
+            "fields": {
+              "n": {
+                "integerValue": "8"
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "read-normal",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one",
+            "expect": "original-fields"
+          },
+          {
+            "id": "refused-overwrite",
+            "method": "PATCH",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one?currentDocument.exists=false",
+            "body": {
+              "fields": {
+                "n": {
+                  "integerValue": "9"
+                }
+              }
+            },
+            "expect": "refusal"
+          },
+          {
+            "id": "read-after-refusal",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one",
+            "expect": "original-fields"
+          },
+          {
+            "id": "empty-commit",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": []
+            },
+            "expect": "success"
+          },
+          {
+            "id": "zero-limit",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+            "body": {
+              "structuredQuery": {
+                "from": [
+                  {
+                    "collectionId": "broad"
+                  }
+                ],
+                "limit": 0
+              }
+            },
+            "expect": "no-documents"
+          },
+          {
+            "id": "negative-limit",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+            "body": {
+              "structuredQuery": {
+                "from": [
+                  {
+                    "collectionId": "broad"
+                  }
+                ],
+                "limit": -1
+              }
+            },
+            "expect": "refusal"
+          },
+          {
+            "id": "read-after-query-refusal",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one",
+            "expect": "original-fields"
+          }
+        ]
+      },
+      {
+        "id": "writes/transforms",
+        "area": "writes",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              },
+              "d": {
+                "doubleValue": 1.5
+              },
+              "s": {
+                "stringValue": "not a number"
+              },
+              "tags": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "stringValue": "a"
+                    },
+                    {
+                      "integerValue": "1"
+                    }
+                  ]
+                }
+              },
+              "m": {
+                "mapValue": {
+                  "fields": {
+                    "inner": {
+                      "integerValue": "5"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "server-timestamp-and-increments",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                    "fields": {}
+                  },
+                  "updateMask": {
+                    "fieldPaths": []
+                  },
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "at",
+                      "setToServerValue": "REQUEST_TIME"
+                    },
+                    {
+                      "fieldPath": "n",
+                      "increment": {
+                        "integerValue": "2"
+                      }
+                    },
+                    {
+                      "fieldPath": "d",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    },
+                    {
+                      "fieldPath": "s",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    },
+                    {
+                      "fieldPath": "missing",
+                      "increment": {
+                        "doubleValue": 0.5
+                      }
+                    },
+                    {
+                      "fieldPath": "m.inner",
+                      "increment": {
+                        "integerValue": "-10"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "read-after-increments",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+          },
+          {
+            "id": "maximum-and-minimum-invalid-field-path",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                    "fields": {}
+                  },
+                  "updateMask": {
+                    "fieldPaths": []
+                  },
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "n",
+                      "maximum": {
+                        "integerValue": "100"
+                      }
+                    },
+                    {
+                      "fieldPath": "d",
+                      "minimum": {
+                        "doubleValue": -1
+                      }
+                    },
+                    {
+                      "fieldPath": "s",
+                      "maximum": {
+                        "integerValue": "7"
+                      }
+                    },
+                    {
+                      "fieldPath": "max-missing",
+                      "maximum": {
+                        "integerValue": "3"
+                      }
+                    },
+                    {
+                      "fieldPath": "n",
+                      "minimum": {
+                        "doubleValue": 50.5
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "read-after-invalid-max-min",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+          },
+          {
+            "id": "maximum-and-minimum",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/tf/extrema",
+                    "fields": {
+                      "finite": {
+                        "integerValue": "5"
+                      },
+                      "nan": {
+                        "doubleValue": "NaN"
+                      },
+                      "equal": {
+                        "integerValue": "5"
+                      },
+                      "zero": {
+                        "doubleValue": 0
+                      },
+                      "text": {
+                        "stringValue": "text"
+                      }
+                    }
+                  },
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "finite",
+                      "maximum": {
+                        "doubleValue": "NaN"
+                      }
+                    },
+                    {
+                      "fieldPath": "nan",
+                      "maximum": {
+                        "integerValue": "5"
+                      }
+                    },
+                    {
+                      "fieldPath": "equal",
+                      "maximum": {
+                        "doubleValue": 5
+                      }
+                    },
+                    {
+                      "fieldPath": "zero",
+                      "minimum": {
+                        "integerValue": "0"
+                      }
+                    },
+                    {
+                      "fieldPath": "text",
+                      "maximum": {
+                        "integerValue": "7"
+                      }
+                    },
+                    {
+                      "fieldPath": "max_missing",
+                      "maximum": {
+                        "integerValue": "3"
+                      }
+                    },
+                    {
+                      "fieldPath": "min_missing",
+                      "minimum": {
+                        "doubleValue": -1
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "read-after-max-min",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/extrema"
+          },
+          {
+            "id": "array-transforms",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                    "fields": {}
+                  },
+                  "updateMask": {
+                    "fieldPaths": []
+                  },
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "tags",
+                      "appendMissingElements": {
+                        "values": [
+                          {
+                            "stringValue": "a"
+                          },
+                          {
+                            "stringValue": "b"
+                          },
+                          {
+                            "doubleValue": 1
+                          },
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "fieldPath": "s",
+                      "appendMissingElements": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "fieldPath": "tags",
+                      "removeAllFromArray": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "read-after-array-transforms",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+          },
+          {
+            "id": "transform-only-write-creates",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "transform": {
+                    "document": "projects/PROJECT/databases/(default)/documents/tf/created",
+                    "fieldTransforms": [
+                      {
+                        "fieldPath": "count",
+                        "increment": {
+                          "integerValue": "1"
+                        }
+                      },
+                      {
+                        "fieldPath": "at",
+                        "setToServerValue": "REQUEST_TIME"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "read-transform-created",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/created"
+          },
+          {
+            "id": "transform-write-with-exists-precondition",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "transform": {
+                    "document": "projects/PROJECT/databases/(default)/documents/tf/none",
+                    "fieldTransforms": [
+                      {
+                        "fieldPath": "count",
+                        "increment": {
+                          "integerValue": "1"
+                        }
+                      }
+                    ]
+                  },
+                  "currentDocument": {
+                    "exists": true
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "increment-with-non-numeric-operand",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                    "fields": {}
+                  },
+                  "updateMask": {
+                    "fieldPaths": []
+                  },
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "n",
+                      "increment": {
+                        "stringValue": "1"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "server-timestamp-on-a-delete",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "delete": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "at",
+                      "setToServerValue": "REQUEST_TIME"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "set-and-transform-same-field",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                    "fields": {
+                      "n": {
+                        "integerValue": "1000"
+                      }
+                    }
+                  },
+                  "updateMask": {
+                    "fieldPaths": [
+                      "n"
+                    ]
+                  },
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "n",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "read-set-and-transform",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+          },
+          {
+            "id": "integer-increment-saturates",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/tf/sat",
+                    "fields": {
+                      "n": {
+                        "integerValue": "9223372036854775807"
+                      }
+                    }
+                  },
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "n",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "read-saturated",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/sat"
+          },
+          {
+            "id": "increment-on-nan",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/tf/nan",
+                    "fields": {
+                      "n": {
+                        "doubleValue": "NaN"
+                      }
+                    }
+                  },
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "n",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "two-transforms-on-one-field-in-one-write",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/tf/dup",
+                    "fields": {
+                      "n": {
+                        "integerValue": "1"
+                      }
+                    }
+                  },
+                  "updateTransforms": [
+                    {
+                      "fieldPath": "n",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    },
+                    {
+                      "fieldPath": "n",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "read-dup",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/dup"
+          }
+        ]
+      }
+    ],
+    "authScenarioSha256": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+    "resources": {
+      "documents": 8,
+      "accounts": 3,
+      "maxPayloadBytes": 16384,
+      "maxResponseBytes": 65536
+    },
+    "limits": {
+      "total": 2400,
+      "auth": 400,
+      "firestore": 1600,
+      "metadata": 100,
+      "recovery": 300
+    },
+    "wallSeconds": 1200,
+    "recoverySeconds": 300,
+    "cost": {
+      "units": {
+        "documentReads": 3200,
+        "documentWrites": 1600,
+        "documentDeletes": 200,
+        "indexReadBatches": 2,
+        "storageGiBMonths": 0.0626220703125,
+        "egressGiB": 0.146484375,
+        "authMau": 3
+      },
+      "planningCeilingRatesUsd": {
+        "documentReads": 1e-05,
+        "documentWrites": 2e-05,
+        "documentDeletes": 1e-05,
+        "indexReadBatches": 1e-05,
+        "storageGiBMonths": 1,
+        "egressGiB": 1,
+        "authMau": 0.01
+      },
+      "upperEstimateUsd": 0.3051264453125,
+      "scanDocumentsPerQuery": 1,
+      "queries": 2,
+      "collectionGroupQueries": 0,
+      "pricingSource": "https://firebase.google.com/docs/firestore/pricing",
+      "tariffsVerified": false,
+      "approvalRequirement": "Owner must verify location/SKU tariffs do not exceed planning ceilings; no free quota deducted",
+      "retentionLimit": "Estimate includes one month of worst-case index storage; unrecovered resources require owner follow-up"
+    },
+    "productionApproval": null,
+    "excluded": [
+      "configuration mutations",
+      "global reset",
+      "collection-group queries",
+      "transactions/contention",
+      "Rules",
+      "SDK/Listen",
+      "MFA",
+      "OOB",
+      "index changes"
+    ]
+  },
+  "comparisonContract": {
+    "version": "batch-pair-v1",
+    "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+    "rowTable": [
+      {
+        "id": "firestore:broad/refusal-preserves-state#read-normal",
+        "principal": "administrator",
+        "programDigest": "a2c9de0047d77eeed093459d6c78663fb6b39efc68cd62513fd795bce8b8c777",
+        "ordinal": 0
+      },
+      {
+        "id": "firestore:broad/refusal-preserves-state#refused-overwrite",
+        "principal": "administrator",
+        "programDigest": "a2c9de0047d77eeed093459d6c78663fb6b39efc68cd62513fd795bce8b8c777",
+        "ordinal": 1
+      },
+      {
+        "id": "firestore:broad/refusal-preserves-state#read-after-refusal",
+        "principal": "administrator",
+        "programDigest": "a2c9de0047d77eeed093459d6c78663fb6b39efc68cd62513fd795bce8b8c777",
+        "ordinal": 2
+      },
+      {
+        "id": "firestore:broad/refusal-preserves-state#empty-commit",
+        "principal": "administrator",
+        "programDigest": "a2c9de0047d77eeed093459d6c78663fb6b39efc68cd62513fd795bce8b8c777",
+        "ordinal": 3
+      },
+      {
+        "id": "firestore:broad/refusal-preserves-state#zero-limit",
+        "principal": "administrator",
+        "programDigest": "a2c9de0047d77eeed093459d6c78663fb6b39efc68cd62513fd795bce8b8c777",
+        "ordinal": 4
+      },
+      {
+        "id": "firestore:broad/refusal-preserves-state#negative-limit",
+        "principal": "administrator",
+        "programDigest": "a2c9de0047d77eeed093459d6c78663fb6b39efc68cd62513fd795bce8b8c777",
+        "ordinal": 5
+      },
+      {
+        "id": "firestore:broad/refusal-preserves-state#read-after-query-refusal",
+        "principal": "administrator",
+        "programDigest": "a2c9de0047d77eeed093459d6c78663fb6b39efc68cd62513fd795bce8b8c777",
+        "ordinal": 6
+      },
+      {
+        "id": "firestore:writes/transforms#server-timestamp-and-increments",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 7
+      },
+      {
+        "id": "firestore:writes/transforms#read-after-increments",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 8
+      },
+      {
+        "id": "firestore:writes/transforms#maximum-and-minimum-invalid-field-path",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 9
+      },
+      {
+        "id": "firestore:writes/transforms#read-after-invalid-max-min",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 10
+      },
+      {
+        "id": "firestore:writes/transforms#maximum-and-minimum",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 11
+      },
+      {
+        "id": "firestore:writes/transforms#read-after-max-min",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 12
+      },
+      {
+        "id": "firestore:writes/transforms#array-transforms",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 13
+      },
+      {
+        "id": "firestore:writes/transforms#read-after-array-transforms",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 14
+      },
+      {
+        "id": "firestore:writes/transforms#transform-only-write-creates",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 15
+      },
+      {
+        "id": "firestore:writes/transforms#read-transform-created",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 16
+      },
+      {
+        "id": "firestore:writes/transforms#transform-write-with-exists-precondition",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 17
+      },
+      {
+        "id": "firestore:writes/transforms#increment-with-non-numeric-operand",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 18
+      },
+      {
+        "id": "firestore:writes/transforms#server-timestamp-on-a-delete",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 19
+      },
+      {
+        "id": "firestore:writes/transforms#set-and-transform-same-field",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 20
+      },
+      {
+        "id": "firestore:writes/transforms#read-set-and-transform",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 21
+      },
+      {
+        "id": "firestore:writes/transforms#integer-increment-saturates",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 22
+      },
+      {
+        "id": "firestore:writes/transforms#read-saturated",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 23
+      },
+      {
+        "id": "firestore:writes/transforms#increment-on-nan",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 24
+      },
+      {
+        "id": "firestore:writes/transforms#two-transforms-on-one-field-in-one-write",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 25
+      },
+      {
+        "id": "firestore:writes/transforms#read-dup",
+        "principal": "administrator",
+        "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+        "ordinal": 26
+      },
+      {
+        "id": "auth:broad/create-a",
+        "principal": "anonymous",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 27
+      },
+      {
+        "id": "auth:broad/create-b",
+        "principal": "anonymous",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 28
+      },
+      {
+        "id": "auth:broad/short-password-refused",
+        "principal": "anonymous",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 29
+      },
+      {
+        "id": "auth:broad/refused-create-absent",
+        "principal": "administrator",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 30
+      },
+      {
+        "id": "auth:broad/self-admin-field",
+        "principal": "self:a",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 31
+      },
+      {
+        "id": "auth:broad/other-user-selector",
+        "principal": "self:b",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 32
+      },
+      {
+        "id": "auth:broad/unauthenticated-update",
+        "principal": "anonymous",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 33
+      },
+      {
+        "id": "auth:broad/refusal-state-a",
+        "principal": "administrator",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 34
+      },
+      {
+        "id": "auth:broad/refusal-state-b",
+        "principal": "administrator",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 35
+      },
+      {
+        "id": "auth:broad/admin-update",
+        "principal": "administrator",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 36
+      },
+      {
+        "id": "auth:broad/self-sees-admin-state",
+        "principal": "self:a",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 37
+      },
+      {
+        "id": "auth:broad/password-change",
+        "principal": "self:a",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 38
+      },
+      {
+        "id": "auth:broad/old-password",
+        "principal": "password:a",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 39
+      },
+      {
+        "id": "auth:broad/new-password",
+        "principal": "password:a",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 40
+      },
+      {
+        "id": "auth:broad/refresh-after-change",
+        "principal": "refresh:a",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 41
+      },
+      {
+        "id": "auth:broad/delete-a",
+        "principal": "administrator",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 42
+      },
+      {
+        "id": "auth:broad/deleted-absent-a",
+        "principal": "administrator",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 43
+      },
+      {
+        "id": "auth:broad/delete-b",
+        "principal": "administrator",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 44
+      },
+      {
+        "id": "auth:broad/deleted-absent-b",
+        "principal": "administrator",
+        "programDigest": "34e82b14b340a2fcc14cfee75ca40e27adaf7950ae0c03e2446deb25d0194318",
+        "ordinal": 45
+      }
+    ],
+    "abstractInputsDigest": "bf22cd130543b234953c1bb2f4f88f35c54d2331af14cf8f05f0dd68ecafb919",
+    "normalizerVersion": "batch-response-v1",
+    "normalizerSpec": {
+      "version": "batch-response-v1",
+      "preserve": "JSON types, field presence, ordinary values, relative expiry, array order, mapped ownership",
+      "opaqueAuthKeys": [
+        "idToken",
+        "id_token",
+        "refreshToken",
+        "refresh_token",
+        "accessToken",
+        "access_token",
+        "passwordHash",
+        "salt",
+        "passwordSalt"
+      ],
+      "authAbsoluteTimeKeys": [
+        "createdAt",
+        "lastLoginAt",
+        "validSince",
+        "passwordUpdatedAt"
+      ],
+      "authTimePaths": "only top-level and users/* fields; preserve JSON type and timestamp format validity",
+      "firestoreTimePaths": [
+        "createTime",
+        "updateTime",
+        "commitTime",
+        "readTime",
+        "writeResults/*/updateTime",
+        "writeResults/*/transformResults/*/timestampValue",
+        "*/readTime",
+        "*/document/createTime",
+        "*/document/updateTime",
+        "fields/at/timestampValue"
+      ],
+      "errorProsePaths": [
+        "error/message",
+        "error/errors/*/message",
+        "*/error/message"
+      ],
+      "errorMachineCode": "leading uppercase underscore code retained; structured codes/status/shape retained",
+      "namespace": "exact compiled parent mapping; known creation-ledger UID/email values only",
+      "passwordProviderRawId": "exact owned email only at providerUserInfo/* and users/*/providerUserInfo/* with providerId=password",
+      "excludedClaims": [
+        "token byte equality/rotation/cryptographic validity",
+        "verifier contents",
+        "exact server time/TTL",
+        "error prose equality"
+      ]
+    },
+    "normalizerImplementationDigest": "34f79b15f680b0262b01dacd88350db110200ce4ac836e53407e80a25044efc3",
+    "databaseProjectionContractDigest": "79690548d106bfdacef8d5440e12c07d3384cbfb8ce7908ca6b93c3098268627",
+    "transport": "REST",
+    "edition": "Standard Native",
+    "project": "fireemu-35fe6"
+  },
+  "comparisonContractDigest": "453565e1eb4f74219d8648f3409ee996a0514d83222669f3edf29d8f7feb6434",
+  "databaseProjectionContract": {
+    "version": "database-settings-v1",
+    "excludedResponseFields": [
+      "earliestVersionTime"
+    ],
+    "retainedFields": "all other fields, including unknown fields and field presence/types",
+    "requiredIdentityFields": [
+      "name",
+      "uid",
+      "databaseEdition",
+      "type",
+      "locationId"
+    ],
+    "hashEncoding": "canonical typed JSON SHA256"
+  },
+  "databaseProjectionContractDigest": "79690548d106bfdacef8d5440e12c07d3384cbfb8ce7908ca6b93c3098268627",
+  "project": "fireemu-35fe6",
+  "projectNumber": "592603257417",
+  "quotaProject": "fireemu-35fe6",
+  "limits": {
+    "total": 2400,
+    "auth": 400,
+    "firestore": 1600,
+    "metadata": 100,
+    "recovery": 300
+  },
+  "recovery": {
+    "reservedSeconds": 300,
+    "reservedRequests": 300,
+    "totalSeconds": 1200,
+    "refreshAttempts": 2,
+    "credentialFailure": "latched; no stale fallback",
+    "unrecovered": "retain private ownership journal; report incomplete and stop"
+  },
+  "ownerInputs": {
+    "ownerIdentity": null,
+    "permissionReference": null,
+    "issuedAt": null,
+    "expiresAt": null,
+    "nonce": null,
+    "databaseProjection": null,
+    "databaseProjectionDigest": null,
+    "authConfigDigest": null,
+    "pricingLocation": null,
+    "pricingCheckedAt": null,
+    "tariffsConfirmedBelowPlanningCeilings": null
+  },
+  "missingInputs": [
+    "current database identity/settings projection and Auth config baseline",
+    "target location and current applicable tariffs checked against manifest planning ceilings",
+    "owner identity/reference, explicit permission, validity window and unused 32-hex nonce"
+  ],
+  "permission": null
+}

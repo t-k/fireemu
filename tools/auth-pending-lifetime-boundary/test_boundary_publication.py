@@ -14,7 +14,6 @@ production = importlib.import_module("publish-auth-pending-lifetime-boundary")
 comparison = importlib.import_module(
     "publish-auth-pending-lifetime-boundary-comparison"
 )
-import manifest_closure
 from manifest_closure import in_repo_closure
 from test_boundary_safety import run
 
@@ -26,13 +25,7 @@ OWN = ROOT / "tools/auth-pending-lifetime-boundary/boundary_owned.py"
 @pytest.mark.parametrize(
     "publisher,entries", [(production, [REC]), (comparison, [REC, OWN])]
 )
-def test_execution_manifest_matches_transitive_import_closure(
-    publisher, entries, monkeypatch
-):
-    # The permanent search-dir update waits until the frozen live run has completed.
-    monkeypatch.setattr(
-        manifest_closure, "SEARCH_DIRS", [REC.parent, *manifest_closure.SEARCH_DIRS]
-    )
+def test_execution_manifest_matches_transitive_import_closure(publisher, entries):
     assert set(publisher.RECORDER_FILES) == in_repo_closure(entries)
 
 

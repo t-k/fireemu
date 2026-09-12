@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SEARCH_DIRS = [
     ROOT / "tools/auth-mfa-start-disabled",
     ROOT / "tools/auth-pending-lifetime",
+    ROOT / "tools/auth-pending-lifetime-boundary",
     ROOT / "tools/auth-pending-triggers",
     ROOT / "tools/auth-pending-revocation",
     ROOT / "tools/auth-password-maximum",

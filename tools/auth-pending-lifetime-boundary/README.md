@@ -1,6 +1,6 @@
 # MFA pending credential lifetime: boundary probe (AUTH-U03, revision 2)
 
-Revision 2 samples 600, 1800, 3300 and 3900 seconds using six independent owned accounts (four age samples and two fresh controls). It is a separate corpus; revision 1's contract, recorder and published receipt stay pinned. Production execution remains subject to separate pre-run approval.
+Revision 2 samples 600, 1800, 3300 and 3900 seconds using six independent owned accounts (four age samples and two fresh controls). It is a separate corpus; revision 1's contract, recorder and published receipt stay pinned. The project owner authorized one production run on 2026-09-12; its results remain candidate. Any additional production experiment requires separate approval.
 
 Each pending credential stays untouched until its diagnostic. Start obtains a fresh SMS session; finalize verifies the returned identity through claims and lookup. Pending acquisition, start and finalize record request/response timing intervals. Production uses real waiting; the owned local run advances its instance's virtual clock.
 
@@ -34,3 +34,14 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pendin
 ```
 
 The pre-review local run at `cea9e674` observed success at 600/1800/3300 and rejection at 3900. Its earlier upper-bound interpretation is superseded by the candidate-only interpretation above; it is not evidence of production behavior or approval to run in production.
+
+
+## Recorded production result (2026-09-12)
+
+The authorized run at `267b10f5a1edf70a2da1a7dff7260e9945f2bd05` completed in 3970.37 seconds with `complete=true`. All four aged starts (600/1800/3300/3900 seconds) returned `INVALID_MFA_PENDING_CREDENTIAL`; their finalizes were skipped. Both fresh controls completed with every identity check. This run has no verified aged success, no sampled survival lower bound and no boundary candidate. It does not prove expiry causality or a lifetime upper bound. In particular, do not combine revision 1's separate 300-second success with this run's 600-second refusal into a certified (300, 600] interval.
+
+The owned local artifact at the same execution commit accepted and fully verified 600/1800/3300 seconds, then refused 3900 seconds. Six semantic rows differ; the two controls and the 3900-second start/skipped-finalize pair agree. This is recorded as the open mismatch `GAP-AUTH-007`, not an implementation fix. AUTH-U03's expired-pending/independently-valid-code residual remains unobserved.
+
+Recovery refreshed the administrative token successfully; all privileged requests retained verified expiry evidence. Configuration readback and digest matched the baseline, and every account was confirmed absent by UID and email. A separate read-only post-run check reconfirmed the configuration digest and all six accounts' absence. Raw reports and recovery journals remain private.
+
+[Production receipt and measured intervals](../../docs/compatibility/auth-pending-lifetime-boundary.md) and [owned local comparison](../../docs/compatibility/auth-pending-lifetime-boundary-comparison.md) are candidate records, not result approvals. Revision 1's published subjects are unchanged.

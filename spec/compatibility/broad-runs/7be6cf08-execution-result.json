@@ -1,0 +1,166 @@
+{
+  "kind": "initial46-execution-candidate",
+  "executionCommit": "7be6cf08f1e9b1620eb0b7675b8352470b0968f5",
+  "observerSha256": "dcab73c44e07152d21bd22897d18c296908bd2ab88b9eed4a31e41edffc60603",
+  "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+  "comparisonContractDigest": "453565e1eb4f74219d8648f3409ee996a0514d83222669f3edf29d8f7feb6434",
+  "permission": {
+    "ownerIdentity": "Owner participating in this conversation (user)",
+    "permissionReference": "User message: \u5b9f\u884c\u3057\u3066OK, responding to quota-only7be6cf08 replacement and linked single-run decision proposal",
+    "issuedAt": 1789223564.0140102,
+    "expiresAt": 1789227164.0140102,
+    "nonce": "39570c44ee184fbcacf5c590e2e40211",
+    "quotaProject": "fireemu-35fe6",
+    "executionsAuthorized": 1,
+    "nonceConsumed": true
+  },
+  "production": {
+    "recordingComplete": false,
+    "cleanupComplete": true,
+    "cleanupBasis": "No account/document creation attempted; empty ownership sets and no unrecovered resources",
+    "configurationUnchanged": false,
+    "exitCode": 2,
+    "startedAt": 1789223580.580466,
+    "endedAt": 1789223586.476813,
+    "elapsedSeconds": 5.8963470458984375,
+    "diagnosticRowsExecuted": 0,
+    "diagnosticRowsNotExecuted": 46,
+    "adcCommands": 1,
+    "directHttpRequests": 5,
+    "adcInternalRequests": "not separately instrumented",
+    "requests": "tokeninfo; project and Database preflight; project and Database postflight",
+    "budgetCounts": {
+      "total": 6,
+      "auth": 0,
+      "firestore": 0,
+      "metadata": 6,
+      "recovery": 2
+    },
+    "automaticReruns": 0,
+    "stopReason": "Approved Database settings projection differed only in etag; stopped before data operations",
+    "configurationStatus": "unconfirmed; no settings mutations issued",
+    "databaseObservations": [
+      {
+        "responseDigest": "9444ae3b70aaddf02a13f9a3b881c7a84795e4caa1591d45347e2a99acb74e19",
+        "projection": {
+          "name": "projects/fireemu-35fe6/databases/(default)",
+          "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+          "createTime": "2026-09-02T12:56:28.522410Z",
+          "updateTime": "2026-09-02T12:56:28.522410Z",
+          "locationId": "us-central1",
+          "type": "FIRESTORE_NATIVE",
+          "concurrencyMode": "PESSIMISTIC",
+          "versionRetentionPeriod": "3600s",
+          "appEngineIntegrationMode": "DISABLED",
+          "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+          "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+          "databaseEdition": "STANDARD",
+          "freeTier": true,
+          "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+          "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+          "etag": "ILi9sKGh6ZYDMODt3eb7z5YD"
+        },
+        "projectionDigest": "d6d1e383d0ff5d937b54a3e25a84b0aa4ef7b7c6c64495afd87832ac29f0e036",
+        "contract": {
+          "version": "database-settings-v1",
+          "excludedResponseFields": [
+            "earliestVersionTime"
+          ],
+          "retainedFields": "all other fields, including unknown fields and field presence/types",
+          "requiredIdentityFields": [
+            "name",
+            "uid",
+            "databaseEdition",
+            "type",
+            "locationId"
+          ],
+          "hashEncoding": "canonical typed JSON SHA256"
+        },
+        "contractDigest": "79690548d106bfdacef8d5440e12c07d3384cbfb8ce7908ca6b93c3098268627",
+        "phase": "observation"
+      },
+      {
+        "responseDigest": "15fde6461bfc0f9a8e6e376a0f2be9e0a07540e21fd1c433e40cc9ff83f434e9",
+        "projection": {
+          "name": "projects/fireemu-35fe6/databases/(default)",
+          "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+          "createTime": "2026-09-02T12:56:28.522410Z",
+          "updateTime": "2026-09-02T12:56:28.522410Z",
+          "locationId": "us-central1",
+          "type": "FIRESTORE_NATIVE",
+          "concurrencyMode": "PESSIMISTIC",
+          "versionRetentionPeriod": "3600s",
+          "appEngineIntegrationMode": "DISABLED",
+          "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+          "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+          "databaseEdition": "STANDARD",
+          "freeTier": true,
+          "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+          "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+          "etag": "INTxpaKh6ZYDMODt3eb7z5YD"
+        },
+        "projectionDigest": "be44028080673ddbc1bf9920424d2b1f92445356cd8324ac9bc3592eff022cd4",
+        "contract": {
+          "version": "database-settings-v1",
+          "excludedResponseFields": [
+            "earliestVersionTime"
+          ],
+          "retainedFields": "all other fields, including unknown fields and field presence/types",
+          "requiredIdentityFields": [
+            "name",
+            "uid",
+            "databaseEdition",
+            "type",
+            "locationId"
+          ],
+          "hashEncoding": "canonical typed JSON SHA256"
+        },
+        "contractDigest": "79690548d106bfdacef8d5440e12c07d3384cbfb8ce7908ca6b93c3098268627",
+        "phase": "recovery"
+      }
+    ],
+    "approvedDatabaseProjectionDigest": "1a067449eec406349580f171ae760ac33f5bc6ff0e0a53e00d26096da75e8fe8",
+    "approvedDatabaseEtag": "INvzo7OZ6ZYDMODt3eb7z5YD",
+    "authAndApiKeyPreflight": "not reached"
+  },
+  "local": {
+    "recordingComplete": true,
+    "rows": 46,
+    "cleanupComplete": true,
+    "counts": {
+      "total": 91,
+      "auth": 31,
+      "firestore": 60,
+      "metadata": 0,
+      "recovery": 29
+    },
+    "artifactSha256": "7df9b0aec8e493daa5c07de09f075d48a92552f038eb142dff167d6953883d85",
+    "ownedProcess": {
+      "pid": 66583,
+      "stopped": true,
+      "listenersClosed": true
+    },
+    "exitCode": 0
+  },
+  "comparison": {
+    "recordingComplete": false,
+    "cleanupComplete": true,
+    "compatibility": "indeterminate",
+    "bindingsValid": false,
+    "bindingErrors": [
+      "production:configuration-unconfirmed",
+      "production:database-projection"
+    ]
+  },
+  "comparisonExitCode": 2,
+  "privateEvidenceSha256": {
+    "approval.json": "507ca19e08a7d063d92605aa39a5e6a85125e9c60ccab8954b9b47577a990428",
+    "production/result.json": "006f0994b3e83fc32948b5a13dbab3986a511157f210254b987eb3df955ccde8",
+    "local/manifest.json": "f88ed7a2e03bb83b9e054cdccfdef8a807e2fcd1090add5d3743db580879d7b8",
+    "local/batch/result.json": "1540a4471a502ed479ed89447f4b486db040b6f84336b7c97e507a1e0df8836d",
+    "comparison.json": "6cd18fa16d53025c97afc7d5e05bc8bfe9202c1ad0def9d56e1491d0556f6fd3"
+  },
+  "runtimeGap": null,
+  "causeCandidate": "Database projection contract includes changing etag; this is acquisition admission behavior, not a Firebase/fireemu runtime gap",
+  "nextStep": "Review etag semantics and a narrow projection-contract revision offline before proposing another explicitly authorized execution; do not silently relax this run or retry it"
+}

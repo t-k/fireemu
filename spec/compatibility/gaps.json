@@ -150,10 +150,11 @@
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
-        "tools/auth-pending-triggers/README.md",
-        "docs/compatibility/auth-pending-revocation-approval.md"
+        "docs/compatibility/auth-pending-trigger-client-password-change-approval.md",
+        "docs/compatibility/auth-pending-trigger-client-password-change.md",
+        "tools/auth-pending-triggers/README.md"
       ],
-      "nextAction": "The parameterized recorder (tools/auth-pending-triggers) covers all four triggers with offline safety tests and completes on an owned local artifact for each; the held credential survives every trigger locally, which is fireemu's behavior, not evidence of production. Next: a production run per trigger under its own execution approval (temporary MFA and test-phone configuration, restored; provider-unlink links a federated identity administratively as a precondition), then per-trigger publication, comparison and scoped approval. Do not generalize the explicit-validSince result to these triggers.",
+      "nextAction": "Trigger 1 of 4 done (client-password-change): production observed and approved, local comparison approved (all seven rows agree); a self password change did not stop the held credential from finalizing, matching fireemu. Remaining triggers to run under their own execution approval: admin-password-update, password-reset, provider-unlink. When all four are observed and compared, close AUTH-U04 as observed-in-scope. Do not generalize any trigger's result to the others or to expiry.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

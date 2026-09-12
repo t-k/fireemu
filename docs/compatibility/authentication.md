@@ -138,6 +138,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Precedence of overlapping refusals, local comparison: scoped approval](auth-refusal-precedence-comparison-approval.md). All nine rows agree on the corrected artifact bound to commit c3a7973b; approved as a comparison of these cases only, not a claim that the non-tampered session-failure orderings are production-observed.
 
+[Held MFA pending credential across a client password change: production candidate](auth-pending-trigger-client-password-change.md), [local comparison](auth-pending-trigger-client-password-change-comparison.md), and scoped approvals of the [production record](auth-pending-trigger-client-password-change-approval.md) and the [comparison](auth-pending-trigger-client-password-change-comparison-approval.md). AUTH-U04, one trigger of four: a self password change did not stop the held credential from finalizing in production, and the owned local artifact agrees on all seven rows. Approved as the observed outcome for this trigger only.
+
 [Current lookup authorization regressions](../../tools/auth-lookup-authorization/README.md) separate token-verified self lookup from authenticated Admin identifier search. These local regressions correct the identifier bypass independently of the approved deletion observations; no production error-code parity or complete Auth authorization claim is made.
 
 [Current OOB issuance authorization regressions](../../tools/auth-oob-authorization/README.md) restrict returned action credentials to authenticated Admin routes and require verified end-user identity for verification delivery. These are local regressions, not new production observations or complete Auth authorization coverage.

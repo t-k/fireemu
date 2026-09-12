@@ -21,6 +21,7 @@ from triggers_contract import (
     TEST_CODE,
     TRIGGERS,
     complete,
+    token_return_checks,
     validate_row,
 )
 
@@ -760,22 +761,43 @@ def test_a_transient_diagnostic_refusal_is_never_complete():
     assert complete(report)
 
 
-def test_trigger_row_records_each_token_field_separately():
-    # A response with an unexpected refresh token but no ID token is not the same
-    # observation as an empty response (revision 2, GAP-AUTH-004 detection power).
-    empty = recorder_token_return_checks({})
-    partial = recorder_token_return_checks({"refreshToken": "x", "expiresIn": "3600"})
-    assert empty == {
+def test_token_return_checks_distinguishes_each_field():
+    # The real contract function (also used by the recorder): an unexpected refresh token
+    # with no ID token is not the same observation as an empty response.
+    assert token_return_checks({}) == {
         "idTokenReturned": False,
         "refreshTokenReturned": False,
         "expiresInReturned": False,
     }
-    assert partial == {
+    assert token_return_checks({"refreshToken": "x", "expiresIn": "3600"}) == {
         "idTokenReturned": False,
         "refreshTokenReturned": True,
         "expiresInReturned": True,
     }
-    assert empty != partial
+    assert token_return_checks({}) != token_return_checks({"refreshToken": "x"})
+
+
+def test_trigger_row_uses_the_real_token_return_checks_end_to_end(
+    tmp_path, monkeypatch
+):
+    # The recorded trigger row must equal token_return_checks applied to the transition
+    # response the world returned, so a recorder that stopped calling it (or a broken
+    # token_return_checks) is caught. The world's client password change returns an ID
+    # and refresh token but no expiresIn.
+    _world, report, saved = run("client-password-change", tmp_path, monkeypatch)
+    assert report["status"] == "observed", report.get("lastStep")
+    checks = rows_of(saved)["trigger"]["checks"]
+    assert checks["idTokenReturned"] is True
+    assert checks["refreshTokenReturned"] is True
+    assert checks["expiresInReturned"] is False
+    # Exactly the fields token_return_checks produces, alongside the trigger-specific ones.
+    assert set(checks) == {
+        "noError",
+        "accountPresent",
+        "idTokenReturned",
+        "refreshTokenReturned",
+        "expiresInReturned",
+    }
 
 
 def test_control_rows_may_not_be_refused():

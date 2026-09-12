@@ -30,12 +30,19 @@ from triggers_contract import (
 from triggers_recorder import digest
 
 EVID = ROOT / "spec/compatibility/evidence"
+# The Python files the owned local run executes to produce and judge the observation,
+# all bound to the recorder commit: the production recorder stack plus the owned runner,
+# the shared build/runtime harness and the runtime-input hashing helper.
 RECORDER_FILES = (
     "tools/auth-pending-triggers/triggers_contract.py",
     "tools/auth-pending-triggers/triggers_recorder.py",
+    "tools/auth-pending-triggers/triggers_owned.py",
     "tools/auth-pending-revocation/revocation_recorder.py",
+    "tools/auth-pending-revocation/revocation_contract.py",
     "tools/auth-password-maximum/maximum_contract.py",
     "tools/auth-password-maximum/maximum_recorder.py",
+    "tools/compat-inventory/owned_runner.py",
+    "tools/compat-inventory/evidence_common.py",
 )
 LOCAL_PROJECTED = (
     "target",
@@ -132,6 +139,17 @@ def publication_contract_sha():
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
+def recorded_with(report, recorder_commit):
+    """Bind every execution-dependency file to the recorder commit: its recorded hash
+    must equal the file at that commit. A tampered or missing dependency hash is refused."""
+    hex_value(recorder_commit, 40)
+    inputs = {path: report["probeInputs"][path] for path in RECORDER_FILES}
+    for path, value in inputs.items():
+        hex_value(value)
+        require(git_blob_sha256(recorder_commit, path) == value)
+    return {"recorderCommit": recorder_commit, "recorderInputs": inputs}
+
+
 def project_local(report, trigger, recorder_commit, runtime_commit):
     require("childCleanupFailure" not in report and "failure" not in report)
     require(
@@ -152,13 +170,9 @@ def project_local(report, trigger, recorder_commit, runtime_commit):
     out["instance"] = exact_keys(report["instance"], INSTANCE_KEYS)
     out["build"] = {key: report["build"][key] for key in BUILD_KEYS}
     out["privateReportSha256"] = digest(report)
-    hex_value(recorder_commit, 40)
     hex_value(runtime_commit, 40)
     out["runtimeInputsCommit"] = runtime_commit
-    inputs = {path: report["probeInputs"][path] for path in RECORDER_FILES}
-    for path, value in inputs.items():
-        require(git_blob_sha256(recorder_commit, path) == value)
-    out["recordedWith"] = {"recorderCommit": recorder_commit, "recorderInputs": inputs}
+    out["recordedWith"] = recorded_with(report, recorder_commit)
     validate_local(out, trigger)
     return out
 

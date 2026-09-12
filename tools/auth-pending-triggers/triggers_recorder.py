@@ -32,6 +32,7 @@ from triggers_contract import (
     corpus,
     error_code,
     require,
+    token_return_checks,
     validate_row,
 )
 
@@ -500,19 +501,6 @@ def observe(trigger, output, origin=None):
 
         # --- Snapshot the account, then fire exactly one trigger -----------------------
         before_trigger = account_projection(lookup())
-
-        def token_return_checks(response):
-            """Each token field of a transition response as a boolean: key present and a
-            non-empty string. Distinguishes 'no idToken' from an unexpected refreshToken
-            or expiresIn; no secret value is stored."""
-            return {
-                "idTokenReturned": isinstance(response.get("idToken"), str)
-                and bool(response["idToken"]),
-                "refreshTokenReturned": isinstance(response.get("refreshToken"), str)
-                and bool(response["refreshToken"]),
-                "expiresInReturned": isinstance(response.get("expiresIn"), str)
-                and bool(response["expiresIn"]),
-            }
 
         def password_trigger_row(status, response):
             record = lookup()

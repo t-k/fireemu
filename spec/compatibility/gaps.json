@@ -147,16 +147,14 @@
       "scope": "Other revocation triggers against an existing MFA pending credential: client password change, administrative password update, password reset, provider unlink. Observed and approved at revision 2 (2026-09-12): the held pending credential and SMS session survive every one of these transitions in production, matching fireemu. The explicit validSince update is covered separately by auth-pending-revocation.",
       "implementationStatus": "unknown",
       "localTestStatus": "none",
-      "productionObservationStatus": "approved",
-      "comparisonStatus": "matches-in-scope",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "none",
       "evidenceRefs": [
-        "docs/compatibility/auth-pending-trigger-client-password-change-approval.md",
-        "docs/compatibility/auth-pending-trigger-admin-password-update-approval.md",
-        "docs/compatibility/auth-pending-trigger-password-reset-approval.md",
-        "docs/compatibility/auth-pending-trigger-provider-unlink-approval.md",
+        "docs/compatibility/auth-pending-trigger-client-password-change-r1.md",
+        "docs/compatibility/auth-pending-trigger-admin-password-update-r1.md",
         "tools/auth-pending-triggers/README.md"
       ],
-      "nextAction": "Closed in scope at revision 2: all four triggers (client password change, administrative password update, password reset, provider unlink) were re-observed with per-field token checks; in production the held MFA pending credential and SMS session survived every transition, matching fireemu, and each production candidate and local comparison carries a scoped approval (all seven rows agree). Revision 1 is retained as history. Not covered: the explicit-validSince trigger (auth-pending-revocation), token/session expiry, tenants, blocking functions.",
+      "nextAction": "Revision 2 observed for all four triggers; being re-published with the completed execution-dependency manifest (production and local-comparison dependency sets, each bound to the recorder commit and covered by a per-file negative test). Re-approve each production candidate and comparison after re-publication.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -644,14 +642,14 @@
       "scope": "Token issuance on a privileged (administrative) accounts:update that changes the password. Production (recorded 2026-09-12, auth-pending-trigger admin-password-update): an administrative password update of an enabled account returns no ID or refresh token (tokensReturned false). fireemu issues tokens for it, because a password change sets the session provider even on the localId (admin) path where there is no session. The self-service password change over a session still returns tokens on both sides (auth-pending-trigger client-password-change matched). The earlier disabled-account fix only suppressed tokens when the account was disabled after the update; the enabled administrative case was unobserved until now.",
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
-      "productionObservationStatus": "approved",
-      "comparisonStatus": "matches-in-scope",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "none",
       "evidenceRefs": [
-        "docs/compatibility/auth-pending-trigger-admin-password-update-approval.md",
-        "docs/compatibility/auth-pending-trigger-admin-password-update-comparison-approval.md",
-        "crates/fireemu-adapter-http/tests/auth_flows.rs"
+        "docs/compatibility/auth-pending-trigger-admin-password-update-r1.md",
+        "crates/fireemu-adapter-http/tests/auth_flows.rs",
+        "tools/auth-pending-triggers/README.md"
       ],
-      "nextAction": "Closed for the recorded conditions: a privileged administrative accounts:update that changes the password issues no ID token, refresh token or expiry, matching production for an enabled account as for a disabled one; the self-service password change still returns all three. The revision-2 production candidate and local comparison each carry a scoped approval (admin-password-update, all seven rows agree, every token field false on both sides), and the auth_flows regression fences both directions. Not established for a valid token with an administrator-only field or other privileged update fields (see AUTH-U13).",
+      "nextAction": "Fixed (auth_flows regression, both directions); the revision-2 production and comparison records confirming no tokens on an administrative password update are being re-published with the completed dependency manifest, then re-approved.",
       "blockedReason": "",
       "requiresProductionChange": true
     }

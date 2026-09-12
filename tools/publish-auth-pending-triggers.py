@@ -35,10 +35,14 @@ TRIGGER_TRANSITION = {
     "password-reset": "an admin PASSWORD_RESET OOB link is issued and resetPassword sets a new password",
     "provider-unlink": "a federated identity linked administratively before the held credential is removed by the session accounts:update deleteProvider",
 }
+# The Python files the production recorder actually executes to produce and judge the
+# observation, all bound to the recorder commit. revocation_contract defines the test
+# phone numbers, code and verification helpers revocation_recorder reads.
 RECORDER_FILES = (
     "tools/auth-pending-triggers/triggers_contract.py",
     "tools/auth-pending-triggers/triggers_recorder.py",
     "tools/auth-pending-revocation/revocation_recorder.py",
+    "tools/auth-pending-revocation/revocation_contract.py",
     "tools/auth-password-maximum/maximum_contract.py",
     "tools/auth-password-maximum/maximum_recorder.py",
 )

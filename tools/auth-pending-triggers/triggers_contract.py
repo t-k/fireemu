@@ -88,6 +88,24 @@ TEST_CODE = "135790"
 LINK_PROVIDER = "google.com"
 
 
+def token_return_checks(response):
+    """Each token field of a transition response as a boolean: a non-empty string value.
+    Distinguishes 'no idToken' from an unexpected refreshToken or expiresIn; no secret
+    value is stored. The check is value-shape (non-empty string), not key presence: an
+    absent key, an empty string, a null and a non-string value all read as false, so this
+    receipt states 'the field was not returned as a non-empty string', not 'the key was
+    absent'. A future revision may split key presence from value shape (see the README)."""
+    require(isinstance(response, dict))
+    return {
+        "idTokenReturned": isinstance(response.get("idToken"), str)
+        and bool(response["idToken"]),
+        "refreshTokenReturned": isinstance(response.get("refreshToken"), str)
+        and bool(response["refreshToken"]),
+        "expiresInReturned": isinstance(response.get("expiresIn"), str)
+        and bool(response["expiresIn"]),
+    }
+
+
 def trigger_checks(trigger):
     require(trigger in TRIGGERS)
     return (

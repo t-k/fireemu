@@ -73,7 +73,7 @@ def test_redaction_preserves_distinct_anonymous_owner_and_field_presence():
     assert "private" not in str(result)
 
 
-def test_signed_principal_requires_issuer_shape_and_anonymous_provider():
+def test_signed_principal_requires_audience_shape_and_anonymous_provider():
     import base64
     import json
 
@@ -137,4 +137,23 @@ def test_provider_display_name_mirror_is_not_an_identity_change():
             changed["b"]["providerUserInfo"].append(
                 copy.deepcopy(changed["b"]["providerUserInfo"][0])
             )
+        assert not all(module().assess(200, before, changed).values())
+
+
+def test_successful_profile_update_keeps_credential_value_and_presence():
+    for field in ["passwordHash", "salt", "passwordUpdatedAt", "validSince"]:
+        for value in ["original", None, 123]:
+            before = states()
+            before["b"][field] = value
+            unchanged = copy.deepcopy(before)
+            unchanged["b"]["displayName"] = "updated"
+            assert all(module().assess(200, before, unchanged).values())
+            changed = copy.deepcopy(unchanged)
+            changed["b"][field] = "replacement"
+            assert not all(module().assess(200, before, changed).values())
+            del changed["b"][field]
+            assert not all(module().assess(200, before, changed).values())
+        before = states()
+        changed = copy.deepcopy(before)
+        changed["b"][field] = None
         assert not all(module().assess(200, before, changed).values())

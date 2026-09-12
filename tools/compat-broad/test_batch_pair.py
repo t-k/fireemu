@@ -251,6 +251,7 @@ def test_owned_provider_email_and_access_token_normalization_is_bounded():
                         {
                             "providerId": "password",
                             "federatedId": names["authEmails"]["a"],
+                            "rawId": names["authEmails"]["a"],
                         }
                     ],
                     "access_token": names["nonce"],
@@ -297,3 +298,32 @@ def test_finite_recording_and_check_outcomes():
         )
         checked += 1
     assert checked == 32
+
+
+def test_raw_id_mapping_requires_password_provider_path_and_observed_owner():
+    p = module()
+    production, _ = fixture_pair()
+    names = production["namespace"]
+    email = names["authEmails"]["a"]
+    for body in [
+        {"rawId": email},
+        {"providerUserInfo": [{"providerId": "other", "rawId": email}]},
+        {
+            "providerUserInfo": [
+                {"providerId": "password", "rawId": "foreign@example.invalid"}
+            ]
+        },
+        {"providerUserInfo": [{"providerId": "password", "rawId": False}]},
+    ]:
+        assert p.normalize(body, names, service="auth") == body
+    body = {
+        "users": [
+            {
+                "providerUserInfo": [
+                    {"providerId": "password", "rawId": names["authEmails"]["b"]}
+                ]
+            }
+        ]
+    }
+    result = p.normalize(body, names, service="auth")
+    assert result["users"][0]["providerUserInfo"][0]["rawId"] == {"$email": "b"}

@@ -77,6 +77,7 @@ NORMALIZATION = {
     "errorProsePaths": ["error/message", "error/errors/*/message", "*/error/message"],
     "errorMachineCode": "leading uppercase underscore code retained; structured codes/status/shape retained",
     "namespace": "exact compiled parent mapping; known creation-ledger UID/email values only",
+    "passwordProviderRawId": "exact owned email only at providerUserInfo/* and users/*/providerUserInfo/* with providerId=password",
     "excludedClaims": [
         "token byte equality/rotation/cryptographic validity",
         "verifier contents",
@@ -361,10 +362,22 @@ def normalize(value, names, *, service, path=()):
             for i, item in enumerate(value)
         ]
     if isinstance(value, dict):
-        return {
+        result = {
             k: normalize(v, names, service=service, path=(*path, k))
             for k, v in value.items()
         }
+        if (
+            service == "auth"
+            and value.get("providerId") == "password"
+            and any(
+                matches(path, pattern)
+                for pattern in ["providerUserInfo/*", "users/*/providerUserInfo/*"]
+            )
+        ):
+            for role, email in names["authEmails"].items():
+                if value.get("rawId") == email:
+                    result["rawId"] = {"$email": role}
+        return result
     return value
 
 

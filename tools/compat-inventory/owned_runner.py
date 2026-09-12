@@ -22,8 +22,6 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from aggregation_corpus import CONFIG, index_definition
-from aggregation_probe import observe
 from evidence_common import (
     ROOT,
     fingerprint,
@@ -33,7 +31,38 @@ from evidence_common import (
     save,
     sha,
 )
-from probe import PROJECT, NoRedirect, endpoint
+
+# Generic, dependency-free primitives inlined here so the owned-runner helpers the Auth
+# corpora use (build_artifact, control_get, local_addresses) do not transitively import
+# the Firestore observation modules (aggregation_corpus/aggregation_probe/probe). The
+# Firestore-specific run below imports those lazily, inside the functions that use them.
+PROJECT = "fireemu-35fe6"
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError("credential-bearing requests never follow redirects")
+
+
+def endpoint(target: str, origin: str | None) -> str:
+    """A fixed production endpoint or a bare loopback HTTP origin, nothing else."""
+    if target == "production" and origin is None:
+        return "https://firestore.googleapis.com"
+    url = urllib.parse.urlsplit(origin or "")
+    if (
+        target != "local"
+        or url.scheme != "http"
+        or url.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or url.username
+        or url.password
+        or url.path
+        or url.query
+        or url.fragment
+    ):
+        raise ValueError(
+            "use the fixed production endpoint or a bare loopback HTTP origin"
+        )
+    return str(origin)
 
 BUILD_COMMAND = ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
 
@@ -148,6 +177,8 @@ def socket_closed(origin: str) -> bool:
 
 
 def validate_config(value: dict) -> None:
+    from aggregation_corpus import CONFIG
+
     require(
         value == CONFIG,
         "only the dependency-free reviewed strict configuration is permitted",
@@ -230,6 +261,8 @@ def observation_complete(report: dict) -> bool:
 
 
 def owned_child(directory: Path, nonce: str) -> None:
+    from aggregation_probe import observe
+
     instance = {"parentPid": os.getppid(), "childPid": os.getpid(), "nonce": nonce}
     save(directory / "instance.json", instance)
     firestore, control = local_addresses(
@@ -269,6 +302,8 @@ def owned_child(directory: Path, nonce: str) -> None:
 
 
 def run_owned(binary: Path, output: Path, build: dict | None = None) -> dict:
+    from aggregation_corpus import CONFIG, index_definition
+
     binary = binary.resolve(strict=True)
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)

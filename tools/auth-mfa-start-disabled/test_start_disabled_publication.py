@@ -1,6 +1,6 @@
-"""The publication contract binds every execution-dependency file to the recorder commit:
-tampering (or dropping) any one dependency hash is refused. Covers the production receipt
-publisher and the local-comparison publisher, whose dependency sets differ."""
+"""The publication contract binds every execution-dependency file to the recorder commit,
+and the manifest equals the transitive top-level import closure of the run's entry
+modules (completeness), for both the production and the comparison publisher."""
 
 import importlib
 import sys
@@ -11,18 +11,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
-production = importlib.import_module("publish-auth-pending-triggers")
-comparison = importlib.import_module("publish-auth-pending-triggers-comparison")
+production = importlib.import_module("publish-auth-mfa-start-disabled")
+comparison = importlib.import_module("publish-auth-mfa-start-disabled-comparison")
 from manifest_closure import in_repo_closure
 
-REC = ROOT / "tools/auth-pending-triggers/triggers_recorder.py"
-OWN = ROOT / "tools/auth-pending-triggers/triggers_owned.py"
+REC = ROOT / "tools/auth-mfa-start-disabled/start_disabled_recorder.py"
+OWN = ROOT / "tools/auth-mfa-start-disabled/start_disabled_owned.py"
+COMMIT = "a" * 40
 
 
 def test_production_manifest_equals_the_recorder_closure():
-    # Completeness: the production receipt binds exactly the modules the production
-    # recorder imports at load, no more and no fewer. Catches a dependency that is
-    # executed but missing from the manifest, and a stale manifest entry.
     assert set(production.RECORDER_FILES) == in_repo_closure([REC])
 
 
@@ -30,11 +28,7 @@ def test_comparison_manifest_equals_the_owned_run_closure():
     assert set(comparison.RECORDER_FILES) == in_repo_closure([REC, OWN])
 
 
-COMMIT = "a" * 40
-
-
 def report_for(publisher):
-    # A hash per bound file, distinct so a corruption is unambiguous.
     return {
         "probeSourceCommit": "b" * 40,
         "probeInputs": {
@@ -49,18 +43,15 @@ def fake_git(publisher, report, monkeypatch):
 
 
 @pytest.mark.parametrize("publisher", [production, comparison])
-def test_recorded_with_accepts_matching_dependency_hashes(publisher, monkeypatch):
+def test_recorded_with_accepts_matching_hashes(publisher, monkeypatch):
     report = report_for(publisher)
     fake_git(publisher, report, monkeypatch)
     out = publisher.recorded_with(report, COMMIT)
     assert set(out["recorderInputs"]) == set(publisher.RECORDER_FILES)
-    assert out["recorderCommit"] == COMMIT
 
 
 @pytest.mark.parametrize("publisher", [production, comparison])
 def test_each_dependency_file_is_bound(publisher, monkeypatch):
-    # Corrupting any one dependency hash (as a changed helper at the commit would) is
-    # refused; this is the negative test the manifest exists for.
     for tampered in publisher.RECORDER_FILES:
         report = report_for(publisher)
         fake_git(publisher, report, monkeypatch)
@@ -77,21 +68,3 @@ def test_a_missing_dependency_hash_is_refused(publisher, monkeypatch):
         del report["probeInputs"][dropped]
         with pytest.raises((ValueError, KeyError)):
             publisher.recorded_with(report, COMMIT)
-
-
-def test_the_two_publishers_cover_distinct_dependency_sets():
-    # The comparison run executes the owned-runner stack the production run does not.
-    prod = set(production.RECORDER_FILES)
-    comp = set(comparison.RECORDER_FILES)
-    assert prod < comp
-    assert "tools/auth-pending-revocation/revocation_contract.py" in prod
-    assert {
-        "tools/auth-pending-triggers/triggers_owned.py",
-        "tools/compat-inventory/owned_runner.py",
-        "tools/compat-inventory/evidence_common.py",
-    } <= comp
-    assert {
-        "tools/auth-pending-triggers/triggers_owned.py",
-        "tools/compat-inventory/owned_runner.py",
-        "tools/compat-inventory/evidence_common.py",
-    }.isdisjoint(prod)

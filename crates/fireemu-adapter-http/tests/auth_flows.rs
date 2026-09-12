@@ -4117,10 +4117,14 @@ fn pending_retry_admin_password_update_of_a_disabled_account_returns_no_tokens()
     }
 }
 
-/// The token decision reads the record after the update: a credential change that
-/// re-enables the account in the same request issues tokens, one that disables it does not.
+/// Production (recorded and approved 2026-09-12, `tools/auth-pending-triggers`
+/// admin-password-update, GAP-AUTH-004): a privileged administrative `accounts:update`
+/// that changes the password returns no tokens, whether the account is enabled or
+/// disabled after the update, because it acts on a `localId` with no session to re-issue
+/// for. The self-service password change over a session still returns tokens (see
+/// `strict_password_change_distinguishes_revoked_refresh` and the client update tests).
 #[test]
-fn pending_retry_admin_credential_change_tokens_follow_the_enabled_state_after_update() {
+fn pending_retry_admin_password_update_never_returns_tokens_regardless_of_enabled_state() {
     for strict in [false, true] {
         let (s, _) = oob_authorization_state(strict);
         let user = sign_up(&s, "admin-update-toggle@example.com");
@@ -4128,7 +4132,8 @@ fn pending_retry_admin_credential_change_tokens_follow_the_enabled_state_after_u
         let update = |body: Value| {
             admin(&s, &format!("{V1}/projects/demo-app/accounts:update"), &body)
         };
-        // Enabled account: password change plus disable in one request issues nothing.
+        // Enabled account, then re-enabled account: neither administrative password
+        // update returns tokens; sign-in still reflects the enabled/disabled state.
         let (status, response) = update(json!({"localId": uid, "password": "toggle-22", "disableUser": true}));
         assert_eq!(status, 200, "{response}");
         for key in ["idToken", "refreshToken", "expiresIn"] {
@@ -4139,16 +4144,27 @@ fn pending_retry_admin_credential_change_tokens_follow_the_enabled_state_after_u
                 &json!({"email": "admin-update-toggle@example.com", "password": "toggle-22"})).1["error"]["message"],
             "USER_DISABLED"
         );
-        // Disabled account: password change plus re-enable in one request issues tokens.
         let (status, response) = update(json!({"localId": uid, "password": "toggle-33", "disableUser": false}));
         assert_eq!(status, 200, "{response}");
-        assert!(response["idToken"].is_string() && response["refreshToken"].is_string(), "{response}");
+        for key in ["idToken", "refreshToken", "expiresIn"] {
+            assert!(response.get(key).is_none(), "{key}: {response}");
+        }
+        // Re-enabled: the account is usable again, but the update itself issued no tokens.
         let (status, signed) = post(
             &s,
             &format!("{V1}/accounts:signInWithPassword"),
             &json!({"email": "admin-update-toggle@example.com", "password": "toggle-33"}),
         );
         assert_eq!(status, 200, "{signed}");
+        // A self-service password change over the session still returns tokens.
+        let session = signed["idToken"].clone();
+        let (status, changed) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": session, "password": "toggle-44", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{changed}");
+        assert!(changed["idToken"].is_string() && changed["refreshToken"].is_string(), "{changed}");
     }
 }
 

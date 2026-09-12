@@ -3912,8 +3912,14 @@ fn update(
         if let Err(e) = store.set_password(&uid, password, at) {
             return auth_error(&e);
         }
-        // Setting a password makes the session a password session.
-        session_provider = Some(fireemu_core_auth::store::Provider::Password);
+        // Setting a password over a session makes it a password session, so the session's
+        // own credential change re-issues tokens. A privileged administrative update
+        // (localId, no session) issues nothing: production returns no tokens for an
+        // administrative password update, of an enabled account as of a disabled one
+        // (auth-pending-trigger admin-password-update, recorded and approved 2026-09-12).
+        if local_id.is_none() {
+            session_provider = Some(fireemu_core_auth::store::Provider::Password);
+        }
     }
     if let Some(u) = store.user_mut(&uid) {
         plan.display_name.apply(&mut u.display_name);

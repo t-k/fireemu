@@ -68,6 +68,8 @@ jobs:
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-comparison-approval.py --trigger client-password-change --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers.py --trigger admin-password-update --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers-comparison.py --trigger admin-password-update --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-approval.py --trigger admin-password-update --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-comparison-approval.py --trigger admin-password-update --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers.py --trigger password-reset --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers-comparison.py --trigger password-reset --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-approval.py --trigger password-reset --check

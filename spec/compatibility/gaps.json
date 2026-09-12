@@ -156,7 +156,7 @@
         "docs/compatibility/auth-pending-trigger-admin-password-update.md",
         "tools/auth-pending-triggers/README.md"
       ],
-      "nextAction": "Closed in scope for the held-credential question: across all four triggers (client password change, administrative password update, password reset, provider unlink) the MFA pending credential and SMS session held from before the transition still started and finalized in production, matching fireemu; each is production-approved and, for three of the four, the local comparison is approved on all seven rows. The administrative-password-update comparison approval waits on GAP-AUTH-004 (fireemu issues tokens on that update while production returns none), a side finding orthogonal to the held-credential question. Not covered: the explicit-validSince trigger (auth-pending-revocation, already approved), token/session expiry, tenants, blocking functions.",
+      "nextAction": "Closed in scope for the held-credential question: across all four triggers (client password change, administrative password update, password reset, provider unlink) the MFA pending credential and SMS session held from before the transition still started and finalized in production, matching fireemu; each is production-approved and, for three of the four, the local comparison is approved on all seven rows. The administrative-password-update comparison is now approved after the GAP-AUTH-004 fix (fireemu issues no tokens on that update, matching production). Not covered: the explicit-validSince trigger (auth-pending-revocation, already approved), token/session expiry, tenants, blocking functions.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -642,16 +642,17 @@
       "feature": "AUTH-USERS",
       "kind": "mismatch",
       "scope": "Token issuance on a privileged (administrative) accounts:update that changes the password. Production (recorded 2026-09-12, auth-pending-trigger admin-password-update): an administrative password update of an enabled account returns no ID or refresh token (tokensReturned false). fireemu issues tokens for it, because a password change sets the session provider even on the localId (admin) path where there is no session. The self-service password change over a session still returns tokens on both sides (auth-pending-trigger client-password-change matched). The earlier disabled-account fix only suppressed tokens when the account was disabled after the update; the enabled administrative case was unobserved until now.",
-      "implementationStatus": "unknown",
-      "localTestStatus": "none",
-      "productionObservationStatus": "recorded",
-      "comparisonStatus": "mismatch",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
+        "docs/compatibility/auth-pending-trigger-admin-password-update-approval.md",
+        "docs/compatibility/auth-pending-trigger-admin-password-update-comparison-approval.md",
         "docs/compatibility/auth-pending-trigger-admin-password-update.md",
-        "docs/compatibility/auth-pending-trigger-admin-password-update-comparison.md",
-        "docs/compatibility/auth-disabled-admin-update-approval.md"
+        "crates/fireemu-adapter-http/tests/auth_flows.rs"
       ],
-      "nextAction": "Proposed fix: set the session provider on a password change only on the self-service route (localId absent), so a privileged administrative password update issues no tokens, matching production; keep the self-service password change issuing tokens. Needs a security review (token issuance), a regression, and a re-run and comparison on the corrected artifact, then a scoped approval of the production observation and the corrected comparison. Awaiting the user's decision on the fix.",
+      "nextAction": "Closed for the recorded conditions: fireemu was corrected so a privileged administrative accounts:update that changes the password issues no tokens, matching production for an enabled account as for a disabled one; the self-service password change still returns tokens. The production candidate and the corrected local comparison each carry a scoped approval (all seven rows agree), and the auth_flows regression fences both directions. Not established for a valid token with an administrator-only field or other privileged update fields, which remain unobserved (see AUTH-U13).",
       "blockedReason": "",
       "requiresProductionChange": true
     }

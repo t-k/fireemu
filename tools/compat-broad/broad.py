@@ -350,9 +350,14 @@ def summarize(report):
     }
 
 
-def run(output):
+def run(output, *, child_script=None, project=PROJECT, configuration=None):
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise ValueError("freeze the checkout before artifact execution")
+    base_config = {
+        **CONFIG,
+        "daemon": {"authProjectNumbers": {}},
+        **(configuration or {}),
+    }
     before = source_inputs()
     commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -382,7 +387,7 @@ def run(output):
         index_file = private / "indexes.json"
         index_file.write_bytes(index_bytes)
         actual_config = {
-            **CONFIG,
+            **base_config,
             "firestore": {**FIRESTORE_CONFIG, "indexFile": str(index_file)},
         }
         config = private / "config.json"
@@ -393,7 +398,7 @@ def run(output):
             "--config",
             str(config),
             "--project",
-            PROJECT,
+            project,
             "--only",
             "auth,firestore",
             "--firestore-port",
@@ -410,7 +415,7 @@ def run(output):
             "silent",
             "--",
             sys.executable,
-            str(Path(__file__).resolve()),
+            str(child_script or Path(__file__).resolve()),
             "--child",
             str(output),
             "--nonce",
@@ -450,7 +455,7 @@ def run(output):
                     executionInputs=before,
                     configurationDigest=digest(actual_config),
                     configuration={
-                        **CONFIG,
+                        **base_config,
                         "firestore": {
                             **FIRESTORE_CONFIG,
                             "indexFile": "<owned-private-index-file>",

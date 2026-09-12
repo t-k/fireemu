@@ -617,14 +617,14 @@
     "probeSourceCommit": "c3a7973b31274311ac64835aec761e0bb2a4c1e9",
     "recordedAt": "2026-09-12T00:49:55.456518+00:00",
     "recordedWith": {
-      "recorderCommit": "ab834f9cbfb5f22437ddda4ce6b18327d6410539",
+      "recorderCommit": "c3a7973b31274311ac64835aec761e0bb2a4c1e9",
       "recorderInputs": {
         "tools/auth-pending-revocation/revocation_recorder.py": "83c65d82b5b3c7ce7de0aee814cea7fefafda48b6bbb5665ea8758f147f4c553",
         "tools/auth-refusal-precedence/precedence_contract.py": "f147c3ffa94fb7bffa8e385dd3fb1bc17ad73f9648ccb74d62f5c309d753e3cd",
         "tools/auth-refusal-precedence/precedence_recorder.py": "a19fe05ccc38e737f7611de9cbf844bdbf5413f873756004d49ada27691fd5e4"
       }
     },
-    "runtimeInputsCommit": "ab834f9cbfb5f22437ddda4ce6b18327d6410539",
+    "runtimeInputsCommit": "c3a7973b31274311ac64835aec761e0bb2a4c1e9",
     "runtimeSourceCommit": "c3a7973b31274311ac64835aec761e0bb2a4c1e9",
     "setup": {
       "a": true,

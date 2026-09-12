@@ -136,6 +136,8 @@ Contract claims: AUTH-CLAIM-MFA.
 
 [Precedence of overlapping refusals: local comparison](auth-refusal-precedence-comparison.md). One run of the same corpus on an owned local artifact built after the accounts:update route was corrected agrees with the production candidate on all nine rows, including the tampered-token update now refused INVALID_ID_TOKEN. A comparison record bound to the build commit, not an approval.
 
+[Precedence of overlapping refusals, local comparison: scoped approval](auth-refusal-precedence-comparison-approval.md). All nine rows agree on the corrected artifact bound to commit c3a7973b; approved as a comparison of these cases only, not a claim that the non-tampered session-failure orderings are production-observed.
+
 [Current lookup authorization regressions](../../tools/auth-lookup-authorization/README.md) separate token-verified self lookup from authenticated Admin identifier search. These local regressions correct the identifier bypass independently of the approved deletion observations; no production error-code parity or complete Auth authorization claim is made.
 
 [Current OOB issuance authorization regressions](../../tools/auth-oob-authorization/README.md) restrict returned action credentials to authenticated Admin routes and require verified end-user identity for verification delivery. These are local regressions, not new production observations or complete Auth authorization coverage.

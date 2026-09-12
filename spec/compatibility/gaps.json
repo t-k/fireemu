@@ -623,13 +623,13 @@
       "productionObservationStatus": "approved",
       "comparisonStatus": "matches-in-scope",
       "evidenceRefs": [
+        "docs/compatibility/auth-refusal-precedence-comparison-approval.md",
         "docs/compatibility/auth-refusal-precedence-comparison.md",
         "docs/compatibility/auth-refusal-precedence-approval.md",
         "docs/compatibility/auth-refusal-precedence.md",
-        "tools/auth-update-authorization/README.md",
         "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
       ],
-      "nextAction": "Session authentication now precedes administrator-only-field authorization on the end-user accounts:update route, fenced by regressions across expired, revoked, disabled and deleted sessions. One local run of auth-refusal-precedence revision 1 on the corrected artifact agrees with the approved production candidate on all nine rows (comparison record published, pending a scoped approval). Exact production precedence is established for the recorded tampered-signature case only; other invalid-token overlaps and a valid token with an administrator-only field remain unobserved (see AUTH-U13).",
+      "nextAction": "Closed for the recorded conditions: the production candidate and the local comparison on the corrected artifact (bound to commit c3a7973b, all nine rows agree) each carry a scoped approval, and regressions fence authenticate-before-authorize across expired, revoked, disabled and deleted sessions. Exact production precedence is established for the recorded tampered-signature case only; other invalid-token overlaps and a valid token with an administrator-only field remain unobserved (see AUTH-U13).",
       "blockedReason": "",
       "requiresProductionChange": true
     }

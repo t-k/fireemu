@@ -128,3 +128,36 @@ def test_failed_final_verifiers_still_persist_each_failure(tmp_path):
     assert saved["listenerVerificationFailure"] == "JSONDecodeError"
     assert saved["inputVerificationFailure"] == "ValueError"
     assert saved["recordingFailure"] == "JSONDecodeError"
+
+
+def test_listener_registration_validates_ownership_and_all_origins_before_probing():
+    import partition
+
+    assert hasattr(partition, "registered_origins"), (
+        "owned local registration validation required"
+    )
+    valid = {"parentPid": 4567, "nonce": "own", "origins": ["http://127.0.0.1:43210"]}
+    assert partition.registered_origins(valid, 4567, "own") == valid["origins"]
+    for update in [
+        {"parentPid": 4568},
+        {"nonce": "other"},
+        {"origins": ["http://example.invalid:1234"]},
+        {"origins": ["http://127.0.0.1:43210", "https://example.invalid:1234"]},
+        {"origins": []},
+    ]:
+        with pytest.raises(ValueError):
+            partition.registered_origins({**valid, **update}, 4567, "own")
+
+
+def test_initial_incomplete_manifest_exists_before_child_launch(tmp_path):
+    import sys
+
+    from partition import supervise_partition
+
+    command = [
+        sys.executable,
+        "-c",
+        "import json,pathlib; p=pathlib.Path('manifest.json'); assert p.exists(); r=json.loads(p.read_text()); assert r['status']=='incomplete' and r['recordingComplete'] is False; pathlib.Path('saw-initial').touch()",
+    ]
+    supervise_partition(command, tmp_path, "nonce", {}, lambda: True)
+    assert (tmp_path / "saw-initial").exists(), "initial report must precede Popen"

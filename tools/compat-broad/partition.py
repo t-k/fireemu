@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 from broad import ROOT, cleanup_run, save, source_inputs
+from broad_contract import local_origin
 from evidence_common import runtime_inputs
 from owned_runner import (
     control_get,
@@ -87,11 +88,27 @@ def child(output, nonce):
                     process.wait(timeout=5)
 
 
+def registered_origins(instance, parent_pid, nonce):
+    """Validate every target before opening any socket for final listener checks."""
+    if (
+        type(parent_pid) is not int
+        or parent_pid <= 1
+        or type(instance.get("parentPid")) is not int
+        or instance.get("parentPid") != parent_pid
+        or instance.get("nonce") != nonce
+        or not isinstance(instance.get("origins"), list)
+        or not instance["origins"]
+    ):
+        raise ValueError("invalid owned listener registration")
+    return [local_origin(origin) for origin in instance["origins"]]
+
+
 def supervise_partition(command, output, nonce, report, verify_inputs, *, timeout=150):
     """Always persist the final failure, owned cleanup and input-verification evidence."""
     process = None
     result = {}
     report.update(status="incomplete", recordingComplete=False, inputsStable=False)
+    save(output / "manifest.json", report)
     try:
         with (output / "stderr.log").open("w") as errors:
             process = subprocess.Popen(
@@ -117,9 +134,12 @@ def supervise_partition(command, output, nonce, report, verify_inputs, *, timeou
         }
         try:
             instance = json.loads((output / "instance.json").read_bytes())
-            report["ownedProcess"]["listenersClosed"] = bool(
-                instance["origins"]
-            ) and all(socket_closed(origin) for origin in instance["origins"])
+            origins = registered_origins(
+                instance, process.pid if process else None, nonce
+            )
+            report["ownedProcess"]["listenersClosed"] = all(
+                socket_closed(origin) for origin in origins
+            )
         except Exception as error:
             report["listenerVerificationFailure"] = type(error).__name__
         try:
@@ -162,6 +182,7 @@ def run(binary, receipt, output):
     config = {
         "schemaVersion": 1,
         "profile": "strict",
+        "daemon": {"authProjectNumbers": {}},
         "firestore": {"edition": "standard", "apiMode": "native"},
     }
     save(output / "config.json", config)

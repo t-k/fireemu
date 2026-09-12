@@ -49,9 +49,23 @@ fn is_header_name(name: &str) -> bool {
             .all(|b| b.is_ascii_graphic() && b != b':' && b != b'(' && b != b')')
 }
 
-/// Whether `value` is a framable header value (no control character bar horizontal tab).
+/// Whether `value` is a framable header value: printable ASCII or a horizontal tab, and
+/// nothing else. This matches the Functions port's own sink check
+/// (`fireemu_adapter_functions::http`), so a value the console accepts is a value the port
+/// will forward -- a NUL, other control character, or a bare CR/LF is refused here rather than
+/// stored unchecked and failing opaquely at dispatch.
 fn is_header_value(value: &str) -> bool {
-    value.bytes().all(|b| b >= 0x20 && b != 0x7f || b == b'\t')
+    value.bytes().all(|b| b == b'\t' || (0x20..=0x7e).contains(&b))
+}
+
+/// Validates one caller-supplied header name and value, shared by the invoke and enqueue
+/// fronts so neither stores or forwards a header with a control character or an unframable
+/// name. Returns the project's boundary refusal on the first offender.
+fn check_header(name: &str, value: &str) -> Result<(), String> {
+    if !is_header_name(name) || !is_header_value(value) {
+        return Err(format!("header {name:?} is not a valid header"));
+    }
+    Ok(())
 }
 
 /// Reads the request body of an invoke request: `body` (a UTF-8 string) or `bodyBase64`
@@ -127,9 +141,7 @@ pub fn build_invoke(
             let value = value
                 .as_str()
                 .ok_or_else(|| format!("header {name:?} must be a string"))?;
-            if !is_header_name(name) || !is_header_value(value) {
-                return Err(format!("header {name:?} is not a valid header"));
-            }
+            check_header(name, value)?;
             if name.eq_ignore_ascii_case("content-type") {
                 has_content_type = true;
             }
@@ -236,6 +248,7 @@ pub fn build_task_body(
             let value = value
                 .as_str()
                 .ok_or_else(|| format!("header {name:?} must be a string"))?;
+            check_header(name, value)?;
             header_map.insert(name.clone(), Value::String(value.to_owned()));
         }
     }
@@ -454,6 +467,35 @@ mod tests {
             body["task"]["httpRequest"]["headers"]["Content-Type"],
             "application/json"
         );
+    }
+
+    #[test]
+    fn an_enqueue_refuses_a_header_with_a_control_character_or_an_unframable_name() {
+        // A CR/LF in a value would be request smuggling if it reached the wire; refuse it at
+        // the boundary rather than store it unchecked (rules/00-general.md, 10-input-canonicalization).
+        let crlf = json!({"x-bad": "a\r\nSmuggle: 1"});
+        assert!(build_task_body("p", "l", "q", &json!({}), None, crlf.as_object()).is_err());
+        let nul = json!({"x-bad": "a\u{0000}b"});
+        assert!(build_task_body("p", "l", "q", &json!({}), None, nul.as_object()).is_err());
+        let bad_name = json!({"bad name": "v"});
+        assert!(build_task_body("p", "l", "q", &json!({}), None, bad_name.as_object()).is_err());
+        let colon_name = json!({"a:b": "v"});
+        assert!(build_task_body("p", "l", "q", &json!({}), None, colon_name.as_object()).is_err());
+        let non_string = json!({"x": 1});
+        assert!(build_task_body("p", "l", "q", &json!({}), None, non_string.as_object()).is_err());
+        // A valid header is still accepted.
+        let ok = json!({"x-trace": "abc"});
+        assert!(build_task_body("p", "l", "q", &json!({}), None, ok.as_object()).is_ok());
+    }
+
+    #[test]
+    fn a_header_value_outside_printable_ascii_is_refused_by_both_fronts() {
+        // The console's header check matches the port's sink, so a value the port would refuse
+        // is refused early here (a clean 400) rather than late at the port (a 502).
+        let high = json!({"headers": {"x": "caf\u{00e9}"}});
+        assert!(build_invoke("p", "r", "f", &high).is_err());
+        let high_task = json!({"x": "caf\u{00e9}"});
+        assert!(build_task_body("p", "l", "q", &json!({}), None, high_task.as_object()).is_err());
     }
 
     #[test]

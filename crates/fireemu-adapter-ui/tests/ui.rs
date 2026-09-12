@@ -1019,6 +1019,42 @@ async fn enqueuing_refuses_a_non_task_function_and_a_bad_id() {
 }
 
 #[tokio::test]
+async fn the_invoke_and_enqueue_fronts_require_the_control_token() {
+    // The guard runs before routing, so no functions runtime is needed to prove these two
+    // routes are behind it: a browser request without the token, or with a wrong one, is 403.
+    let s = state();
+    for path in [
+        "/ui/api/functions/echo:invoke",
+        "/ui/api/functions/countJob:enqueue",
+    ] {
+        let (status, _) = call(&s, browser(request("POST", path, &json!({})), None)).await;
+        assert_eq!(status, 403, "{path} without a token");
+        let (status, _) = call(&s, browser(request("POST", path, &json!({})), Some("wrong"))).await;
+        assert_eq!(status, 403, "{path} with a wrong token");
+    }
+}
+
+#[tokio::test]
+async fn invoking_refuses_a_header_that_could_be_smuggled() {
+    let (s, runtime, _probe) = state_with_http_functions().await;
+    // A CR/LF in a header value is refused at the boundary (400), not forwarded.
+    let (status, _) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/echo:invoke",
+                &json!({"headers": {"x-bad": "a\r\nSmuggle: 1"}}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 400);
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
 async fn the_functions_overview_reports_the_clock_and_a_schedule_next_run() {
     let (s, runtime) = state_with_functions().await;
     let (status, body) = call(&s, request("GET", "/ui/api/functions", &Value::Null)).await;

@@ -191,7 +191,6 @@ def run(output):
                     stderr=stderr,
                 )
                 code = process.wait(timeout=300)
-            code = process.wait(timeout=300)
             report["ownedProcess"] = {
                 "pid": process.pid,
                 "exitCode": code,

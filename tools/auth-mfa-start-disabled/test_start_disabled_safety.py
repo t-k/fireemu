@@ -54,7 +54,10 @@ class World:
         self.start_when_disabled = options.pop("start_when_disabled", "refused")
         self.lose = options.pop("lose", None)
         self.terminate = options.pop("terminate", None)
+        self.lie_readback = options.pop("lie_readback", False)
         assert not options, options
+        self.start_credentials = []
+        self.pending_counter = 0
         self.users = {}
         self.pendings = {}
         self.sessions = {}
@@ -139,7 +142,10 @@ class World:
             for u in self.users.values():
                 for field, key in keys.items():
                     if u.get(key) in body.get(field, []):
-                        found.append(self.public(u))
+                        record = self.public(u)
+                        if self.lie_readback and "disabled" in record:
+                            record = {**record, "disabled": not record["disabled"]}
+                        found.append(record)
                         break
             return 200, ({"users": found} if found else {})
         if action == "delete":
@@ -178,7 +184,8 @@ class World:
             if user.get("disabled"):
                 return self.error("USER_DISABLED")
             assert user.get("emailVerified") is True
-            credential = "pending-secret-" + str(len(self.pendings))
+            credential = "pending-secret-" + str(self.pending_counter)
+            self.pending_counter += 1
             self.pendings[credential] = user["localId"]
             return 200, {
                 "mfaPendingCredential": credential,
@@ -198,6 +205,7 @@ class World:
             return self.error("INVALID_MFA_PENDING_CREDENTIAL")
         disabled = self.users[pending].get("disabled", False)
         if action == "mfaSignIn:start":
+            self.start_credentials.append(body["mfaPendingCredential"])
             if disabled and self.start_when_disabled == "refused":
                 return self.error("USER_DISABLED")
             session = "session-secret-" + str(len(self.sessions))
@@ -291,6 +299,11 @@ def test_start_refused_while_disabled_completes_and_the_pending_survives(
     assert world.deleted == ["uid-x"] and world.users == {}
     assert len(world.patches) == 2 and world.patches[1]["mfa"] == {"state": "DISABLED"}
     assert saved["configRestored"] is True and saved["configDigestMatches"] is True
+    # The recovery record was written (before the enabling PATCH) and persists.
+    recovery = json.loads((tmp_path / "run" / "config-recovery.json").read_bytes())
+    assert (
+        recovery["configSha256"] == CONFIG_SHA and recovery["changeAttempted"] is True
+    )
 
 
 def test_start_accepted_while_disabled_is_recorded_not_pinned(tmp_path, monkeypatch):
@@ -304,6 +317,72 @@ def test_start_accepted_while_disabled_is_recorded_not_pinned(tmp_path, monkeypa
     # diagnostic refusal, and the run completes.
     assert rows["disabled-finalize"]["observedError"] == "USER_DISABLED"
     assert rows["reenabled-finalize"]["outcome"] == "accepted"
+
+
+def test_the_reenabled_row_reuses_the_same_held_credential(tmp_path, monkeypatch):
+    # The disabled and re-enabled starts must present the identical pre-disable pending
+    # credential (not a fresh one), so the re-enabled row shows whether the disabled
+    # attempt consumed it. Kills a mutation that obtains a fresh credential after re-enable.
+    world, report, saved = run(tmp_path, monkeypatch, start_when_disabled="refused")
+    assert report["status"] == "observed", report.get("lastStep")
+    assert complete(saved)
+    # start credentials in order: baseline (fresh), disabled (held), reenabled (held),
+    # final (fresh).
+    creds = world.start_credentials
+    assert len(creds) == 4, creds
+    assert creds[1] == creds[2], "the re-enabled start must reuse the held credential"
+    assert creds[0] != creds[1] and creds[3] != creds[1], (
+        "fresh rows use fresh credentials"
+    )
+    # Exactly three password sign-ins: baseline, the held pending, and the final control.
+    assert world.counts.get("signInWithPassword", 0) == 3
+
+
+def test_a_wrong_disabled_readback_aborts_the_run(tmp_path, monkeypatch):
+    # If the account does not actually read back disabled after the admin disable (e.g. a
+    # propagation lag, or a deleted readback), the run must abort rather than record a
+    # disabled-account observation against a still-enabled account.
+    _world, report, saved = run(tmp_path, monkeypatch, lie_readback=True)
+    assert report["status"] == "incomplete" and saved["failure"] == "ValueError"
+    assert saved["lastStep"] == "admin:lookup"
+    # It aborted at the disable transition, before any disabled-account row was recorded.
+    assert [r["id"] for r in saved["cases"]] == ["baseline-fresh-finalize"]
+    assert saved["transitions"] == []
+    assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
+    assert not complete(saved)
+
+
+def test_a_lost_admin_request_cleans_up_and_is_incomplete(tmp_path, monkeypatch):
+    # A lost request after the account exists: it is still found and deleted in finally.
+    world, report, saved = run(tmp_path, monkeypatch, lose=("admin:update", 2))
+    assert report["status"] == "incomplete" and saved["failure"] == "TimeoutError"
+    assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
+    assert world.users == {} and world.patches[-1]["mfa"] == {"state": "DISABLED"}
+    assert not complete(saved)
+
+
+def test_a_failed_restore_is_visible_and_not_complete(tmp_path, monkeypatch):
+    world = World(tmp_path / "run")
+
+    def raise_restore(access, original):
+        raise TimeoutError("restore lost")
+
+    monkeypatch.setattr(recorder.core, "production_preflight", world.preflight)
+    monkeypatch.setattr(recorder.core, "request", request_router(world))
+    monkeypatch.setattr(recorder.revocation, "patch", world.patch)
+    monkeypatch.setattr(recorder.core, "command", git(False))
+    monkeypatch.setattr(
+        recorder.core, "config_projection", lambda s, c: {"sha256": CONFIG_SHA}
+    )
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
+    monkeypatch.setattr(recorder, "restore_configuration", raise_restore)
+    recorder.observe(world.output)
+    saved = json.loads((world.output / "observation.json").read_bytes())
+    assert saved["configRestoreFailure"] == "TimeoutError"
+    assert "configRestored" not in saved and complete(saved) is False
+    assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
+    recovery = json.loads((world.output / "config-recovery.json").read_bytes())
+    assert recovery["configSha256"] == CONFIG_SHA
 
 
 def test_a_termination_signal_still_cleans_up_and_restores(tmp_path, monkeypatch):

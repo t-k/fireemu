@@ -99,6 +99,31 @@ test.describe("Functions", () => {
     await expect(page.getByTestId("invocation-table")).toContainText("tick");
   });
 
+  test("disables functions actions and explains when a different session is selected", async ({
+    page,
+    request,
+  }) => {
+    // A second session on a different project. Functions belong to the default session only, so
+    // switching to this one must not leave any action that would fire against the default project.
+    await api(request, "POST", "control/v1/sessions", { project: "demo-b", name: "demo-b" });
+    try {
+      await gotoApp(page, "/functions");
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeEnabled();
+      await page.getByTestId("session-select").selectOption("demo-b");
+      await expect(page.getByTestId("functions-session-mismatch")).toBeVisible();
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeDisabled();
+      await expect(page.getByTestId("enqueue-countJob-toggle")).toBeDisabled();
+      await expect(page.getByTestId("run-tick")).toBeDisabled();
+      await expect(page.getByTestId("advance-to-next-tick")).toBeDisabled();
+      // Selecting the functions' own session restores them.
+      await page.getByTestId("session-select").selectOption("default");
+      await expect(page.getByTestId("functions-session-mismatch")).toHaveCount(0);
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeEnabled();
+    } finally {
+      await api(request, "DELETE", "control/v1/sessions/demo-b");
+    }
+  });
+
   test("filters invocations by function and logs by text", async ({ page, request }) => {
     await gotoApp(page, "/functions");
     await page.getByTestId("run-tick").click();

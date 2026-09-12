@@ -15,6 +15,10 @@ it("parses header lines and rejects malformed ones", () => {
   // A colon at the very start is an empty name, distinct from a missing colon.
   expect(parseHeaderLines(": value")._unsafeUnwrapErr()).toContain("empty name");
   expect(parseHeaderLines("X: 1\nX: 2")._unsafeUnwrapErr()).toContain("Duplicate");
+  // Duplicate detection is case-insensitive, as HTTP header names are.
+  expect(parseHeaderLines("X-Test: 1\nx-test: 2")._unsafeUnwrapErr()).toContain("Duplicate");
+  // A name that collides with an Object prototype key is a normal header, not a duplicate.
+  expect(parseHeaderLines("constructor: 1")._unsafeUnwrap()).toEqual({ constructor: "1" });
 });
 
 it("wraps callable data in the envelope and carries the tokens as headers", () => {

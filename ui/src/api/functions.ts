@@ -59,6 +59,8 @@ export type InvocationInfo = {
 export type FunctionsOverview = {
   configured: boolean;
   project?: string;
+  /** The session the functions belong to; console actions target it, not the top-bar session. */
+  session?: string;
   source?: string | null;
   /** The current virtual clock (RFC 3339), for showing schedules relative to now. */
   clock?: string;

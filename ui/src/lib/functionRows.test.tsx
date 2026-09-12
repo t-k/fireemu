@@ -111,3 +111,72 @@ it.each([
     expect(ui.container.querySelector("script")).toBeNull();
   }
 });
+
+it("disables every action when the functions do not belong to the selected session", () => {
+  const functions: FunctionInfo[] = [
+    {
+      name: "echo",
+      region: "us-central1",
+      entryPoint: "echo",
+      trigger: { kind: "http", callable: false },
+      timeoutSeconds: 60,
+      retry: false,
+      concurrency: 1,
+    },
+    {
+      name: "countJob",
+      region: "us-central1",
+      entryPoint: "countJob",
+      trigger: { kind: "tasks", maxAttempts: 3, maxConcurrentDispatches: 1 },
+      timeoutSeconds: 60,
+      retry: false,
+      concurrency: 1,
+    },
+    {
+      name: "tick",
+      region: "us-central1",
+      entryPoint: "tick",
+      trigger: { kind: "schedule", schedule: "every 5 minutes", timeZone: null },
+      timeoutSeconds: 60,
+      retry: false,
+      concurrency: 1,
+      nextRun: "2026-08-29T12:05:00Z",
+    },
+  ];
+  const [active, setActive] = createSignal(false);
+  const ui = render(() => (
+    <table>
+      <tbody>
+        <FunctionRows
+          functions={functions}
+          project="demo"
+          functionsAddr="127.0.0.1:5001"
+          active={active()}
+          onNotice={() => {}}
+          onError={() => {}}
+        />
+      </tbody>
+    </table>
+  ));
+  const button = (id: string) => ui.getByTestId(id) as HTMLButtonElement;
+  // A session that does not own the functions: no invoke, enqueue, run, or advance is possible,
+  // so switching the top bar can never fire an action against the functions' project.
+  for (const id of [
+    "invoke-echo-toggle",
+    "enqueue-countJob-toggle",
+    "run-tick",
+    "advance-to-next-tick",
+  ]) {
+    expect(button(id).disabled).toBe(true);
+  }
+  // Selecting the functions' own session re-enables them.
+  setActive(true);
+  for (const id of [
+    "invoke-echo-toggle",
+    "enqueue-countJob-toggle",
+    "run-tick",
+    "advance-to-next-tick",
+  ]) {
+    expect(button(id).disabled).toBe(false);
+  }
+});

@@ -366,6 +366,8 @@ const FunctionRow: Component<{
   f: FunctionInfo;
   project: string;
   functionsAddr: string | null;
+  /** Whether the selected session is the one the functions belong to; actions are disabled otherwise. */
+  active: boolean;
   onNotice: (m: string) => void;
   onError: (m: string) => void;
   onRefresh: () => Promise<void>;
@@ -442,6 +444,7 @@ const FunctionRow: Component<{
         <Show when={trigger().kind === "schedule"}>
           <AsyncButton
             class="btn"
+            disabled={!props.active}
             testId={`run-${props.f.name}`}
             onClick={async () => {
               const r = await runSchedule(appState.session(), props.f.name);
@@ -457,6 +460,7 @@ const FunctionRow: Component<{
             {(nextRun) => (
               <AsyncButton
                 class="btn"
+                disabled={!props.active}
                 testId={`advance-to-next-${props.f.name}`}
                 onClick={async () => {
                   const r = await setClock(appState.session(), nextRun(), false);
@@ -479,6 +483,7 @@ const FunctionRow: Component<{
           <button
             type="button"
             class="btn"
+            disabled={!props.active}
             data-testid={`publish-${props.f.name}`}
             onClick={() => setPublishing(!publishing())}
           >
@@ -497,6 +502,7 @@ const FunctionRow: Component<{
             <button
               type="button"
               class="btn"
+              disabled={!props.active}
               data-testid={`invoke-${props.f.name}-toggle`}
               onClick={() => setInvoking(!invoking())}
             >
@@ -508,6 +514,7 @@ const FunctionRow: Component<{
           <button
             type="button"
             class="btn"
+            disabled={!props.active}
             data-testid={`enqueue-${props.f.name}-toggle`}
             onClick={() => setEnqueuing(!enqueuing())}
           >
@@ -523,6 +530,8 @@ export const FunctionRows: Component<{
   functions: FunctionInfo[];
   project: string;
   functionsAddr?: string | null;
+  /** Whether the selected session owns the functions; actions are disabled otherwise. */
+  active?: boolean;
   onNotice: (m: string) => void;
   onError: (m: string) => void;
   onRefresh?: () => Promise<void>;
@@ -546,6 +555,7 @@ export const FunctionRows: Component<{
           f={byTarget().get(key)!}
           project={props.project}
           functionsAddr={props.functionsAddr ?? null}
+          active={props.active ?? true}
           onNotice={props.onNotice}
           onError={props.onError}
           onRefresh={props.onRefresh ?? (async () => {})}
@@ -640,6 +650,13 @@ const Functions: Component = () => {
 
   const s = () => status()?.unwrapOr(null) ?? null;
   const o = () => overview()?.unwrapOr(null) ?? null;
+  // The functions belong to one project's session. When the top bar selects a different
+  // project, an invoke/enqueue/run/advance would still act on the functions' project, so the
+  // actions are disabled and a notice explains where the functions actually live.
+  const active = () => {
+    const project = o()?.project;
+    return project === undefined || project === appState.project();
+  };
   return (
     <div>
       <h1 class="mb-4 text-xl font-bold">{t("functions.title")}</h1>
@@ -656,6 +673,18 @@ const Functions: Component = () => {
           when={configured()}
           fallback={<p class="card text-sm text-zinc-500">{t("functions.notConfigured")}</p>}
         >
+          <Show when={!active()}>
+            <div
+              role="status"
+              data-testid="functions-session-mismatch"
+              class="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+            >
+              {t("functions.sessionMismatch", {
+                session: o()?.session ?? "",
+                project: o()?.project ?? "",
+              })}
+            </div>
+          </Show>
           <Section
             title={t("functions.registered")}
             actions={
@@ -689,6 +718,7 @@ const Functions: Component = () => {
                   functions={o()?.functions ?? []}
                   project={o()?.project ?? appState.project()}
                   functionsAddr={o()?.functionsAddr ?? null}
+                  active={active()}
                   onNotice={setNotice}
                   onError={setError}
                   onRefresh={async () => {

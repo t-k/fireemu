@@ -34,19 +34,47 @@ pub struct InvokePlan {
     pub body: Vec<u8>,
 }
 
-/// Whether every byte of `s` is safe to write into a request line or a header (no control
-/// character, no space, no other byte a framing writer would misread).
-fn is_target_safe(s: &str) -> bool {
+/// Whether `s` is safe in the path portion of the request target: no space, no control
+/// character, and neither the query (`?`) nor the fragment (`#`) delimiter, so an extra path
+/// segment cannot start a query or fragment of its own.
+fn is_path_safe(s: &str) -> bool {
     s.bytes()
         .all(|b| b > 0x20 && b != 0x7f && b != b'?' && b != b'#')
 }
 
-/// Whether `name` is a framable header name (token characters only, no separators).
+/// Whether `s` is safe in the query portion of the request target. A `?` is ordinary data in
+/// a query (RFC 3986 `query = *( pchar / "/" / "?" )`), so it is allowed here; only a space, a
+/// control character, and the fragment (`#`) delimiter are refused -- HTTP framing is guarded
+/// by the space/control rejection, not by forbidding `?`.
+fn is_query_safe(s: &str) -> bool {
+    s.bytes().all(|b| b > 0x20 && b != 0x7f && b != b'#')
+}
+
+/// Whether `name` is an HTTP field name: a non-empty RFC 9110 `token` (letters, digits, and
+/// the token punctuation only). This rejects separators such as `/`, `@`, `[`, `]`, `,`, `;`,
+/// `=`, `:` and the parentheses -- names a strict HTTP stack (and the sink) would reject.
 fn is_header_name(name: &str) -> bool {
     !name.is_empty()
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_graphic() && b != b':' && b != b'(' && b != b')')
+        && name.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 /// Whether `value` is a framable header value: printable ASCII or a horizontal tab, and
@@ -118,8 +146,8 @@ pub fn build_invoke(
         return Err("path must begin with '/'".to_owned());
     }
     let full_path = format!("/{project}/{region}/{function}{extra_path}");
-    if !is_target_safe(&full_path) {
-        return Err("path must not contain spaces or control characters".to_owned());
+    if !is_path_safe(&full_path) {
+        return Err("path must not contain spaces, control characters, '?' or '#'".to_owned());
     }
 
     let query = match req.get("query") {
@@ -127,8 +155,8 @@ pub fn build_invoke(
         Some(Value::String(q)) => q.trim_start_matches('?').to_owned(),
         Some(_) => return Err("query must be a string".to_owned()),
     };
-    if !query.is_empty() && !is_target_safe(&format!("x{query}")) {
-        return Err("query must not contain spaces or control characters".to_owned());
+    if !is_query_safe(&query) {
+        return Err("query must not contain spaces, control characters or '#'".to_owned());
     }
 
     let mut headers: Vec<(String, String)> = Vec::new();
@@ -356,6 +384,15 @@ mod tests {
     }
 
     #[test]
+    fn a_question_mark_inside_the_query_is_kept() {
+        // Only the first "?" separates path from query; a later one is query data and must
+        // survive, matching what the front produces and reach the function unchanged.
+        let plan = build_invoke("demo-app", "us-central1", "echo", &json!({"query": "a=1?b=2"}))
+            .unwrap();
+        assert_eq!(plan.path_and_query, "/demo-app/us-central1/echo?a=1?b=2");
+    }
+
+    #[test]
     fn an_explicit_content_type_is_not_overridden() {
         let plan = build_invoke(
             "p",
@@ -383,10 +420,27 @@ mod tests {
         assert!(build_invoke("p", "r", "f", &json!({"path": "no-leading-slash"})).is_err());
         assert!(build_invoke("p", "r", "f", &json!({"path": "/a b"})).is_err());
         assert!(build_invoke("p", "r", "f", &json!({"path": "/a\u{0000}b"})).is_err());
+        // A "?" or "#" in the path would start a query or fragment of its own.
+        assert!(build_invoke("p", "r", "f", &json!({"path": "/a?b"})).is_err());
+        assert!(build_invoke("p", "r", "f", &json!({"path": "/a#b"})).is_err());
+        // A space, control character or "#" in the query is refused; a "?" is not (see above).
         assert!(build_invoke("p", "r", "f", &json!({"query": "a=1 2"})).is_err());
-        assert!(build_invoke("p", "r", "f", &json!({"headers": {"bad name": "v"}})).is_err());
+        assert!(build_invoke("p", "r", "f", &json!({"query": "a=1\u{0000}"})).is_err());
+        assert!(build_invoke("p", "r", "f", &json!({"query": "a=1#frag"})).is_err());
         assert!(build_invoke("p", "r", "f", &json!({"headers": {"x": "v\nsmuggle"}})).is_err());
         assert!(build_invoke("p", "r", "f", &json!({"headers": {"x": 1}})).is_err());
+    }
+
+    #[test]
+    fn a_header_name_must_be_an_http_token() {
+        for bad in ["bad name", "X/Bad", "X@Bad", "X[Bad]", "a,b", "a;b", "a=b", "a:b", ""] {
+            assert!(
+                build_invoke("p", "r", "f", &json!({"headers": {bad: "v"}})).is_err(),
+                "header name {bad:?} should be refused"
+            );
+        }
+        // The legal token punctuation is accepted.
+        assert!(build_invoke("p", "r", "f", &json!({"headers": {"X-Trace_id.1": "v"}})).is_ok());
     }
 
     #[test]

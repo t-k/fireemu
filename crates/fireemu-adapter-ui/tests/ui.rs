@@ -799,7 +799,15 @@ async fn state_with_http_functions() -> (
     use fireemu_adapter_functions::runtime::{CatchUpPolicy, FunctionsConfig, OverlapPolicy};
     use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig, Trigger};
 
-    let dir = std::env::temp_dir().join(format!("fireemu-ui-invoke-{}", std::process::id()));
+    // A per-fixture sequence keeps each invocation's probe path unique even when several of
+    // these tests run in parallel in the same process (same PID), so one test's setup cannot
+    // delete another's task probe.
+    static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-ui-invoke-{}-{seq}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let probe = dir.join("tasks");
     let _ = std::fs::remove_file(&probe);
@@ -1035,6 +1043,66 @@ async fn the_invoke_and_enqueue_fronts_require_the_control_token() {
 }
 
 #[tokio::test]
+async fn invoking_forwards_a_question_mark_inside_the_query_to_the_function() {
+    // Cross-layer: the front keeps a "?" that is query data, and the backend forwards it
+    // unchanged rather than rejecting it. Testing each layer alone would miss the contract gap.
+    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (status, body) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/echo:invoke",
+                &json!({"query": "a=1?b=2"}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let echoed: Value = serde_json::from_str(body["body"].as_str().unwrap()).unwrap();
+    assert_eq!(echoed["path"], "/demo-app/us-central1/echo?a=1?b=2");
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn enqueuing_refuses_a_task_over_the_tasks_port_size_limit() {
+    let (s, runtime, _probe) = state_with_http_functions().await;
+    // A payload whose base64-encoded task request exceeds the 100 KiB Tasks-port limit is
+    // refused here, exactly as it would be at the Tasks port -- the UI's 256 KiB JSON limit
+    // does not become a way to enqueue an oversize task.
+    let big = "a".repeat(80 * 1024);
+    let (status, _) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/countJob:enqueue",
+                &json!({"data": {"id": "big", "blob": big}}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 413);
+    // A small task is accepted.
+    let (status, _) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/countJob:enqueue",
+                &json!({"data": {"id": "small", "n": 1}}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200);
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
 async fn invoking_refuses_a_header_that_could_be_smuggled() {
     let (s, runtime, _probe) = state_with_http_functions().await;
     // A CR/LF in a header value is refused at the boundary (400), not forwarded.
@@ -1061,6 +1129,8 @@ async fn the_functions_overview_reports_the_clock_and_a_schedule_next_run() {
     assert_eq!(status, 200);
     // The runtime clock starts at 12:01:00Z; "every 5 minutes" next runs at 12:05:00Z.
     assert_eq!(body["clock"], "2026-08-29T12:01:00Z");
+    // The functions belong to the session whose project is the runtime's (here, "default").
+    assert_eq!(body["session"], "default");
     let tick = body["functions"]
         .as_array()
         .unwrap()

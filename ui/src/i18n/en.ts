@@ -243,6 +243,8 @@ export const en = {
   "functions.retry": "Retry",
   "functions.concurrency": "Concurrency",
   "functions.runNow": "Run now",
+  "functions.sessionMismatch":
+    "These functions belong to session {session} (project {project}). Switch to that session to invoke, enqueue, run, or advance the clock.",
   "functions.nextRun": "Next run",
   "functions.nextRunNone": "no run within the search horizon",
   "functions.advanceToNextRun": "Advance clock to next run",

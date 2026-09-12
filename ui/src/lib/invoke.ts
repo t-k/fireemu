@@ -26,7 +26,11 @@ export type EnqueueRequest = {
  * header the user meant to send.
  */
 export const parseHeaderLines = (text: string): Result<Record<string, string>, string> => {
-  const headers: Record<string, string> = {};
+  // A Set of lowercased names detects duplicates (header names are case-insensitive) without
+  // an `in` check that would treat inherited names like `constructor` as already present;
+  // Object.fromEntries then builds own properties for every name, `__proto__` included.
+  const entries: [string, string][] = [];
+  const seen = new Set<string>();
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (line === "") {
@@ -41,12 +45,14 @@ export const parseHeaderLines = (text: string): Result<Record<string, string>, s
     if (name === "") {
       return err(`Header line with an empty name: ${line}`);
     }
-    if (name in headers) {
+    const key = name.toLowerCase();
+    if (seen.has(key)) {
       return err(`Duplicate header: ${name}`);
     }
-    headers[name] = value;
+    seen.add(key);
+    entries.push([name, value]);
   }
-  return ok(headers);
+  return ok(Object.fromEntries(entries));
 };
 
 /** Parses text as JSON, reporting the parser's message with a label for the field. */

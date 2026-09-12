@@ -427,11 +427,30 @@ fn functions(state: &UiState) -> UiResponse {
     if logs.truncated {
         lines.insert(0, "[fireemu] earlier function logs were truncated");
     }
+    // The functions runtime belongs to one session -- the one whose project is the runtime's
+    // (functions and Pub/Sub are served only for the default session, server-enforced). The
+    // console targets that session for every functions action, whatever the top bar selects,
+    // so an invoke or task never lands on a different project's data.
+    let functions_session = state
+        .control
+        .sessions
+        .lock()
+        .ok()
+        .and_then(|sessions| {
+            sessions
+                .iter()
+                .find(|(_, project)| project.as_str() == runtime.project())
+                .map(|(name, _)| name.clone())
+        })
+        .unwrap_or_else(|| "default".to_owned());
     UiResponse::json(
         200,
         &json!({
             "configured": true,
             "project": runtime.project(),
+            // The session the functions belong to; the console operates on it, not the top-bar
+            // selection, and warns when they differ.
+            "session": functions_session,
             "source": state.info.functions_source,
             // The current virtual clock, so the console can show a schedule's next run
             // relative to now and offer to advance to it.
@@ -560,6 +579,16 @@ fn enqueue_task(state: &UiState, name: &str, req: &UiRequest) -> UiResponse {
         Ok(body) => body,
         Err(message) => return UiResponse::error(400, &format!("INVALID_ARGUMENT : {message}")),
     };
+    // Apply the Cloud Tasks port's own request-body ceiling to the assembled task JSON (the
+    // base64 body, headers and name -- not the raw `data`), so the same task is accepted or
+    // refused identically whether it is enqueued here or sent to the Tasks port by the SDK.
+    let serialized = serde_json::to_vec(&task_body).unwrap_or_default();
+    if serialized.len() > fireemu_adapter_functions::http::MAX_TASK_BODY_BYTES {
+        return UiResponse::error(
+            413,
+            "PAYLOAD_TOO_LARGE : the task exceeds the Cloud Tasks request size limit",
+        );
+    }
     match runtime.enqueue_task(runtime.project(), &region, name, &task_body) {
         Ok(answer) => UiResponse::json(200, &answer),
         Err(refusal) => {

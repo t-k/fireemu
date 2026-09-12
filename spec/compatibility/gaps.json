@@ -125,17 +125,18 @@
     {
       "id": "AUTH-U03",
       "feature": "AUTH-SMS-MFA",
-      "kind": "unobserved",
-      "scope": "Precedence of overlapping refusals: disabled plus wrong code, expired pending plus valid code, invalid token plus administrator-only fields. Error class and post-refusal state are separate checks.",
+      "kind": "mismatch",
+      "scope": "Precedence of overlapping refusals on MFA finalize and on a client accounts:update. Production (recorded 2026-09-12, candidate): a disabled account holding an SMS session is refused INVALID_CODE with a wrong code and USER_DISABLED with the correct code, so the verification code is checked before the account state, and both held credentials complete after re-enablement (neither refusal consumes them); a client update carrying a tampered ID token and an administrator-only field is refused INVALID_ID_TOKEN with nothing applied, so the token is verified before the privileged field is judged. fireemu agrees on the finalize rows but refuses the tampered-token update OPERATION_NOT_ALLOWED, rejecting the privileged field before verifying the token. Expired-pending precedence is unobserved.",
       "implementationStatus": "unknown",
       "localTestStatus": "none",
-      "productionObservationStatus": "none",
+      "productionObservationStatus": "recorded",
       "comparisonStatus": "none",
       "evidenceRefs": [
-        "tools/auth-pending-retry/README.md",
-        "tools/auth-refusal-precedence/README.md"
+        "docs/compatibility/auth-refusal-precedence.md",
+        "tools/auth-refusal-precedence/README.md",
+        "tools/auth-pending-retry/README.md"
       ],
-      "nextAction": "Recorder for revision 1 (disabled plus wrong code, disabled plus correct code, tampered token plus administrator-only field) is implemented with offline safety tests and validated end to end on an owned local artifact; the local order is OPERATION_NOT_ALLOWED for the tampered-token row, INVALID_CODE for the disabled account with a wrong code, USER_DISABLED with the correct code, and both held credentials survive re-enablement. None of that is evidence of production. Next: production run of revision 1 under a separate execution approval (temporary MFA and test-phone configuration, restored), then publication and comparison. Expired pending credential precedence stays unobserved for a later revision.",
+      "nextAction": "Divergence on the tampered-token row only: to match the recorded production order, verify the ID token before rejecting the presence of an administrator-only field on the unprivileged accounts:update route, leaving the valid-token rejection (OPERATION_NOT_ALLOWED, unobserved) and the finalize order unchanged; the change touches authorization ordering, so it needs a security review, a regression, and a local comparison bound to the new artifact. Pending a scoped approval of this production candidate. The finalize precedence (code before account state) and the survival of held credentials across disable and re-enable already agree with production. Expired-pending precedence stays for a later revision.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

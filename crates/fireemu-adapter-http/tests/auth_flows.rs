@@ -3507,6 +3507,54 @@ fn pending_retry_ends_when_the_pending_credential_expires() {
     }
 }
 
+/// GAP-AUTH-005 (auth-mfa-start-disabled, recorded and approved 2026-09-12): production
+/// accepts `mfaSignIn:start` on an account disabled after its pending credential and issues
+/// the code, enforcing `USER_DISABLED` at finalize; the held pending survives re-enablement.
+/// This pins accept-at-start then refuse-at-finalize, so restoring the start refusal fails.
+#[test]
+fn pending_retry_start_is_accepted_on_a_disabled_account_and_refused_at_finalize() {
+    for strict in [false, true] {
+        let email = "start-disabled@example.com";
+        let (s, user) = pending_expiry_state(strict, email);
+        let pending = pending_login(&s, email);
+        let (status, _) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:update"),
+            &json!({"localId": user["localId"], "disableUser": true}),
+        );
+        assert_eq!(status, 200);
+        // Start is accepted while disabled and returns a session and a code.
+        let (status, started) = start_phone_step(&s, &pending);
+        assert_eq!(status, 200, "{started}");
+        assert!(started["phoneResponseInfo"]["sessionInfo"].is_string(), "{started}");
+        let phone = start_phone_code(&s, &pending);
+        // Finalizing that session is refused USER_DISABLED, and issues no tokens.
+        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "USER_DISABLED");
+        assert!(refused.get("idToken").is_none());
+        // Re-enabled: the same held pending credential starts and finalizes.
+        let (status, _) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:update"),
+            &json!({"localId": user["localId"], "disableUser": false}),
+        );
+        assert_eq!(status, 200);
+        let phone = start_phone_code(&s, &pending);
+        let (status, signed) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 200, "{signed}");
+        // mfaSignIn:finalize returns tokens without localId; confirm identity by lookup.
+        assert!(signed["idToken"].is_string(), "{signed}");
+        let (status, lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        assert_eq!(lookup["users"][0]["localId"], user["localId"]);
+    }
+}
+
 #[test]
 fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
     for strict in [false, true] {
@@ -3533,7 +3581,6 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
             lookup["users"][0].clone()
         };
         let before = account(true);
-        let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
         let count = s.store.lock().unwrap().pending_sign_in_count();
         // Finalize is refused before anything is consumed.
         let (status, refused) = finalize_phone_step(&s, &pending, &phone);
@@ -3541,13 +3588,21 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
         assert_eq!(refused["error"]["message"], "USER_DISABLED");
         assert!(refused.get("idToken").is_none());
         assert!(refused.get("refreshToken").is_none());
-        // A disabled account cannot start a new phone step either.
-        let (status, refused) = start_phone_step(&s, &pending);
+        // A disabled account still starts a new phone step: production accepts
+        // mfaSignIn:start on a disabled account and enforces USER_DISABLED at finalize
+        // (auth-mfa-start-disabled, GAP-AUTH-005). The start returns a session and issues
+        // a code, but finalizing it is refused USER_DISABLED, so the sign-in cannot
+        // complete while disabled.
+        let (status, started) = start_phone_step(&s, &pending);
+        assert_eq!(status, 200, "{started}");
+        assert!(started["phoneResponseInfo"]["sessionInfo"].is_string(), "{started}");
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count);
+        let disabled_phone = start_phone_code(&s, &pending);
+        let (status, refused) = finalize_phone_step(&s, &pending, &disabled_phone);
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "USER_DISABLED");
-        assert_eq!(get(&s, &format!("{EMU}/verificationCodes")).1, codes);
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count);
-        // Re-enabled: the same pending credential and code complete the sign-in.
+        assert!(refused.get("idToken").is_none());
+        // Re-enabled: the same pending credential and the original code complete the sign-in.
         let after = account(false);
         assert_eq!(after["lastLoginAt"], before["lastLoginAt"]);
         let (status, signed) = finalize_phone_step(&s, &pending, &phone);

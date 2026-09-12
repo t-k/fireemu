@@ -6298,10 +6298,11 @@ fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) ->
     let Some(uid) = store.pending_sign_in_user(&pending_id) else {
         return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
     };
-    // Disabled after the first factor: no code is issued for the account.
-    if store.user(&uid).is_some_and(|u| u.disabled) {
-        return error(400, "USER_DISABLED");
-    }
+    // A disabled account is not refused here: production accepts mfaSignIn:start on an
+    // account disabled after its pending credential and issues the code, enforcing
+    // USER_DISABLED only at mfaSignIn:finalize (auth-mfa-start-disabled, recorded and
+    // approved 2026-09-12, GAP-AUTH-005). The finalize path already refuses a disabled
+    // account, so the sign-in still cannot complete.
     if body.get("phoneSignInInfo").is_none() {
         return error(
             400,

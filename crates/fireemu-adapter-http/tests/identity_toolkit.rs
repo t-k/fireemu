@@ -2769,7 +2769,108 @@ fn end_user_update_rejects_admin_fields_atomically_by_presence() {
 /// end-user route now authenticates first. A valid session with such a field is still
 /// refused `OPERATION_NOT_ALLOWED` (local policy, not observed for a valid token); the OOB
 /// route still rejects the field before consuming the code, and neither refusal mutates.
+/// AUTH-U03 / GAP-AUTH-003 invariant fence: the end-user accounts:update route
+/// authenticates before it authorizes for EVERY session-failure class, not only the
+/// tampered signature production observed. An expired, revoked, disabled or deleted
+/// session carrying an administrator-only field (or a disableUser flag) is refused with
+/// its own session error, never `OPERATION_NOT_ALLOWED`, and changes nothing. Only the
+/// tampered-signature row is production-observed; the other classes pin local behavior so
+/// a partial revert that moves the field check back before `verify_session` is caught.
 #[test]
+fn end_user_update_session_failure_precedes_admin_field_authorization() {
+    let admin_field = ("customAttributes", json!("{\"role\":\"admin\"}"));
+    // (label, expected error) for a session that fails verification before authorization.
+    for s in [state(), strict_state()] {
+        let lookup = |uid: &str| {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            )
+            .1
+        };
+        let fresh = |email: &str| {
+            let (_, signed) = post(
+                &s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": email, "password": "password1", "returnSecureToken": true}),
+            );
+            (
+                signed["localId"].as_str().unwrap().to_string(),
+                signed["idToken"].as_str().unwrap().to_string(),
+            )
+        };
+
+        // Expired: the token outlives its one-hour lifetime before the update.
+        let (expired_uid, expired_token) = fresh("expired-field@example.com");
+        advance(&s, 3601);
+        // Revoked: a fresh token, then a privileged password change advances validSince.
+        let (revoked_uid, revoked_token) = fresh("revoked-field@example.com");
+        advance(&s, 2);
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": revoked_uid, "password": "password2"}),
+        );
+        assert_eq!(status, 200);
+        // Disabled: the account is disabled after the token is issued.
+        let (disabled_uid, disabled_token) = fresh("disabled-field@example.com");
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": disabled_uid, "disableUser": true}),
+        );
+        assert_eq!(status, 200);
+        // Deleted: the account is removed after the token is issued.
+        let (deleted_uid, deleted_token) = fresh("deleted-field@example.com");
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": deleted_uid}),
+        );
+        assert_eq!(status, 200);
+
+        let cases = [
+            ("expired", &expired_token, Some(&expired_uid), "TOKEN_EXPIRED"),
+            (
+                "revoked",
+                &revoked_token,
+                Some(&revoked_uid),
+                "TOKEN_EXPIRED : credentials revoked",
+            ),
+            ("disabled", &disabled_token, Some(&disabled_uid), "USER_DISABLED"),
+            // A deleted account's token fails verification as an unknown user (INVALID_ID_TOKEN),
+            // not the trailing USER_NOT_FOUND, since the verifier checks the user first.
+            ("deleted", &deleted_token, None, "INVALID_ID_TOKEN"),
+        ];
+        for (label, token, uid, expected) in cases {
+            let before = uid.map(|u| lookup(u));
+            // The administrator-only field and the disableUser flag both come after the
+            // session check, so both must surface the session error, not OPERATION_NOT_ALLOWED.
+            for extra in [admin_field.clone(), ("disableUser", json!(true))] {
+                let mut request = json!({"idToken": token, "displayName": "must-not-apply"});
+                request[extra.0] = extra.1;
+                let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+                assert_eq!(status, 400, "{label}/{}: {refused}", extra.0);
+                assert_eq!(
+                    refused["error"]["message"], expected,
+                    "{label}/{} must surface the session error, not OPERATION_NOT_ALLOWED",
+                    extra.0
+                );
+            }
+            if let (Some(u), Some(b)) = (uid, before) {
+                assert_eq!(lookup(u), b, "{label}: no rejected update may mutate the account");
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
 fn end_user_update_authenticates_before_authorizing_admin_fields() {
     let admin_fields = [
         ("customAttributes", json!("{\"role\":\"admin\"}")),
@@ -2850,6 +2951,24 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
             assert_eq!(status, 400, "{field}: {refused}");
             assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED", "{field}");
         }
+
+        // disableUser is symmetric with the administrator-only fields: a tampered session
+        // is refused on the token, a valid session on the flag, and neither mutates.
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": tampered, "disableUser": true}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN");
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "disableUser": true}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+
         assert_eq!(lookup(&s), before, "no rejected update may change the account");
 
         // The unconsumed OOB code still verifies the email on its own.

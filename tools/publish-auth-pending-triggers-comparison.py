@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/auth-pending-triggers"))
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
-from triggers_contract import (  # noqa: E402
+from triggers_contract import (
     CASES,
     DIAGNOSTIC,
     TRIGGERS,
@@ -27,7 +27,7 @@ from triggers_contract import (  # noqa: E402
     semantic_rows,
     validate_row,
 )
-from triggers_recorder import digest  # noqa: E402
+from triggers_recorder import digest
 
 EVID = ROOT / "spec/compatibility/evidence"
 RECORDER_FILES = (

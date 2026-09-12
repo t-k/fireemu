@@ -45,6 +45,56 @@ test.describe("Functions", () => {
     await expect(page.getByTestId("function-logs")).toContainText("mirrorTodo");
   });
 
+  test("invokes an onRequest function and shows its response", async ({ page }) => {
+    await gotoApp(page, "/functions");
+    await page.getByTestId("invoke-echo-toggle").click();
+    // The onRequest form: a header and a JSON body are echoed back by the function.
+    await page.getByLabel("Headers (one per line, Name: value)").fill("x-smoke: hello");
+    await page.getByLabel("Body (optional)").fill('{"ping":1}');
+    await page.getByTestId("invoke-echo-send").click();
+    await expect(page.getByTestId("invoke-result")).toContainText("Status 200");
+    const body = page.getByTestId("invoke-response-body");
+    await expect(body).toContainText('"method":"POST"');
+    await expect(body).toContainText('"header":"hello"');
+    await expect(body).toContainText('"ping":1');
+  });
+
+  test("invokes a callable and shows its result envelope", async ({ page }) => {
+    await gotoApp(page, "/functions");
+    await page.getByTestId("invoke-add-toggle").click();
+    await page.getByTestId("invoke-add-data").fill('{"a":2,"b":3}');
+    await page.getByTestId("invoke-add-send").click();
+    await expect(page.getByTestId("invoke-result")).toContainText("Status 200");
+    // A callable's return travels in the `{ "result": ... }` envelope.
+    await expect(page.getByTestId("invoke-response-body")).toContainText('"sum":5');
+  });
+
+  test("enqueues a task that reaches its onTaskDispatched handler", async ({ page, request }) => {
+    await gotoApp(page, "/functions");
+    await page.getByTestId("enqueue-countJob-toggle").click();
+    await page.getByTestId("enqueue-countJob-data").fill('{"id":"ui-task-1","n":42}');
+    await page.getByTestId("enqueue-countJob-send").click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Enqueued a task onto countJob" }),
+    ).toBeVisible();
+    await page.getByTestId("await-idle").click();
+    // The handler writes tasks/{data.id} with the task's payload.
+    const doc = (await api(request, "GET", `${DOCS}/tasks/ui-task-1`)) as {
+      fields?: { n?: { integerValue?: string } };
+    };
+    expect(doc.fields?.n?.integerValue).toBe("42");
+  });
+
+  test("shows a schedule's next run and advances the clock to it", async ({ page }) => {
+    await gotoApp(page, "/functions");
+    await expect(page.getByTestId("next-run-tick")).toContainText("Next run");
+    await page.getByTestId("advance-to-next-tick").click();
+    await expect(page.getByRole("status").filter({ hasText: "Advanced the clock" })).toBeVisible();
+    // Advancing to the next run makes it due; the catch-up policy runs it.
+    await page.getByTestId("await-idle").click();
+    await expect(page.getByTestId("invocation-table")).toContainText("tick");
+  });
+
   test("filters invocations by function and logs by text", async ({ page, request }) => {
     await gotoApp(page, "/functions");
     await page.getByTestId("run-tick").click();

@@ -12,15 +12,19 @@ import {
 import { t } from "../i18n";
 import { appState } from "../state";
 import { AsyncButton, ErrorBanner, FetchState, Notice, Section } from "../components/common";
-import { awaitIdle, functionsStatus, publishMessage, runSchedule } from "../api/control";
+import { awaitIdle, functionsStatus, publishMessage, runSchedule, setClock } from "../api/control";
 import { errorOf, settle } from "../api/client";
 import {
+  enqueueTask,
   functionsOverview,
+  invokeFunction,
   subscribeLogs,
   type FunctionInfo,
   type InvocationInfo,
+  type InvokeResponse,
   type TriggerInfo,
 } from "../api/functions";
+import { buildCallableInvoke, buildEnqueue, buildRequestInvoke } from "../lib/invoke";
 import { matchesLog, type LevelFilter } from "../lib/logFilter";
 
 const LEVEL_OPTIONS: { value: LevelFilter; key: Parameters<typeof t>[0] }[] = [
@@ -146,13 +150,229 @@ const PublishForm: Component<{ topic: string; onDone: (count: number) => void }>
   );
 };
 
+/** Renders the response of a forwarded invocation: the status line, headers and body. */
+const InvokeResult: Component<{ response: InvokeResponse }> = (props) => (
+  <div class="mt-2 text-sm" data-testid="invoke-result">
+    <div class="label">
+      {t("functions.invokeStatus", {
+        status: props.response.status,
+        ms: props.response.durationMs,
+      })}
+    </div>
+    <Show when={props.response.truncated}>
+      <p class="text-xs text-amber-700 dark:text-amber-300">
+        {t("functions.invokeTruncated", { bytes: props.response.bodyLength })}
+      </p>
+    </Show>
+    <Show when={props.response.headers.length > 0}>
+      <pre class="mono mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-xs text-zinc-500">
+        {props.response.headers.map(([name, value]) => `${name}: ${value}`).join("\n")}
+      </pre>
+    </Show>
+    <pre
+      class="mono mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-zinc-900 p-2 text-xs text-zinc-100"
+      data-testid="invoke-response-body"
+    >
+      {props.response.bodyEncoding === "base64"
+        ? `(base64) ${props.response.body ?? ""}`
+        : (props.response.body ?? "")}
+    </pre>
+  </div>
+);
+
+/** Invokes an HTTP or callable function, showing the response the port returns. */
+const InvokeForm: Component<{ f: FunctionInfo; onError: (m: string) => void }> = (props) => {
+  const callable = () => props.f.trigger.kind === "http" && props.f.trigger.callable;
+  const [data, setData] = createSignal('{"a": 1, "b": 2}');
+  const [authToken, setAuthToken] = createSignal("");
+  const [appCheckToken, setAppCheckToken] = createSignal("");
+  const [method, setMethod] = createSignal("POST");
+  const [path, setPath] = createSignal("");
+  const [query, setQuery] = createSignal("");
+  const [headers, setHeaders] = createSignal("");
+  const [body, setBody] = createSignal("");
+  const [response, setResponse] = createSignal<InvokeResponse | null>(null);
+
+  const send = async () => {
+    const built = callable()
+      ? buildCallableInvoke({
+          data: data(),
+          authToken: authToken(),
+          appCheckToken: appCheckToken(),
+        })
+      : buildRequestInvoke({
+          method: method(),
+          path: path(),
+          query: query(),
+          headers: headers(),
+          body: body(),
+        });
+    if (built.isErr()) {
+      props.onError(built.error);
+      return;
+    }
+    const r = await invokeFunction(props.f.name, built.value);
+    r.match(
+      (res) => setResponse(res),
+      (e) => props.onError(e.message),
+    );
+  };
+
+  return (
+    <div
+      class="mt-2 rounded-md border border-zinc-200 p-2 dark:border-zinc-800"
+      data-testid={`invoke-${props.f.name}`}
+    >
+      <Show
+        when={callable()}
+        fallback={
+          <>
+            <label class="block text-sm">
+              <span class="label">{t("functions.invokeMethod")}</span>
+              <select
+                class="input"
+                data-testid={`invoke-${props.f.name}-method`}
+                value={method()}
+                onInput={(e) => setMethod(e.currentTarget.value)}
+              >
+                <For each={["GET", "POST", "PUT", "PATCH", "DELETE"]}>
+                  {(m) => <option value={m}>{m}</option>}
+                </For>
+              </select>
+            </label>
+            <label class="mt-1 block text-sm">
+              <span class="label">{t("functions.invokePath")}</span>
+              <input
+                class="input mono"
+                value={path()}
+                onInput={(e) => setPath(e.currentTarget.value)}
+              />
+            </label>
+            <label class="mt-1 block text-sm">
+              <span class="label">{t("functions.invokeQuery")}</span>
+              <input
+                class="input mono"
+                value={query()}
+                onInput={(e) => setQuery(e.currentTarget.value)}
+              />
+            </label>
+            <label class="mt-1 block text-sm">
+              <span class="label">{t("functions.invokeHeaders")}</span>
+              <textarea
+                class="input mono h-16"
+                value={headers()}
+                onInput={(e) => setHeaders(e.currentTarget.value)}
+              />
+            </label>
+            <label class="mt-1 block text-sm">
+              <span class="label">{t("functions.invokeBody")}</span>
+              <textarea
+                class="input mono h-16"
+                value={body()}
+                onInput={(e) => setBody(e.currentTarget.value)}
+              />
+            </label>
+          </>
+        }
+      >
+        <label class="block text-sm">
+          <span class="label">{t("functions.invokeData")}</span>
+          <textarea
+            class="input mono h-16"
+            data-testid={`invoke-${props.f.name}-data`}
+            value={data()}
+            onInput={(e) => setData(e.currentTarget.value)}
+          />
+        </label>
+        <label class="mt-1 block text-sm">
+          <span class="label">{t("functions.invokeAuthToken")}</span>
+          <input
+            class="input mono"
+            value={authToken()}
+            onInput={(e) => setAuthToken(e.currentTarget.value)}
+          />
+        </label>
+        <label class="mt-1 block text-sm">
+          <span class="label">{t("functions.invokeAppCheckToken")}</span>
+          <input
+            class="input mono"
+            value={appCheckToken()}
+            onInput={(e) => setAppCheckToken(e.currentTarget.value)}
+          />
+        </label>
+      </Show>
+      <AsyncButton
+        class="btn btn-primary mt-2"
+        onClick={send}
+        testId={`invoke-${props.f.name}-send`}
+      >
+        {t("functions.invokeSend")}
+      </AsyncButton>
+      <Show when={response()}>{(res) => <InvokeResult response={res()} />}</Show>
+    </div>
+  );
+};
+
+/** Enqueues a Cloud Task onto an onTaskDispatched queue. */
+const EnqueueForm: Component<{
+  f: FunctionInfo;
+  onDone: () => void;
+  onError: (m: string) => void;
+}> = (props) => {
+  const [data, setData] = createSignal('{"id": "1", "n": 1}');
+  const [id, setId] = createSignal("");
+  const enqueue = async () => {
+    const built = buildEnqueue({ data: data(), id: id() });
+    if (built.isErr()) {
+      props.onError(built.error);
+      return;
+    }
+    const r = await enqueueTask(props.f.name, built.value);
+    r.match(
+      () => props.onDone(),
+      (e) => props.onError(e.message),
+    );
+  };
+  return (
+    <div
+      class="mt-2 rounded-md border border-zinc-200 p-2 dark:border-zinc-800"
+      data-testid={`enqueue-${props.f.name}`}
+    >
+      <label class="block text-sm">
+        <span class="label">{t("functions.enqueueData")}</span>
+        <textarea
+          class="input mono h-16"
+          data-testid={`enqueue-${props.f.name}-data`}
+          value={data()}
+          onInput={(e) => setData(e.currentTarget.value)}
+        />
+      </label>
+      <label class="mt-1 block text-sm">
+        <span class="label">{t("functions.enqueueId")}</span>
+        <input class="input mono" value={id()} onInput={(e) => setId(e.currentTarget.value)} />
+      </label>
+      <AsyncButton
+        class="btn btn-primary mt-2"
+        onClick={enqueue}
+        testId={`enqueue-${props.f.name}-send`}
+      >
+        {t("functions.enqueueSend")}
+      </AsyncButton>
+    </div>
+  );
+};
+
 const FunctionRow: Component<{
   f: FunctionInfo;
   project: string;
+  functionsAddr: string | null;
   onNotice: (m: string) => void;
   onError: (m: string) => void;
+  onRefresh: () => Promise<void>;
 }> = (props) => {
   const [publishing, setPublishing] = createSignal(false);
+  const [invoking, setInvoking] = createSignal(false);
+  const [enqueuing, setEnqueuing] = createSignal(false);
   const trigger = () => props.f.trigger;
   return (
     <tr data-testid={`function-row-${props.f.name}`}>
@@ -194,6 +414,26 @@ const FunctionRow: Component<{
             }}
           />
         </Show>
+        <Show when={invoking() && trigger().kind === "http"}>
+          <InvokeForm f={props.f} onError={props.onError} />
+        </Show>
+        <Show when={enqueuing() && trigger().kind === "tasks"}>
+          <EnqueueForm
+            f={props.f}
+            onDone={() => {
+              setEnqueuing(false);
+              props.onNotice(t("functions.enqueued", { name: props.f.name }));
+            }}
+            onError={props.onError}
+          />
+        </Show>
+        <Show when={trigger().kind === "schedule" && props.f.nextRun}>
+          {(nextRun) => (
+            <div class="mono text-xs text-zinc-500" data-testid={`next-run-${props.f.name}`}>
+              {t("functions.nextRun")}: {nextRun()}
+            </div>
+          )}
+        </Show>
       </td>
       <td class="text-xs">{props.f.timeoutSeconds}s</td>
       <td class="text-xs">{props.f.retry ? t("app.yes") : t("app.no")}</td>
@@ -213,6 +453,27 @@ const FunctionRow: Component<{
           >
             {t("functions.runNow")}
           </AsyncButton>
+          <Show when={props.f.nextRun}>
+            {(nextRun) => (
+              <AsyncButton
+                class="btn"
+                testId={`advance-to-next-${props.f.name}`}
+                onClick={async () => {
+                  const r = await setClock(appState.session(), nextRun(), false);
+                  await r.match(
+                    async (c) => {
+                      appState.setClock(c.clock);
+                      props.onNotice(t("functions.advancedToNextRun", { instant: nextRun() }));
+                      await props.onRefresh();
+                    },
+                    async (e) => props.onError(e.message),
+                  );
+                }}
+              >
+                {t("functions.advanceToNextRun")}
+              </AsyncButton>
+            )}
+          </Show>
         </Show>
         <Show when={trigger().kind === "pubsub"}>
           <button
@@ -224,6 +485,35 @@ const FunctionRow: Component<{
             {t("functions.publish")}
           </button>
         </Show>
+        <Show when={trigger().kind === "http"}>
+          <Show
+            when={props.functionsAddr}
+            fallback={
+              <span class="text-xs text-zinc-500" title={t("functions.invokeUnavailable")}>
+                {t("functions.invokeUnavailable")}
+              </span>
+            }
+          >
+            <button
+              type="button"
+              class="btn"
+              data-testid={`invoke-${props.f.name}-toggle`}
+              onClick={() => setInvoking(!invoking())}
+            >
+              {t("functions.invoke")}
+            </button>
+          </Show>
+        </Show>
+        <Show when={trigger().kind === "tasks"}>
+          <button
+            type="button"
+            class="btn"
+            data-testid={`enqueue-${props.f.name}-toggle`}
+            onClick={() => setEnqueuing(!enqueuing())}
+          >
+            {t("functions.enqueue")}
+          </button>
+        </Show>
       </td>
     </tr>
   );
@@ -232,10 +522,14 @@ const FunctionRow: Component<{
 export const FunctionRows: Component<{
   functions: FunctionInfo[];
   project: string;
+  functionsAddr?: string | null;
   onNotice: (m: string) => void;
   onError: (m: string) => void;
+  onRefresh?: () => Promise<void>;
 }> = (props) => {
   // Refreshed objects describe the same target. Keep its form mounted until that target changes.
+  // `nextRun` is deliberately excluded so advancing the clock updates a row without discarding
+  // an open invoke or enqueue form.
   const byTarget = createMemo(
     () =>
       new Map(
@@ -251,8 +545,10 @@ export const FunctionRows: Component<{
         <FunctionRow
           f={byTarget().get(key)!}
           project={props.project}
+          functionsAddr={props.functionsAddr ?? null}
           onNotice={props.onNotice}
           onError={props.onError}
+          onRefresh={props.onRefresh ?? (async () => {})}
         />
       )}
     </For>
@@ -392,8 +688,12 @@ const Functions: Component = () => {
                 <FunctionRows
                   functions={o()?.functions ?? []}
                   project={o()?.project ?? appState.project()}
+                  functionsAddr={o()?.functionsAddr ?? null}
                   onNotice={setNotice}
                   onError={setError}
+                  onRefresh={async () => {
+                    await refetch();
+                  }}
                 />
               </tbody>
             </table>

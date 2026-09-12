@@ -1,6 +1,7 @@
 import type { ResultAsync } from "neverthrow";
-import { request, subscribe, type ApiError, type SseEvent } from "./client";
+import { request, subscribe, type ApiError, type Json, type SseEvent } from "./client";
 import type { FunctionsStatus } from "./control";
+import type { EnqueueRequest, InvokeRequest } from "../lib/invoke";
 
 export type TriggerInfo =
   | { kind: "http"; callable: boolean }
@@ -31,6 +32,19 @@ export type FunctionInfo = {
   timeoutSeconds: number;
   retry: boolean;
   concurrency: number;
+  /** When a scheduled function next runs on the virtual clock (RFC 3339), if reachable. */
+  nextRun?: string;
+};
+
+/** The response of a forwarded invocation (see functions_actions::encode_response). */
+export type InvokeResponse = {
+  status: number;
+  headers: [string, string][];
+  body?: string;
+  bodyEncoding?: "utf8" | "base64";
+  bodyLength: number;
+  truncated: boolean;
+  durationMs: number;
 };
 
 export type InvocationInfo = {
@@ -46,6 +60,10 @@ export type FunctionsOverview = {
   configured: boolean;
   project?: string;
   source?: string | null;
+  /** The current virtual clock (RFC 3339), for showing schedules relative to now. */
+  clock?: string;
+  /** The Functions port address, or null when no codebase is loaded (no invocation). */
+  functionsAddr?: string | null;
   functions: FunctionInfo[];
   status?: FunctionsStatus;
   history: InvocationInfo[];
@@ -55,6 +73,17 @@ export type FunctionsOverview = {
 
 export const functionsOverview = (): ResultAsync<FunctionsOverview, ApiError> =>
   request<FunctionsOverview>("GET", "functions");
+
+/** Invokes an HTTP or callable function by forwarding the request through the port. */
+export const invokeFunction = (
+  name: string,
+  req: InvokeRequest,
+): ResultAsync<InvokeResponse, ApiError> =>
+  request<InvokeResponse>("POST", `functions/${encodeURIComponent(name)}:invoke`, req);
+
+/** Enqueues a Cloud Task onto an onTaskDispatched queue. */
+export const enqueueTask = (name: string, req: EnqueueRequest): ResultAsync<Json, ApiError> =>
+  request("POST", `functions/${encodeURIComponent(name)}:enqueue`, req);
 
 /**
  * The stream sends the retained window once, then one `invocation` per new record. A `resync`

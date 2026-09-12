@@ -6,9 +6,10 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 
-from batch_contract import candidate
+from batch_contract import candidate, recording_exit_code
 from broad_cases import check_generated, generated_programs
 from broad_contract import ROOT, decision, digest, first_difference
 
@@ -36,6 +37,8 @@ def normalize(value, parent):
 
 
 def compare(batch, baseline):
+    if recording_exit_code(batch):
+        raise ValueError("incomplete recording or cleanup")
     manifest = candidate()
     if (
         batch["manifestDigest"] != digest(manifest)
@@ -119,6 +122,11 @@ def compare(batch, baseline):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Require all comparisons/invariants to match",
+    )
     parser.add_argument("--batch", type=Path, required=True)
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -128,3 +136,5 @@ if __name__ == "__main__":
     )
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({"passed": result["passed"], "total": result["total"]}))
+
+    sys.exit(1 if args.check and result["passed"] != result["total"] else 0)

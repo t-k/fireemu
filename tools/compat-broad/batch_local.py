@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 
 from batch_adapter import Adapter, candidate
-from batch_contract import PROJECT
+from batch_contract import PROJECT, wrapper_exit_code
 from broad import cleanup_run, save, source_inputs
 from broad_contract import ROOT, local_origin
 from owned_runner import (
@@ -152,6 +152,8 @@ def run(output):
         )
     )
 
+    return wrapper_exit_code(report)
+
 
 def interrupted(_signum, _frame):
     raise InterruptedError("stop requested; unwind owned cleanup")
@@ -168,6 +170,6 @@ if __name__ == "__main__":
     if args.child:
         child(args.child, args.nonce)
     elif args.output:
-        run(args.output.resolve())
+        sys.exit(run(args.output.resolve()))
     else:
         parser.error("--output required")

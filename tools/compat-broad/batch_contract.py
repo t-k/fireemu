@@ -167,6 +167,7 @@ def approve(manifest, approval, nonce, observer_sha, now):
         "project": PROJECT,
         "projectNumber": NUMBER,
         "tariffsConfirmedBelowPlanningCeilings": True,
+        "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
     }
     if any(
         type(approval.get(k)) is not type(v) or approval.get(k) != v
@@ -185,12 +186,16 @@ def approve(manifest, approval, nonce, observer_sha, now):
         raise ValueError("owner provenance required; AI review is not permission")
     for key in (
         "authConfigDigest",
-        "databaseDigest",
+        "databaseProjectionDigest",
         "pricingLocation",
         "pricingCheckedAt",
     ):
         if not isinstance(approval.get(key), str) or not approval[key]:
             raise ValueError("missing approved baseline or pricing provenance")
+
+    approved_database = database_evidence(approval.get("databaseProjection"))
+    if approved_database["projectionDigest"] != approval["databaseProjectionDigest"]:
+        raise ValueError("approved database projection digest differs")
 
 
 class Credential:
@@ -211,3 +216,58 @@ class Credential:
 
     def fail(self):
         self.token, self.expiry, self.failed = None, 0, True
+
+
+DATABASE_PROJECTION = {
+    "version": "database-settings-v1",
+    "excludedResponseFields": ["earliestVersionTime"],
+    "retainedFields": "all other fields, including unknown fields and field presence/types",
+    "requiredIdentityFields": ["name", "uid", "databaseEdition", "type", "locationId"],
+    "hashEncoding": "canonical typed JSON SHA256",
+}
+
+
+def database_evidence(body):
+    if not isinstance(body, dict) or any(
+        not isinstance(body.get(key), str) or not body[key]
+        for key in DATABASE_PROJECTION["requiredIdentityFields"]
+    ):
+        raise ValueError("database identity incomplete")
+    projection = {
+        k: v
+        for k, v in body.items()
+        if k not in DATABASE_PROJECTION["excludedResponseFields"]
+    }
+    return {
+        "responseDigest": digest(body),
+        "projection": projection,
+        "projectionDigest": digest(projection),
+        "contract": DATABASE_PROJECTION,
+        "contractDigest": digest(DATABASE_PROJECTION),
+    }
+
+
+def recording_exit_code(report):
+    return (
+        0
+        if report.get("completed") is True
+        and report.get("failure") is None
+        and report.get("unrecovered") == []
+        else 2
+    )
+
+
+def wrapper_exit_code(report):
+    owned = report.get("ownedProcess", {})
+    return (
+        0
+        if (
+            report.get("exitCode") == 0
+            and not report.get("cleanupFailure")
+            and not report.get("parentCleanupFailure")
+            and owned.get("stopped") is True
+            and owned.get("listenersClosed") is True
+            and recording_exit_code(report.get("batch", {})) == 0
+        )
+        else 2
+    )

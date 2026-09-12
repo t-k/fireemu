@@ -314,10 +314,18 @@ def test_valid_permission_and_each_binding_rejection():
         "ownerIdentity": "unit-test-only-not-real-permission",
         "permissionReference": "offline-fixture",
         "authConfigDigest": "c" * 64,
-        "databaseDigest": "d" * 64,
+        "databaseProjection": {
+            "name": "projects/fireemu-35fe6/databases/(default)",
+            "uid": "fixture",
+            "type": "FIRESTORE_NATIVE",
+            "databaseEdition": "STANDARD",
+            "locationId": "us-central1",
+        },
+        "databaseProjectionContractDigest": c.digest(c.DATABASE_PROJECTION),
         "pricingLocation": "us-central1",
         "pricingCheckedAt": "2026-09-12",
     }
+    permission["databaseProjectionDigest"] = c.digest(permission["databaseProjection"])
     c.approve(m, permission, "a" * 32, "b" * 64, 1000)
     for key, value in [
         ("manifestSha256", "x"),

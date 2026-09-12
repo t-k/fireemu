@@ -22,6 +22,8 @@ from batch_contract import (
     approve,
     candidate,
     compile_firestore,
+    database_evidence,
+    recording_exit_code,
 )
 from broad_contract import digest, local_origin
 
@@ -129,6 +131,7 @@ class Adapter:
         }
         self.rows = []
         self.auth_evidence = []
+        self.database_observations = []
         self.unrecovered = []
 
     def record(self, event):
@@ -462,7 +465,7 @@ class Adapter:
             (f"cloudresourcemanager.googleapis.com/v1/projects/{PROJECT}", None),
             (
                 f"firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)",
-                permission["databaseDigest"],
+                "database-projection",
             ),
             (
                 f"identitytoolkit.googleapis.com/admin/v2/projects/{PROJECT}/config",
@@ -471,7 +474,17 @@ class Adapter:
         ]
         for path, expected in metadata:
             status, body = self.request("metadata", path, method="GET", privileged=True)
-            if status != 200 or (expected and digest(body) != expected):
+            if path.startswith("firestore") and status == 200:
+                evidence = database_evidence(body)
+                evidence["phase"] = (
+                    "recovery" if self.budget.recovery else "observation"
+                )
+                self.database_observations.append(evidence)
+                expected = permission["databaseProjectionDigest"]
+                actual_digest = evidence["projectionDigest"]
+            else:
+                actual_digest = digest(body)
+            if status != 200 or (expected and actual_digest != expected):
                 raise ValueError("approved metadata baseline differs")
             if expected is None and (
                 str(body.get("projectNumber")) != NUMBER
@@ -521,6 +534,7 @@ class Adapter:
                 failure = failure or "MetadataDriftOrUnconfirmed"
         report = {
             "configurationUnchanged": unchanged,
+            "databaseObservations": self.database_observations,
             "manifestDigest": digest(self.manifest),
             "observerDigest": observer_digest(),
             "productionExecuted": not bool(self.local),
@@ -578,6 +592,8 @@ def main():
         )
     )
 
+    return recording_exit_code(report)
+
 
 def interrupted(_signum, _frame):
     raise InterruptedError("stop requested; unwind owned cleanup")
@@ -586,4 +602,4 @@ def interrupted(_signum, _frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGHUP, interrupted)
-    main()
+    sys.exit(main())

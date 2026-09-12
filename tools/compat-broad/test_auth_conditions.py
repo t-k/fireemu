@@ -108,3 +108,10 @@ def test_public_observations_never_publish_credential_bytes():
     )
     assert "private" not in str(public)
     assert public["response"]["localId"] == {"$account": "b"}
+
+
+def test_profile_update_cannot_link_or_remove_a_provider():
+    before = states()
+    after = copy.deepcopy(before)
+    after["b"]["providerUserInfo"] = [{"providerId": "password"}]
+    assert not all(module().assess(200, before, after).values())

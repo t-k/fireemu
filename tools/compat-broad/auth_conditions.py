@@ -51,6 +51,11 @@ def assess(status, before, after):
     return {
         "httpResponsePresent": type(status) is int and 100 <= status <= 599,
         **auth_invariants({"actor": "b"}, status, before, after),
+        "providersPreserved": all(
+            {k: before[r][k] for k in ["providerUserInfo"] if k in before[r]}
+            == {k: after[r][k] for k in ["providerUserInfo"] if k in after[r]}
+            for r in before
+        ),
     }
 
 

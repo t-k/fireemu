@@ -473,7 +473,10 @@ def catalog():
             )
     family_map = {family["id"]: family for family in families}
     for case in cases:
-        family = family_map[case["family"]]
+        family_key = case["family"]
+        if not isinstance(family_key, str):
+            raise TypeError("case family must be a string")
+        family = family_map[family_key]
         case.update(
             service=family["service"],
             edition=family["edition"],

@@ -599,8 +599,13 @@ def test_a_slow_setup_stops_before_the_deadline_and_recovers(tmp_path, monkeypat
 def test_a_slow_observation_request_is_stopped_before_the_deadline(
     tmp_path, monkeypatch
 ):
-    # Not only the aging wait: a slow observation request (here the held-pending sign-ins)
-    # is itself time-guarded, so once the deadline is near no further request is sent.
+    # Not only the aging wait: a slow observation request is itself time-guarded. Setup
+    # finishes (no delay there), then the baseline control's first sign-in is slow and the
+    # NEXT request (its start) is refused before it is sent, so the run stops with no row
+    # recorded at all. That is a state the later aging-wait guard cannot produce (it would
+    # stop only after the baseline and the first age rows), so this discriminates the
+    # per-request guard: with it removed the run proceeds into the diagnostics and records
+    # cases before the aging wait stops it.
     tight = {
         "maxAccounts": 5,
         "maxRequests": 200,
@@ -618,6 +623,9 @@ def test_a_slow_observation_request_is_stopped_before_the_deadline(
     )
     assert report["status"] == "incomplete" and saved["stopReason"] == "time-budget"
     assert "failure" not in saved
+    # A slow request ran, then the next request was stopped before any row was recorded.
+    assert world.counts.get("signInWithPassword", 0) >= 1
+    assert saved["setup"] is True and saved["cases"] == []
     assert world.users == {} and saved["cleanup"] == {
         "uidAbsent": True,
         "emailAbsent": True,
@@ -682,12 +690,16 @@ def test_timing_intervals_must_agree_with_their_raw_timestamps(tmp_path, monkeyp
     # The derived age intervals are checked against the raw send/receive times, so a report
     # whose interval or whose timestamps were tampered independently is rejected.
     base = complete_report(tmp_path, monkeypatch)
-    # (a) keep the raw times, corrupt only the derived interval.
+    # (a) leave EVERY raw timestamp valid and in order, corrupt only the derived interval.
     stale = copy.deepcopy(base)
     row = next(r for r in stale["cases"] if r["id"] == "age-300s-start")
-    row["timing"]["pendingAgeAtStart"] = {"lower": 300.0, "upper": 300.0}
-    row["timing"]["pendingReceived"] = row["timing"]["startSent"] - 1
-    assert complete(stale) is False
+    ordered_before = [
+        row["timing"][k]
+        for k in ("pendingSent", "pendingReceived", "startSent", "startReceived")
+    ]
+    row["timing"]["pendingAgeAtStart"] = {"lower": 0.0, "upper": 0.0}
+    assert ordered_before == sorted(ordered_before)  # raw stamps untouched and ordered
+    assert complete(stale) is False  # rejected by the interval-vs-timestamp check alone
     # (b) keep the derived interval, corrupt only a raw timestamp out of order.
     reordered = copy.deepcopy(base)
     row = next(r for r in reordered["cases"] if r["id"] == "age-300s-start")

@@ -83,10 +83,13 @@ BUDGET = {
     "configHoldMaxSeconds": max(AGE_SECONDS) + 300,
     "cleanupReserveSeconds": 120,
 }
-# The shared transport's per-request timeout (maximum_recorder.request / revocation.patch
-# open with timeout=20). Every request path reserves this before sending, so a request that
-# starts cannot, even at its worst-case timeout, finish past the phase deadline; that is how
-# the response-inclusive deadline is honoured without a per-call dynamic timeout.
+# The shared transport's socket timeout (maximum_recorder.request / revocation.patch open
+# with timeout=20). Every request path reserves this before sending, so against the trusted
+# oracle -- which responds in well under it, and to which each blocking socket operation is
+# bounded by this timeout -- a request that starts finishes before its phase deadline. This
+# approximates a response-inclusive deadline without a per-call dynamic timeout (the shared
+# transport is not modified); it is not a hard total-request deadline, so a pathologically
+# slow server could still exceed it, which is out of scope for the trusted-oracle model.
 REQUEST_BUDGET_SECONDS = 20
 
 
@@ -216,9 +219,15 @@ def observe(output, origin=None, clock_control=None):
                 )
 
         if production:
+            # Preflight is a budget-consuming phase: stop before it if the budget is already
+            # spent, and again (via config()'s guard) before enabling configuration, so the
+            # change is never applied past the deadline. The gcloud subprocesses inside
+            # preflight carry their own timeouts; these checkpoints bound the phase entry.
+            time_guard()
             require(committed_checkout())
             report["committedCheckout"] = True
             access, key, report["configReadback"] = core.production_preflight()
+            time_guard()
 
             def config(patch_body=None, mask=None):
                 time_guard()

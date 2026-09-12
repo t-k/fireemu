@@ -650,12 +650,18 @@ const Functions: Component = () => {
 
   const s = () => status()?.unwrapOr(null) ?? null;
   const o = () => overview()?.unwrapOr(null) ?? null;
-  // The functions belong to one project's session. When the top bar selects a different
-  // project, an invoke/enqueue/run/advance would still act on the functions' project, so the
-  // actions are disabled and a notice explains where the functions actually live.
+  // The functions belong to one project's session. Actions are enabled only when the selected
+  // session still exists and its project is the functions' project. Matching the real selected
+  // session (not `appState.project()`, which falls back to the default project when the
+  // selection has been deleted) keeps actions disabled after that session is removed elsewhere,
+  // rather than silently re-enabling them against the default project.
   const active = () => {
-    const project = o()?.project;
-    return project === undefined || project === appState.project();
+    const owner = o();
+    if (!owner?.configured || owner.project === undefined) {
+      return false;
+    }
+    const selected = appState.sessions().find((sess) => sess.name === appState.session());
+    return selected !== undefined && selected.project === owner.project;
   };
   return (
     <div>

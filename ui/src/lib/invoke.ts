@@ -104,7 +104,9 @@ export const buildRequestInvoke = (input: {
 }): Result<InvokeRequest, string> =>
   parseHeaderLines(input.headers).map((headers) => {
     const path = input.path.trim();
-    const query = input.query.trim().replace(/^\?/, "");
+    // Only whitespace is trimmed; the optional leading "?" is normalized once, on the server,
+    // so a second "?" is never stripped twice.
+    const query = input.query.trim();
     const request: InvokeRequest = { method: input.method };
     if (path !== "") {
       request.path = path;

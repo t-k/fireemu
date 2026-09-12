@@ -73,8 +73,8 @@ it("builds an onRequest invocation from method, path, query, headers and body", 
   expect(r).toEqual({
     method: "GET",
     path: "/users",
-    // Surrounding whitespace is trimmed and a single leading "?" is dropped.
-    query: "limit=5",
+    // Only whitespace is trimmed; the leading "?" is left for the server to normalize once.
+    query: "?limit=5",
     headers: { "X-Smoke": "hi" },
   });
 });
@@ -90,16 +90,17 @@ it("omits empty path, query, headers and body on an onRequest invocation", () =>
   expect(r).toEqual({ method: "POST" });
 });
 
-it("keeps a non-empty body and only strips a leading question mark from the query", () => {
+it("keeps a non-empty body and every question mark in the query", () => {
   const r = buildRequestInvoke({
     method: "POST",
     path: "",
-    // A "?" that is not at the start belongs to the query and must be kept.
-    query: "a=1?b=2",
+    // The front trims whitespace only; the server strips the single leading separator, so a
+    // "??a=1" reaches the server intact and is normalized there exactly once.
+    query: "  ??a=1  ",
     headers: "",
     body: "raw body",
   })._unsafeUnwrap();
-  expect(r.query).toBe("a=1?b=2");
+  expect(r.query).toBe("??a=1");
   expect(r.body).toBe("raw body");
 });
 

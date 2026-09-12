@@ -152,7 +152,9 @@ pub fn build_invoke(
 
     let query = match req.get("query") {
         None | Some(Value::Null) => String::new(),
-        Some(Value::String(q)) => q.trim_start_matches('?').to_owned(),
+        // Strip exactly one optional leading "?" separator (the front sends the query as typed,
+        // trimmed only). A second "?" is query data and is kept, so normalization happens once.
+        Some(Value::String(q)) => q.strip_prefix('?').unwrap_or(q.as_str()).to_owned(),
         Some(_) => return Err("query must be a string".to_owned()),
     };
     if !is_query_safe(&query) {
@@ -384,12 +386,20 @@ mod tests {
     }
 
     #[test]
-    fn a_question_mark_inside_the_query_is_kept() {
-        // Only the first "?" separates path from query; a later one is query data and must
-        // survive, matching what the front produces and reach the function unchanged.
-        let plan = build_invoke("demo-app", "us-central1", "echo", &json!({"query": "a=1?b=2"}))
-            .unwrap();
-        assert_eq!(plan.path_and_query, "/demo-app/us-central1/echo?a=1?b=2");
+    fn exactly_one_leading_question_mark_is_stripped_and_the_rest_is_query_data() {
+        // Only one optional leading "?" separator is removed; any further "?" is query data and
+        // survives, so the front (which trims only) and the back normalise the query once.
+        let cases = [
+            ("a=1?b=2", "/demo-app/us-central1/echo?a=1?b=2"),
+            ("?a=1", "/demo-app/us-central1/echo?a=1"),
+            ("??a=1", "/demo-app/us-central1/echo??a=1"),
+            ("??", "/demo-app/us-central1/echo??"),
+        ];
+        for (query, expected) in cases {
+            let plan =
+                build_invoke("demo-app", "us-central1", "echo", &json!({ "query": query })).unwrap();
+            assert_eq!(plan.path_and_query, expected, "query {query:?}");
+        }
     }
 
     #[test]

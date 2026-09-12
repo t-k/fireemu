@@ -124,6 +124,36 @@ test.describe("Functions", () => {
     }
   });
 
+  test("keeps functions actions disabled after the selected session is deleted elsewhere", async ({
+    page,
+    request,
+  }) => {
+    await api(request, "POST", "control/v1/sessions", { project: "demo-b", name: "demo-b" });
+    let cleaned = false;
+    try {
+      await gotoApp(page, "/functions");
+      await page.getByTestId("session-select").selectOption("demo-b");
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeDisabled();
+      // Delete the selected session from elsewhere; the app polls the session list every 5s.
+      await api(request, "DELETE", "control/v1/sessions/demo-b");
+      cleaned = true;
+      // Wait until the list has refreshed and the option is gone.
+      await expect(
+        page.locator('[data-testid="session-select"] option[value="demo-b"]'),
+      ).toHaveCount(0, { timeout: 15000 });
+      // The selection no longer resolves to a real session, so actions must stay disabled
+      // rather than re-enable against the default project via the display fallback.
+      await expect(page.getByTestId("functions-session-mismatch")).toBeVisible();
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeDisabled();
+      await expect(page.getByTestId("enqueue-countJob-toggle")).toBeDisabled();
+      await expect(page.getByTestId("run-tick")).toBeDisabled();
+    } finally {
+      if (!cleaned) {
+        await api(request, "DELETE", "control/v1/sessions/demo-b");
+      }
+    }
+  });
+
   test("filters invocations by function and logs by text", async ({ page, request }) => {
     await gotoApp(page, "/functions");
     await page.getByTestId("run-tick").click();

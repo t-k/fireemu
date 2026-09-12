@@ -1062,6 +1062,24 @@ async fn invoking_forwards_a_question_mark_inside_the_query_to_the_function() {
     assert_eq!(status, 200, "{body}");
     let echoed: Value = serde_json::from_str(body["body"].as_str().unwrap()).unwrap();
     assert_eq!(echoed["path"], "/demo-app/us-central1/echo?a=1?b=2");
+
+    // What the front sends for a "??a=1" input (it trims only): the server strips exactly one
+    // leading "?", so the second reaches the function -- normalized once, not twice.
+    let (status, body) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/echo:invoke",
+                &json!({"query": "??a=1"}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let echoed: Value = serde_json::from_str(body["body"].as_str().unwrap()).unwrap();
+    assert_eq!(echoed["path"], "/demo-app/us-central1/echo??a=1");
     runtime.runner().shutdown().await;
 }
 

@@ -5,7 +5,13 @@ obtained near a common origin and left untouched until its diagnostic, so no int
 access can extend it. The SMS session is opened fresh at the diagnostic, isolating the
 pending age from the session age. Production ages by real waiting within a declared
 observation budget; the owned local run ages by advancing the virtual clock through the
-control API, so it can sample past the local pending lifetime deterministically. Tokens,
+control API, so it can sample past the local pending lifetime deterministically.
+
+Two clocks are kept apart. The AGING clock measures a pending credential's age: real
+monotonic time in production, the shared virtual clock locally. The WALL clock (always real
+monotonic time) enforces the observation budget, so a local run's instantaneous virtual
+aging never trips a wall-time budget, and a production run's real waiting does. Every row
+carries a timing region on the aging clock, saved on acceptance and refusal alike. Tokens,
 pending credentials, session identifiers, codes and passwords stay in memory.
 """
 
@@ -13,6 +19,7 @@ pending credentials, session identifiers, codes and passwords stay in memory.
 import argparse
 import hashlib
 import json
+import math
 import secrets
 import signal
 import sys
@@ -63,14 +70,15 @@ PROBE_TREES = (
     "tools/auth-password-maximum",
     "tools/compat-inventory",
 )
-# The declared observation budget. Production ages by real waiting up to totalBudgetSeconds
-# (pendings age in parallel from a common origin, so the wall time is the largest age plus
-# overhead), holds the temporary configuration no longer than configHoldMaxSeconds, and
-# reserves cleanupReserveSeconds to restore configuration and delete accounts even if the
-# budget is exhausted.
+# The declared observation budget. maxRequests bounds auth API calls (admin/client/mfa);
+# recoveryRequestReserve is the slice kept unspent during observation so cleanup (five admin
+# calls per account) is always affordable. totalBudgetSeconds bounds the whole wall time and
+# configHoldMaxSeconds the time configuration stays enabled; observation stops early enough
+# to leave cleanupReserveSeconds for restore and deletion before either deadline.
 BUDGET = {
     "maxAccounts": len(AGE_SECONDS) + 2,
     "maxRequests": 200,
+    "recoveryRequestReserve": 40,
     "totalBudgetSeconds": max(AGE_SECONDS) + 300,
     "configHoldMaxSeconds": max(AGE_SECONDS) + 300,
     "cleanupReserveSeconds": 120,
@@ -83,6 +91,15 @@ def patch(url, body, token):
 
 class Terminated(BaseException):
     """SIGTERM or SIGHUP during a run: unwinds through `finally`."""
+
+
+class BudgetExhausted(Exception):
+    """An observation budget guard fired: a clean early stop, not a crash. Cleanup still
+    runs in the recovery reserve; the run is incomplete and records the guard."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
 
 
 def terminate(signum, frame):
@@ -142,22 +159,34 @@ def observe(output, origin=None, clock_control=None):
         "cases": [],
         "setup": False,
         "cleanup": {},
+        "stopReason": "error",
+        "requestCount": {"observation": 0, "recovery": 0, "config": 0},
+        "wallElapsedSeconds": 0.0,
+        "configHoldSeconds": 0.0,
     }
     accounts: dict = {}
     admin = None
     access = None
     original = None
     change_attempted = False
-    request_count = 0
+    phase = ["observation"]
+    request_count = report["requestCount"]
+    run_started = time.monotonic()
+    config_enabled_wall = None
     previous = {s: signal.signal(s, terminate) for s in (signal.SIGTERM, signal.SIGHUP)}
     try:
         access, key = "owner", "local-test-key"
+
+        def config_counted():
+            request_count["config"] += 1
+
         if production:
             require(committed_checkout())
             report["committedCheckout"] = True
             access, key, report["configReadback"] = core.production_preflight()
 
             def config(patch_body=None, mask=None):
+                config_counted()
                 if patch_body is None:
                     return core.request(CONFIG_URL, token=access, quota=True)
                 return patch(
@@ -186,6 +215,7 @@ def observe(output, origin=None, clock_control=None):
                 },
             )
             change_attempted = True
+            config_enabled_wall = time.monotonic()
             status, patched = config(
                 {
                     "mfa": MFA_ON,
@@ -205,10 +235,42 @@ def observe(output, origin=None, clock_control=None):
             report["configEnabled"] = False
         query = f"?key={urllib.parse.quote(key, safe='')}"
 
+        # --- Budget guards on the WALL clock (real time), separate from the aging clock ---
+        def guard():
+            now = time.monotonic()
+            if (
+                production
+                and config_enabled_wall is not None
+                and now
+                >= config_enabled_wall
+                + BUDGET["configHoldMaxSeconds"]
+                - BUDGET["cleanupReserveSeconds"]
+            ):
+                raise BudgetExhausted("config-hold-budget")
+            if (
+                now
+                >= run_started
+                + BUDGET["totalBudgetSeconds"]
+                - BUDGET["cleanupReserveSeconds"]
+            ):
+                raise BudgetExhausted("time-budget")
+
         def counted():
-            nonlocal request_count
-            request_count += 1
-            require(request_count <= BUDGET["maxRequests"])  # request budget
+            # Check the limit before incrementing, so the recorded count reflects requests
+            # actually sent and a rejected request is never issued.
+            current = phase[0]
+            if current == "observation":
+                if (
+                    request_count["observation"] + 1
+                    > BUDGET["maxRequests"] - BUDGET["recoveryRequestReserve"]
+                ):
+                    raise BudgetExhausted("request-budget")
+            elif (
+                request_count["observation"] + request_count["recovery"] + 1
+                > BUDGET["maxRequests"]
+            ):
+                raise BudgetExhausted("request-budget")
+            request_count[current] += 1
 
         def admin(action, body):
             require(action in {"lookup", "update", "delete"})
@@ -244,9 +306,6 @@ def observe(output, origin=None, clock_control=None):
             return status, response
 
         # --- Aging: measure age from each pending's own acquisition, not a fixed origin. ---
-        # Production waits real time; the owned local run advances the shared virtual clock.
-        # Either way the age is (elapsed_now - the pending's acquiredAt), so setup time before
-        # acquisition never counts against a pending's measured age.
         origin_monotonic = time.monotonic()
         origin_clock = clock_now(clock_control) if not production else None
 
@@ -256,16 +315,24 @@ def observe(output, origin=None, clock_control=None):
             return clock_now(clock_control) - origin_clock
 
         def age_to(target):
-            # Bring elapsed_now up to `target` seconds. Idempotent when already past it.
-            require(target <= BUDGET["totalBudgetSeconds"])  # total time budget
+            # The wall-clock guard bounds real aging; a target beyond the budget stops the
+            # run cleanly (BudgetExhausted), never as an unclassified error. Local aging is
+            # instant on the virtual clock and does not spend the wall budget.
             if production:
                 deadline = origin_monotonic + target
                 while time.monotonic() < deadline:
+                    guard()
                     time.sleep(min(5.0, deadline - time.monotonic()))
             else:
-                delta = target - elapsed_now()
-                if delta > 0:
-                    advance_clock(clock_control, delta)
+                # Advance until the aging clock has reached at least the target, so the
+                # measured pending age is never a rounding hair below the sampled age.
+                # advance_clock rounds up, so each step makes progress; a few iterations
+                # absorb any read/advance drift.
+                for _ in range(8):
+                    remaining = target - elapsed_now()
+                    if remaining <= 0:
+                        break
+                    advance_clock(clock_control, remaining)
 
         def lookup(account):
             records = users(*admin("lookup", {"localId": [account["uid"]]}))
@@ -311,7 +378,7 @@ def observe(output, origin=None, clock_control=None):
             )
             accounts[label] = account
             report["accountsUsed"] = len(accounts)
-            require(len(accounts) <= BUDGET["maxAccounts"])  # account budget
+            require(len(accounts) <= BUDGET["maxAccounts"])
             status, _signed = client(
                 "signUp",
                 {
@@ -368,6 +435,10 @@ def observe(output, origin=None, clock_control=None):
             )
             return credential
 
+        def timed_pending(account):
+            credential = pending(account)
+            return credential, elapsed_now()
+
         def start(account, credential):
             return mfa(
                 "mfaSignIn:start",
@@ -380,6 +451,11 @@ def observe(output, origin=None, clock_control=None):
                     },
                 },
             )
+
+        def timed_start(account, credential):
+            sent = elapsed_now()
+            status, started = start(account, credential)
+            return status, started, sent, elapsed_now()
 
         def code_for(session):
             if production:
@@ -404,15 +480,49 @@ def observe(output, origin=None, clock_control=None):
                 },
             )
 
+        def timed_finalize(credential, session, code):
+            sent = elapsed_now()
+            status, signed = finalize(credential, session, code)
+            return status, signed, sent, elapsed_now()
+
         rows_started = time.monotonic()
 
-        def row(name, status, response, checks=None):
+        def start_timing(acquired, sent, received):
+            return {
+                "pendingAcquiredAt": acquired,
+                "startSent": sent,
+                "startReceived": received,
+                "pendingAgeAtStart": {
+                    "lower": sent - acquired,
+                    "upper": received - acquired,
+                },
+            }
+
+        def finalize_timing(acquired, s_sent, s_recv, f_sent, f_recv):
+            return {
+                "pendingAcquiredAt": acquired,
+                "startSent": s_sent,
+                "startReceived": s_recv,
+                "finalizeSent": f_sent,
+                "finalizeReceived": f_recv,
+                "sessionAgeAtFinalize": {
+                    "lower": f_sent - s_recv,
+                    "upper": f_recv - s_sent,
+                },
+                "pendingAgeAtFinalize": {
+                    "lower": f_sent - acquired,
+                    "upper": f_recv - acquired,
+                },
+            }
+
+        def row(name, status, response, checks, timing):
             result = {
                 "id": name,
                 "httpStatus": status,
                 "outcome": "accepted" if status == 200 else "refused",
                 "observedError": None if status == 200 else error_code(response),
                 "checks": checks if status == 200 else {},
+                "timing": timing,
                 "elapsedMs": int((time.monotonic() - rows_started) * 1000),
                 "skipped": False,
             }
@@ -427,6 +537,7 @@ def observe(output, origin=None, clock_control=None):
                 "outcome": "skipped",
                 "observedError": None,
                 "checks": {},
+                "timing": {},
                 "elapsedMs": int((time.monotonic() - rows_started) * 1000),
                 "skipped": True,
             }
@@ -461,14 +572,22 @@ def observe(output, origin=None, clock_control=None):
             return checks
 
         def fresh_finalize(name, account):
-            credential = pending(account)
-            status, started = start(account, credential)
+            credential, acquired = timed_pending(account)
+            status, started, s_sent, s_recv = timed_start(account, credential)
             require(status == 200 and "error" not in started)
             session = started.get("phoneResponseInfo", {}).get("sessionInfo")
             require(isinstance(session, str) and bool(session))
-            status, signed = finalize(credential, session, code_for(session))
-            require(status == 200)
-            row(name, status, signed, token_checks(account, signed))
+            fstatus, signed, f_sent, f_recv = timed_finalize(
+                credential, session, code_for(session)
+            )
+            require(fstatus == 200)
+            row(
+                name,
+                fstatus,
+                signed,
+                token_checks(account, signed),
+                finalize_timing(acquired, s_sent, s_recv, f_sent, f_recv),
+            )
 
         # --- Setup: baseline, one account per age, final ------------------------------
         baseline = new_account("baseline")
@@ -477,21 +596,21 @@ def observe(output, origin=None, clock_control=None):
         report["setup"] = True
 
         # --- Baseline control ----------------------------------------------------------
+        guard()
         fresh_finalize("baseline-fresh-finalize", baseline)
 
         # --- Obtain each age account's held pending at the common origin ---------------
-        held = {
-            a: {"credential": pending(age_accounts[a]), "acquiredAt": elapsed_now()}
-            for a in AGE_SECONDS
-        }
+        held = {}
+        for a in AGE_SECONDS:
+            credential, acquired = timed_pending(age_accounts[a])
+            held[a] = {"credential": credential, "acquiredAt": acquired}
 
         # --- Age to each target and diagnose (fresh session at the diagnostic) ---------
         for a in sorted(AGE_SECONDS):
+            guard()
             account, entry = age_accounts[a], held[a]
             age_to(entry["acquiredAt"] + a)
-            pending_age = round(elapsed_now() - entry["acquiredAt"])
-            session_opened = elapsed_now()
-            status, started = start(account, entry["credential"])
+            status, started, s_sent, s_recv = timed_start(account, entry["credential"])
             session = (
                 started.get("phoneResponseInfo", {}).get("sessionInfo")
                 if status == 200
@@ -502,44 +621,50 @@ def observe(output, origin=None, clock_control=None):
                 f"age-{a}s-start",
                 status,
                 started,
-                {
-                    "sessionInfoPresent": session_present,
-                    "pendingAgeSeconds": pending_age,
-                    "sessionAgeSeconds": round(elapsed_now() - session_opened),
-                }
-                if status == 200
-                else None,
+                {"sessionInfoPresent": session_present} if status == 200 else None,
+                start_timing(entry["acquiredAt"], s_sent, s_recv),
             )
             if started_row["outcome"] == "accepted" and session_present:
-                status, signed = finalize(
+                fstatus, signed, f_sent, f_recv = timed_finalize(
                     entry["credential"], session, code_for(session)
                 )
                 row(
                     f"age-{a}s-finalize",
-                    status,
+                    fstatus,
                     signed,
                     token_checks(account, signed, diagnostic=True)
-                    if status == 200
+                    if fstatus == 200
                     else None,
+                    finalize_timing(
+                        entry["acquiredAt"], s_sent, s_recv, f_sent, f_recv
+                    ),
                 )
             else:
                 skipped(f"age-{a}s-finalize")
 
         # --- Final control -------------------------------------------------------------
+        guard()
         fresh_finalize("final-fresh-finalize", final)
         require(inputs() == before)
         report["status"] = "observed"
+        report["stopReason"] = "completed"
+    except BudgetExhausted as error:
+        report["stopReason"] = error.reason
     except Exception as error:
         report["failure"] = type(error).__name__
+        report["stopReason"] = "error"
     except (Terminated, KeyboardInterrupt) as error:
         report["failure"] = type(error).__name__
+        report["stopReason"] = "terminated"
     finally:
+        phase[0] = "recovery"
         if not production:
             report["configRestored"] = True
             report["configDigestMatches"] = True
         if change_attempted:
             try:
                 status, raw = restore_configuration(access, original)
+                request_count["config"] += 2
                 report["configRestored"] = True
                 report["configRestoredReadback"] = {
                     "mfa": raw.get("mfa"),
@@ -552,6 +677,8 @@ def observe(output, origin=None, clock_control=None):
                 )
             except Exception as error:
                 report["configRestoreFailure"] = type(error).__name__
+        if production and config_enabled_wall is not None:
+            report["configHoldSeconds"] = time.monotonic() - config_enabled_wall
         cleaned = []
         for account in accounts.values():
             try:
@@ -572,6 +699,8 @@ def observe(output, origin=None, clock_control=None):
             and all(c == {"uidAbsent": True, "emailAbsent": True} for c in cleaned)
         ):
             report["cleanup"] = {"uidAbsent": True, "emailAbsent": True}
+        report["requestCount"] = dict(request_count)
+        report["wallElapsedSeconds"] = time.monotonic() - run_started
         for signum, handler in previous.items():
             signal.signal(signum, handler)
         save(output / "observation.json", report)
@@ -608,11 +737,12 @@ def clock_now(clock_control):
 
 
 def advance_clock(clock_control, seconds):
-    # Millisecond precision so a pending lands at least at its sampled age, never short.
+    # Round the advance UP to whole milliseconds so a pending lands at least at its sampled
+    # age, never a rounding hair short; at least 1 ms so a top-up step always progresses.
     _control(
         clock_control,
         "/v1/sessions/default/clock:advance",
-        {"millis": max(0, round(seconds * 1000))},
+        {"millis": max(1, math.ceil(seconds * 1000))},
     )
 
 

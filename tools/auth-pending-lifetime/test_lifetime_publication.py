@@ -20,6 +20,17 @@ OWN = ROOT / "tools/auth-pending-lifetime/lifetime_owned.py"
 COMMIT = "a" * 40
 
 
+def test_no_publisher_prose_claims_an_upper_bound_from_a_refusal():
+    # Revision 1 asserts no lifetime upper bound: the machine summary hardcodes it False, so
+    # the human-facing SCOPE and module docstrings (which are rendered onto the page and,
+    # for production, pinned into the receipt) must not claim a refusal establishes one.
+    forbidden = ("upper bound only if", "an upper bound only")
+    for module in (production, comparison):
+        text = f"{module.SCOPE}\n{module.__doc__ or ''}".lower()
+        for phrase in forbidden:
+            assert phrase not in text, (module.__name__, phrase)
+
+
 def test_production_manifest_equals_the_recorder_closure():
     assert set(production.RECORDER_FILES) == in_repo_closure([REC])
 

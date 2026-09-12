@@ -3,8 +3,9 @@
 The observation was recorded with the recorder at one commit and re-evaluated with the
 contract at publication; both are named and never conflated. Only allowlisted fields are
 projected, and the full execution-dependency set is bound to the recorder commit. The
-receipt states a lower bound on the pending lifetime (and an upper bound only if an age
-was refused), never an exact TTL or an error precedence.
+receipt states a lower bound on the pending lifetime; a refusal records its age and error
+but does not, in this revision, establish an upper bound, and the receipt never states an
+exact TTL or an error precedence.
 """
 
 import argparse
@@ -34,7 +35,7 @@ from lifetime_recorder import digest
 BUNDLE = ROOT / "spec/compatibility/evidence/auth-pending-lifetime/receipt.json"
 REVIEW = ROOT / "spec/compatibility/evidence/auth-pending-lifetime/source-review.json"
 PAGE = ROOT / "docs/compatibility/auth-pending-lifetime.md"
-SCOPE = "Eight sequential REST observations in production only: a fresh phone MFA completion (control); then, for each of three pending credentials held untouched from a common origin and aged by real waiting to about 2, 120 and 300 seconds, mfaSignIn:start with a freshly opened SMS session (so only the pending age is large) and, on an acceptance, a finalize of that fresh session; a fresh completion (control) closes the run. One independent account per age, phone MFA with one test phone number, no tenant, no blocking function, one run. The oracle configuration was changed for the run and restored with a digest comparison. This establishes a lower bound on the pending lifetime, and an upper bound only if an aged row was refused; it pins no exact TTL and no error precedence. No human approval, no local artifact comparison, no claim about tenants, SDK or Rules, and no separation of pending-versus-session expiry."
+SCOPE = "Eight sequential REST observations in production only: a fresh phone MFA completion (control); then, for each of three pending credentials held untouched from a common origin and aged by real waiting to about 2, 120 and 300 seconds, mfaSignIn:start with a freshly opened SMS session (so only the pending age is large) and, on an acceptance, a finalize of that fresh session; a fresh completion (control) closes the run. One independent account per age, phone MFA with one test phone number, no tenant, no blocking function, one run. The oracle configuration was changed for the run and restored with a digest comparison. This establishes a lower bound on the pending lifetime; a refused age records its error but does not, in this revision, establish an upper bound, because the corpus does not prove a refusal is due to expiry; it pins no exact TTL and no error precedence. No human approval, no local artifact comparison, no claim about tenants, SDK or Rules, and no separation of pending-versus-session expiry."
 RECORDER_FILES = (
     "tools/auth-pending-lifetime/lifetime_contract.py",
     "tools/auth-pending-lifetime/lifetime_recorder.py",
@@ -51,6 +52,10 @@ PROJECTED = (
     "agingMode",
     "budget",
     "accountsUsed",
+    "stopReason",
+    "requestCount",
+    "wallElapsedSeconds",
+    "configHoldSeconds",
     "cases",
     "setup",
     "cleanup",
@@ -233,11 +238,25 @@ def outcome(row):
     return f"{row['outcome']} / {row['observedError'] or 'none'}"
 
 
+def age_display(row):
+    timing = row["timing"]
+    if "pendingAgeAtStart" in timing:
+        return round(timing["pendingAgeAtStart"]["lower"])
+    if "pendingAgeAtFinalize" in timing:
+        return round(timing["pendingAgeAtFinalize"]["lower"])
+    return "-"
+
+
 def render(value):
     validate(value)
     report = value["production"]
     summary = report["lifetimeSummary"]
     recorded, reevaluated = report["recordedWith"], report["reevaluatedWith"]
+    usable, refused, reasons = (
+        summary["usableAges"],
+        summary["refusedAges"],
+        summary["refusalReasons"],
+    )
     lower = summary["lowerBoundSeconds"]
     lines = [
         "# MFA pending credential lifetime",
@@ -251,28 +270,32 @@ def render(value):
     ]
     for row in report["cases"]:
         basis = "diagnostic" if row["id"] in DIAGNOSTIC else "control"
-        age = row["checks"].get("pendingAgeSeconds", "-") if row["checks"] else "-"
         checks = (
             ", ".join(f"{k}={v}" for k, v in sorted(row["checks"].items()))
             if row["checks"]
             else "none"
         )
         lines.append(
-            f"| {row['id']} | {basis} | {age} | {outcome(row)} | {checks} | {row['elapsedMs']} |"
+            f"| {row['id']} | {basis} | {age_display(row)} | {outcome(row)} | {checks} | {row['elapsedMs']} |"
         )
-    bound = (
-        f"still usable at every sampled age up to **{lower} s** (a lower bound, not an infinite lifetime)"
-        if not summary["upperBoundEstablished"]
-        else f"usable up to **{lower} s** and refused at **{min(summary['refusedAges'])} s** (an upper bound between them)"
+    refused_text = (
+        "none"
+        if not refused
+        else ", ".join(f"{a} s ({reasons[str(a)]})" for a in refused)
+    )
+    lower_text = (
+        f"a lower bound of **{lower} s** on the pending lifetime (not an infinite lifetime)"
+        if lower is not None
+        else "no verified success at any sampled age"
     )
     lines.extend(
         [
             "",
-            f"Sampled ages: {', '.join(str(a) for a in AGE_SECONDS)} s. Usable: {summary['usableAges'] or 'none'}. Refused: {summary['refusedAges'] or 'none'}. The pending credential was {bound}.",
+            f"Sampled ages: {', '.join(str(a) for a in AGE_SECONDS)} s. Verified usable: {usable or 'none'}. Refused: {refused_text}. Indeterminate (accepted without a verified token): {summary['indeterminateAges'] or 'none'}. This establishes {lower_text}. A refused age records its error, but this revision does not prove a refusal is due to expiry, so it asserts no lifetime upper bound.",
             "",
             f"Review subject (unapproved): `{digest(value)}`.",
             "",
-            "Each pending credential was obtained near a common origin and left untouched until its own diagnostic, so no intermediate access could extend it; the SMS session was opened fresh at the diagnostic, so the recorded session age is near zero while only the pending age grows. A refused start records its error and skips its finalize; an accepted start finalizes the fresh session and records its token checks as booleans. Elapsed milliseconds are cumulative from the recorder's measurement origin and are excluded from semantic equality, as are the measured pending and session ages, which vary across runs and clocks.",
+            "Each pending credential was obtained near a common origin and left untouched until its own diagnostic, so no intermediate access could extend it; the SMS session was opened fresh at the diagnostic, so its age at finalize is recorded as an interval near zero while only the pending age grows. A sampled age is counted usable only when its start returned a session and its finalize both succeeded and passed every identity check; an accepted finalize with a missing or unverifiable token is recorded but counts as indeterminate, not usable. A refused start records its error and skips its finalize. The pending age at start and the session age at finalize are kept in a separate timing region on each row, saved on refusal too, and excluded from semantic equality along with the elapsed milliseconds, since they vary across runs and clocks.",
             "",
             "The oracle project had MFA disabled, no phone sign-in and an empty SMS region allowlist. For the run, phone MFA, one test phone number with a fixed code (no SMS is sent) and the allow-by-default SMS region policy were enabled, and after a wait for enforcement the flow ran. The recorded values were restored before the accounts were deleted; the readback matched and the whole-configuration digest equaled the pre-run digest. Every account was deleted with UID and email absence confirmation. The run aged by real waiting and started from a committed checkout.",
             "",

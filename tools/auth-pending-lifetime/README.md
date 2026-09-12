@@ -38,18 +38,53 @@ Rows (revision 1 samples 2, 120 and 300 seconds), in run order:
 | `age-300s-finalize` | diagnostic | If the 300 s start returned a session, it is finalized; skipped otherwise. |
 | `final-fresh-finalize` | control | A fresh sign-in completes the second factor after all aging. |
 
-The observation budget is declared in the report (`budget`): a maximum account count, a
-maximum request count, a total time budget, a maximum configuration-hold time and a cleanup
-reserve. Reaching a budget guard aborts the run (an incomplete report), and the run still
-restores configuration and deletes every account in `finally`. A diagnostic row records any
-refusal, including an unlisted class, a throttle or a server error, and the run continues;
-a transient throttle or quota answer never completes a run. Only the two fresh finalizes
-are controls that must fully succeed; a finalize whose own start was refused is skipped, not
-sent. Pending credentials, session identifiers, codes, tokens and passwords stay in memory;
-an aborted run keeps only the last request's step (named before the request), its status and
-error class, plus the failure's exception class. The measured pending and session ages and
-the elapsed milliseconds are excluded from semantic equality, since they vary across runs
-and clocks. Every account is deleted with UID and email absence confirmation.
+The observation budget is declared in the report (`budget`) and enforced, not merely
+recorded. It names a maximum account count; a maximum request count split into an
+observation share and a recovery reserve; a total wall-time budget; a maximum
+configuration-hold time; and a cleanup reserve. Two clocks are kept apart: the aging clock
+measures a pending credential's age (real monotonic time in production, the virtual clock
+locally), while the wall clock (always real monotonic time) enforces the budget, so a local
+run's instant virtual aging never trips a wall-time budget and a production run's real
+waiting does. Before each diagnostic and inside the aging wait, a guard stops the run if the
+wall clock has reached the total-time or configuration-hold deadline minus the cleanup
+reserve; the observation request counter is capped at the total minus the recovery reserve,
+so cleanup (five admin calls per account) is always affordable even when observation is
+exhausted. Reaching any guard is a clean early stop recorded in `stopReason`
+(`time-budget` / `config-hold-budget` / `request-budget`), not a crash, and the run still
+restores configuration and deletes every account in `finally`. The report records the
+request counts (observation, recovery, configuration), the total wall elapsed and the
+configuration-hold seconds, and `complete()` checks all of them against the declared budget.
+Restore and deletion are always attempted; success is confirmed by the restore readback,
+the whole-configuration digest, and per-account UID and email absence, and a failure is
+reported (`configRestoreFailure` / `cleanupFailure`) rather than assumed from reaching
+`finally`.
+
+Every row carries a `timing` region measured on the aging clock, saved on acceptance and
+refusal alike, so a refused start keeps its measured pending age. It records the pending
+acquisition time and the start and finalize send and receive times, and derives the pending
+age at start and, at a finalize, the session age and pending age as intervals: the session
+is minted during the start request, so its age at finalize is
+`[finalizeSent - startReceived, finalizeReceived - startSent]`, and the fresh-session
+condition (`<= 30 s`) is judged on that finalize-time interval, not on a start round-trip.
+Raw send and receive times are kept so second rounding never loses a boundary. A diagnostic
+row records any refusal, including an unlisted class, a throttle or a server error, and the
+run continues; a transient throttle or quota answer never completes a run. Only the two
+fresh finalizes are controls that must fully succeed; a finalize whose own start was refused
+is skipped, not sent. Pending credentials, session identifiers, codes, tokens and passwords
+stay in memory; an aborted run keeps only the last request's step (named before the
+request), its status and error class, plus the failure's exception class. The timing region
+and the elapsed milliseconds are excluded from semantic equality, since they vary across
+runs and clocks. Every account is deleted with UID and email absence confirmation.
+
+The lifetime summary classifies each sampled age from its observation, never beyond it. An
+age is `usable` only on a fully-verified success: the start returned a session and the
+finalize both succeeded and passed every identity check (token present, claims match, second
+factor, derived lookup). An HTTP 200 without a usable token is recorded but counted
+`indeterminate`, never as a lower-bound success. The largest usable age is a lower bound on
+the lifetime, never an infinite lifetime. A refusal records the age and its error, but this
+revision does not prove a refusal is due to expiry (that needs an aged pending against an
+independently valid code, a later corpus), so `upperBoundEstablished` is always false and no
+lifetime upper bound is asserted from a refusal alone.
 
 ```sh
 uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-lifetime -q
@@ -64,10 +99,12 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pendin
 `observe()` against it with no configuration change, codes read from the emulator inspection
 route, and pendings aged by advancing the owned instance's virtual clock. On 2026-09-12 the
 owned local run accepted `mfaSignIn:start` and `mfaSignIn:finalize` at all three sampled
-ages (2, 120, 300 s), with the SMS session age near zero at each, establishing a local lower
+ages, with the recorded pending age at start at least the sampled age (2.001, 120.001,
+300.000 s) and the session age at finalize near zero, establishing a verified local lower
 bound of 300 s with no upper bound (every sampled age is below the 3600 s fireemu-local
-pending lifetime). This is the local behavior, not evidence of production. The production
-run, its publication, comparison and approval are separate steps.
+pending lifetime). The wall budget was untouched by the virtual aging, and all five accounts
+were deleted with absence confirmation. This is the local behavior, not evidence of
+production. The production run, its publication, comparison and approval are separate steps.
 
 ```sh
 uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-lifetime/lifetime_owned.py --output /absolute/private/new-local

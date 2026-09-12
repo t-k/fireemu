@@ -1,11 +1,15 @@
-"""Offline drive of observe() against a scripted Identity Platform with phone MFA, aging
-pendings against a shared fake clock. Verifies: the run completes when every sampled age
-is still usable (a lower bound, not an infinite lifetime) and equally when an age is
-refused (an upper bound); the SMS session is fresh at each diagnostic while only the
-pending age grows; a finalize is skipped when its start was refused; the production run
-refuses a dirty checkout, restores what it read, and cleans up on a termination signal or
-a lost request; the owned local run ages by the virtual clock. No credential reaches any
-file, and the run never overclaims a TTL."""
+"""Offline drive of observe() against a scripted Identity Platform with phone MFA.
+
+Two clocks are kept apart, as in production: a WALL clock (drives time.monotonic and
+time.sleep, enforces the budget) and a VIRTUAL clock (drives the control clock, ages
+pendings locally). The scripted backend expires a pending by whichever clock the run ages
+against. The suite verifies: a fully-verified success at every age is a lower bound and an
+expiry is recorded without asserting an upper bound; the declared time, config-hold and
+request budgets actually stop the run and still restore configuration and delete accounts;
+the pending and session ages are saved as intervals on every row, refusals included; an
+HTTP 200 without a usable token is not counted as usable; a non-expiry refusal never
+establishes an upper bound; a transient row never completes a run; and no credential reaches
+any file."""
 
 import base64
 import json
@@ -17,6 +21,8 @@ import lifetime_recorder as recorder
 import pytest
 from lifetime_contract import (
     AGE_SECONDS,
+    CASES,
+    FINALIZE_CHECKS,
     TEST_CODE,
     complete,
     lifetime_summary,
@@ -50,13 +56,8 @@ def jwt(payload, marker):
 
 
 class Clock:
-    """One fake clock shared by the recorder and the scripted backend. In production the
-    recorder reads it as time.monotonic and moves it with time.sleep; in the owned local
-    run it reads it as the control clock and moves it with clock:advance. The backend reads
-    it to decide whether a pending has aged past the configured lifetime."""
-
-    def __init__(self):
-        self.t = 1_000.0
+    def __init__(self, t0=1_000.0):
+        self.t = t0
 
     def now(self):
         return self.t
@@ -66,13 +67,20 @@ class Clock:
 
 
 class World:
-    def __init__(self, output, clock, **options):
+    def __init__(self, output, wall, virtual, **options):
         self.output = output
-        self.clock = clock
+        self.wall = wall
+        self.virtual = virtual
         self.production = options.pop("production", True)
+        # The clock the run ages against: real wall time in production, the virtual clock
+        # locally. The backend expires a pending by this clock, as fireemu would.
+        self.aging = wall if self.production else virtual
         self.ttl = options.pop("ttl", 10_000)
         self.lose = options.pop("lose", None)
         self.terminate = options.pop("terminate", None)
+        # delay: {request-action: seconds} advances the aging clock after handling the
+        # request, so a start or finalize can take measurable time.
+        self.delay = options.pop("delay", {})
         assert not options, options
         self.users = {}
         self.pendings = {}
@@ -183,7 +191,7 @@ class World:
             self.pending_counter += 1
             self.pendings[credential] = {
                 "uid": user["localId"],
-                "born": self.clock.now(),
+                "born": self.aging.now(),
             }
             return 200, {
                 "mfaPendingCredential": credential,
@@ -202,21 +210,22 @@ class World:
         if entry is None:
             return self.error("INVALID_MFA_PENDING_CREDENTIAL")
         if action == "mfaSignIn:start":
-            age = self.clock.now() - entry["born"]
+            age = self.aging.now() - entry["born"]
             self.start_ages.append(age)
-            # The pending expires once older than the lifetime; the session is minted fresh.
+            self.aging.advance(self.delay.get(action, 0))
             if age > self.ttl:
                 return self.error("INVALID_MFA_PENDING_CREDENTIAL")
             session = "session-secret-" + str(self.session_counter)
             self.session_counter += 1
             self.sessions[session] = {
                 "credential": body["mfaPendingCredential"],
-                "born": self.clock.now(),
+                "born": self.aging.now(),
                 "consumed": False,
             }
             return 200, {"phoneResponseInfo": {"sessionInfo": session}}
         info = body["phoneVerificationInfo"]
         session = self.sessions.get(info["sessionInfo"])
+        self.aging.advance(self.delay.get(action, 0))
         if session is None or session["consumed"]:
             return self.error("INVALID_SESSION_INFO")
         if session["credential"] != body["mfaPendingCredential"]:
@@ -270,7 +279,9 @@ def git(dirty):
     return command
 
 
-def wire(world, monkeypatch, dirty=False):
+def wire(world, monkeypatch, dirty=False, budget=None):
+    if budget is not None:
+        monkeypatch.setattr(recorder, "BUDGET", budget)
     monkeypatch.setattr(recorder.core, "production_preflight", world.preflight)
     monkeypatch.setattr(recorder.core, "request", router(world))
     monkeypatch.setattr(recorder.revocation, "patch", world.patch)
@@ -280,20 +291,19 @@ def wire(world, monkeypatch, dirty=False):
         "config_projection",
         lambda status, config: {"sha256": CONFIG_SHA},
     )
-    # Production reads and moves the clock as monotonic time / real sleep.
-    monkeypatch.setattr(recorder.time, "monotonic", world.clock.now)
-    monkeypatch.setattr(recorder.time, "sleep", world.clock.advance)
-    # The owned local run reads and moves it as the control clock.
-    monkeypatch.setattr(recorder, "clock_now", lambda cc: world.clock.now())
+    # Production reads/moves the wall clock as monotonic time / real sleep.
+    monkeypatch.setattr(recorder.time, "monotonic", world.wall.now)
+    monkeypatch.setattr(recorder.time, "sleep", world.wall.advance)
+    # The owned local run reads/moves the virtual clock as the control clock.
+    monkeypatch.setattr(recorder, "clock_now", lambda cc: world.virtual.now())
     monkeypatch.setattr(
-        recorder, "advance_clock", lambda cc, seconds: world.clock.advance(seconds)
+        recorder, "advance_clock", lambda cc, seconds: world.virtual.advance(seconds)
     )
 
 
-def run(tmp_path, monkeypatch, dirty=False, **options):
-    clock = Clock()
-    world = World(tmp_path / "run", clock, **options)
-    wire(world, monkeypatch, dirty=dirty)
+def run(tmp_path, monkeypatch, dirty=False, budget=None, **options):
+    world = World(tmp_path / "run", Clock(), Clock(), **options)
+    wire(world, monkeypatch, dirty=dirty, budget=budget)
     origin = None if world.production else LOCAL_ORIGIN
     control = None if world.production else (LOCAL_ORIGIN, "control-token")
     report = recorder.observe(world.output, origin=origin, clock_control=control)
@@ -311,18 +321,27 @@ def rows_of(saved):
     return {r["id"]: r for r in saved["cases"]}
 
 
+def complete_report(tmp_path, monkeypatch):
+    """A real, complete production report to mutate in the pure-summary tests."""
+    _world, report, saved = run(tmp_path, monkeypatch, ttl=10_000)
+    assert report["status"] == "observed" and complete(saved)
+    return saved
+
+
+# --- Recorder integration: lower bound, expiry, budgets, cleanup --------------------
+
+
 def test_all_ages_usable_is_a_lower_bound_not_an_infinite_lifetime(
     tmp_path, monkeypatch
 ):
     world, report, saved = run(tmp_path, monkeypatch, ttl=10_000)
     assert report["status"] == "observed", report.get("lastStep")
-    assert complete(saved)
+    assert complete(saved) and saved["stopReason"] == "completed"
     rows = rows_of(saved)
     for a in AGE_SECONDS:
         assert rows[f"age-{a}s-start"]["outcome"] == "accepted"
         assert rows[f"age-{a}s-finalize"]["outcome"] == "accepted"
-        assert rows[f"age-{a}s-start"]["checks"]["pendingAgeSeconds"] >= a
-        assert rows[f"age-{a}s-start"]["checks"]["sessionAgeSeconds"] <= 30
+        assert rows[f"age-{a}s-start"]["timing"]["pendingAgeAtStart"]["lower"] >= a
     summary = lifetime_summary(saved)
     assert summary["usableAges"] == list(AGE_SECONDS)
     assert summary["refusedAges"] == []
@@ -333,11 +352,11 @@ def test_all_ages_usable_is_a_lower_bound_not_an_infinite_lifetime(
     assert world.users == {}
 
 
-def test_an_expired_age_is_recorded_as_an_upper_bound_and_finalize_skipped(
+def test_an_expired_age_is_recorded_but_does_not_assert_an_upper_bound(
     tmp_path, monkeypatch
 ):
-    # A pending older than the lifetime is refused at start; its finalize is skipped. This
-    # is the expiry-observed path: the run still completes and reports an upper bound.
+    # A pending older than the lifetime is refused at start; its finalize is skipped. The
+    # refusal is recorded with its reason, but revision 1 asserts no upper bound.
     _world, report, saved = run(tmp_path, monkeypatch, ttl=60)
     assert report["status"] == "observed", report.get("lastStep")
     assert complete(saved)
@@ -350,38 +369,79 @@ def test_an_expired_age_is_recorded_as_an_upper_bound_and_finalize_skipped(
             rows[f"age-{a}s-start"]["observedError"] == "INVALID_MFA_PENDING_CREDENTIAL"
         )
         assert rows[f"age-{a}s-finalize"]["skipped"] is True
+        # The refused start keeps its measured pending age.
+        assert rows[f"age-{a}s-start"]["timing"]["pendingAgeAtStart"]["lower"] >= a
     summary = lifetime_summary(saved)
     assert summary["usableAges"] == [2]
     assert summary["refusedAges"] == [120, 300]
+    assert summary["refusalReasons"] == {
+        "120": "INVALID_MFA_PENDING_CREDENTIAL",
+        "300": "INVALID_MFA_PENDING_CREDENTIAL",
+    }
     assert summary["lowerBoundSeconds"] == 2
-    assert summary["upperBoundEstablished"] is True
+    assert summary["upperBoundEstablished"] is False
+
+
+def test_time_budget_stops_observation_and_still_cleans_up(tmp_path, monkeypatch):
+    tight = {
+        "maxAccounts": 5,
+        "maxRequests": 200,
+        "recoveryRequestReserve": 40,
+        "totalBudgetSeconds": 100,
+        "configHoldMaxSeconds": 100_000,
+        "cleanupReserveSeconds": 20,
+    }
+    world, report, saved = run(tmp_path, monkeypatch, ttl=10_000, budget=tight)
+    assert report["status"] == "incomplete" and saved["stopReason"] == "time-budget"
+    assert "failure" not in saved
+    # Setup finished, then aging past the wall budget stopped a later diagnostic, so the
+    # corpus is incomplete (a proper prefix of the cases, missing the largest age).
+    assert saved["setup"] is True
+    recorded = [r["id"] for r in saved["cases"]]
+    assert recorded != list(CASES) and "age-300s-start" not in recorded
     assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
+    assert world.users == {} and not complete(saved)
 
 
-def test_each_diagnostic_uses_an_independent_account_and_a_fresh_session(
-    tmp_path, monkeypatch
-):
-    world, report, _saved = run(tmp_path, monkeypatch, ttl=10_000)
-    assert report["status"] == "observed"
-    # One account per age plus the two controls; each is a distinct uid, deleted in cleanup.
-    assert world.uid_counter == len(AGE_SECONDS) + 2
-    assert sorted(world.deleted) == sorted(f"uid-{i}" for i in range(world.uid_counter))
-    # Sessions are minted fresh at each start; none is reused across diagnostics.
-    # One start per age plus the two controls, each opening exactly one session.
-    assert world.session_counter == len(AGE_SECONDS) + 2
-    # The measured start ages cover the fresh controls (~0) and the sampled ages.
-    aged = sorted(round(a) for a in world.start_ages)
-    assert aged[:2] == [0, 0]  # baseline and final controls
-    for a in AGE_SECONDS:
-        assert any(round(x) >= a for x in world.start_ages)
+def test_request_budget_leaves_room_for_cleanup(tmp_path, monkeypatch):
+    tight = {
+        "maxAccounts": 5,
+        "maxRequests": 30,
+        "recoveryRequestReserve": 20,
+        "totalBudgetSeconds": 100_000,
+        "configHoldMaxSeconds": 100_000,
+        "cleanupReserveSeconds": 120,
+    }
+    world, report, saved = run(tmp_path, monkeypatch, ttl=10_000, budget=tight)
+    assert report["status"] == "incomplete" and saved["stopReason"] == "request-budget"
+    counts = saved["requestCount"]
+    # Observation stayed within its reserve; recovery ran; the total stayed within budget.
+    assert (
+        counts["observation"] <= tight["maxRequests"] - tight["recoveryRequestReserve"]
+    )
+    assert counts["recovery"] > 0
+    assert counts["observation"] + counts["recovery"] <= tight["maxRequests"]
+    assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
+    assert world.users == {} and not complete(saved)
 
 
-def test_a_dirty_checkout_is_refused_before_any_write(tmp_path, monkeypatch):
-    world, report, saved = run(tmp_path, monkeypatch, dirty=True)
-    assert report["status"] == "incomplete" and saved["failure"] == "ValueError"
-    assert "committedCheckout" not in saved
-    assert world.patches == [] and world.counts == {}
-    assert not complete(saved)
+def test_config_hold_budget_stops_observation_and_restores(tmp_path, monkeypatch):
+    tight = {
+        "maxAccounts": 5,
+        "maxRequests": 200,
+        "recoveryRequestReserve": 40,
+        "totalBudgetSeconds": 100_000,
+        "configHoldMaxSeconds": 100,
+        "cleanupReserveSeconds": 20,
+    }
+    world, report, saved = run(tmp_path, monkeypatch, ttl=10_000, budget=tight)
+    assert report["status"] == "incomplete"
+    assert saved["stopReason"] == "config-hold-budget"
+    assert saved["configRestored"] and saved["cleanup"] == {
+        "uidAbsent": True,
+        "emailAbsent": True,
+    }
+    assert world.users == {} and not complete(saved)
 
 
 def test_a_termination_signal_restores_config_and_deletes_accounts(
@@ -390,7 +450,8 @@ def test_a_termination_signal_restores_config_and_deletes_accounts(
     world, report, saved = run(
         tmp_path, monkeypatch, ttl=10_000, terminate=("mfaSignIn:start", 2)
     )
-    assert report["status"] == "incomplete" and saved["failure"] == "Terminated"
+    assert report["status"] == "incomplete" and saved["stopReason"] == "terminated"
+    assert saved["failure"] == "Terminated"
     assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
     assert world.users == {}
     assert world.patches[-1]["mfa"] == {"state": "DISABLED"}
@@ -402,13 +463,13 @@ def test_a_lost_admin_request_still_cleans_up_and_is_incomplete(tmp_path, monkey
         tmp_path, monkeypatch, ttl=10_000, lose=("admin:update", 1)
     )
     assert report["status"] == "incomplete" and saved["failure"] == "TimeoutError"
+    assert saved["stopReason"] == "error"
     assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
     assert world.users == {} and not complete(saved)
 
 
 def test_a_failed_restore_is_visible_and_not_complete(tmp_path, monkeypatch):
-    clock = Clock()
-    world = World(tmp_path / "run", clock, ttl=10_000)
+    world = World(tmp_path / "run", Clock(), Clock(), ttl=10_000)
     wire(world, monkeypatch)
 
     def raise_restore(access, original):
@@ -422,80 +483,236 @@ def test_a_failed_restore_is_visible_and_not_complete(tmp_path, monkeypatch):
     assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
 
 
+def test_a_dirty_checkout_is_refused_before_any_write(tmp_path, monkeypatch):
+    world, report, saved = run(tmp_path, monkeypatch, dirty=True)
+    assert report["status"] == "incomplete" and saved["failure"] == "ValueError"
+    assert "committedCheckout" not in saved
+    assert world.patches == [] and world.counts == {}
+    assert not complete(saved)
+
+
+# --- Timing intervals ---------------------------------------------------------------
+
+
+def test_pending_and_session_ages_are_saved_as_intervals_measured_at_the_right_moment(
+    tmp_path, monkeypatch
+):
+    # A 4-second start latency: the pending age at start widens by it, and the session age
+    # at finalize is measured at finalize (not at the start round-trip) and stays small.
+    _world, report, saved = run(
+        tmp_path, monkeypatch, ttl=10_000, delay={"mfaSignIn:start": 4}
+    )
+    assert report["status"] == "observed", report.get("lastStep")
+    assert complete(saved)
+    rows = rows_of(saved)
+    for a in AGE_SECONDS:
+        start_timing = rows[f"age-{a}s-start"]["timing"]
+        interval = start_timing["pendingAgeAtStart"]
+        assert interval["lower"] >= a
+        # The 4-second start latency shows up as interval width.
+        assert interval["upper"] - interval["lower"] == pytest.approx(4, abs=0.01)
+        fin_timing = rows[f"age-{a}s-finalize"]["timing"]
+        session_age = fin_timing["sessionAgeAtFinalize"]
+        # The session is minted during the start request, so at finalize it is at most the
+        # start latency plus the finalize round-trip, always small and never the pending age.
+        assert session_age["upper"] <= 30
+        # For the large ages the session age is far below the pending age: they are separate.
+        if a >= 120:
+            assert session_age["upper"] < a
+        # Interval bounds are consistent with the recorded send/receive timestamps.
+        assert (
+            session_age["lower"]
+            == fin_timing["finalizeSent"] - fin_timing["startReceived"]
+        )
+        assert (
+            session_age["upper"]
+            == fin_timing["finalizeReceived"] - fin_timing["startSent"]
+        )
+
+
+def test_a_refused_start_keeps_its_measured_pending_age(tmp_path, monkeypatch):
+    _world, report, saved = run(tmp_path, monkeypatch, ttl=60)
+    assert report["status"] == "observed"
+    rows = rows_of(saved)
+    refused = rows["age-120s-start"]
+    assert refused["outcome"] == "refused" and refused["checks"] == {}
+    # checks are empty, but the timing region still carries the measured age.
+    assert refused["timing"]["pendingAgeAtStart"]["lower"] >= 120
+    # Its skipped finalize carries no timing.
+    assert rows["age-120s-finalize"]["skipped"] is True
+    assert rows["age-120s-finalize"]["timing"] == {}
+
+
+def test_a_stale_session_at_an_accepted_finalize_fails_the_freshness_check(
+    tmp_path, monkeypatch
+):
+    # If the SMS session were not fresh at finalize (here forced by a 40 s finalize latency
+    # on the aging clock), the session-age-at-finalize interval exceeds the 30 s freshness
+    # bound, validate_timing refuses the accepted finalize row, and the run is not complete.
+    # Guards the <= 30 s check from silent deletion.
+    _world, report, saved = run(
+        tmp_path, monkeypatch, ttl=10_000, delay={"mfaSignIn:finalize": 40}
+    )
+    assert report["status"] == "incomplete" and saved["failure"] == "ValueError"
+    assert not complete(saved)
+
+
+# --- Owned local run (virtual-clock aging) ------------------------------------------
+
+
 def test_owned_local_run_ages_by_the_virtual_clock(tmp_path, monkeypatch):
     world, report, saved = run(tmp_path, monkeypatch, production=False, ttl=10_000)
     assert report["status"] == "observed", report.get("lastStep")
     assert complete(saved)
     assert saved["target"] == "local" and saved["agingMode"] == "virtual-clock"
     assert saved["configEnabled"] is False
-    # No production configuration was touched and no quota project was recorded.
     assert world.patches == [] and saved["projectNumber"] is None
+    # Virtual aging never spent the wall budget.
+    assert saved["wallElapsedSeconds"] <= saved["budget"]["totalBudgetSeconds"]
+    assert saved["configHoldSeconds"] == 0
     rows = rows_of(saved)
     for a in AGE_SECONDS:
-        assert rows[f"age-{a}s-start"]["checks"]["pendingAgeSeconds"] >= a
+        assert rows[f"age-{a}s-start"]["timing"]["pendingAgeAtStart"]["lower"] >= a
 
 
-def test_owned_local_run_observes_expiry_when_advanced_past_the_lifetime(
+def test_owned_local_run_records_expiry_without_asserting_an_upper_bound(
     tmp_path, monkeypatch
 ):
     _world, report, saved = run(tmp_path, monkeypatch, production=False, ttl=60)
     assert report["status"] == "observed"
     assert complete(saved)
     summary = lifetime_summary(saved)
-    assert summary["upperBoundEstablished"] is True
     assert summary["usableAges"] == [2]
+    assert summary["refusedAges"] == [120, 300]
+    assert summary["upperBoundEstablished"] is False
 
 
-def test_semantic_rows_drop_timing_and_measured_ages(tmp_path, monkeypatch):
+# --- Budget accounting on a complete run --------------------------------------------
+
+
+def test_budget_usage_is_recorded_and_within_the_declared_budget(tmp_path, monkeypatch):
     _world, report, saved = run(tmp_path, monkeypatch, ttl=10_000)
     assert report["status"] == "observed"
+    budget = saved["budget"]
+    counts = saved["requestCount"]
+    assert set(counts) == {"observation", "recovery", "config"}
+    assert (
+        counts["observation"]
+        <= budget["maxRequests"] - budget["recoveryRequestReserve"]
+    )
+    assert counts["observation"] + counts["recovery"] <= budget["maxRequests"]
+    assert saved["accountsUsed"] == len(AGE_SECONDS) + 2 <= budget["maxAccounts"]
+    assert saved["wallElapsedSeconds"] <= budget["totalBudgetSeconds"]
+    assert saved["configHoldSeconds"] <= budget["configHoldMaxSeconds"]
+
+
+# --- Pure summary / contract mutations ----------------------------------------------
+
+
+def test_an_http_200_without_a_usable_token_is_not_counted_as_usable(
+    tmp_path, monkeypatch
+):
+    saved = complete_report(tmp_path, monkeypatch)
+    empty_checks = {k: (k == "noError") for k in FINALIZE_CHECKS}
+    for row in saved["cases"]:
+        if row["id"].endswith("-finalize") and row["id"].startswith("age-"):
+            row["checks"] = dict(empty_checks)
+    # The run is still a complete observation, but no age is a verified success.
+    assert complete(saved) is True
+    summary = lifetime_summary(saved)
+    assert summary["usableAges"] == []
+    assert summary["indeterminateAges"] == list(AGE_SECONDS)
+    assert summary["lowerBoundSeconds"] is None
+    assert summary["upperBoundEstablished"] is False
+
+
+def test_a_non_expiry_refusal_records_the_reason_but_asserts_no_upper_bound(
+    tmp_path, monkeypatch
+):
+    saved = complete_report(tmp_path, monkeypatch)
+    rows = {r["id"]: r for r in saved["cases"]}
+    start = rows["age-120s-start"]
+    start.update(
+        outcome="refused", httpStatus=400, observedError="USER_DISABLED", checks={}
+    )
+    fin = rows["age-120s-finalize"]
+    fin.update(
+        outcome="skipped",
+        httpStatus=None,
+        observedError=None,
+        checks={},
+        skipped=True,
+        timing={},
+    )
+    assert complete(saved) is True
+    summary = lifetime_summary(saved)
+    assert 120 in summary["refusedAges"]
+    assert summary["refusalReasons"]["120"] == "USER_DISABLED"
+    assert summary["upperBoundEstablished"] is False
+
+
+def test_a_refusal_below_a_later_success_does_not_produce_a_contradiction(
+    tmp_path, monkeypatch
+):
+    saved = complete_report(tmp_path, monkeypatch)
+    rows = {r["id"]: r for r in saved["cases"]}
+    rows["age-120s-start"].update(
+        outcome="refused",
+        httpStatus=400,
+        observedError="INVALID_MFA_PENDING_CREDENTIAL",
+        checks={},
+    )
+    rows["age-120s-finalize"].update(
+        outcome="skipped",
+        httpStatus=None,
+        observedError=None,
+        checks={},
+        skipped=True,
+        timing={},
+    )
+    assert complete(saved) is True
+    summary = lifetime_summary(saved)
+    # 300 usable, 120 refused: reported side by side, no upper bound asserted.
+    assert summary["usableAges"] == [2, 300]
+    assert summary["refusedAges"] == [120]
+    assert summary["lowerBoundSeconds"] == 300
+    assert summary["upperBoundEstablished"] is False
+
+
+def test_a_transient_error_row_never_completes_a_run(tmp_path, monkeypatch):
+    saved = complete_report(tmp_path, monkeypatch)
+    rows = {r["id"]: r for r in saved["cases"]}
+    rows["age-300s-start"].update(
+        outcome="refused",
+        httpStatus=400,
+        observedError="TOO_MANY_ATTEMPTS_TRY_LATER",
+        checks={},
+    )
+    rows["age-300s-finalize"].update(
+        outcome="skipped",
+        httpStatus=None,
+        observedError=None,
+        checks={},
+        skipped=True,
+        timing={},
+    )
+    # A throttle answer is an observation but not a semantic result: the run is not complete.
+    assert complete(saved) is False
+
+
+def test_semantic_rows_drop_timing_and_elapsed(tmp_path, monkeypatch):
+    saved = complete_report(tmp_path, monkeypatch)
     stripped = semantic_rows(saved["cases"])
     for row in stripped:
-        assert "elapsedMs" not in row
-        assert "pendingAgeSeconds" not in row["checks"]
-        assert "sessionAgeSeconds" not in row["checks"]
-    # The start rows keep their session-presence check after stripping the ages.
+        assert "elapsedMs" not in row and "timing" not in row
     start = next(r for r in stripped if r["id"] == "age-2s-start")
     assert set(start["checks"]) == {"sessionInfoPresent"}
 
 
 def test_no_expected_secret_marker_would_be_a_false_negative():
-    # Guards the leak scan: every marker the World actually emits must be searched for.
     emitted = ("pending-secret-0", "session-secret-0", "Aa9!x", TEST_CODE)
     for value in emitted:
         assert any(marker in value for marker in SECRET_MARKERS), value
-
-
-def test_budget_is_declared_and_accounts_respect_it(tmp_path, monkeypatch):
-    _world, report, saved = run(tmp_path, monkeypatch, ttl=10_000)
-    assert report["status"] == "observed"
-    assert saved["accountsUsed"] == len(AGE_SECONDS) + 2
-    assert saved["accountsUsed"] <= saved["budget"]["maxAccounts"]
-    assert set(saved["budget"]) == {
-        "maxAccounts",
-        "maxRequests",
-        "totalBudgetSeconds",
-        "configHoldMaxSeconds",
-        "cleanupReserveSeconds",
-    }
-    assert all(type(v) is int and v > 0 for v in saved["budget"].values())
-
-
-def test_contract_rejects_a_transient_error_row():
-    # A throttle answer at a start must not complete a run: it is not a semantic result.
-    template = {
-        "status": "observed",
-        "target": "local",
-        "agingMode": "virtual-clock",
-        "setup": True,
-        "cleanup": {"uidAbsent": True, "emailAbsent": True},
-        "configRestored": True,
-        "configDigestMatches": True,
-        "accountsUsed": 1,
-        "budget": dict(recorder.BUDGET),
-        "cases": [],
-    }
-    assert complete(template) is False  # empty cases never satisfy the id sequence
 
 
 if __name__ == "__main__":

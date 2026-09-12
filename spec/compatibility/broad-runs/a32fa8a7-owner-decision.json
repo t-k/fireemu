@@ -107,7 +107,7 @@
       "tariffsConfirmedBelowPlanningCeilings": null,
       "remainingConditions": [
         "Owner confirmation of applicable billing terms/currency",
-        "Auth configuration unavailable; no confirmation that external blocking integrations are absent",
+        "Owner approval of successfully retrieved Auth baseline (no blocking triggers listed)",
         "Retention beyond the budgeted month remains outside this cost estimate"
       ]
     }
@@ -136,7 +136,7 @@
     "etag": "INvzo7OZ6ZYDMODt3eb7z5YD"
   },
   "databaseResponseDigest": "557c544e9a25e843c27f032be20cf50342001c0fcb75a6b39dd9ef0b73c8bba3",
-  "authConfigDigest": null,
+  "authConfigDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2",
   "productionExecuted": false,
   "readOnlyResult": {
     "completed": false,
@@ -229,9 +229,9 @@
   "databaseRawResponseSha256": "05fc90573f9cff8a92d9e8ddd031d47a408e255bf836a24ca9a2dff5980852d3",
   "databaseAcquiredAt": "2026-09-12T13:57:54.552050+00:00",
   "remainingInputs": [
-    "Successful Auth configuration digest",
-    "API-key project ownership",
-    "Owner acceptance of complete configuration and billing conditions",
+    "Explicit API-key project ownership lookup (key is available only in private successful Auth response)",
+    "Resolve quota-header requirement for the unchanged frozen production transport; do not silently replace a32fa8a7",
+    "Owner acceptance of collected settings and billing conditions",
     "Production ownerIdentity/permissionReference, validity window and unused nonce"
   ],
   "executionBlocker": {
@@ -239,15 +239,14 @@
     "observedHttpStatus": 403,
     "scope": "Auth configuration metadata read with current authorized_user ADC",
     "frozenSourceUnchanged": true,
-    "note": "Frozen a32fa8a7 sends Authorization but no x-goog-user-project. Do not substitute another project or silently alter frozen request headers. No IAM/ADC config changes or automatic retry performed.",
+    "note": "Quota header resolved the authorized Auth read, but frozen a32fa8a7 still lacks it. The production execution binding has not been replaced. Resolve this before proposing execution; no IAM/ADC/global changes or automatic retry performed.",
     "officialGuidance": "https://docs.cloud.google.com/docs/authentication/rest#user-credentials"
   },
   "proposedRemainingReadScope": {
     "quotaProject": "fireemu-35fe6",
     "header": "x-goog-user-project",
     "metadataGets": [
-      "Auth project configuration",
-      "API-key ownership using key from authorized Auth config or existing approved input"
+      "One API-key ownership lookup using the private key already retrieved from Auth config"
     ],
     "credentialAcquisitions": 1,
     "tokeninfoRequests": 1,
@@ -255,6 +254,63 @@
     "wallSeconds": 180,
     "permission": null,
     "dataOrConfigMutation": false,
-    "iamMutation": false
+    "iamMutation": false,
+    "repeatProjectDatabaseAuthReads": false
+  },
+  "additionalReadResult": {
+    "independentWindow": true,
+    "authorizedWallSeconds": 180,
+    "quotaProject": "fireemu-35fe6",
+    "authorizationSource": "Explicit user permission for a new remaining-read window with request-level x-goog-user-project, no persistent config changes, no retries, no alternative principal, no production batch.",
+    "startedAt": "2026-09-12T14:07:46.633399+00:00",
+    "elapsedSeconds": 2.365975792054087,
+    "adcCommandAttempts": 1,
+    "httpRequestAttempts": 2,
+    "adcInternalNetworkRequests": "not separately instrumented; one command invocation",
+    "requests": [
+      {
+        "label": "tokeninfo",
+        "quotaProject": null,
+        "requestedAt": "2026-09-12T14:07:48.402757+00:00",
+        "receivedAt": "2026-09-12T14:07:48.541695+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "78a0bf49c7be9d50ee26360132ba9ece0421f50c1396252f23c77d7f1a88ea71",
+        "parsedResponseDigest": "bad8d210d06dda4b2695af9cbd1c549e45e2750fec3a7c0469aae04ce87a7a60"
+      },
+      {
+        "label": "auth-config",
+        "quotaProject": "fireemu-35fe6",
+        "requestedAt": "2026-09-12T14:07:48.542056+00:00",
+        "receivedAt": "2026-09-12T14:07:48.976648+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "b6e081a061371ee0b1bf4068f417a4274fce7650e768ae36dabf169acb3cae27",
+        "parsedResponseDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+      }
+    ],
+    "completed": false,
+    "stopReason": "unexpected Auth configuration identity",
+    "causeClassification": "collection-helper validation defect; expected project ID spelling rejected the authorized numeric project resource name",
+    "offlineValidation": {
+      "validatedOffline": true,
+      "noAdditionalOracleRequest": true,
+      "responseNameMatchesPreviouslyVerifiedProjectNumber": true,
+      "authConfigDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2",
+      "authRawResponseSha256": "b6e081a061371ee0b1bf4068f417a4274fce7650e768ae36dabf169acb3cae27",
+      "sourceResponseHttpStatus": 200,
+      "apiKeyPresentInPrivateAuthResponse": true,
+      "apiKeyOwnershipConfirmed": false
+    },
+    "automaticRetries": 0,
+    "dataMutations": 0,
+    "persistentConfigurationMutations": 0,
+    "apiKeyOwnershipRequestSent": false
+  },
+  "authConfigAcquiredAt": "2026-09-12T14:07:48.976648+00:00",
+  "authConfigFacts": {
+    "emailPasswordEnabled": true,
+    "anonymousEnabled": true,
+    "blockingTriggerCount": 0
   }
 }

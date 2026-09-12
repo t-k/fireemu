@@ -229,7 +229,6 @@
   "databaseRawResponseSha256": "05fc90573f9cff8a92d9e8ddd031d47a408e255bf836a24ca9a2dff5980852d3",
   "databaseAcquiredAt": "2026-09-12T13:57:54.552050+00:00",
   "remainingInputs": [
-    "Independent API-key ownership remains unconfirmed after successful service enablement; immediate lookup still403. Propagation delay is possible; no failed-request retry was performed.",
     "Resolve quota-header requirement for unchanged frozen production transport; do not silently replace a32fa8a7",
     "Owner acceptance of collected settings and billing conditions",
     "Production ownerIdentity/permissionReference, validity window and unused nonce"
@@ -360,8 +359,8 @@
     "iamChanges": 0,
     "principalSwitches": 0
   },
-  "currentStatus": "API Keys API enabled and confirmed; independent key ownership remains unconfirmed after immediate403; production batch unapproved",
-  "apiKeyOwnershipConfirmed": false,
+  "currentStatus": "All required metadata obtained; quota-header candidate being prepared; production batch unapproved",
+  "apiKeyOwnershipConfirmed": true,
   "apiEnablementResult": {
     "authorizationSource": "User asked assistant to enable the required API; scope limited to API Keys API on fireemu-35fe6 and verification, without IAM changes or production batch permission.",
     "quotaProject": "fireemu-35fe6",
@@ -439,5 +438,48 @@
       "shouldFix": [],
       "scope": "exact API enablement and bounded verification only; not new46-row review"
     }
-  }
+  },
+  "postEnableKeyOwnershipReadResult": {
+    "kind": "authorized-read-only-metadata-acquisition",
+    "productionBatchExecuted": false,
+    "authorization": "User requested \u5b9f\u884c\u3057\u3066 after API enablement and the pending ownership lookup report. One post-enablement saved-key lookup plus existing ADC/expiry verification, quota fireemu-35fe6,180s,no retries; no46-row data batch.",
+    "quotaProject": "fireemu-35fe6",
+    "adcCommandAttempts": 1,
+    "requestAttempts": 2,
+    "requests": [
+      {
+        "label": "tokeninfo",
+        "quotaProject": null,
+        "requestedAt": "2026-09-12T14:23:28.263227+00:00",
+        "receivedAt": "2026-09-12T14:23:28.405174+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "78a0bf49c7be9d50ee26360132ba9ece0421f50c1396252f23c77d7f1a88ea71",
+        "parsedResponseDigest": "bad8d210d06dda4b2695af9cbd1c549e45e2750fec3a7c0469aae04ce87a7a60"
+      },
+      {
+        "label": "api-key-ownership",
+        "quotaProject": "fireemu-35fe6",
+        "requestedAt": "2026-09-12T14:23:28.405771+00:00",
+        "receivedAt": "2026-09-12T14:23:29.511418+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "882e81125f2cd679a7cac6d30b27449dea81a209b81febbf549b492772568771",
+        "parsedResponseDigest": "dbcfde7dea9dafbd7aaa987782cd3c333788f19c346facd97a77dfe79b00f19e"
+      }
+    ],
+    "completed": true,
+    "frozenCommit": "a32fa8a7fa9b2b3f4e286a3d8167723c8c26fcf0",
+    "credentialAcquisitionStartedAt": "2026-09-12T14:23:26.732481+00:00",
+    "elapsedSeconds": 2.800123291090131,
+    "verifiedTokenLifetimeSeconds": 3599,
+    "apiKeyOwnershipConfirmed": true,
+    "authorizedWallSeconds": 180,
+    "stopReason": "Successful ownership confirmation; window complete",
+    "automaticRetries": 0,
+    "dataMutations": 0,
+    "configurationMutations": 0,
+    "adcInternalNetworkRequests": "not separately instrumented; one command invocation"
+  },
+  "apiKeyOwnershipAcquiredAt": "2026-09-12T14:23:29.511418+00:00"
 }

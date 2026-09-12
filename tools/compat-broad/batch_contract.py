@@ -169,6 +169,7 @@ def approve(manifest, approval, nonce, observer_sha, now):
         "nonce": nonce,
         "project": PROJECT,
         "projectNumber": NUMBER,
+        "quotaProject": PROJECT,
         "tariffsConfirmedBelowPlanningCeilings": True,
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
     }

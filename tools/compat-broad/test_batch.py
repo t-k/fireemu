@@ -315,6 +315,7 @@ def test_valid_permission_and_each_binding_rejection():
         "nonce": "a" * 32,
         "project": c.PROJECT,
         "projectNumber": c.NUMBER,
+        "quotaProject": c.PROJECT,
         "tariffsConfirmedBelowPlanningCeilings": True,
         "issuedAt": 900,
         "expiresAt": 9000,
@@ -339,6 +340,8 @@ def test_valid_permission_and_each_binding_rejection():
         ("observerSha256", "x"),
         ("nonce", "x"),
         ("projectNumber", "0"),
+        ("quotaProject", "foreign-project"),
+        ("quotaProject", None),
         ("tariffsConfirmedBelowPlanningCeilings", 1),
         ("expiresAt", 1100),
         ("issuedAt", 1100),
@@ -346,3 +349,21 @@ def test_valid_permission_and_each_binding_rejection():
     ]:
         with pytest.raises(ValueError):
             c.approve(m, {**permission, key: value}, "a" * 32, "b" * 64, 1000)
+
+
+def test_request_headers_bind_only_remote_privileged_quota():
+    from batch_adapter import request_headers
+
+    for local in (False, True):
+        for token in (None, "offline-token"):
+            for form in (False, True):
+                headers = request_headers(token, local=local, form=form)
+                assert headers.get("x-goog-user-project") == (
+                    "fireemu-35fe6" if token and not local else None
+                )
+                assert headers.get("Authorization") == (
+                    "Bearer offline-token" if token else None
+                )
+                assert headers["Content-Type"] == (
+                    "application/x-www-form-urlencoded" if form else "application/json"
+                )

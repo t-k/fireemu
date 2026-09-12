@@ -38,6 +38,19 @@ HOSTS = {
 }
 
 
+def request_headers(token, *, local, form):
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded"
+        if form
+        else "application/json"
+    }
+    if token:
+        headers["Authorization"] = "Bearer " + token
+        if not local:
+            headers["x-goog-user-project"] = PROJECT
+    return headers
+
+
 def wire(url, method, body, headers, *, local=False, timeout=12):
     parsed = urllib.parse.urlsplit(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -215,15 +228,10 @@ class Adapter:
             raise ValueError("only verified cleanup allowed during recovery")
         token = self.access() if privileged else None
         self.reserve(service)
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-            if form
-            else "application/json"
-        }
+        headers = request_headers(token, local=bool(self.local), form=form)
         if token:
             if not self.local and not self.credential.usable(time.monotonic()):
                 raise ValueError("credential no longer covers request")
-            headers["Authorization"] = "Bearer " + token
             self.auth_evidence.append(
                 {
                     "operation": path.split("?", 1)[0],
@@ -694,6 +702,7 @@ def execution_inputs(manifest):
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
         "project": PROJECT,
         "projectNumber": NUMBER,
+        "quotaProject": PROJECT,
         "limits": LIMITS,
         "recovery": {
             "reservedSeconds": 300,

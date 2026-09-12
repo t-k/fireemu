@@ -109,8 +109,11 @@ def session(service, selected, origin, output):
         process = subprocess.Popen(
             command, env=env, cwd=output, stdout=subprocess.DEVNULL, stderr=errors
         )
-        save(output / f"{service}-process.json", {"pid": process.pid, "argv": command})
         try:
+            save(
+                output / f"{service}-process.json",
+                {"pid": process.pid, "argv": command},
+            )
             code = process.wait(timeout=130)
             if code != 0 or not out.exists():
                 raise ValueError(f"{service} session did not produce a complete run")

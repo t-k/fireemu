@@ -212,3 +212,148 @@ def test_missing_entire_program_remains_not_run():
     p = program()
     rows = compare_program(p, p, {}, {})
     assert all(row["status"] == "not-run" for row in rows)
+
+
+def test_registration_write_failure_stops_the_real_node_child(tmp_path):
+    import os
+    import signal
+    import subprocess
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    import broad
+
+    release = threading.Event()
+
+    class PendingResponse(BaseHTTPRequestHandler):
+        def do_POST(self):
+            release.wait(5)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), PendingResponse)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    (tmp_path / "auth-process.json").mkdir()
+    command_suffix = str(broad.ROOT / "conformance/src/auth-probe/session.mjs")
+
+    def children():
+        listing = subprocess.check_output(["ps", "-axo", "pid=,ppid=,args="], text=True)
+        found = []
+        for line in listing.splitlines():
+            fields = line.strip().split(maxsplit=2)
+            if (
+                len(fields) == 3
+                and fields[1] == str(os.getpid())
+                and fields[2].endswith(command_suffix)
+            ):
+                found.append(int(fields[0]))
+        return found
+
+    try:
+        with pytest.raises(IsADirectoryError):
+            broad.session(
+                "auth",
+                [
+                    {
+                        "id": "hold",
+                        "steps": [
+                            {"id": "hold", "path": "v1/accounts:lookup", "body": {}}
+                        ],
+                    }
+                ],
+                f"http://127.0.0.1:{server.server_port}",
+                tmp_path,
+            )
+        assert children() == []
+    finally:
+        for pid in children():
+            try:
+                os.kill(pid, signal.SIGTERM)
+                os.waitpid(pid, 0)
+            except ProcessLookupError:
+                pass
+        release.set()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2)
+
+
+def test_real_redirect_and_failed_reset_are_blocked(tmp_path):
+    import os
+    import subprocess
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from pathlib import Path
+
+    hits = {"source": 0, "sink": 0}
+
+    class Sink(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits["sink"] += 1
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    sink = ThreadingHTTPServer(("127.0.0.1", 0), Sink)
+
+    class Source(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits["source"] += 1
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{sink.server_port}/sink")
+            self.end_headers()
+
+        def do_DELETE(self):
+            hits["source"] += 1
+            self.send_response(500)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    source = ThreadingHTTPServer(("127.0.0.1", 0), Source)
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True) for s in (source, sink)
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        origin = f"http://127.0.0.1:{source.server_port}"
+        environment = {k: os.environ[k] for k in ("PATH", "HOME") if k in os.environ}
+        environment.update(
+            BROAD_ORIGIN=origin, BROAD_STATS=str(tmp_path / "stats.json")
+        )
+        code = """
+for (const [path, method] of [["/redirect", "GET"], ["/emulator/reset", "DELETE"]]) {
+  let failed = false;
+  try { await fetch(process.env.BROAD_ORIGIN + path, {method}); } catch { failed = true; }
+  if (!failed) process.exit(2);
+}
+"""
+        subprocess.run(
+            [
+                "node",
+                "--import",
+                str((Path(__file__).parent / "local-guard.mjs").resolve()),
+                "--input-type=module",
+            ],
+            input=code,
+            text=True,
+            env=environment,
+            check=True,
+            timeout=10,
+            capture_output=True,
+        )
+        assert hits == {"source": 2, "sink": 0}
+    finally:
+        for server in (source, sink):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=2)

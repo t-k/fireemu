@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # The tool directories the recorders and owned runners put on sys.path.
 SEARCH_DIRS = [
     ROOT / "tools/auth-mfa-start-disabled",
+    ROOT / "tools/auth-pending-lifetime",
     ROOT / "tools/auth-pending-triggers",
     ROOT / "tools/auth-pending-revocation",
     ROOT / "tools/auth-password-maximum",

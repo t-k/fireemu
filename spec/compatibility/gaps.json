@@ -154,7 +154,7 @@
         "docs/compatibility/auth-pending-trigger-client-password-change.md",
         "tools/auth-pending-triggers/README.md"
       ],
-      "nextAction": "Trigger 1 of 4 done (client-password-change): production observed and approved, local comparison approved (all seven rows agree); a self password change did not stop the held credential from finalizing, matching fireemu. Remaining triggers to run under their own execution approval: admin-password-update, password-reset, provider-unlink. When all four are observed and compared, close AUTH-U04 as observed-in-scope. Do not generalize any trigger's result to the others or to expiry.",
+      "nextAction": "Trigger 1 of 4 closed (client-password-change): production and comparison approved, held credential survived. Trigger 2 (admin-password-update) observed: the held credential also survived the administrative password update in production (matching fireemu), so AUTH-U04's question is answered for it; a side finding, that fireemu issues tokens on the administrative password update while production returns none, is tracked separately as GAP-AUTH-004 and gates that trigger's comparison approval. Remaining: password-reset, provider-unlink. Close AUTH-U04 as observed-in-scope when all four held-credential observations and their comparisons are approved.",
       "blockedReason": "",
       "requiresProductionChange": true
     },
@@ -632,6 +632,24 @@
         "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
       ],
       "nextAction": "Closed for the recorded conditions: the production candidate and the local comparison on the corrected artifact (bound to commit c3a7973b, all nine rows agree) each carry a scoped approval, and regressions fence authenticate-before-authorize across expired, revoked, disabled and deleted sessions. Exact production precedence is established for the recorded tampered-signature case only; other invalid-token overlaps and a valid token with an administrator-only field remain unobserved (see AUTH-U13).",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "GAP-AUTH-004",
+      "feature": "AUTH-USERS",
+      "kind": "mismatch",
+      "scope": "Token issuance on a privileged (administrative) accounts:update that changes the password. Production (recorded 2026-09-12, auth-pending-trigger admin-password-update): an administrative password update of an enabled account returns no ID or refresh token (tokensReturned false). fireemu issues tokens for it, because a password change sets the session provider even on the localId (admin) path where there is no session. The self-service password change over a session still returns tokens on both sides (auth-pending-trigger client-password-change matched). The earlier disabled-account fix only suppressed tokens when the account was disabled after the update; the enabled administrative case was unobserved until now.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "mismatch",
+      "evidenceRefs": [
+        "docs/compatibility/auth-pending-trigger-admin-password-update.md",
+        "docs/compatibility/auth-pending-trigger-admin-password-update-comparison.md",
+        "docs/compatibility/auth-disabled-admin-update-approval.md"
+      ],
+      "nextAction": "Proposed fix: set the session provider on a password change only on the self-service route (localId absent), so a privileged administrative password update issues no tokens, matching production; keep the self-service password change issuing tokens. Needs a security review (token issuance), a regression, and a re-run and comparison on the corrected artifact, then a scoped approval of the production observation and the corrected comparison. Awaiting the user's decision on the fix.",
       "blockedReason": "",
       "requiresProductionChange": true
     }

@@ -65,6 +65,8 @@ jobs:
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-mfa-start-disabled -q
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-mfa-start-disabled.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-mfa-start-disabled-comparison.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-mfa-start-disabled-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-mfa-start-disabled-comparison-approval.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers.py --trigger client-password-change --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers-comparison.py --trigger client-password-change --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-approval.py --trigger client-password-change --check

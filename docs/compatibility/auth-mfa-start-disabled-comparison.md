@@ -7,17 +7,17 @@ Row-by-row comparison of the approved production record of auth-mfa-start-disabl
 | Case | Basis | Production outcome / error | Local outcome / error | Same semantic projection |
 | --- | --- | --- | --- | --- |
 | baseline-fresh-finalize | control | accepted / none | accepted / none | True |
-| disabled-start | diagnostic | accepted / none | refused / USER_DISABLED | False |
-| disabled-finalize | diagnostic | refused / USER_DISABLED | skipped / none | False |
+| disabled-start | diagnostic | accepted / none | accepted / none | True |
+| disabled-finalize | diagnostic | refused / USER_DISABLED | refused / USER_DISABLED | True |
 | reenabled-start | diagnostic | accepted / none | accepted / none | True |
 | reenabled-finalize | diagnostic | accepted / none | accepted / none | True |
 | final-fresh-finalize | control | accepted / none | accepted / none | True |
 
-Differing rows: disabled-start, disabled-finalize.
+Differing rows: none.
 
-Comparison subject (unapproved): `dc7ff6596c4c85156b77c7ae5e5d28ed26449cd869cc5cc98fab29c7b8d79a33`. Production subject compared: `e0fdb84012734f99533f84e7fab173d26e1f0f0a9112f4703d990f1a968df442`.
+Comparison subject (unapproved): `07636ce70c9c46289b4e49d64b4f09fcae997901e1bcc89771e4ead3e7968353`. Production subject compared: `e0fdb84012734f99533f84e7fab173d26e1f0f0a9112f4703d990f1a968df442`.
 
-Local artifact `0.7.0` built from the tree at `7afc750b67845d14573d2a9de9f58dc0688026d5` (repository HEAD `7afc750b67845d14573d2a9de9f58dc0688026d5` at run time) with recorder files at `7afc750b67845d14573d2a9de9f58dc0688026d5`; strict profile. Owned process exit 0 with listeners closed; the account was deleted with absence confirmation.
+Local artifact `0.7.0` built from the tree at `aef95ad3e6f623d6ce8263f52ce20791b67afe68` (repository HEAD `aef95ad3e6f623d6ce8263f52ce20791b67afe68` at run time) with recorder files at `aef95ad3e6f623d6ce8263f52ce20791b67afe68`; strict profile. Owned process exit 0 with listeners closed; the account was deleted with absence confirmation.
 
 A row that differs is an open gap in the ledger, not a verdict about which side is right. Agreement on the remaining rows is agreement in scope, not compatibility coverage.
 

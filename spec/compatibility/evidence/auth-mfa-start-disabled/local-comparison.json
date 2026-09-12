@@ -7,11 +7,11 @@
     },
     {
       "id": "disabled-start",
-      "sameSemanticProjection": false
+      "sameSemanticProjection": true
     },
     {
       "id": "disabled-finalize",
-      "sameSemanticProjection": false
+      "sameSemanticProjection": true
     },
     {
       "id": "reenabled-start",
@@ -29,11 +29,11 @@
   "local": {
     "artifact": {
       "kind": "local-build",
-      "sha256": "d1b97256f12a3c777cb29913cefc17b9001bacdc444a5a1f3dfd99262513125d",
+      "sha256": "162aab54317c166c9c4192539d11afe43d6b0fdd1a237c60898a7976ca297e1c",
       "version": "0.7.0"
     },
     "build": {
-      "artifactSha256": "d1b97256f12a3c777cb29913cefc17b9001bacdc444a5a1f3dfd99262513125d",
+      "artifactSha256": "162aab54317c166c9c4192539d11afe43d6b0fdd1a237c60898a7976ca297e1c",
       "command": [
         "cargo",
         "build",
@@ -96,7 +96,7 @@
         "crates/fireemu-adapter-http/benches/auth_signing_parallel.rs": "6a17bd606af6c91f53d188311db88d0cd9802cf9bcdb9ab7f59c45a43e0996bd",
         "crates/fireemu-adapter-http/src/app_check.rs": "1ca9ff7bf2b26b09c5ea56a7ec138fef27d67e1f10b0f57122eefa724f573cf1",
         "crates/fireemu-adapter-http/src/control.rs": "9796c4486765c7ef2cd308e4ed45751cafa6602bfc53451e628d7fa64363a9a6",
-        "crates/fireemu-adapter-http/src/identity_toolkit.rs": "eb27d6148dfcb612d52daa9b3c7a1d7c3142115c0b52ee828895c04da0fddecf",
+        "crates/fireemu-adapter-http/src/identity_toolkit.rs": "d065a467742fd1550b6f33328c64d3a94ab5cf766a5441a07f127784ab931fe0",
         "crates/fireemu-adapter-http/src/identity_toolkit/routes.rs": "5ca50a06ccfe883cc4068c2b8824cb45d01c7f4c3ab3ef4ce1f1e2fd7bee7cf0",
         "crates/fireemu-adapter-http/src/identity_toolkit/widget.rs": "f2546b32734fafdf3759241f852ebaa5f003d2a721185478cfa584efb06a3e1f",
         "crates/fireemu-adapter-http/src/identity_toolkit/widget_templates.rs": "e702799e98cd26603fa3e9f1035f016db6b0e2c8756a2420694b103854ad73d1",
@@ -110,7 +110,7 @@
         "crates/fireemu-adapter-http/tests/app_check_control.rs": "8d51f6fdf616f9082021ee89fd86ee4f6874c966c3632842eebd5a72e63e8856",
         "crates/fireemu-adapter-http/tests/app_check_storage.rs": "ca5a050c6a67600a8362863112b49cdd697b7bcfd16f160cfeb184603d69f526",
         "crates/fireemu-adapter-http/tests/app_check_support/mod.rs": "3e80e5cd7616ab61d93c850e0256c00b965273c44db474c9162cfbbcd9438776",
-        "crates/fireemu-adapter-http/tests/auth_flows.rs": "e9968ba629b1d7aa90f909760f284ba4f7b50f34d9df032ab4f68e134115ee4e",
+        "crates/fireemu-adapter-http/tests/auth_flows.rs": "335822b674019d5a842025103368bfab21ac8899df60e8249cd7f6a3bffbcc39",
         "crates/fireemu-adapter-http/tests/control.rs": "94b8102f6a4f96e769ab4615a5631ee65639ca77280590e287f5cb4a7ba55766",
         "crates/fireemu-adapter-http/tests/fixtures/INSECURE_TEST_ONLY_RSA_A.der.hex": "74782086f9afd61b10b1b32d114aac9ad229ad54ef19be4ad75de71d22b8e73a",
         "crates/fireemu-adapter-http/tests/fixtures/INSECURE_TEST_ONLY_RSA_B.der.hex": "1bf303c2b4c79c4fe406ec1271b2be3c25af8b8d3c7f12dc9b1b147ea737752b",
@@ -445,7 +445,7 @@
           "refreshTokenPresent": true,
           "secondFactorClaim": true
         },
-        "elapsedMs": 33,
+        "elapsedMs": 31,
         "httpStatus": 200,
         "id": "baseline-fresh-finalize",
         "observedError": null,
@@ -453,28 +453,30 @@
         "skipped": false
       },
       {
-        "checks": {},
-        "elapsedMs": 44,
-        "httpStatus": 400,
+        "checks": {
+          "sessionInfoPresent": true
+        },
+        "elapsedMs": 42,
+        "httpStatus": 200,
         "id": "disabled-start",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 47,
+        "httpStatus": 400,
+        "id": "disabled-finalize",
         "observedError": "USER_DISABLED",
         "outcome": "refused",
         "skipped": false
       },
       {
-        "checks": {},
-        "elapsedMs": 44,
-        "httpStatus": null,
-        "id": "disabled-finalize",
-        "observedError": null,
-        "outcome": "skipped",
-        "skipped": true
-      },
-      {
         "checks": {
           "sessionInfoPresent": true
         },
-        "elapsedMs": 52,
+        "elapsedMs": 55,
         "httpStatus": 200,
         "id": "reenabled-start",
         "observedError": null,
@@ -491,7 +493,7 @@
           "refreshTokenPresent": true,
           "secondFactorClaim": true
         },
-        "elapsedMs": 60,
+        "elapsedMs": 66,
         "httpStatus": 200,
         "id": "reenabled-finalize",
         "observedError": null,
@@ -508,7 +510,7 @@
           "refreshTokenPresent": true,
           "secondFactorClaim": true
         },
-        "elapsedMs": 76,
+        "elapsedMs": 79,
         "httpStatus": 200,
         "id": "final-fresh-finalize",
         "observedError": null,
@@ -531,9 +533,9 @@
     "connection": "owned-artifact",
     "heldPendingBeforeDisable": true,
     "instance": {
-      "childPid": 95114,
-      "nonce": "300ce4664dff4bdcb0b30bb37fc48c41",
-      "parentPid": 95113,
+      "childPid": 98832,
+      "nonce": "0e7b0beabfc04eaebd1ca2091893c0dc",
+      "parentPid": 98831,
       "profile": "strict",
       "version": "0.7.0",
       "wrongTokenStatus": 403
@@ -541,14 +543,14 @@
     "ownedProcess": {
       "exitCode": 0,
       "listenersClosed": true,
-      "pid": 95113,
+      "pid": 98831,
       "stopped": true
     },
-    "privateReportSha256": "87b6d0e75aebeda183d02cfb9d98fde611495809175a3f3d065680232477486d",
-    "probeSourceCommit": "7afc750b67845d14573d2a9de9f58dc0688026d5",
-    "recordedAt": "2026-09-12T03:38:11.623265+00:00",
+    "privateReportSha256": "ba6fce2b55d705110555e9597edf03718cc4b0a0f62b564767df97256391642e",
+    "probeSourceCommit": "aef95ad3e6f623d6ce8263f52ce20791b67afe68",
+    "recordedAt": "2026-09-12T03:46:30.031047+00:00",
     "recordedWith": {
-      "recorderCommit": "7afc750b67845d14573d2a9de9f58dc0688026d5",
+      "recorderCommit": "aef95ad3e6f623d6ce8263f52ce20791b67afe68",
       "recorderInputs": {
         "tools/auth-mfa-start-disabled/start_disabled_contract.py": "9ad9460a6c8d5dc6513db257d3757931cdad2268453a85fec3ddd5f086b67501",
         "tools/auth-mfa-start-disabled/start_disabled_owned.py": "49122d5d07f8631e21a27f8b239160389fe451782fc6ecf414805dccfaf70b7c",
@@ -561,8 +563,8 @@
         "tools/compat-inventory/owned_runner.py": "ceb7dab2ab9bd4878e21e28da475d1156e6948aae07de13384cbbe56aff1deed"
       }
     },
-    "runtimeInputsCommit": "7afc750b67845d14573d2a9de9f58dc0688026d5",
-    "runtimeSourceCommit": "7afc750b67845d14573d2a9de9f58dc0688026d5",
+    "runtimeInputsCommit": "aef95ad3e6f623d6ce8263f52ce20791b67afe68",
+    "runtimeSourceCommit": "aef95ad3e6f623d6ce8263f52ce20791b67afe68",
     "setup": true,
     "target": "local",
     "transitions": [

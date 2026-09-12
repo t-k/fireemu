@@ -52,10 +52,27 @@ def assess(status, before, after):
         "httpResponsePresent": type(status) is int and 100 <= status <= 599,
         **auth_invariants({"actor": "b"}, status, before, after),
         "providersPreserved": all(
-            {k: before[r][k] for k in ["providerUserInfo"] if k in before[r]}
-            == {k: after[r][k] for k in ["providerUserInfo"] if k in after[r]}
-            for r in before
+            provider_identity(before[r]) == provider_identity(after[r]) for r in before
         ),
+    }
+
+
+def provider_identity(record):
+    # A password provider mirrors the profile displayName. Preserve every other key,
+    # occurrence and list position; do not hide a provider removal or duplicate.
+    if "providerUserInfo" not in record:
+        return {"present": False}
+    value = record["providerUserInfo"]
+    return {
+        "present": True,
+        "value": [
+            {k: v for k, v in item.items() if k != "displayName"}
+            if isinstance(item, dict)
+            else item
+            for item in value
+        ]
+        if isinstance(value, list)
+        else value,
     }
 
 

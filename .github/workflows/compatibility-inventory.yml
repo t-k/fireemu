@@ -63,6 +63,7 @@ jobs:
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-refusal-precedence -q
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-refusal-precedence.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-refusal-precedence-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-refusal-precedence-comparison.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-create-disable-r1.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-create-disable.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-readback.py --check

@@ -1,0 +1,132 @@
+{
+  "kind": "runtime-fix-local46-candidate",
+  "executionCommit": "ed90292a067866999a308f5c9bf029e0846c17b0",
+  "runtimeFixCommit": "d9d66d825fa5f99fae54b50df50b5260178142c4",
+  "observerSha256": "3a7001525e2580ab6e0654794fd9c3ab0556d06238163960c700f23816a8c0d7",
+  "manifestDigest": "6f0fa73a8fe494709b883c440266c721157d8ec44252fb81c331f2a10642d534",
+  "comparisonContractDigest": "467df4b222eec0b35a800c5cddc434413711c26400668cd4fddb57bdfed09cea",
+  "artifactSha256": "8e433fc24df9585573ce6a213152269de8d51a22d60b1800a4d0e62e0d15508e",
+  "runtimeConfiguration": {
+    "schemaVersion": 1,
+    "profile": "strict",
+    "daemon": {
+      "authProjectNumbers": {
+        "fireemu-35fe6": "592603257417"
+      }
+    },
+    "firestore": {
+      "edition": "standard",
+      "apiMode": "native"
+    }
+  },
+  "runtimeConfigurationSha256": "3b3dba2b7c98a0152a2bc0f87c2283e5db93e4051b4ce2bd37bd89b7a8396d0e",
+  "recordingComplete": true,
+  "cleanupComplete": true,
+  "compatibility": "match",
+  "newProductionExecuted": false,
+  "counts": {
+    "total": 91,
+    "auth": 31,
+    "firestore": 60,
+    "metadata": 0,
+    "recovery": 29
+  },
+  "unrecovered": [],
+  "ownedProcess": {
+    "pid": 85528,
+    "stopped": true,
+    "listenersClosed": true
+  },
+  "wrapperExitCode": 0,
+  "comparisonCheckExitCode": 0,
+  "rows": {
+    "match": 46,
+    "mismatch": 0,
+    "missing": 0,
+    "indeterminate": 0
+  },
+  "oldComparisonPreserved": {
+    "publicationCommit": "ab7bd698",
+    "match": 35,
+    "mismatch": 11
+  },
+  "currentTransformComparison": {
+    "matchedRows": 20,
+    "ids": [
+      "firestore:writes/transforms#server-timestamp-and-increments",
+      "firestore:writes/transforms#read-after-increments",
+      "firestore:writes/transforms#maximum-and-minimum-invalid-field-path",
+      "firestore:writes/transforms#read-after-invalid-max-min",
+      "firestore:writes/transforms#maximum-and-minimum",
+      "firestore:writes/transforms#read-after-max-min",
+      "firestore:writes/transforms#array-transforms",
+      "firestore:writes/transforms#read-after-array-transforms",
+      "firestore:writes/transforms#transform-only-write-creates",
+      "firestore:writes/transforms#read-transform-created",
+      "firestore:writes/transforms#transform-write-with-exists-precondition",
+      "firestore:writes/transforms#increment-with-non-numeric-operand",
+      "firestore:writes/transforms#server-timestamp-on-a-delete",
+      "firestore:writes/transforms#set-and-transform-same-field",
+      "firestore:writes/transforms#read-set-and-transform",
+      "firestore:writes/transforms#integer-increment-saturates",
+      "firestore:writes/transforms#read-saturated",
+      "firestore:writes/transforms#increment-on-nan",
+      "firestore:writes/transforms#two-transforms-on-one-field-in-one-write",
+      "firestore:writes/transforms#read-dup"
+    ],
+    "basis": "saved bc38f392 production response versus current runtime; separate from old 23 indeterminate cases"
+  },
+  "localAuthAssertions": {
+    "passed": 19,
+    "failed": 0,
+    "basis": "current local checks, not additional production cases"
+  },
+  "tests": {
+    "relatedRust": {
+      "passed": 624,
+      "skipped": 1,
+      "skip": "ignored streams::refresh_tests::fifty_targets_examine_one_changed_document_fifty_times"
+    },
+    "configCoreImportExportTargeted": {
+      "passed": 16,
+      "filteredOut": 394
+    },
+    "broadPython": {
+      "passed": 64
+    },
+    "clippy": "passed",
+    "cargoFmt": "passed",
+    "ruff": "passed",
+    "ty": "passed",
+    "fullWorkspaceRust": "not rerun",
+    "lifetimeSuitesAndPublishers": "not rerun; immutable source/evidence retained"
+  },
+  "review": {
+    "runtimeMustFix": [],
+    "runtimeShouldFix": [],
+    "comparisonMustFix": [],
+    "comparisonShouldFix": [],
+    "resolvedFindings": [
+      "lastRefreshAt export/import preservation",
+      "RFC3339 timezone offset validation"
+    ],
+    "ownerResultApproval": false
+  },
+  "privateEvidenceSha256": {
+    "localManifest": "acca1ad5fc9360956b31e1612fbfab3b331aaefa88a6ada13ceceac078d7e00d",
+    "localBatch": "57b2ebe32b8dae4beb11ad41491a0090f77c6d14df49c0ed132954bbabf039d9",
+    "localResponses": "14279837b4b88bcb357f6543690af7aeb8f48096c51a7453dd194488131215dd",
+    "comparison": "4aae1628c54eca47b6fa7c28a3e583b0d9fabfe099f47fac7bbbc60d35851a70",
+    "relatedRustLog": "b9216d99d8b2e861d089a3e38bbd42d6b3004180a5b673327c5ddf4bc85afa7b",
+    "targetedRustLog": "55561c61d82174be4afc7468cea360cfc6fc392d779b65f9965268ac7e1d8649",
+    "broadTestsLog": "30074ac02cf740f34fa13e8da305329596e92cceeca3b8c9d943d56a4c0bd8f6",
+    "clippyLog": "05b00d3095d1f4da99c2388288a47964e182703a3cdc3464f8036d84228ec6ad"
+  },
+  "remainingScope": [
+    "No new oracle operation or approval",
+    "No claim of all-API update field behavior, token byte equality, exact issuance time or propagation",
+    "Project number fallback is project ID when not configured; no numeric identity is fabricated",
+    "193 historical comparisons,26 earlier local checks,23 indeterminate histories,46 mapping checks and SDK/Rules/Listen evidence retain their original scopes",
+    "GAP-AUTH-007, AUTH-U03 and lifetime revision3 remain independent open tasks"
+  ]
+}

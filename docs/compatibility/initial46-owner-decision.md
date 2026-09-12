@@ -166,3 +166,7 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broa
 ```
 
 No local server was started in this production-only step; the prepared local artifact's process and listeners were already stopped. No Rust tests, lifetime tests, publisher checks or new local46 rerun were needed or claimed here. The earlier07feab41 preflight stop remains incomplete, and the old193 historical matches,26 local checks,23 indeterminate cases and SDK/Rules/Listen evidence are not added to or relabeled by this46-row result. Revision3 and TTL investigations remain independent.
+
+## Follow-up runtime corrections
+
+The saved production batch is retained as comparison evidence. [Runtime fixes and the separate re-evaluation](initial46-runtime-fixes.md) record the five cause-level corrections, the fixed `ed90292a` local artifact and46 matches under the explicit new contract. This does not rewrite the original35/11 result or authorize another production execution.

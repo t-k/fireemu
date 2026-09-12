@@ -358,4 +358,4 @@ if __name__ == "__main__":
         require(PAGE.read_text() == page)
     else:
         PAGE.write_text(page)
-    print("Auth pending revocation comparison checked; subject " + digest(value))
+    print("Auth refusal precedence comparison checked; subject " + digest(value))

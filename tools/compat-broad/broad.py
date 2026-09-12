@@ -73,7 +73,7 @@ def source_inputs():
     }
 
 
-def session(service, selected, origin, output):
+def session(service, selected, origin, output, *, current_wire=False):
     origin = local_origin(origin)
     inp, out = output / f"{service}-input.json", output / f"{service}-actual.json"
     save(inp, selected)
@@ -99,11 +99,19 @@ def session(service, selected, origin, output):
             FIRESTORE_PROBE_TOKEN="owner",
             FIRESTORE_PROBE_TIMEOUT_MS="5000",
         )
+    if current_wire:
+        if service != "firestore":
+            raise ValueError("current wire recorder only supports Firestore")
+        env["FIRESTORE_PROBE_WIRE_DIR"] = str(output / "wire-private")
     command = [
         "node",
         "--import",
         str(HERE / "local-guard.mjs"),
-        str(ROOT / f"conformance/src/{service}-probe/session.mjs"),
+        str(
+            HERE / "current-session.mjs"
+            if current_wire
+            else ROOT / f"conformance/src/{service}-probe/session.mjs"
+        ),
     ]
     with (output / f"{service}-stderr.log").open("wb") as errors:
         process = subprocess.Popen(
@@ -265,24 +273,37 @@ def stop_registered(output, parent_pid, nonce):
                 expected = [sys.executable, *expected]
             for sig in (signal.SIGTERM, signal.SIGKILL):
                 state = subprocess.run(
-                    ["ps", "-p", str(pid), "-o", "comm=", "-o", "args="],
+                    [
+                        "ps",
+                        "-ww",
+                        "-p",
+                        str(pid),
+                        "-o",
+                        "stat=",
+                        "-o",
+                        "ucomm=" if sys.platform == "darwin" else "comm=",
+                        "-o",
+                        "args=",
+                    ],
                     capture_output=True,
                     text=True,
                     check=False,
                 )
                 if not state.stdout.strip():
                     break
-                fields = state.stdout.strip().split(maxsplit=1)
-                comm = Path(fields[0]).name.lower()
+                fields = state.stdout.strip().split(maxsplit=2)
+                # A zombie cannot execute or receive useful termination signals. Its
+                # Popen owner must still reap it; do not relax live-process argv checks.
+                if fields[0].startswith("Z"):
+                    break
+                if len(fields) != 3:
+                    raise ValueError("incomplete process identity")
+                comm = Path(fields[1]).name.lower()
                 same_binary = comm == Path(expected[0]).name.lower() or (
                     comm.startswith("python")
                     and Path(expected[0]).name.lower().startswith("python")
                 )
-                if (
-                    len(fields) != 2
-                    or fields[1] != " ".join(expected)
-                    or not same_binary
-                ):
+                if fields[2] != " ".join(expected) or not same_binary:
                     raise ValueError("owned pid reused; refusing signal")
                 try:
                     os.kill(pid, sig)

@@ -17,6 +17,7 @@ from batch_pair import normalize
 from broad import run, save, session
 from broad_cases import PROJECT as FIRESTORE_PROJECT
 from broad_contract import compare_program, digest, historical, local_origin
+from current_contract import compare_current, contract, received
 from owned_runner import control_get, local_addresses
 
 SEED = 20260913
@@ -456,6 +457,8 @@ def execute_auth(origin, firestore_origin, output, nonce):
 
 
 def valid_observation(value):
+    if isinstance(value, dict) and "http" in value:
+        return received(value)
     return (
         isinstance(value, dict)
         and type(value.get("status")) is int
@@ -464,11 +467,14 @@ def valid_observation(value):
     )
 
 
-def recording_complete(selected, actual):
+def recording_complete(selected, actual, *, current_wire=False):
     return set(actual) == {p["id"] for p in selected} and all(
         set(actual[p["id"]].get("steps", {})) == {s["id"] for s in p["steps"]}
         and all(
-            valid_observation(actual[p["id"]]["steps"].get(s["id"])) for s in p["steps"]
+            (received if current_wire else valid_observation)(
+                actual[p["id"]]["steps"].get(s["id"])
+            )
+            for s in p["steps"]
         )
         for p in selected
     )
@@ -496,6 +502,7 @@ def usable_readback(value, expected_name):
         valid_observation(value)
         and value.get("status") == 200
         and value.get("code") == "OK"
+        and ("http" not in value or value["http"].get("bodyKind") == "json")
         and isinstance(value.get("body"), dict)
         and value["body"].get("name") == expected_name
         and isinstance(value["body"].get("fields"), dict)
@@ -544,7 +551,7 @@ def state_row(program, observations):
     }
 
 
-def firestore_rows(selected, actual, old, matrix):
+def firestore_rows(selected, actual, old, matrix, *, current_wire=False):
     old_by_id = {p["id"]: p for p in old}
     expected = {p["id"]: p for p in matrix["programs"]}
     rows = []
@@ -581,7 +588,7 @@ def firestore_rows(selected, actual, old, matrix):
                     "family": "fs-historical-expansion",
                     "basis": "historical-production-reference",
                 }
-                for row in compare_program(
+                for row in (compare_current if current_wire else compare_program)(
                     program,
                     old_by_id.get(program["id"]),
                     actual.get(program["id"], {}),
@@ -626,23 +633,27 @@ def child(output, nonce):
         auth_job = executor.submit(
             execute_auth, auth, fs, output / "auth-matrix", nonce
         )
-        fs_job = executor.submit(session, "firestore", selected, fs, output)
+        fs_job = executor.submit(
+            session, "firestore", selected, fs, output, current_wire=True
+        )
         auth_result = auth_job.result()
         fs_result = fs_job.result()
-    rows = auth_result["rows"] + firestore_rows(selected, fs_result, old, matrix)
+    rows = auth_result["rows"] + firestore_rows(
+        selected, fs_result, old, matrix, current_wire=True
+    )
     report = {
         "schemaVersion": 1,
-        "kind": "second-broad-local-v1",
+        "kind": "second-broad-local-http-v1",
         "cases": rows,
-        "manifest": manifest(),
-        "manifestDigest": digest(manifest()),
+        "manifest": execution_manifest(),
+        "manifestDigest": digest(execution_manifest()),
         "auth": auth_result,
         "selectedPrograms": selected,
         "historicalSources": {"firestore": reference},
         "localObservations": {"firestore": fs_result},
         "productionExecuted": False,
         "recordingComplete": auth_result["completed"]
-        and recording_complete(selected, fs_result),
+        and recording_complete(selected, fs_result, current_wire=True),
         "requestStats": {
             "firestore": json.loads((output / "firestore-stats.json").read_bytes())
         },
@@ -652,13 +663,28 @@ def child(output, nonce):
         raise ValueError("second suite incomplete; see private observations")
 
 
+def execution_manifest():
+    return {
+        "kind": "second-broad-local-http-v1",
+        "caseManifestPath": "spec/compatibility/broad-second-candidate.json",
+        "caseManifestDigest": digest(manifest()),
+        "comparison": contract(),
+        "productionExecutable": False,
+        "productionApproval": None,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--child", type=Path)
     parser.add_argument("--nonce")
     parser.add_argument("--write-manifest", type=Path)
+    parser.add_argument("--write-execution-manifest", type=Path)
     args = parser.parse_args()
+    if args.write_execution_manifest:
+        save(args.write_execution_manifest, execution_manifest())
+        return 0
     if args.write_manifest:
         save(args.write_manifest, manifest())
         return 0

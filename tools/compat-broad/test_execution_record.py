@@ -108,3 +108,26 @@ def test_malformed_partial_report_does_not_skip_final_manifest(tmp_path, payload
     assert result["partialResultFailure"] == "ValueError"
     assert result["partialResultSha256"]
     assert json.loads((tmp_path / "manifest.json").read_text()) == result
+
+
+def test_registered_python_with_long_absolute_path_is_stopped(tmp_path):
+    import os
+    import subprocess
+    import time
+
+    from broad import stop_registered
+
+    command = [sys.executable, "-c", "import time; time.sleep(30)"]
+    child = subprocess.Popen(command)
+    try:
+        time.sleep(0.05)
+        (tmp_path / "worker-process.json").write_text(
+            json.dumps({"pid": child.pid, "argv": command})
+        )
+        stop_registered(tmp_path, os.getpid(), "test")
+        child.wait(timeout=5)
+        assert child.returncode != 0
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            child.wait(timeout=5)

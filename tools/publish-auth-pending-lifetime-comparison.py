@@ -1,6 +1,6 @@
 """Publish the local-versus-production comparison of the auth-pending-lifetime corpus.
 
-The approved production receipt is read, never rewritten. The private local report is
+The recorded production receipt is read, never rewritten. The private local report is
 projected to allowlisted fields, its full execution-dependency set is bound to the commit
 that produced it, and the two are compared row by row on their semantic projection, which
 excludes elapsed timing and the measured pending and session ages.
@@ -34,7 +34,7 @@ BUNDLE = (
     ROOT / "spec/compatibility/evidence/auth-pending-lifetime/local-comparison.json"
 )
 PAGE = ROOT / "docs/compatibility/auth-pending-lifetime-comparison.md"
-SCOPE = "Row-by-row comparison of the approved production record of auth-pending-lifetime with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth, no configuration change, codes read from the emulator inspection route, pendings aged by advancing the virtual clock). Semantic projections exclude elapsed milliseconds and the measured pending and session ages. A comparison record, not a new production run, not an approval, and not a claim beyond these eight cases."
+SCOPE = "Row-by-row comparison of the recorded production observations of auth-pending-lifetime with one run of the same corpus on an owned local fireemu artifact (strict profile, --only auth, no configuration change, codes read from the emulator inspection route, pendings aged by advancing the virtual clock). Semantic projections exclude elapsed milliseconds and the measured pending and session ages. A comparison record, not a new production run, not an approval, and not a claim beyond these eight cases."
 RECORDER_FILES = (
     "tools/auth-pending-lifetime/lifetime_contract.py",
     "tools/auth-pending-lifetime/lifetime_recorder.py",

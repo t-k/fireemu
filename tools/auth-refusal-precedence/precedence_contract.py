@@ -38,8 +38,12 @@ DIAGNOSTIC = tuple(
 )
 DIAGNOSTIC_FINALIZES = tuple(n for n in DIAGNOSTIC if n.endswith("-finalize"))
 CORPUS = {"slice": "auth-refusal-precedence", "revision": 1, "cases": list(CASES)}
+# Fixed message-level codes only; raw error text is never retained. The privileged-field
+# family (INSUFFICIENT_PERMISSION, INVALID_REQ_TYPE, ADMIN_ONLY_OPERATION) and the
+# throttle family are listed so that a refusal of that class keeps its name.
 ERRORS = {
     "INVALID_MFA_PENDING_CREDENTIAL",
+    "MISSING_MFA_PENDING_CREDENTIAL",
     "INVALID_SESSION_INFO",
     "INVALID_CODE",
     "SESSION_EXPIRED",
@@ -48,6 +52,9 @@ ERRORS = {
     "INVALID_RECAPTCHA_TOKEN",
     "CAPTCHA_CHECK_FAILED",
     "OPERATION_NOT_ALLOWED",
+    "INSUFFICIENT_PERMISSION",
+    "INVALID_REQ_TYPE",
+    "ADMIN_ONLY_OPERATION",
     "TOKEN_EXPIRED",
     "INVALID_ID_TOKEN",
     "INVALID_REFRESH_TOKEN",
@@ -55,7 +62,13 @@ ERRORS = {
     "PERMISSION_DENIED",
     "USER_DISABLED",
     "USER_NOT_FOUND",
+    "TOO_MANY_ATTEMPTS_TRY_LATER",
+    "QUOTA_EXCEEDED",
 }
+# A refusal a receipt can be complete with: a known class on a validation status. Any
+# other refusal (an unlisted class, a throttle status, a server error) is still recorded
+# by the row so the run never aborts on it, but the run is then not complete.
+CLASSIFIED_STATUSES = {400, 403}
 FINALIZE_CHECKS = {
     "noError",
     "idTokenPresent",
@@ -108,8 +121,11 @@ def validate_row(row, name):
     require(0 <= row["elapsedMs"] <= 600000 and row["skipped"] is False)
     require(type(row["httpStatus"]) is int)
     if row["outcome"] == "refused":
+        # Only diagnostic rows may be refused, with any error status, so that an
+        # unforeseen production answer is recorded instead of aborting the run.
         require(name in DIAGNOSTIC)
-        require(row["httpStatus"] in {400, 403} and row["observedError"] in ERRORS)
+        require(400 <= row["httpStatus"] <= 599)
+        require(row["observedError"] in ERRORS | {"UNCLASSIFIED_ERROR"})
         require(row["checks"] == {})
         return
     require(row["outcome"] == "accepted")
@@ -129,6 +145,13 @@ def validate_row(row, name):
     require(all(v is True for v in row["checks"].values()))
 
 
+def classified(row):
+    """A refused row whose class and status a receipt can rely on."""
+    return row["outcome"] != "refused" or (
+        row["httpStatus"] in CLASSIFIED_STATUSES and row["observedError"] in ERRORS
+    )
+
+
 def complete(report):
     try:
         require(
@@ -143,6 +166,7 @@ def complete(report):
         )
         for row, name in zip(report["cases"], CASES, strict=True):
             validate_row(row, name)
+            require(classified(row))
         require(report["setup"] == {"a": True, "b": True})
         require(report["held"] == {"a": True, "b": True})
         # The tampered-token row is followed by an administrative readback of A; whether

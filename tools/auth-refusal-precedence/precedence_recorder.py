@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import secrets
+import signal
 import sys
 import time
 import urllib.parse
@@ -60,6 +61,47 @@ require(revocation.TEST_CODE == TEST_CODE)
 
 def patch(url, body, token):
     return revocation.patch(url, body, token)
+
+
+class Terminated(BaseException):
+    """SIGTERM or SIGHUP during a run: unwinds through `finally` so the accounts are
+    deleted and the configuration restored before the process ends."""
+
+
+def terminate(signum, frame):
+    raise Terminated(signum)
+
+
+RECOVERY_KEYS = {"project", "original", "changeAttempted", "configSha256"}
+
+
+def recovery_record(path):
+    """The private configuration record of an interrupted run, validated like an account
+    journal: a regular private file whose original values have the one shape the
+    recorder ever writes (the run preconditions)."""
+    require(path.is_file() and not path.is_symlink())
+    require(path.stat().st_mode & 0o077 == 0)
+    value = json.loads(path.read_bytes())
+    require(isinstance(value, dict) and set(value) == RECOVERY_KEYS)
+    require(value["project"] == PROJECT and value["changeAttempted"] is True)
+    original = value["original"]
+    require(isinstance(original, dict))
+    require(set(original) == {"mfa", "phoneNumber", "smsRegionConfig"})
+    require(original["mfa"] == MFA_OFF and not original["phoneNumber"])
+    require(original["smsRegionConfig"] == {"allowlistOnly": {}})
+    sha = value["configSha256"]
+    require(isinstance(sha, str) and len(sha) == 64)
+    return value
+
+
+def restore_from_record(path):
+    """Restore the configuration of an interrupted run and compare the whole-configuration
+    digest with the one recorded before the change."""
+    value = recovery_record(path)
+    access, _, _ = core.production_preflight()
+    status, raw = restore_configuration(access, value["original"])
+    matches = core.config_projection(status, raw)["sha256"] == value["configSha256"]
+    return {"configRestored": True, "configDigestMatches": matches}
 
 
 def begin(report, step):
@@ -159,6 +201,9 @@ def observe(output, origin=None):
     access = None
     original = None
     change_attempted = False
+    # A termination signal unwinds through `finally` instead of killing the process
+    # with the configuration changed and the accounts in place.
+    previous = {s: signal.signal(s, terminate) for s in (signal.SIGTERM, signal.SIGHUP)}
     try:
         access, key = "owner", "local-test-key"
         if production:
@@ -186,7 +231,12 @@ def observe(output, origin=None):
             original = read
             save(
                 output / "config-recovery.json",
-                {"project": PROJECT, "original": original, "changeAttempted": True},
+                {
+                    "project": PROJECT,
+                    "original": original,
+                    "changeAttempted": True,
+                    "configSha256": report["configReadback"]["sha256"],
+                },
             )
             change_attempted = True
             status, patched = config(
@@ -485,6 +535,9 @@ def observe(output, origin=None):
                 "returnSecureToken": False,
             },
         )
+        if status != 200:
+            # Recorded before the readback so an aborting class stays in the report.
+            row("invalid-token-admin-field-update", status, response)
         record = lookup(a)
         after_update = {k: record.get(k) for k in fields}
         try:
@@ -493,14 +546,17 @@ def observe(output, origin=None):
             stored_claims = None
         claim_applied = stored_claims == claim
         photo_applied = after_update["photoUrl"] == photo
-        checks = None
         if status == 200:
-            checks = {
-                "noError": "error" not in response,
-                "customAttributesApplied": claim_applied,
-                "photoUrlApplied": photo_applied,
-            }
-        row("invalid-token-admin-field-update", status, response, checks)
+            row(
+                "invalid-token-admin-field-update",
+                status,
+                response,
+                {
+                    "noError": "error" not in response,
+                    "customAttributesApplied": claim_applied,
+                    "photoUrlApplied": photo_applied,
+                },
+            )
         report["invalidTokenStateUnchanged"] = (
             after_update == before_update and not claim_applied and not photo_applied
         )
@@ -528,25 +584,10 @@ def observe(output, origin=None):
         report["status"] = "observed"
     except Exception as error:
         report["failure"] = type(error).__name__
+    except (Terminated, KeyboardInterrupt) as error:
+        report["failure"] = type(error).__name__
     finally:
-        clean = []
-        for account in accounts.values():
-            try:
-                clean.append(
-                    core.cleanup_account(
-                        admin,
-                        account["email"],
-                        account["marker"],
-                        account["uid"],
-                        account["journal"],
-                    )
-                )
-            except Exception as error:
-                report["cleanupFailure"] = type(error).__name__
-        if len(clean) == 2 and all(
-            c == {"uidAbsent": True, "emailAbsent": True} for c in clean
-        ):
-            report["cleanup"] = {"uidAbsent": True, "emailAbsent": True}
+        # The project-wide change is undone first; the owned accounts do not need it.
         if not production:
             report["configRestored"] = True
             report["configDigestMatches"] = True
@@ -565,6 +606,26 @@ def observe(output, origin=None):
                 )
             except Exception as error:
                 report["configRestoreFailure"] = type(error).__name__
+        report["cleanupAccounts"] = {}
+        for label, account in accounts.items():
+            try:
+                core.cleanup_account(
+                    admin,
+                    account["email"],
+                    account["marker"],
+                    account["uid"],
+                    account["journal"],
+                )
+                report["cleanupAccounts"][label] = "absent"
+            except Exception as error:
+                report["cleanupAccounts"][label] = "unresolved"
+                report["cleanupFailure"] = type(error).__name__
+        if len(accounts) == 2 and all(
+            v == "absent" for v in report["cleanupAccounts"].values()
+        ):
+            report["cleanup"] = {"uidAbsent": True, "emailAbsent": True}
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
         save(output / "observation.json", report)
     return report
 
@@ -577,13 +638,9 @@ if __name__ == "__main__":
     parser.add_argument("--restore-config", type=Path)
     args = parser.parse_args()
     if args.restore_config:
-        value = json.loads(args.restore_config.read_bytes())
-        require(
-            value.get("project") == PROJECT and value.get("changeAttempted") is True
-        )
-        access, _, _ = core.production_preflight()
-        restore_configuration(access, value["original"])
-        print(json.dumps({"configRestored": True}))
+        outcome = restore_from_record(args.restore_config)
+        print(json.dumps(outcome))
+        raise SystemExit(0 if outcome["configDigestMatches"] else 2)
     elif args.recover:
         try:
             print(json.dumps(core.reconcile(args.recover)))

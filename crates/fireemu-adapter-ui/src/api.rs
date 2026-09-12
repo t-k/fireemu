@@ -407,11 +407,9 @@ fn functions(state: &UiState) -> UiResponse {
                 ..
             } = &f.trigger
             {
-                if let Some(next) = crate::functions_actions::next_run_rfc3339(
-                    schedule,
-                    time_zone.as_deref(),
-                    now,
-                ) {
+                if let Some(next) =
+                    crate::functions_actions::next_run_rfc3339(schedule, time_zone.as_deref(), now)
+                {
                     entry["nextRun"] = Value::String(next);
                 }
             }
@@ -565,7 +563,10 @@ fn enqueue_task(state: &UiState, name: &str, req: &UiRequest) -> UiResponse {
         None | Some(Value::Null) => None,
         Some(Value::Object(map)) => Some(map.clone()),
         Some(_) => {
-            return UiResponse::error(400, "INVALID_ARGUMENT : headers must be an object of strings")
+            return UiResponse::error(
+                400,
+                "INVALID_ARGUMENT : headers must be an object of strings",
+            )
         }
     };
     let task_body = match crate::functions_actions::build_task_body(

@@ -804,10 +804,7 @@ async fn state_with_http_functions() -> (
     // delete another's task probe.
     static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "fireemu-ui-invoke-{}-{seq}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("fireemu-ui-invoke-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let probe = dir.join("tasks");
     let _ = std::fs::remove_file(&probe);
@@ -986,7 +983,10 @@ async fn enqueuing_a_task_dispatches_it_to_the_queue_handler() {
         "projects/demo-app/locations/us-central1/queues/countJob/tasks/job-1"
     );
     // The accepted response echoes the decoded body, as the Admin SDK's does.
-    assert_eq!(body["task"]["httpRequest"]["body"], json!({"data": {"n": 7}}));
+    assert_eq!(
+        body["task"]["httpRequest"]["body"],
+        json!({"data": {"n": 7}})
+    );
     // The task actually reached the handler over the port with the wrapped payload.
     let entries = wait_for_probe(&probe, 1).await;
     let dispatched: Value = serde_json::from_str(&entries[0]).unwrap();
@@ -1037,7 +1037,11 @@ async fn the_invoke_and_enqueue_fronts_require_the_control_token() {
     ] {
         let (status, _) = call(&s, browser(request("POST", path, &json!({})), None)).await;
         assert_eq!(status, 403, "{path} without a token");
-        let (status, _) = call(&s, browser(request("POST", path, &json!({})), Some("wrong"))).await;
+        let (status, _) = call(
+            &s,
+            browser(request("POST", path, &json!({})), Some("wrong")),
+        )
+        .await;
         assert_eq!(status, 403, "{path} with a wrong token");
     }
 }

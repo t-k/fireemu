@@ -83,7 +83,9 @@ fn is_header_name(name: &str) -> bool {
 /// will forward -- a NUL, other control character, or a bare CR/LF is refused here rather than
 /// stored unchecked and failing opaquely at dispatch.
 fn is_header_value(value: &str) -> bool {
-    value.bytes().all(|b| b == b'\t' || (0x20..=0x7e).contains(&b))
+    value
+        .bytes()
+        .all(|b| b == b'\t' || (0x20..=0x7e).contains(&b))
 }
 
 /// Validates one caller-supplied header name and value, shared by the invoke and enqueue
@@ -105,8 +107,9 @@ fn read_body(req: &Value) -> Result<Vec<u8>, String> {
             Err("body and bodyBase64 are mutually exclusive".to_owned())
         }
         (Some(Value::String(text)), _) => Ok(text.clone().into_bytes()),
-        (_, Some(Value::String(encoded))) => decode_base64(encoded)
-            .ok_or_else(|| "bodyBase64 must be standard base64".to_owned()),
+        (_, Some(Value::String(encoded))) => {
+            decode_base64(encoded).ok_or_else(|| "bodyBase64 must be standard base64".to_owned())
+        }
         _ => Err("body must be a string and bodyBase64 must be a base64 string".to_owned()),
     }
 }
@@ -379,7 +382,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.method, "GET");
-        assert_eq!(plan.path_and_query, "/demo-app/us-central1/echo/hello?x=1&y=2");
+        assert_eq!(
+            plan.path_and_query,
+            "/demo-app/us-central1/echo/hello?x=1&y=2"
+        );
         // No body, so no default content-type is added; only the header the caller gave.
         assert_eq!(plan.headers, vec![("x-smoke".to_owned(), "hi".to_owned())]);
         assert!(plan.body.is_empty());
@@ -396,8 +402,13 @@ mod tests {
             ("??", "/demo-app/us-central1/echo??"),
         ];
         for (query, expected) in cases {
-            let plan =
-                build_invoke("demo-app", "us-central1", "echo", &json!({ "query": query })).unwrap();
+            let plan = build_invoke(
+                "demo-app",
+                "us-central1",
+                "echo",
+                &json!({ "query": query }),
+            )
+            .unwrap();
             assert_eq!(plan.path_and_query, expected, "query {query:?}");
         }
     }
@@ -443,7 +454,9 @@ mod tests {
 
     #[test]
     fn a_header_name_must_be_an_http_token() {
-        for bad in ["bad name", "X/Bad", "X@Bad", "X[Bad]", "a,b", "a;b", "a=b", "a:b", ""] {
+        for bad in [
+            "bad name", "X/Bad", "X@Bad", "X[Bad]", "a,b", "a;b", "a=b", "a:b", "",
+        ] {
             assert!(
                 build_invoke("p", "r", "f", &json!({"headers": {bad: "v"}})).is_err(),
                 "header name {bad:?} should be refused"
@@ -455,21 +468,29 @@ mod tests {
 
     #[test]
     fn body_and_body_base64_are_mutually_exclusive() {
-        let e = build_invoke("p", "r", "f", &json!({"body": "a", "bodyBase64": "YQ=="}))
-            .unwrap_err();
+        let e =
+            build_invoke("p", "r", "f", &json!({"body": "a", "bodyBase64": "YQ=="})).unwrap_err();
         assert!(e.contains("mutually exclusive"), "{e}");
     }
 
     #[test]
     fn the_response_body_is_utf8_when_valid_and_base64_otherwise() {
-        let text = encode_response(200, &[("content-type".to_owned(), "application/json".to_owned())], b"{\"sum\":3}", 12);
+        let text = encode_response(
+            200,
+            &[("content-type".to_owned(), "application/json".to_owned())],
+            b"{\"sum\":3}",
+            12,
+        );
         assert_eq!(text["status"], 200);
         assert_eq!(text["body"], "{\"sum\":3}");
         assert_eq!(text["bodyEncoding"], "utf8");
         assert_eq!(text["bodyLength"], 9);
         assert_eq!(text["truncated"], false);
         assert_eq!(text["durationMs"], 12);
-        assert_eq!(text["headers"], json!([["content-type", "application/json"]]));
+        assert_eq!(
+            text["headers"],
+            json!([["content-type", "application/json"]])
+        );
 
         let binary = encode_response(200, &[], &[0xff, 0xfe, 0x00], 0);
         assert_eq!(binary["bodyEncoding"], "base64");

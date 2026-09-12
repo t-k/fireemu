@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "kind": "pending-trigger-case-mapping",
+  "trigger": "client-password-change",
+  "reviewer": "Claude (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-12",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "mfa-finalize",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/finalize",
+      "locators": [
+        "request-body",
+        "response-body"
+      ]
+    },
+    {
+      "id": "mfa-start",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/start",
+      "locators": [
+        "request-body",
+        "response-body"
+      ]
+    },
+    {
+      "id": "client-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/accounts/update",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "admin-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/update",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "oob",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/accounts/sendOobCode",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "reset",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/accounts/resetPassword",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-sign-in-email-password",
+        "section-get-account-info",
+        "section-refresh-token"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "baseline-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh pending credential completes the phone second factor before the transition; its ID token is the session reused by a self-service trigger."
+    },
+    {
+      "case": "trigger",
+      "source": "client-update",
+      "basis": "diagnostic",
+      "condition": "The account's own ID token from the baseline session is sent to accounts:update with a new password. Which tokens the response carries and whether the account remains present are recorded; the held credential's fate afterwards is the observation."
+    },
+    {
+      "case": "held-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "The pending credential held from before the transition is presented to mfaSignIn:start after it; accepted and refused are both valid."
+    },
+    {
+      "case": "held-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "The held credential is finalized on the SMS session opened before the transition; accepted (with token checks recorded as booleans) and refused are both valid."
+    },
+    {
+      "case": "held-lookup",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If the held finalize was accepted, accounts:lookup with the returned ID token names the owner; executed exactly when finalize was accepted."
+    },
+    {
+      "case": "held-refresh",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If the held finalize was accepted, the returned refresh token is redeemed and the derived ID token names the owner; executed exactly when finalize was accepted."
+    },
+    {
+      "case": "final-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh sign-in with the current password completes the second factor after the run, bounding it against a broken account."
+    }
+  ],
+  "limitations": [
+    "URLs were read during design; no new frozen full-body source snapshot or completed page-review claim is made by this mapping.",
+    "The sources define the operations and the fields; none of them states whether an MFA pending credential issued before this transition remains usable. The observation, not the sources, answers that for the recorded conditions and this trigger only.",
+    "One trigger, one owned account, one SMS session, phone MFA with a test phone number, no tenant, no blocking function, one run. For provider-unlink the federated identity is linked administratively as a precondition; a refused link aborts the run and is not an unlink result.",
+    "The oracle project's MFA, phone sign-in and SMS region configuration were changed for the run and restored; the restore readback and whole-configuration digest comparison are part of the receipt, not a claim about production defaults.",
+    "No execution approval, independent signature verification, SDK checkRevoked, Rules, other triggers, tenants or expiry claim follows from this mapping."
+  ]
+}

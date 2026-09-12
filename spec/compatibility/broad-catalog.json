@@ -1,0 +1,3598 @@
+{
+  "schemaVersion": 1,
+  "scope": "known pinned API methods, not all fields or all upstream semantics",
+  "families": [
+    {
+      "id": "auth-accounts",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "feature": "account creation/lookup/update/delete",
+      "transport": "REST",
+      "principal": "anonymous/self/local-admin",
+      "availability": "selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Existing account lifecycle programs and new state readbacks"
+    },
+    {
+      "id": "auth-credentials",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "feature": "password/sign-in/refresh",
+      "transport": "REST",
+      "principal": "self",
+      "availability": "selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Existing sign-in programs plus password-change/refresh sequence"
+    },
+    {
+      "id": "auth-authorization",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "feature": "administrator/self/other/unauthenticated",
+      "transport": "REST",
+      "principal": "multiple principals",
+      "availability": "selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "New refusal and unchanged-account checks; preserved GAP-AUTH-005 regressions"
+    },
+    {
+      "id": "auth-tenants",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "feature": "tenant isolation and configuration",
+      "transport": "REST",
+      "principal": "tenant admin/user",
+      "availability": "external-dependency",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: isolated local tenant corpus; production tenant/config scope needs approval"
+    },
+    {
+      "id": "auth-providers",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "feature": "federated/custom/SAML/OIDC providers",
+      "transport": "REST/SDK",
+      "principal": "IdP/user",
+      "availability": "external-dependency",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: existing custom-token fixtures; real IdP integration needs separately scoped credentials"
+    },
+    {
+      "id": "auth-mfa",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "feature": "MFA enrollment/session/pending",
+      "transport": "REST",
+      "principal": "self/admin",
+      "availability": "prepared",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Keep lifetime revision 3 independent and production-unobserved; GAP-AUTH-007 and AUTH-U03 remain open"
+    },
+    {
+      "id": "auth-oob",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "feature": "OOB/email action flows",
+      "transport": "REST/SDK",
+      "principal": "self/email recipient",
+      "availability": "not-selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: existing OOB fixtures; no real email delivery in this milestone"
+    },
+    {
+      "id": "auth-blocking",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "feature": "blocking function integration",
+      "transport": "REST/functions",
+      "principal": "service account/user",
+      "availability": "external-dependency",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: preserved blocking receipts/fixtures; live function/config scope separate"
+    },
+    {
+      "id": "auth-admin",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "feature": "project configuration/import/export/policies",
+      "transport": "REST",
+      "principal": "project administrator",
+      "availability": "not-selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: existing capability/admin tests; configuration mutation requires exclusive scope"
+    },
+    {
+      "id": "fs-writes",
+      "service": "Firestore",
+      "edition": "Standard",
+      "feature": "CRUD/masks/preconditions/atomic commit/batchWrite/transforms",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "availability": "selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Existing stateful writes programs; changed transform corpus is incomparable to old rows"
+    },
+    {
+      "id": "fs-queries",
+      "service": "Firestore",
+      "edition": "Standard",
+      "feature": "types/filters/order/cursors/missing/null",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "availability": "selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Existing cursor program plus seeded refusal-state case; more type/filter programs next"
+    },
+    {
+      "id": "fs-transactions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "feature": "begin/read/commit/rollback/conflict",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "availability": "selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Existing transaction lifecycle; no-response historical rows remain indeterminate"
+    },
+    {
+      "id": "fs-aggregations",
+      "service": "Firestore",
+      "edition": "Standard",
+      "feature": "count/sum/average",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "availability": "not-selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: reuse tools/compat-inventory aggregation corpus and pinned receipts"
+    },
+    {
+      "id": "fs-indexes",
+      "service": "Firestore",
+      "edition": "Standard",
+      "feature": "composite/index requirements",
+      "transport": "REST/admin",
+      "principal": "admin/query caller",
+      "availability": "not-selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: pinned index fixture/config matching; shared index changes require exclusive scope"
+    },
+    {
+      "id": "fs-rules",
+      "service": "Firestore",
+      "edition": "Standard",
+      "feature": "Rules and authenticated query/write authorization",
+      "transport": "REST/SDK",
+      "principal": "user/anonymous",
+      "availability": "not-selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: conformance Rules sessions; owner data operations do not test Rules"
+    },
+    {
+      "id": "fs-listen",
+      "service": "Firestore",
+      "edition": "Standard",
+      "feature": "Listen/reconnect/resume/order",
+      "transport": "gRPC/WebChannel",
+      "principal": "user/admin",
+      "availability": "not-selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: existing SDK listen fixtures with invariant/partial-order checks"
+    },
+    {
+      "id": "fs-sdk",
+      "service": "Firestore",
+      "edition": "Standard",
+      "feature": "client SDK/Admin SDK/Lite",
+      "transport": "gRPC/WebChannel/REST",
+      "principal": "user/admin",
+      "availability": "not-selected",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: conformance SDK corpus and tools/sdk-smoke; REST pass does not cover SDK"
+    },
+    {
+      "id": "fs-enterprise",
+      "service": "Firestore",
+      "edition": "Enterprise",
+      "feature": "pipeline/full-text/Enterprise Native",
+      "transport": "REST/gRPC",
+      "principal": "user/admin",
+      "availability": "unimplemented-or-unobserved",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Next: map existing Enterprise capability stubs; separate edition oracle required"
+    },
+    {
+      "id": "fs-mongodb",
+      "service": "Firestore",
+      "edition": "Enterprise MongoDB",
+      "feature": "MongoDB wire compatibility",
+      "transport": "MongoDB",
+      "principal": "database user",
+      "availability": "unimplemented-or-unobserved",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Separate protocol and database; never import Standard expectations"
+    },
+    {
+      "id": "fs-admin",
+      "service": "Firestore",
+      "edition": "Standard/Enterprise",
+      "feature": "database/index/backup/restore/PITR management",
+      "transport": "REST/admin",
+      "principal": "project administrator",
+      "availability": "external-dependency",
+      "currentStatus": "not-run",
+      "reasonAndNextUnit": "Managed-service boundaries; enumerate capability limitations before owned database scope"
+    }
+  ],
+  "surfaces": [
+    {
+      "api": "identitytoolkit.accounts.createAuthUri",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.issueSamlResponse",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.lookup",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.resetPassword",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.sendOobCode",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.sendVerificationCode",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.signInWithCustomToken",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.signInWithEmailLink",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.signInWithGameCenter",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.signInWithIdp",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.signInWithPassword",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.signInWithPhoneNumber",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.signUp",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.update",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.verifyIosClient",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.getProjects",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.getPublicKeys",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.getRecaptchaParams",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.getSessionCookiePublicKeys",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.accounts",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.accounts.batchCreate",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.accounts.batchDelete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.accounts.batchGet",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.accounts.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.accounts.lookup",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.accounts.query",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.accounts.sendOobCode",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.accounts.update",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.createSessionCookie",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.queryAccounts",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.accounts",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.accounts.batchCreate",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.accounts.batchDelete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.accounts.batchGet",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.accounts.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.accounts.lookup",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.accounts.query",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.accounts.sendOobCode",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.accounts.update",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.createSessionCookie",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.mfaEnrollment.finalize",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.mfaEnrollment.start",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.mfaEnrollment.withdraw",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.mfaSignIn.finalize",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.mfaSignIn.start",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.accounts.revokeToken",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.defaultSupportedIdps.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.getPasswordPolicy",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.getRecaptchaConfig",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.defaultSupportedIdpConfigs.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.defaultSupportedIdpConfigs.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.defaultSupportedIdpConfigs.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.defaultSupportedIdpConfigs.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.defaultSupportedIdpConfigs.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.getConfig",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.identityPlatform.initializeAuth",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.inboundSamlConfigs.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.inboundSamlConfigs.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.inboundSamlConfigs.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.inboundSamlConfigs.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.inboundSamlConfigs.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.oauthIdpConfigs.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.oauthIdpConfigs.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.oauthIdpConfigs.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.oauthIdpConfigs.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.oauthIdpConfigs.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.defaultSupportedIdpConfigs.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.defaultSupportedIdpConfigs.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.defaultSupportedIdpConfigs.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.defaultSupportedIdpConfigs.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.defaultSupportedIdpConfigs.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.getIamPolicy",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.inboundSamlConfigs.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.inboundSamlConfigs.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.inboundSamlConfigs.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.inboundSamlConfigs.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.inboundSamlConfigs.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.oauthIdpConfigs.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.oauthIdpConfigs.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.oauthIdpConfigs.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.oauthIdpConfigs.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.oauthIdpConfigs.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.setIamPolicy",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.tenants.testIamPermissions",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "identitytoolkit.projects.updateConfig",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "identitytoolkit-v2",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.backupSchedules.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.backupSchedules.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.backupSchedules.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.backupSchedules.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.backupSchedules.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.bulkDeleteDocuments",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.changeStreams.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.changeStreams.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.changeStreams.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.changeStreams.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.clone",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.collectionGroups.fields.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.collectionGroups.fields.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.collectionGroups.fields.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.collectionGroups.indexes.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.collectionGroups.indexes.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.collectionGroups.indexes.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.collectionGroups.indexes.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.batchGet",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.batchWrite",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.beginTransaction",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.commit",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.createDocument",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.executePipeline",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.listCollectionIds",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.listDocuments",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.listen",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.partitionQuery",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.rollback",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.runAggregationQuery",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.runQuery",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.documents.write",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.exportDocuments",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.importDocuments",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.operations.cancel",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.operations.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.operations.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.operations.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.patch",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.restore",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.userCreds.create",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.userCreds.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.userCreds.disable",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.userCreds.enable",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.userCreds.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.userCreds.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.databases.userCreds.resetPassword",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.locations.backups.delete",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.locations.backups.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.locations.backups.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.locations.get",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "firestore.projects.locations.list",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "firestore-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "securetoken.token",
+      "source": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+      "definition": "securetoken-v1",
+      "transport": "REST",
+      "currentStatus": "not-run",
+      "reason": "API-method denominator; case execution does not automatically cover every method variant"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.BatchGetDocuments",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.BatchWrite",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.BeginTransaction",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.Commit",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.CreateDocument",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.DeleteDocument",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.ExecutePipeline",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.GetDocument",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.ListCollectionIds",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.ListDocuments",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.Listen",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.PartitionQuery",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.Rollback",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.RunAggregationQuery",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.RunQuery",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.UpdateDocument",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    },
+    {
+      "api": "google.firestore.v1.Firestore.Write",
+      "source": "spec/compatibility/upstream/firestore-protobuf.json",
+      "definition": "firestore-protobuf",
+      "transport": "gRPC",
+      "currentStatus": "not-run",
+      "reason": "REST runs do not execute this protocol"
+    }
+  ],
+  "cases": [
+    {
+      "id": "auth:password/sign-up-and-sign-in",
+      "family": "auth-credentials",
+      "entry": "conformance/src/auth-probe/session.mjs",
+      "corpus": "conformance/src/auth-probe/programs.mjs",
+      "corpusDigest": "91b279e3be6b07f85859b3ce9e402382d9b0935907acd59b8a44d8d4c0ec6281",
+      "programDigest": "811bc3358f4ab947aa560a8813029de2264a84af08702cbdc7c9e74f0e5986cb",
+      "steps": [
+        {
+          "id": "sign-up",
+          "method": "POST",
+          "path": "v1/accounts:signUp"
+        },
+        {
+          "id": "duplicate-email",
+          "method": "POST",
+          "path": "v1/accounts:signUp"
+        },
+        {
+          "id": "sign-in",
+          "method": "POST",
+          "path": "v1/accounts:signInWithPassword"
+        },
+        {
+          "id": "wrong-password",
+          "method": "POST",
+          "path": "v1/accounts:signInWithPassword"
+        },
+        {
+          "id": "unknown-email",
+          "method": "POST",
+          "path": "v1/accounts:signInWithPassword"
+        },
+        {
+          "id": "lookup",
+          "method": "POST",
+          "path": "v1/accounts:lookup"
+        },
+        {
+          "id": "update-display-name",
+          "method": "POST",
+          "path": "v1/accounts:update"
+        },
+        {
+          "id": "delete",
+          "method": "POST",
+          "path": "v1/accounts:delete"
+        },
+        {
+          "id": "sign-in-after-delete",
+          "method": "POST",
+          "path": "v1/accounts:signInWithPassword"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/auth-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "auth:password/validation",
+      "family": "auth-credentials",
+      "entry": "conformance/src/auth-probe/session.mjs",
+      "corpus": "conformance/src/auth-probe/programs.mjs",
+      "corpusDigest": "91b279e3be6b07f85859b3ce9e402382d9b0935907acd59b8a44d8d4c0ec6281",
+      "programDigest": "391e6d66cdc8068ea8b0a643e59b542b04d49da46ab63efd309f7652da4d576f",
+      "steps": [
+        {
+          "id": "invalid-email",
+          "method": "POST",
+          "path": "v1/accounts:signUp"
+        },
+        {
+          "id": "weak-password",
+          "method": "POST",
+          "path": "v1/accounts:signUp"
+        },
+        {
+          "id": "missing-password",
+          "method": "POST",
+          "path": "v1/accounts:signUp"
+        },
+        {
+          "id": "missing-email",
+          "method": "POST",
+          "path": "v1/accounts:signInWithPassword"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/auth-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "auth:anonymous/lifecycle",
+      "family": "auth-accounts",
+      "entry": "conformance/src/auth-probe/session.mjs",
+      "corpus": "conformance/src/auth-probe/programs.mjs",
+      "corpusDigest": "91b279e3be6b07f85859b3ce9e402382d9b0935907acd59b8a44d8d4c0ec6281",
+      "programDigest": "86d64afc1b1ec27c5665454f11a2db66ef6247e58fac9c931e2f2f74140e7a1e",
+      "steps": [
+        {
+          "id": "anonymous-sign-up",
+          "method": "POST",
+          "path": "v1/accounts:signUp"
+        },
+        {
+          "id": "lookup-anonymous",
+          "method": "POST",
+          "path": "v1/accounts:lookup"
+        },
+        {
+          "id": "delete-anonymous",
+          "method": "POST",
+          "path": "v1/accounts:delete"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/auth-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "auth:tokens/errors",
+      "family": "auth-authorization",
+      "entry": "conformance/src/auth-probe/session.mjs",
+      "corpus": "conformance/src/auth-probe/programs.mjs",
+      "corpusDigest": "91b279e3be6b07f85859b3ce9e402382d9b0935907acd59b8a44d8d4c0ec6281",
+      "programDigest": "10a113f9cda01311ca3b7ca41a83b18a3a848c813a5ce15b91ca66a70353f17c",
+      "steps": [
+        {
+          "id": "lookup-with-garbage-token",
+          "method": "POST",
+          "path": "v1/accounts:lookup"
+        },
+        {
+          "id": "custom-token-garbage",
+          "method": "POST",
+          "path": "v1/accounts:signInWithCustomToken"
+        },
+        {
+          "id": "reset-password-bad-code",
+          "method": "POST",
+          "path": "v1/accounts:resetPassword"
+        },
+        {
+          "id": "update-with-bad-oob-code",
+          "method": "POST",
+          "path": "v1/accounts:update"
+        },
+        {
+          "id": "unknown-method",
+          "method": "POST",
+          "path": "v1/accounts:definitelyNotAMethod"
+        },
+        {
+          "id": "password-reset-for-unknown-email",
+          "method": "POST",
+          "path": "v1/accounts:sendOobCode"
+        },
+        {
+          "id": "mfa-enrollment-start-without-token",
+          "method": "POST",
+          "path": "v2/accounts/mfaEnrollment:start"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/auth-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:values/type-order",
+      "family": "fs-queries",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "2f97608068f21190edc9e569b6136314506ffbaad3d93a9fb67405a4803d9abd",
+      "steps": [
+        {
+          "id": "ascending",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "descending",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "ascending-name-only",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "descending-name-only",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "no-order-is-name-order",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "select-name-only",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        }
+      ],
+      "selected": false,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:values/numeric-ties",
+      "family": "fs-queries",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "fdd72ea9fe0b1fb9542ca5a3c62a670ea2ca4c52f36acc8fbc80229da4bee57d",
+      "steps": [
+        {
+          "id": "ascending",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "equal-int-matches-double",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "equal-double-matches-int",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "zero-equals-negative-zero",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "nan-equals-nothing",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "is-nan",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "is-not-nan",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "greater-than-negative-infinity",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "less-than-nan",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "not-equal-one",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        }
+      ],
+      "selected": false,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:queries/filters",
+      "family": "fs-queries",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "0acfc96b0b94e38c1640d5d82a327bd27474236f9efab11098d2b5df8d85b90f",
+      "steps": [
+        {
+          "id": "equal-string",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "equal-null",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "is-null",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "is-not-null",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "not-equal-excludes-null-and-missing",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "not-equal-null",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "range-is-type-restricted",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "range-on-string",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "range-implies-order",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "array-contains",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "array-contains-null",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "array-contains-nan",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "array-contains-array",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "array-contains-any",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "in",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "in-with-double-for-int",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "not-in",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "not-in-with-null-candidate",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "equal-on-array-value",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "equal-on-map-value",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "nested-field-path",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "nested-field-path-on-map",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "or-filter",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "and-of-or",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "two-equalities",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "two-inequalities-on-different-fields",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "inequality-and-order-on-another-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "inequality-then-order-on-it-explicitly-second",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "order-by-missing-field-excludes",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "order-by-two-fields",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        }
+      ],
+      "selected": false,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:queries/cursors",
+      "family": "fs-queries",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "2eedf3e0401f07bbc4e956b40f2de6d0fef8144e51fc2357aafe481dfe0faa8d",
+      "steps": [
+        {
+          "id": "start-at-inclusive",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "start-after",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "end-before",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "end-at-inclusive",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "start-at-with-name-tiebreak",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "start-at-prefix-of-order",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "descending-start-after",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "cursor-of-another-type",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "cursor-on-name-only",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "cursor-with-too-many-values",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "offset-and-limit",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "offset-past-the-end",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "limit-zero",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "limit-to-last-shape",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "start-at-with-empty-values",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:queries/collection-group",
+      "family": "fs-queries",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "6318d555216cad20bb05e5d18aaade0d47a32c7250bf56696af4178945a9a2da",
+      "steps": [
+        {
+          "id": "all-descendants",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "all-descendants-by-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "all-descendants-under-a-parent",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cg/b:runQuery"
+        },
+        {
+          "id": "subcollection-query",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cg/a:runQuery"
+        },
+        {
+          "id": "group-start-at-a-full-reference",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "group-with-name-range",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "name-equality",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "name-in",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "missing-collection",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "partition-query",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:partitionQuery"
+        }
+      ],
+      "selected": false,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:queries/aggregations",
+      "family": "fs-queries",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "6123c1524b70e0ea1e32d18d5b177a73430ec10a76bfd1e82c92e4714832fdc2",
+      "steps": [
+        {
+          "id": "count-all",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "count-up-to",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "count-with-filter",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "count-with-limit",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "count-with-offset",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "count-empty",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "sum-integers",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "sum-mixed-numbers",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "sum-doubles-only",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "sum-empty",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "sum-missing-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "sum-overflow-saturates-or-promotes",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "avg-integers",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "avg-with-nan",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "avg-empty",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "several-aggregations",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "count-collection-group",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "count-with-cursor",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "count-beside-a-sum-over-a-missing-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "count-beside-an-avg-over-a-missing-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "duplicate-alias",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "no-aggregations",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "sum-on-name",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        }
+      ],
+      "selected": false,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:queries/projection-and-listing",
+      "family": "fs-queries",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "e8c30e076d75f6783e0fe3eba3157d36f05c5ba92caa7f43cb5a4d7e0d678589",
+      "steps": [
+        {
+          "id": "select-fields",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "select-missing-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "select-with-empty-list",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "list-documents",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj"
+        },
+        {
+          "id": "list-documents-page-size-one",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?pageSize=1"
+        },
+        {
+          "id": "list-documents-next-page",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?pageSize=1&pageToken={{list-documents-page-size-one.nextPageToken}}"
+        },
+        {
+          "id": "list-documents-with-mask",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?mask.fieldPaths=a"
+        },
+        {
+          "id": "list-documents-descending",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?orderBy=a%20desc"
+        },
+        {
+          "id": "list-documents-show-missing",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?showMissing=true"
+        },
+        {
+          "id": "list-missing-parents",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?showMissing=true&pageSize=10"
+        },
+        {
+          "id": "list-subcollection-of-missing-parent",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/missing-parent/sub"
+        },
+        {
+          "id": "list-empty-collection",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/nothing"
+        },
+        {
+          "id": "list-collection-ids-root",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:listCollectionIds"
+        },
+        {
+          "id": "list-collection-ids-of-a-missing-document",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/missing-parent:listCollectionIds"
+        },
+        {
+          "id": "list-collection-ids-paged",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:listCollectionIds"
+        },
+        {
+          "id": "get-with-mask",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/a?mask.fieldPaths=b.d&mask.fieldPaths=e"
+        },
+        {
+          "id": "get-missing-parent-document",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/missing-parent"
+        },
+        {
+          "id": "batch-get-mixed",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        }
+      ],
+      "selected": false,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:writes/preconditions-and-masks",
+      "family": "fs-writes",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "cd4fc7df2a0173b797fc0b5b45ed430d36a1706db83c9cbef6c31b3c03616bae",
+      "steps": [
+        {
+          "id": "create-with-exists-false",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "create-again-is-already-exists",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "update-missing-with-exists-true",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "mask-sets-and-deletes",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-mask",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/existing"
+        },
+        {
+          "id": "mask-on-missing-document-creates-it",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-masked-new",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/masked-new"
+        },
+        {
+          "id": "mask-naming-an-absent-field-deletes-it",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-delete-by-mask",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/existing"
+        },
+        {
+          "id": "replace-without-mask",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-replace",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/existing"
+        },
+        {
+          "id": "update-time-precondition-matches",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "update-time-precondition-is-stale",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "update-time-precondition-on-a-missing-document",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "delete-missing-is-ok",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "delete-missing-with-exists-true",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "atomic-failure-writes-nothing",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "atomic-1-is-absent",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/atomic-1"
+        },
+        {
+          "id": "same-document-twice-in-one-commit",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-twice",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/twice"
+        },
+        {
+          "id": "empty-commit",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "verify-write",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "verify-missing",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "no-op-set-keeps-update-time",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-no-op",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/twice"
+        },
+        {
+          "id": "patch-with-mask-and-exists-precondition-on-missing",
+          "method": "PATCH",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/patched?updateMask.fieldPaths=a&currentDocument.exists=true"
+        },
+        {
+          "id": "patch-creates",
+          "method": "PATCH",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/patched?updateMask.fieldPaths=a"
+        },
+        {
+          "id": "read-patched",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/patched"
+        },
+        {
+          "id": "create-document",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr?documentId=created"
+        },
+        {
+          "id": "create-document-again",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr?documentId=created"
+        },
+        {
+          "id": "create-document-with-generated-id",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr"
+        },
+        {
+          "id": "delete-document",
+          "method": "DELETE",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/created"
+        },
+        {
+          "id": "delete-document-again",
+          "method": "DELETE",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/created"
+        },
+        {
+          "id": "delete-with-exists-precondition",
+          "method": "DELETE",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/created?currentDocument.exists=true"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:writes/transforms",
+      "family": "fs-writes",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "7e77f0b0257758a27227f3e6431a8c3c4ddaa56a6f43ea9bf438f70872714b30",
+      "steps": [
+        {
+          "id": "server-timestamp-and-increments",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-increments",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "maximum-and-minimum-invalid-field-path",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-invalid-max-min",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "maximum-and-minimum",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-max-min",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/extrema"
+        },
+        {
+          "id": "array-transforms",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-array-transforms",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "transform-only-write-creates",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-transform-created",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/created"
+        },
+        {
+          "id": "transform-write-with-exists-precondition",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "increment-with-non-numeric-operand",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "server-timestamp-on-a-delete",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "set-and-transform-same-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-set-and-transform",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "integer-increment-saturates",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-saturated",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/sat"
+        },
+        {
+          "id": "increment-on-nan",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "two-transforms-on-one-field-in-one-write",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-dup",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/dup"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:writes/batch-write",
+      "family": "fs-writes",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "cdda66d1fbb8f32a707188b58880134781c9d2ea105bec3924dea9dee98e57af",
+      "steps": [
+        {
+          "id": "non-atomic-batch",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchWrite"
+        },
+        {
+          "id": "one-was-written",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/bw/one"
+        },
+        {
+          "id": "existing-was-deleted",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/bw/existing"
+        },
+        {
+          "id": "empty-batch",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchWrite"
+        },
+        {
+          "id": "batch-with-transaction-is-refused",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchWrite"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:transactions/lifecycle",
+      "family": "fs-transactions",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "4043c31d923279a9d9935c2d1ad06271b551f1a447f7e322ebe3267761af1810",
+      "steps": [
+        {
+          "id": "begin",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:beginTransaction"
+        },
+        {
+          "id": "read-in-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        },
+        {
+          "id": "get-with-transaction-query-parameter",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tx/counter?transaction={{begin}}"
+        },
+        {
+          "id": "commit-in-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "commit-finished-transaction-again",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "begin-contended",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:beginTransaction"
+        },
+        {
+          "id": "read-contended",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        },
+        {
+          "id": "out-of-band-write",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "contended-commit-is-aborted",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "counter-keeps-the-out-of-band-value",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tx/counter"
+        },
+        {
+          "id": "begin-unread",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:beginTransaction"
+        },
+        {
+          "id": "out-of-band-write-2",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "blind-write-in-a-transaction-commits",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "begin-query",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:beginTransaction"
+        },
+        {
+          "id": "query-in-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "phantom-write",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "commit-after-a-phantom-row",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "begin-read-only",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:beginTransaction"
+        },
+        {
+          "id": "read-only-commit-with-writes",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-only-commit-without-writes",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "begin-rolled-back",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:beginTransaction"
+        },
+        {
+          "id": "rollback",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:rollback"
+        },
+        {
+          "id": "commit-after-rollback",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "rollback-unknown",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:rollback"
+        },
+        {
+          "id": "commit-with-unknown-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "commit-with-malformed-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "batch-get-with-new-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        },
+        {
+          "id": "commit-the-new-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "run-query-with-new-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "begin-with-read-time-in-the-past",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:beginTransaction"
+        },
+        {
+          "id": "begin-read-write-with-retry-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:beginTransaction"
+        },
+        {
+          "id": "batch-get-with-both-transaction-and-read-time",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:errors/rest-shapes",
+      "family": "fs-admin",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "c4b201decb3adaf50ac1f9173b927bf6729bd7e2ee8785aacae2664adcbe69db",
+      "steps": [
+        {
+          "id": "get-missing-document",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err/none"
+        },
+        {
+          "id": "get-collection-path-as-document",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err/a/sub"
+        },
+        {
+          "id": "get-odd-path",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err/a/sub/x/y"
+        },
+        {
+          "id": "get-with-invalid-mask",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err/a?mask.fieldPaths=a..b"
+        },
+        {
+          "id": "unknown-custom-method",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:doSomething"
+        },
+        {
+          "id": "wrong-database",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/nope/documents/err/a"
+        },
+        {
+          "id": "wrong-project",
+          "method": "GET",
+          "path": "/v1/projects/other-project/databases/(default)/documents/err/a"
+        },
+        {
+          "id": "not-json",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "run-query-without-from",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "run-query-empty-body",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "unknown-operator",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "unknown-unary-operator",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "operator-unspecified",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "in-with-empty-array",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "in-with-non-array",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "in-with-thirty-one-values",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "in-with-thirty-values",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "array-contains-with-array-operand-and-any",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "two-not-in",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "not-in-with-in",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "two-array-contains",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "not-equal-with-not-in",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "empty-composite",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "composite-without-op",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "invalid-field-path",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "empty-field-path",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "order-by-empty-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "order-by-without-direction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "cursor-arity-mismatch",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "negative-limit",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "negative-offset",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "two-from-clauses",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "from-with-empty-collection-id",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "from-with-slash-in-collection-id",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "inequality-on-name-with-non-reference",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "name-equality-with-a-string",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "reference-to-another-database",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "unknown-value-kind",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "integer-value-out-of-range",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "timestamp-out-of-range",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "read-time-in-the-future",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "read-time-in-the-distant-past",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "write-with-invalid-document-name",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-to-another-database",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-with-empty-field-name",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-with-reserved-field-name",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-with-dotted-field-name",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-dotted-field-name",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err/x"
+        },
+        {
+          "id": "write-nested-arrays",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-array-of-maps-with-arrays",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-integer-out-of-range",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-integer-as-number",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-double-as-string",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-unknown-value-kind",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-empty-value",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-bad-timestamp",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-bad-base64",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-geopoint-out-of-range",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-reference-to-another-project",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-reference-to-a-collection",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-without-fields",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-without-fields",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err/nofields"
+        },
+        {
+          "id": "write-with-two-operations",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "write-with-no-operation",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "mask-with-invalid-path",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "mask-with-backticks",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-mask-with-backticks",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err/x"
+        },
+        {
+          "id": "mask-on-a-delete",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "precondition-with-both-fields",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "document-over-one-mebibyte",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "document-just-under-one-mebibyte",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "nesting-depth-twenty-one",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "nesting-depth-twenty",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "field-name-of-1500-bytes",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "field-name-of-1501-bytes",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "document-id-of-1500-bytes",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "document-id-of-1501-bytes",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "document-id-double-dot",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "document-id-single-dot",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "document-id-with-slash-encoded",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "document-id-with-double-underscore",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "collection-id-with-double-underscore",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "five-hundred-and-one-transforms",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "five-hundred-transforms",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "batch-get-with-a-bad-name",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        },
+        {
+          "id": "batch-get-with-a-collection-name",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        },
+        {
+          "id": "batch-get-with-no-documents",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        },
+        {
+          "id": "list-with-negative-page-size",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err?pageSize=-1"
+        },
+        {
+          "id": "list-with-bad-page-token",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err?pageToken=not-a-token"
+        },
+        {
+          "id": "list-with-bad-order-by",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err?orderBy=a%20sideways"
+        },
+        {
+          "id": "method-not-allowed",
+          "method": "PUT",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err/a"
+        },
+        {
+          "id": "delete-collection-path",
+          "method": "DELETE",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/err"
+        }
+      ],
+      "selected": false,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:emulator/routes",
+      "family": "fs-admin",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "1a8e6be0557e86be29294e07316e183ca8e033ebf3f3e378c41f1833fa04fa32",
+      "steps": [
+        {
+          "id": "clear-database",
+          "method": "DELETE",
+          "path": "/emulator/v1/projects/PROJECT/databases/(default)/documents"
+        },
+        {
+          "id": "cleared-document-is-gone",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/em/a"
+        },
+        {
+          "id": "cleared-subcollection-is-gone",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/em/a/sub/b"
+        },
+        {
+          "id": "clear-unknown-database",
+          "method": "DELETE",
+          "path": "/emulator/v1/projects/PROJECT/databases/nope/documents"
+        },
+        {
+          "id": "clear-with-get",
+          "method": "GET",
+          "path": "/emulator/v1/projects/PROJECT/databases/(default)/documents"
+        },
+        {
+          "id": "put-rules-that-do-not-compile",
+          "method": "PUT",
+          "path": "/emulator/v1/projects/PROJECT:securityRules"
+        },
+        {
+          "id": "put-rules-with-a-warning",
+          "method": "PUT",
+          "path": "/emulator/v1/projects/PROJECT:securityRules"
+        },
+        {
+          "id": "put-rules-without-files",
+          "method": "PUT",
+          "path": "/emulator/v1/projects/PROJECT:securityRules"
+        },
+        {
+          "id": "put-rules-restores-open-rules",
+          "method": "PUT",
+          "path": "/emulator/v1/projects/PROJECT:securityRules"
+        },
+        {
+          "id": "unknown-emulator-route",
+          "method": "GET",
+          "path": "/emulator/v1/projects/PROJECT:nothing"
+        },
+        {
+          "id": "named-database-is-served",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/named-db/documents/em/a"
+        },
+        {
+          "id": "write-to-a-named-database",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "commit-on-the-named-database-route",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/named-db/documents:commit"
+        },
+        {
+          "id": "named-database-document",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/named-db/documents/em/a"
+        },
+        {
+          "id": "default-database-is-separate",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/em/a"
+        },
+        {
+          "id": "clear-named-database",
+          "method": "DELETE",
+          "path": "/emulator/v1/projects/PROJECT/databases/named-db/documents"
+        },
+        {
+          "id": "named-database-cleared",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/named-db/documents/em/a"
+        },
+        {
+          "id": "database-with-uppercase-name",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/Named/documents/em/a"
+        },
+        {
+          "id": "list-databases",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases"
+        },
+        {
+          "id": "get-database",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)"
+        },
+        {
+          "id": "get-named-database",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/named-db"
+        }
+      ],
+      "selected": false,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    },
+    {
+      "id": "firestore:reads/read-time",
+      "family": "fs-admin",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+      "programDigest": "adf956497d20db3a8bb48f036886b169b033a3883b4d2e3371152accf111100a",
+      "steps": [
+        {
+          "id": "read-current",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/rt/a"
+        },
+        {
+          "id": "write-v2",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-at-the-first-update-time",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/rt/a?readTime={{read-current.updateTime}}"
+        },
+        {
+          "id": "read-at-the-second-update-time",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/rt/a?readTime={{write-v2.commitTime}}"
+        },
+        {
+          "id": "query-at-the-first-update-time",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
+        },
+        {
+          "id": "batch-get-at-the-first-update-time",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        },
+        {
+          "id": "list-at-the-first-update-time",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/rt?readTime={{read-current.updateTime}}"
+        },
+        {
+          "id": "count-at-the-first-update-time",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
+        },
+        {
+          "id": "begin-read-only-at-the-first-update-time",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:beginTransaction"
+        },
+        {
+          "id": "read-in-the-read-only-transaction",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet"
+        }
+      ],
+      "selected": false,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+    }
+  ],
+  "currentExecutionInherited": false
+}

@@ -45,12 +45,20 @@ def cases():
     ]
 
 
+CREDENTIAL_FIELDS = ("passwordHash", "salt", "passwordUpdatedAt", "validSince")
+
+
 def assess(status, before, after):
     if set(before) != {"a", "b"} or set(after) != {"a", "b"}:
         return {"bothAccountsPresent": False}
     return {
         "httpResponsePresent": type(status) is int and 100 <= status <= 599,
         **auth_invariants({"actor": "b"}, status, before, after),
+        "credentialsPreserved": all(
+            digest({k: before[r][k] for k in CREDENTIAL_FIELDS if k in before[r]})
+            == digest({k: after[r][k] for k in CREDENTIAL_FIELDS if k in after[r]})
+            for r in before
+        ),
         "providersPreserved": all(
             provider_identity(before[r]) == provider_identity(after[r]) for r in before
         ),
@@ -106,6 +114,38 @@ def signed_principal(token, uid, provider):
         and payload.get("aud") == PROJECT
         and payload.get("firebase", {}).get("sign_in_provider") == provider
     )
+
+
+def recover_anonymous(adapter, anonymous_uid):
+    """Only confirm recovery after owned UID validation, deletion and absence readback."""
+    try:
+        if anonymous_uid is None:
+            raise ValueError("anonymous UID unknown")
+        status, body = adapter.request(
+            "auth", ADMIN + "lookup", {"localId": [anonymous_uid]}, privileged=True
+        )
+        records = body.get("users", [])
+        if (
+            status != 200
+            or len(records) != 1
+            or records[0].get("localId") != anonymous_uid
+            or records[0].get("email")
+            or records[0].get("providerUserInfo")
+        ):
+            raise ValueError("anonymous ownership verification failed")
+        status, _ = adapter.request(
+            "auth", ADMIN + "delete", {"localId": anonymous_uid}, privileged=True
+        )
+        if status != 200:
+            raise ValueError("anonymous deletion failed")
+        status, body = adapter.request(
+            "auth", ADMIN + "lookup", {"localId": [anonymous_uid]}, privileged=True
+        )
+        if status != 200 or body.get("users", []):
+            raise ValueError("anonymous absence unconfirmed")
+        adapter.record({"kind": "anonymous-absent", "uid": anonymous_uid})
+    except Exception:
+        adapter.unrecovered.append({"kind": "anonymous-account"})
 
 
 def execute(origin, firestore_origin, output, nonce):
@@ -274,34 +314,7 @@ def execute(origin, firestore_origin, output, nonce):
     finally:
         adapter.budget.recovery = True
         if anonymous_attempted:
-            try:
-                if anonymous_uid is None:
-                    raise ValueError("anonymous UID unknown")
-                status, body = request(
-                    ADMIN + "lookup", {"localId": [anonymous_uid]}, privileged=True
-                )
-                records = body.get("users", [])
-                if (
-                    status != 200
-                    or len(records) != 1
-                    or records[0].get("localId") != anonymous_uid
-                    or records[0].get("email")
-                    or records[0].get("providerUserInfo")
-                ):
-                    raise ValueError("anonymous ownership verification failed")
-                status, _ = request(
-                    ADMIN + "delete", {"localId": anonymous_uid}, privileged=True
-                )
-                if status != 200:
-                    raise ValueError("anonymous deletion failed")
-                status, body = request(
-                    ADMIN + "lookup", {"localId": [anonymous_uid]}, privileged=True
-                )
-                if status != 200 or body.get("users", []):
-                    raise ValueError("anonymous absence unconfirmed")
-                adapter.record({"kind": "anonymous-absent", "uid": anonymous_uid})
-            except Exception:
-                adapter.unrecovered.append({"kind": "anonymous-account"})
+            recover_anonymous(adapter, anonymous_uid)
         adapter.cleanup()
     result = {
         "kind": "auth-conditions-local-v1",

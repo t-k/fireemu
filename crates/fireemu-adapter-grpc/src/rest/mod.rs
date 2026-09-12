@@ -1002,9 +1002,15 @@ impl RestState {
             Ok(result) => result,
             // Observed production negative-limit error is a stream element. Keep
             // other validation/authentication errors on their existing paths.
-            Err(status) if status.code() == Code::InvalidArgument && status.message() == "invalid query: negative limit" => {
+            Err(status)
+                if status.code() == Code::InvalidArgument
+                    && status.message() == "invalid query: negative limit" =>
+            {
                 let response = error_response(&status);
-                return Ok(RestResponse { status: response.status, body: json!([response.body]) });
+                return Ok(RestResponse {
+                    status: response.status,
+                    body: json!([response.body]),
+                });
             }
             Err(status) => return Err(status),
         };

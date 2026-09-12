@@ -636,9 +636,18 @@ fn finish_token_response(
     at: LogicalInstant,
 ) -> JsonResponse {
     let response = sign_response_tokens(response, signer);
-    if response.status == 200 && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some()) {
-        if let Some(refresh) = response.body.get("refreshToken").or_else(|| response.body.get("refresh_token")).and_then(Value::as_str) {
-            let Ok(mut store) = store.lock() else { return error(500, "INTERNAL"); };
+    if response.status == 200
+        && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some())
+    {
+        if let Some(refresh) = response
+            .body
+            .get("refreshToken")
+            .or_else(|| response.body.get("refresh_token"))
+            .and_then(Value::as_str)
+        {
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
             store.record_token_issuance(refresh, at);
         }
     }
@@ -3801,7 +3810,11 @@ fn update(
         None
     };
     // The saved production input is displayName-only; do not change shared token errors.
-    if self_service && body.as_object().is_some_and(|o| o.len() == 1 && o.contains_key("displayName")) {
+    if self_service
+        && body
+            .as_object()
+            .is_some_and(|o| o.len() == 1 && o.contains_key("displayName"))
+    {
         return error(400, "INVALID_REQ_TYPE");
     }
     // The provider the request's session signed in with, when it carries one: the official
@@ -3817,7 +3830,11 @@ fn update(
         // never a client selector, and does not change self-service invalidation rules.
         match verify_session(store, body, at) {
             Ok(session) => {
-                if has_admin_field && ["customAttributes", "mfa", "linkProviderUserInfo"].iter().any(|key| body.get(*key).is_some()) {
+                if has_admin_field
+                    && ["customAttributes", "mfa", "linkProviderUserInfo"]
+                        .iter()
+                        .any(|key| body.get(*key).is_some())
+                {
                     return error(400, "OPERATION_NOT_ALLOWED");
                 }
                 if body.get("disableUser").is_some_and(|v| !v.is_null()) {
@@ -3831,7 +3848,11 @@ fn update(
     };
     // Validate the whole request before touching the store (a rejected request changes
     // nothing); email / phone uniqueness is part of the validation.
-    let plan = match if self_service { parse_client_update(body) } else { parse_update(body) } {
+    let plan = match if self_service {
+        parse_client_update(body)
+    } else {
+        parse_update(body)
+    } {
         Ok(p) => p,
         Err(r) => return r,
     };
@@ -4567,7 +4588,8 @@ fn batch_row_user(
         custom_claims,
         created_at: millis_field(row, "createdAt").unwrap_or(at),
         last_sign_in_at: millis_field(row, "lastLoginAt"),
-        last_refresh_at: str_field(row, "lastRefreshAt").and_then(|v| LogicalInstant::parse_rfc3339(v).ok()),
+        last_refresh_at: str_field(row, "lastRefreshAt")
+            .and_then(|v| LogicalInstant::parse_rfc3339(v).ok()),
         tokens_valid_after: at,
         federated,
         password,

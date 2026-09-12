@@ -3253,6 +3253,7 @@ fn pending_retry_preserves_sms_after_a_mismatched_pending_credential() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep the stateful MFA sequence together.
 fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
     for strict in [false, true] {
         let (s, lines) = oob_authorization_state(strict);
@@ -3288,7 +3289,9 @@ fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
         let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
         let list = codes["verificationCodes"].as_array().unwrap();
         assert_eq!(list.len(), 2);
-        let mfa_session = started["phoneResponseInfo"]["sessionInfo"].as_str().unwrap();
+        let mfa_session = started["phoneResponseInfo"]["sessionInfo"]
+            .as_str()
+            .unwrap();
         let plain_session = sent["sessionInfo"].as_str().unwrap();
         let code_for = |session: &str| {
             list.iter()
@@ -3310,7 +3313,11 @@ fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(refused.get("idToken").is_none());
         // The MFA code is refused by the plain phone sign-in and kept.
-        let (status, refused) = post(&s, &format!("{V1}/accounts:signInWithPhoneNumber"), &mfa_code);
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPhoneNumber"),
+            &mfa_code,
+        );
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(refused.get("idToken").is_none());
@@ -3338,13 +3345,24 @@ fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        let (status, phone_user) =
-            post(&s, &format!("{V1}/accounts:signInWithPhoneNumber"), &plain_code);
+        let (status, phone_user) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPhoneNumber"),
+            &plain_code,
+        );
         assert_eq!(status, 200, "{phone_user}");
         assert_eq!(phone_user["phoneNumber"], "+15550001111");
         assert_ne!(phone_user["localId"], user["localId"]);
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_ne!(post(&s, &format!("{V1}/accounts:signInWithPhoneNumber"), &plain_code).0, 200);
+        assert_ne!(
+            post(
+                &s,
+                &format!("{V1}/accounts:signInWithPhoneNumber"),
+                &plain_code
+            )
+            .0,
+            200
+        );
         assert_ne!(
             finalize_mfa(&s, &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": mfa_code})).0,
             200
@@ -3354,10 +3372,7 @@ fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
 
 /// A verified user with one phone factor, plus closures that sign in (pending), start the
 /// phone step and finalize it against the shared state.
-fn pending_expiry_state(
-    strict: bool,
-    email: &str,
-) -> (AuthState, Value) {
+fn pending_expiry_state(strict: bool, email: &str) -> (AuthState, Value) {
     let (s, _) = oob_authorization_state(strict);
     let user = sign_up(&s, email);
     let (status, seeded) = admin(
@@ -3374,7 +3389,9 @@ fn advance_clock(s: &AuthState, seconds: i64) {
     s.clock
         .lock()
         .unwrap()
-        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(seconds))
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(
+            seconds,
+        ))
         .unwrap();
 }
 
@@ -3450,7 +3467,11 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 1);
         let fresh = start_phone_code(&s, &pending);
         assert_ne!(fresh["sessionInfo"], phone["sessionInfo"]);
-        assert_ne!(finalize_phone_step(&s, &pending, &phone).0, 200, "the expired code stays dead");
+        assert_ne!(
+            finalize_phone_step(&s, &pending, &phone).0,
+            200,
+            "the expired code stays dead"
+        );
         let (status, signed) = finalize_phone_step(&s, &pending, &fresh);
         assert_eq!(status, 200, "{signed}");
         let (status, lookup) = post(
@@ -3503,7 +3524,10 @@ fn pending_retry_ends_when_the_pending_credential_expires() {
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
         let (status, refused) = start_phone_step(&s, &pending);
         assert_eq!(status, 400, "{refused}");
-        assert_eq!(refused["error"]["message"], "INVALID_MFA_PENDING_CREDENTIAL");
+        assert_eq!(
+            refused["error"]["message"],
+            "INVALID_MFA_PENDING_CREDENTIAL"
+        );
     }
 }
 
@@ -3526,7 +3550,10 @@ fn pending_retry_start_is_accepted_on_a_disabled_account_and_refused_at_finalize
         // Start is accepted while disabled and returns a session and a code.
         let (status, started) = start_phone_step(&s, &pending);
         assert_eq!(status, 200, "{started}");
-        assert!(started["phoneResponseInfo"]["sessionInfo"].is_string(), "{started}");
+        assert!(
+            started["phoneResponseInfo"]["sessionInfo"].is_string(),
+            "{started}"
+        );
         let phone = start_phone_code(&s, &pending);
         // Finalizing that session is refused USER_DISABLED, and issues no tokens.
         let (status, refused) = finalize_phone_step(&s, &pending, &phone);
@@ -3595,7 +3622,10 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
         // complete while disabled.
         let (status, started) = start_phone_step(&s, &pending);
         assert_eq!(status, 200, "{started}");
-        assert!(started["phoneResponseInfo"]["sessionInfo"].is_string(), "{started}");
+        assert!(
+            started["phoneResponseInfo"]["sessionInfo"].is_string(),
+            "{started}"
+        );
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count);
         let disabled_phone = start_phone_code(&s, &pending);
         let (status, refused) = finalize_phone_step(&s, &pending, &disabled_phone);
@@ -3620,6 +3650,7 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep the stateful MFA sequence together.
 fn pending_retry_refuses_totp_finalize_and_enrollment_after_the_account_is_disabled() {
     let mut s = state();
     s.totp_extension_enabled = true;
@@ -3636,7 +3667,12 @@ fn pending_retry_refuses_totp_finalize_and_enrollment_after_the_account_is_disab
         enrollment
     };
     let enroll_finalize = |token: &Value, enrollment: &Value, at: LogicalInstant| {
-        let secret = base32::decode(enrollment["totpSessionInfo"]["sharedSecretKey"].as_str().unwrap()).unwrap();
+        let secret = base32::decode(
+            enrollment["totpSessionInfo"]["sharedSecretKey"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
         let code = totp_at(&secret, &TotpPolicy::default().params(), at);
         post(
             &s,
@@ -3655,10 +3691,17 @@ fn pending_retry_refuses_totp_finalize_and_enrollment_after_the_account_is_disab
     };
     let t0 = LogicalInstant::from_unix_seconds(1_788_004_860);
     let enrollment = enroll_start(&user["idToken"]);
-    let secret = base32::decode(enrollment["totpSessionInfo"]["sharedSecretKey"].as_str().unwrap()).unwrap();
+    let secret = base32::decode(
+        enrollment["totpSessionInfo"]["sharedSecretKey"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
     let (status, enrolled) = enroll_finalize(&user["idToken"], &enrollment, t0);
     assert_eq!(status, 200, "{enrolled}");
-    let enrollment_id = claims(enrolled["idToken"].as_str().unwrap())["firebase"]["second_factor_identifier"].clone();
+    let enrollment_id = claims(enrolled["idToken"].as_str().unwrap())["firebase"]
+        ["second_factor_identifier"]
+        .clone();
 
     // Second factor pending, then disabled: the TOTP finalize has no adapter-level guard and
     // rests on the core check.
@@ -3713,7 +3756,10 @@ fn pending_retry_refuses_totp_finalize_and_enrollment_after_the_account_is_disab
     s.clock.lock().unwrap().advance(step).unwrap();
     let (status, signed) = finalize_mfa(&s, &finalize);
     assert_eq!(status, 200, "{signed}");
-    assert_eq!(claims(signed["idToken"].as_str().unwrap())["firebase"]["sign_in_second_factor"], "totp");
+    assert_eq!(
+        claims(signed["idToken"].as_str().unwrap())["firebase"]["sign_in_second_factor"],
+        "totp"
+    );
     let (status, enrolled_again) = phone_finalize(&signed["idToken"]);
     assert_eq!(status, 200, "{enrolled_again}");
     assert!(s.store.lock().unwrap().verification_codes().is_empty());
@@ -3824,7 +3870,12 @@ fn pending_retry_two_party_totp_refusal_keeps_both_pendings_and_the_owners_step(
             &json!({"idToken": user["idToken"], "totpEnrollmentInfo": {}}),
         );
         assert_eq!(status, 200, "{enrollment}");
-        let secret = base32::decode(enrollment["totpSessionInfo"]["sharedSecretKey"].as_str().unwrap()).unwrap();
+        let secret = base32::decode(
+            enrollment["totpSessionInfo"]["sharedSecretKey"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
         let (status, enrolled) = post(
             &s,
             &format!("{V2}/accounts/mfaEnrollment:finalize"),
@@ -3833,17 +3884,30 @@ fn pending_retry_two_party_totp_refusal_keeps_both_pendings_and_the_owners_step(
                 "verificationCode": totp_at(&secret, &TotpPolicy::default().params(), t0)}}),
         );
         assert_eq!(status, 200, "{enrolled}");
-        let factor = claims(enrolled["idToken"].as_str().unwrap())["firebase"]["second_factor_identifier"].clone();
+        let factor = claims(enrolled["idToken"].as_str().unwrap())["firebase"]
+            ["second_factor_identifier"]
+            .clone();
         (user, secret, factor)
     };
     let (a, secret_a, factor_a) = enroll("totp-a@example.com");
     let (b, _, _) = enroll("totp-b@example.com");
     let pending_a = pending_login(&s, "totp-a@example.com");
     let pending_b = pending_login(&s, "totp-b@example.com");
-    let b_before = admin(&s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [b["localId"]]})).1;
+    let b_before = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [b["localId"]]}),
+    )
+    .1;
     let count = s.store.lock().unwrap().pending_sign_in_count();
-    let t1 = t0.checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(30)).unwrap();
-    s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(30)).unwrap();
+    let t1 = t0
+        .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(30))
+        .unwrap();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(30))
+        .unwrap();
     let code_a = totp_at(&secret_a, &TotpPolicy::default().params(), t1);
     // B's pending credential with A's factor and A's valid code: A's factor is not on B.
     let (status, refused) = finalize_mfa(
@@ -3864,14 +3928,30 @@ fn pending_retry_two_party_totp_refusal_keeps_both_pendings_and_the_owners_step(
     );
     assert_eq!(status, 200, "{signed}");
     assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
-    let (status, lookup) = post(&s, &format!("{V1}/accounts:lookup"), &json!({"idToken": signed["idToken"]}));
+    let (status, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed["idToken"]}),
+    );
     assert_eq!(status, 200, "{lookup}");
     assert_eq!(lookup["users"][0]["localId"], a["localId"]);
     // B's pending credential is intact and B is not signed in.
-    let (status, lookup) = admin(&s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [b["localId"]]}));
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [b["localId"]]}),
+    );
     assert_eq!(status, 200, "{lookup}");
-    assert_eq!(lookup["users"][0]["lastLoginAt"], b_before["users"][0]["lastLoginAt"]);
-    assert!(s.store.lock().unwrap().pending_sign_in_user(&PendingSignId_parse(&pending_b)).is_some());
+    assert_eq!(
+        lookup["users"][0]["lastLoginAt"],
+        b_before["users"][0]["lastLoginAt"]
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .pending_sign_in_user(&PendingSignId_parse(&pending_b))
+        .is_some());
 }
 
 #[allow(non_snake_case)]
@@ -3908,11 +3988,26 @@ fn pending_retry_tenant_pending_credentials_do_not_cross_namespaces() {
             "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
     );
     assert_eq!(status, 200, "{started}");
-    let tenant_codes = || get(&s, "/emulator/v1/projects/demo-app/tenants/customer-a/verificationCodes").1;
+    let tenant_codes = || {
+        get(
+            &s,
+            "/emulator/v1/projects/demo-app/tenants/customer-a/verificationCodes",
+        )
+        .1
+    };
     let codes = tenant_codes();
-    assert_eq!(codes["verificationCodes"].as_array().map(Vec::len), Some(1), "{codes}");
+    assert_eq!(
+        codes["verificationCodes"].as_array().map(Vec::len),
+        Some(1),
+        "{codes}"
+    );
     let phone = json!({"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": codes["verificationCodes"][0]["code"]});
-    let tenant_store = s.registry.as_ref().unwrap().tenant_store("demo-app", "customer-a").unwrap();
+    let tenant_store = s
+        .registry
+        .as_ref()
+        .unwrap()
+        .tenant_store("demo-app", "customer-a")
+        .unwrap();
     let count = tenant_store.lock().unwrap().pending_sign_in_count();
     assert_eq!(count, 1);
     // The valid credentials of tenant A are refused in tenant B and in the default
@@ -3942,7 +4037,10 @@ fn pending_retry_tenant_pending_credentials_do_not_cross_namespaces() {
         &json!({"tenantId": "customer-a", "mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": phone}),
     );
     assert_eq!(status, 200, "{signed}");
-    assert_eq!(claims(signed["idToken"].as_str().unwrap())["firebase"]["tenant"], "customer-a");
+    assert_eq!(
+        claims(signed["idToken"].as_str().unwrap())["firebase"]["tenant"],
+        "customer-a"
+    );
     assert_ne!(
         finalize_mfa(&s, &json!({"tenantId": "customer-a", "mfaPendingCredential": pending["mfaPendingCredential"], "phoneVerificationInfo": phone})).0,
         200
@@ -3961,13 +4059,21 @@ fn pending_retry_concurrent_finalizes_of_one_credential_succeed_exactly_once() {
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
-    let successes: Vec<&Value> = results.iter().filter(|(status, _)| *status == 200).map(|(_, body)| body).collect();
+    let successes: Vec<&Value> = results
+        .iter()
+        .filter(|(status, _)| *status == 200)
+        .map(|(_, body)| body)
+        .collect();
     assert_eq!(successes.len(), 1, "{results:?}");
     assert!(results
         .iter()
         .filter(|(status, _)| *status != 200)
         .all(|(_, body)| body.get("idToken").is_none() && body.get("refreshToken").is_none()));
-    let (status, lookup) = post(&s, &format!("{V1}/accounts:lookup"), &json!({"idToken": successes[0]["idToken"]}));
+    let (status, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": successes[0]["idToken"]}),
+    );
     assert_eq!(status, 200, "{lookup}");
     assert_eq!(lookup["users"][0]["localId"], user["localId"]);
     assert!(s.store.lock().unwrap().verification_codes().is_empty());
@@ -4043,8 +4149,10 @@ fn pending_retry_hook_that_disables_the_account_refuses_the_same_request() {
     assert_eq!(status, 200, "{lookup}");
     assert_eq!(lookup["users"][0]["disabled"], true);
     s.blocking = Some(Arc::new(PassThroughBlockingHook));
-    assert_eq!(finalize_phone_step(&s, &pending, &phone).1["error"]["message"], "USER_DISABLED");
-
+    assert_eq!(
+        finalize_phone_step(&s, &pending, &phone).1["error"]["message"],
+        "USER_DISABLED"
+    );
 }
 
 /// The whole hook response persists as one record update, and an account created by the
@@ -4086,8 +4194,14 @@ fn pending_retry_hook_disable_persists_the_whole_response_and_created_accounts()
     // An existing account's first-factor sign-in persists none of the response: neither
     // the flag nor the claims, and no sign-in time.
     assert_ne!(lookup["users"][0]["disabled"], true, "{lookup}");
-    assert_eq!(lookup["users"][0]["lastLoginAt"], before["users"][0]["lastLoginAt"]);
-    assert!(lookup["users"][0].get("customAttributes").is_none(), "{lookup}");
+    assert_eq!(
+        lookup["users"][0]["lastLoginAt"],
+        before["users"][0]["lastLoginAt"]
+    );
+    assert!(
+        lookup["users"][0].get("customAttributes").is_none(),
+        "{lookup}"
+    );
     s.blocking = None;
     let (status, signed) = post(
         &s,
@@ -4185,21 +4299,31 @@ fn pending_retry_admin_password_update_never_returns_tokens_regardless_of_enable
         let user = sign_up(&s, "admin-update-toggle@example.com");
         let uid = user["localId"].clone();
         let update = |body: Value| {
-            admin(&s, &format!("{V1}/projects/demo-app/accounts:update"), &body)
+            admin(
+                &s,
+                &format!("{V1}/projects/demo-app/accounts:update"),
+                &body,
+            )
         };
         // Enabled account, then re-enabled account: neither administrative password
         // update returns tokens; sign-in still reflects the enabled/disabled state.
-        let (status, response) = update(json!({"localId": uid, "password": "toggle-22", "disableUser": true}));
+        let (status, response) =
+            update(json!({"localId": uid, "password": "toggle-22", "disableUser": true}));
         assert_eq!(status, 200, "{response}");
         for key in ["idToken", "refreshToken", "expiresIn"] {
             assert!(response.get(key).is_none(), "{key}: {response}");
         }
         assert_eq!(
-            post(&s, &format!("{V1}/accounts:signInWithPassword"),
-                &json!({"email": "admin-update-toggle@example.com", "password": "toggle-22"})).1["error"]["message"],
+            post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": "admin-update-toggle@example.com", "password": "toggle-22"})
+            )
+            .1["error"]["message"],
             "USER_DISABLED"
         );
-        let (status, response) = update(json!({"localId": uid, "password": "toggle-33", "disableUser": false}));
+        let (status, response) =
+            update(json!({"localId": uid, "password": "toggle-33", "disableUser": false}));
         assert_eq!(status, 200, "{response}");
         for key in ["idToken", "refreshToken", "expiresIn"] {
             assert!(response.get(key).is_none(), "{key}: {response}");
@@ -4219,7 +4343,10 @@ fn pending_retry_admin_password_update_never_returns_tokens_regardless_of_enable
             &json!({"idToken": session, "password": "toggle-44", "returnSecureToken": true}),
         );
         assert_eq!(status, 200, "{changed}");
-        assert!(changed["idToken"].is_string() && changed["refreshToken"].is_string(), "{changed}");
+        assert!(
+            changed["idToken"].is_string() && changed["refreshToken"].is_string(),
+            "{changed}"
+        );
     }
 }
 
@@ -5154,21 +5281,53 @@ fn broad_client_update_uses_verified_owner_and_ignores_observed_admin_fields() {
     let b = sign_up(&s, "broad-owner-b@example.com");
     let update = format!("{V1}/accounts:update");
     let admin_update = format!("{V1}/projects/demo-app/accounts:update");
-    assert_eq!(admin(&s, &admin_update, &json!({"localId": a["localId"], "displayName": "A-original"})).0, 200);
-    let (status, changed) = post(&s, &update, &json!({"idToken": b["idToken"], "localId": a["localId"], "emailVerified": true, "displayName": "B-self"}));
+    assert_eq!(
+        admin(
+            &s,
+            &admin_update,
+            &json!({"localId": a["localId"], "displayName": "A-original"})
+        )
+        .0,
+        200
+    );
+    let (status, changed) = post(
+        &s,
+        &update,
+        &json!({"idToken": b["idToken"], "localId": a["localId"], "emailVerified": true, "displayName": "B-self"}),
+    );
     assert_eq!(status, 200, "{changed}");
     assert_eq!(changed["localId"], b["localId"]);
     assert_eq!(changed["emailVerified"], false);
-    let lookup = |uid: &Value| admin(&s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [uid]})).1["users"][0].clone();
+    let lookup = |uid: &Value| {
+        admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        )
+        .1["users"][0]
+            .clone()
+    };
     assert_eq!(lookup(&a["localId"])["displayName"], "A-original");
     assert_eq!(lookup(&b["localId"])["displayName"], "B-self");
     assert_eq!(lookup(&b["localId"])["emailVerified"], false);
     // Ignored selector must not turn a self-service password change into an Admin plan.
-    let (status, changed) = post(&s, &update, &json!({"idToken": b["idToken"], "localId": a["localId"], "password": "replacement-22", "returnSecureToken": true}));
+    let (status, changed) = post(
+        &s,
+        &update,
+        &json!({"idToken": b["idToken"], "localId": a["localId"], "password": "replacement-22", "returnSecureToken": true}),
+    );
     assert_eq!(status, 200, "{changed}");
     assert!(changed["idToken"].is_string() && changed["refreshToken"].is_string());
     assert_eq!(changed["localId"], b["localId"]);
-    assert_eq!(admin(&s, &admin_update, &json!({"localId": a["localId"], "emailVerified": true})).0, 200);
+    assert_eq!(
+        admin(
+            &s,
+            &admin_update,
+            &json!({"localId": a["localId"], "emailVerified": true})
+        )
+        .0,
+        200
+    );
     assert_eq!(lookup(&a["localId"])["emailVerified"], true);
 }
 
@@ -5178,19 +5337,59 @@ fn broad_client_update_failed_credentials_never_apply_regular_attributes() {
         let (s, _) = oob_authorization_state(true);
         let a = sign_up(&s, "broad-failed-a@example.com");
         let b = sign_up(&s, "broad-failed-b@example.com");
-        let token = if failure == "invalid" { json!("invalid-token") } else { b["idToken"].clone() };
+        let token = if failure == "invalid" {
+            json!("invalid-token")
+        } else {
+            b["idToken"].clone()
+        };
         if failure == "expired" {
-            s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(3601)).unwrap();
+            s.clock
+                .lock()
+                .unwrap()
+                .advance(fireemu_core_types::time::LogicalDuration::from_seconds(
+                    3601,
+                ))
+                .unwrap();
         } else if failure == "disabled" {
-            assert_eq!(admin(&s, &format!("{V1}/projects/demo-app/accounts:update"), &json!({"localId": b["localId"], "disableUser": true})).0, 200);
+            assert_eq!(
+                admin(
+                    &s,
+                    &format!("{V1}/projects/demo-app/accounts:update"),
+                    &json!({"localId": b["localId"], "disableUser": true})
+                )
+                .0,
+                200
+            );
         } else if failure == "revoked" {
-            s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(2)).unwrap();
-            assert_eq!(admin(&s, &format!("{V1}/projects/demo-app/accounts:update"), &json!({"localId": b["localId"], "password": "revoke-22"})).0, 200);
+            s.clock
+                .lock()
+                .unwrap()
+                .advance(fireemu_core_types::time::LogicalDuration::from_seconds(2))
+                .unwrap();
+            assert_eq!(
+                admin(
+                    &s,
+                    &format!("{V1}/projects/demo-app/accounts:update"),
+                    &json!({"localId": b["localId"], "password": "revoke-22"})
+                )
+                .0,
+                200
+            );
         }
-        let (status, result) = post(&s, &format!("{V1}/accounts:update"), &json!({"idToken": token, "localId": a["localId"], "emailVerified": true, "displayName": "forbidden"}));
+        let (status, result) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": token, "localId": a["localId"], "emailVerified": true, "displayName": "forbidden"}),
+        );
         assert_eq!(status, 400, "{failure}: {result}");
         for uid in [&a["localId"], &b["localId"]] {
-            let row = admin(&s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [uid]})).1["users"][0].clone();
+            let row = admin(
+                &s,
+                &format!("{V1}/projects/demo-app/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            )
+            .1["users"][0]
+                .clone();
             assert!(row.get("displayName").is_none(), "{failure}: {row}");
             assert_eq!(row["emailVerified"], false);
         }
@@ -5200,7 +5399,11 @@ fn broad_client_update_failed_credentials_never_apply_regular_attributes() {
 #[test]
 fn broad_display_name_only_update_preserves_production_error_code() {
     let (s, _) = oob_authorization_state(true);
-    let (status, response) = post(&s, &format!("{V1}/accounts:update"), &json!({"displayName": "must-not-apply"}));
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"displayName": "must-not-apply"}),
+    );
     assert_eq!(status, 400);
     assert_eq!(response["error"]["message"], "INVALID_REQ_TYPE");
 }
@@ -5209,40 +5412,103 @@ fn broad_display_name_only_update_preserves_production_error_code() {
 fn broad_last_refresh_tracks_successful_token_issuance_not_reads_or_failures() {
     let (mut s, _) = oob_authorization_state(true);
     let user = sign_up(&s, "mint-clock@example.com");
-    let lookup = |s: &AuthState| admin(s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [user["localId"]]})).1["users"][0]["lastRefreshAt"].clone();
-    let expected = |s: &AuthState| LogicalInstant::to_rfc3339(s.clock.lock().unwrap().now()).unwrap();
+    let lookup = |s: &AuthState| {
+        admin(
+            s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [user["localId"]]}),
+        )
+        .1["users"][0]["lastRefreshAt"]
+            .clone()
+    };
+    let expected =
+        |s: &AuthState| LogicalInstant::to_rfc3339(s.clock.lock().unwrap().now()).unwrap();
     let first = lookup(&s);
     assert_eq!(first, expected(&s));
-    s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(30)).unwrap();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(30))
+        .unwrap();
     assert_eq!(lookup(&s), first);
-    assert_eq!(post(&s, &format!("{V1}/accounts:signInWithPassword"), &json!({"email": "mint-clock@example.com", "password": "wrong"})).0, 400);
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "mint-clock@example.com", "password": "wrong"})
+        )
+        .0,
+        400
+    );
     assert_eq!(lookup(&s), first);
-    assert_eq!(post(&s, "/securetoken.googleapis.com/v1/token", &json!({"grant_type":"refresh_token", "refresh_token":"invalid"})).0, 400);
+    assert_eq!(
+        post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type":"refresh_token", "refresh_token":"invalid"})
+        )
+        .0,
+        400
+    );
     assert_eq!(lookup(&s), first);
-    assert_eq!(post(&s, "/securetoken.googleapis.com/v1/token", &json!({"grant_type":"refresh_token", "refresh_token":user["refreshToken"]})).0, 200);
+    assert_eq!(
+        post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type":"refresh_token", "refresh_token":user["refreshToken"]})
+        )
+        .0,
+        200
+    );
     let refreshed = lookup(&s);
     assert_eq!(refreshed, expected(&s));
     assert_ne!(refreshed, first);
-    s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(30)).unwrap();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(30))
+        .unwrap();
     s.blocking = Some(Arc::new(RejectBeforeSignInHook { timeout: false }));
-    assert_ne!(post(&s, &format!("{V1}/accounts:signInWithPassword"), &json!({"email": "mint-clock@example.com", "password": "hunter22"})).0, 200);
+    assert_ne!(
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "mint-clock@example.com", "password": "hunter22"})
+        )
+        .0,
+        200
+    );
     assert_eq!(lookup(&s), refreshed);
 }
 
 #[test]
 fn broad_refresh_project_number_is_separate_from_jwt_project_identity() {
-    for (project, number) in [("demo-one", Some(111_111_111_111_u64)), ("demo-two", Some(222_222_222_222_u64)), ("demo-unset", None)] {
+    for (project, number) in [
+        ("demo-one", Some(111_111_111_111_u64)),
+        ("demo-two", Some(222_222_222_222_u64)),
+        ("demo-unset", None),
+    ] {
         let mut s = state();
         s.stateless_refresh_tokens = false;
         let mut store = AuthStore::new(project, SplitMix64::new(8), TotpPolicy::default());
         store.set_project_number(number);
         s.store = Arc::new(Mutex::new(store));
         let user = sign_up(&s, "project-mapping@example.com");
-        let (status, response) = post(&s, "/securetoken.googleapis.com/v1/token", &json!({"grant_type":"refresh_token", "refresh_token":user["refreshToken"]}));
+        let (status, response) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type":"refresh_token", "refresh_token":user["refreshToken"]}),
+        );
         assert_eq!(status, 200, "{response}");
-        assert_eq!(response["project_id"], number.map_or_else(|| project.to_owned(), |n| n.to_string()));
+        assert_eq!(
+            response["project_id"],
+            number.map_or_else(|| project.to_owned(), |n| n.to_string())
+        );
         let token_claims = claims(response["id_token"].as_str().unwrap());
         assert_eq!(token_claims["aud"], project);
-        assert_eq!(token_claims["iss"], format!("https://securetoken.google.com/{project}"));
+        assert_eq!(
+            token_claims["iss"],
+            format!("https://securetoken.google.com/{project}")
+        );
     }
 }

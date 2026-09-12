@@ -895,7 +895,6 @@ impl AuthStore {
         self.project_number
     }
 
-
     /// Looks up a user by its ID text.
     #[must_use]
     pub fn user_by_id(&self, uid: &str) -> Option<&UserRecord> {
@@ -2441,7 +2440,9 @@ impl AuthStore {
     /// Records a completed issuance by its exact refresh session, without activating
     /// email ownership. Deleted/replaced sessions cannot mutate a reused UID.
     pub fn record_token_issuance(&mut self, token: &str, at: LogicalInstant) {
-        let Ok(session) = self.stateless_refresh_session(token) else { return; };
+        let Ok(session) = self.stateless_refresh_session(token) else {
+            return;
+        };
         let uid = session.uid.clone();
         if let Some(user) = self.users.get_mut(&uid).map(Arc::make_mut) {
             user.last_refresh_at = Some(user.last_refresh_at.map_or(at, |old| old.max(at)));
@@ -3152,7 +3153,11 @@ pub struct TenantMetadataPatch {
 impl AuthRegistry {
     /// Configured project numbers are isolated by project ID, including routed stores.
     #[must_use]
-    pub fn with_project_numbers(default_project: &str, default: SharedAuthStore, numbers: BTreeMap<String, u64>) -> Self {
+    pub fn with_project_numbers(
+        default_project: &str,
+        default: SharedAuthStore,
+        numbers: BTreeMap<String, u64>,
+    ) -> Self {
         if let Ok(mut store) = default.lock() {
             store.set_project_number(numbers.get(default_project).copied());
         }
@@ -3418,7 +3423,12 @@ impl AuthRegistry {
         let parent = self.store_for(project)?;
         let (policy, config, signer, number) = {
             let parent = parent.lock().ok()?;
-            (*parent.policy(), parent.config(), parent.signer_arc(), parent.project_number())
+            (
+                *parent.policy(),
+                parent.config(),
+                parent.signer_arc(),
+                parent.project_number(),
+            )
         };
         let seed = project
             .bytes()
@@ -4711,12 +4721,26 @@ mod broad_project_number_tests {
 
     #[test]
     fn configured_numbers_follow_namespace_not_default_or_snapshot_source() {
-        let default = Arc::new(Mutex::new(AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default())));
-        let registry = AuthRegistry::with_project_numbers("demo-one", default.clone(), BTreeMap::from([("demo-one".to_owned(), 111), ("demo-two".to_owned(), 222)]));
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-one",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = AuthRegistry::with_project_numbers(
+            "demo-one",
+            default.clone(),
+            BTreeMap::from([("demo-one".to_owned(), 111), ("demo-two".to_owned(), 222)]),
+        );
         assert_eq!(default.lock().unwrap().project_number(), Some(111));
         let second = registry.routed_candidate("demo-two").unwrap();
         assert_eq!(second.project_number(), Some(222));
-        assert_eq!(registry.routed_candidate("demo-unset").unwrap().project_number(), None);
+        assert_eq!(
+            registry
+                .routed_candidate("demo-unset")
+                .unwrap()
+                .project_number(),
+            None
+        );
         assert!(registry.register("demo-two", second));
         let tenant = registry.ensure_tenant("demo-two", "tenant").unwrap();
         assert_eq!(tenant.lock().unwrap().project_number(), Some(222));
@@ -4728,19 +4752,35 @@ mod broad_project_number_tests {
     #[test]
     fn issuance_metadata_does_not_activate_email_owner_or_touch_recreated_uid() {
         let mut store = AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default());
-        store.set_config(ProjectAuthConfig { allow_duplicate_emails: true, ..ProjectAuthConfig::default() });
+        store.set_config(ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            ..ProjectAuthConfig::default()
+        });
         let at = LogicalInstant::from_unix_seconds(100);
-        let a = store.create_user_with_id(NewUser::email("shared@example.com"), Some("a"), at).unwrap();
-        let token = store.issue_refresh_session(&a, at, None, CustomClaims::default(), None).unwrap();
-        let b = store.create_user_with_id(NewUser::email("shared@example.com"), Some("b"), at).unwrap();
-        assert_eq!(store.user_by_email("shared@example.com").unwrap().local_id, b);
+        let a = store
+            .create_user_with_id(NewUser::email("shared@example.com"), Some("a"), at)
+            .unwrap();
+        let token = store
+            .issue_refresh_session(&a, at, None, CustomClaims::default(), None)
+            .unwrap();
+        let b = store
+            .create_user_with_id(NewUser::email("shared@example.com"), Some("b"), at)
+            .unwrap();
+        assert_eq!(
+            store.user_by_email("shared@example.com").unwrap().local_id,
+            b
+        );
         store.record_token_issuance(&token, at);
         assert_eq!(store.user(&a).unwrap().last_refresh_at, Some(at));
-        assert_eq!(store.user_by_email("shared@example.com").unwrap().local_id, b);
+        assert_eq!(
+            store.user_by_email("shared@example.com").unwrap().local_id,
+            b
+        );
         store.delete_user_by_id("a").unwrap();
-        let replacement = store.create_user_with_id(NewUser::anonymous(), Some("a"), at).unwrap();
+        let replacement = store
+            .create_user_with_id(NewUser::anonymous(), Some("a"), at)
+            .unwrap();
         store.record_token_issuance(&token, at);
         assert_eq!(store.user(&replacement).unwrap().last_refresh_at, None);
     }
-
 }

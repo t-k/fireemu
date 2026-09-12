@@ -1125,7 +1125,12 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         custom_claims,
         created_at,
         last_sign_in_at: millis_instant(record.last_login_at.as_deref()),
-        last_refresh_at: record.last_refresh_at.as_deref().map(LogicalInstant::parse_rfc3339).transpose().map_err(|e| refuse(format!("invalid lastRefreshAt: {e}")))?,
+        last_refresh_at: record
+            .last_refresh_at
+            .as_deref()
+            .map(LogicalInstant::parse_rfc3339)
+            .transpose()
+            .map_err(|e| refuse(format!("invalid lastRefreshAt: {e}")))?,
         tokens_valid_after: seconds_instant(record.valid_since.as_deref()).unwrap_or(created_at),
         federated: record
             .provider_user_info
@@ -1702,104 +1707,104 @@ fn exported_account(
     user: &fireemu_core_auth::store::UserRecord,
     tenant_id: Option<&str>,
 ) -> UserRecord {
+    let (password_hash, salt) = match store
+        .password_digest(&user.local_id)
+        .and_then(fireemu_core_auth::store::PasswordDigest::emulator_form)
     {
-        let (password_hash, salt) = match store
-            .password_digest(&user.local_id)
-            .and_then(fireemu_core_auth::store::PasswordDigest::emulator_form)
-        {
-            Some((salt, password)) => (
-                Some(fake_hash::encode(salt, password)),
-                Some(salt.to_owned()),
-            ),
-            None => (None, None),
-        };
-        let mut providers = Vec::new();
-        if let Some(email) = &user.email {
-            providers.push(ProviderUserInfo {
-                provider_id: if password_hash.is_some() || store.has_password(&user.local_id) {
-                    "password".to_owned()
-                } else {
-                    "emailLink".to_owned()
-                },
-                raw_id: email.clone(),
-                federated_id: Some(email.clone()),
-                email: Some(email.clone()),
-                display_name: user.display_name.clone(),
-                photo_url: user.photo_url.clone(),
-                phone_number: None,
-                screen_name: None,
-            });
-        }
-        if let Some(phone) = &user.phone_number {
-            providers.push(ProviderUserInfo {
-                provider_id: "phone".to_owned(),
-                raw_id: phone.clone(),
-                phone_number: Some(phone.clone()),
-                ..ProviderUserInfo::default()
-            });
-        }
-        for identity in &user.federated {
-            providers.push(ProviderUserInfo {
-                provider_id: identity.provider_id.clone(),
-                raw_id: identity.raw_id.clone(),
-                federated_id: Some(identity.raw_id.clone()),
-                email: identity.email.clone(),
-                display_name: identity.display_name.clone(),
-                photo_url: identity.photo_url.clone(),
-                phone_number: None,
-                screen_name: None,
-            });
-        }
-        let mut mfa_info = Vec::new();
-        for factor in user.mfa.phone_factors() {
-            mfa_info.push(MfaEnrollment {
-                mfa_enrollment_id: factor.mfa_enrollment_id.clone(),
-                display_name: factor.display_name.clone(),
-                phone_info: Some(factor.phone_number.clone()),
-                unobfuscated_phone_info: Some(factor.phone_number.clone()),
-                enrolled_at: Some(rfc3339_text(factor.enrolled_at)),
-                totp_shared_secret_key: None,
-            });
-        }
-        for factor in user.mfa.totp_factors() {
-            mfa_info.push(MfaEnrollment {
-                mfa_enrollment_id: factor.mfa_enrollment_id.clone(),
-                display_name: factor.display_name.clone(),
-                phone_info: None,
-                unobfuscated_phone_info: None,
-                enrolled_at: Some(rfc3339_text(factor.enrolled_at)),
-                totp_shared_secret_key: Some(fireemu_core_auth::base32::encode(
-                    factor.secret.expose_for_enrollment(),
-                )),
-            });
-        }
-        let claims = user.custom_claims.canonical_json();
-        UserRecord {
-            local_id: user.local_id.as_str().to_owned(),
-            email: user.email.clone(),
-            email_verified: user.email_verified,
+        Some((salt, password)) => (
+            Some(fake_hash::encode(salt, password)),
+            Some(salt.to_owned()),
+        ),
+        None => (None, None),
+    };
+    let mut providers = Vec::new();
+    if let Some(email) = &user.email {
+        providers.push(ProviderUserInfo {
+            provider_id: if password_hash.is_some() || store.has_password(&user.local_id) {
+                "password".to_owned()
+            } else {
+                "emailLink".to_owned()
+            },
+            raw_id: email.clone(),
+            federated_id: Some(email.clone()),
+            email: Some(email.clone()),
             display_name: user.display_name.clone(),
             photo_url: user.photo_url.clone(),
-            phone_number: user.phone_number.clone(),
-            disabled: user.disabled,
-            password_hash,
-            salt,
-            #[allow(clippy::cast_precision_loss)]
-            password_updated_at: store
-                .password_updated_at(&user.local_id)
-                .map(|t| (t.as_nanos() / 1_000_000) as f64),
-            valid_since: Some((user.tokens_valid_after.as_nanos() / 1_000_000_000).to_string()),
-            created_at: Some((user.created_at.as_nanos() / 1_000_000).to_string()),
-            last_login_at: user
-                .last_sign_in_at
-                .map(|t| (t.as_nanos() / 1_000_000).to_string()),
-            last_refresh_at: user.last_refresh_at.and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
-            custom_attributes: (claims != "{}").then_some(claims),
-            tenant_id: tenant_id.map(str::to_owned),
-            provider_user_info: providers,
-            mfa_info,
-            extra: Vec::new(),
-        }
+            phone_number: None,
+            screen_name: None,
+        });
+    }
+    if let Some(phone) = &user.phone_number {
+        providers.push(ProviderUserInfo {
+            provider_id: "phone".to_owned(),
+            raw_id: phone.clone(),
+            phone_number: Some(phone.clone()),
+            ..ProviderUserInfo::default()
+        });
+    }
+    for identity in &user.federated {
+        providers.push(ProviderUserInfo {
+            provider_id: identity.provider_id.clone(),
+            raw_id: identity.raw_id.clone(),
+            federated_id: Some(identity.raw_id.clone()),
+            email: identity.email.clone(),
+            display_name: identity.display_name.clone(),
+            photo_url: identity.photo_url.clone(),
+            phone_number: None,
+            screen_name: None,
+        });
+    }
+    let mut mfa_info = Vec::new();
+    for factor in user.mfa.phone_factors() {
+        mfa_info.push(MfaEnrollment {
+            mfa_enrollment_id: factor.mfa_enrollment_id.clone(),
+            display_name: factor.display_name.clone(),
+            phone_info: Some(factor.phone_number.clone()),
+            unobfuscated_phone_info: Some(factor.phone_number.clone()),
+            enrolled_at: Some(rfc3339_text(factor.enrolled_at)),
+            totp_shared_secret_key: None,
+        });
+    }
+    for factor in user.mfa.totp_factors() {
+        mfa_info.push(MfaEnrollment {
+            mfa_enrollment_id: factor.mfa_enrollment_id.clone(),
+            display_name: factor.display_name.clone(),
+            phone_info: None,
+            unobfuscated_phone_info: None,
+            enrolled_at: Some(rfc3339_text(factor.enrolled_at)),
+            totp_shared_secret_key: Some(fireemu_core_auth::base32::encode(
+                factor.secret.expose_for_enrollment(),
+            )),
+        });
+    }
+    let claims = user.custom_claims.canonical_json();
+    UserRecord {
+        local_id: user.local_id.as_str().to_owned(),
+        email: user.email.clone(),
+        email_verified: user.email_verified,
+        display_name: user.display_name.clone(),
+        photo_url: user.photo_url.clone(),
+        phone_number: user.phone_number.clone(),
+        disabled: user.disabled,
+        password_hash,
+        salt,
+        #[allow(clippy::cast_precision_loss)]
+        password_updated_at: store
+            .password_updated_at(&user.local_id)
+            .map(|t| (t.as_nanos() / 1_000_000) as f64),
+        valid_since: Some((user.tokens_valid_after.as_nanos() / 1_000_000_000).to_string()),
+        created_at: Some((user.created_at.as_nanos() / 1_000_000).to_string()),
+        last_login_at: user
+            .last_sign_in_at
+            .map(|t| (t.as_nanos() / 1_000_000).to_string()),
+        last_refresh_at: user
+            .last_refresh_at
+            .and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
+        custom_attributes: (claims != "{}").then_some(claims),
+        tenant_id: tenant_id.map(str::to_owned),
+        provider_user_info: providers,
+        mfa_info,
+        extra: Vec::new(),
     }
 }
 
@@ -2745,19 +2750,31 @@ mod tests {
     }
     #[test]
     fn last_token_issuance_round_trips_without_lookup_time_fabrication() {
-        use fireemu_core_auth::{store::{AuthStore, NewUser}, mfa::TotpPolicy};
+        use fireemu_core_auth::{
+            mfa::TotpPolicy,
+            store::{AuthStore, NewUser},
+        };
         use fireemu_core_types::determinism::SplitMix64;
         let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
         let at = LogicalInstant::from_unix_seconds(100);
         let uid = store.create_user(NewUser::anonymous(), at).unwrap();
-        let token = store.issue_refresh_session(&uid, at, None, super::CustomClaims::default(), None).unwrap();
+        let token = store
+            .issue_refresh_session(&uid, at, None, super::CustomClaims::default(), None)
+            .unwrap();
         store.record_token_issuance(&token, at);
         let exported = super::exported_account(&store, store.user(&uid).unwrap(), None);
-        assert_eq!(exported.last_refresh_at.as_deref(), Some("1970-01-01T00:01:40Z"));
-        let imported = super::imported_user(&exported, std::path::Path::new("offline.json")).unwrap();
+        assert_eq!(
+            exported.last_refresh_at.as_deref(),
+            Some("1970-01-01T00:01:40Z")
+        );
+        let imported =
+            super::imported_user(&exported, std::path::Path::new("offline.json")).unwrap();
         let mut restored = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
         restored.import_user(imported).unwrap();
-        assert_eq!(super::exported_account(&restored, restored.user_by_id(uid.as_str()).unwrap(), None).last_refresh_at, exported.last_refresh_at);
+        assert_eq!(
+            super::exported_account(&restored, restored.user_by_id(uid.as_str()).unwrap(), None)
+                .last_refresh_at,
+            exported.last_refresh_at
+        );
     }
-
 }

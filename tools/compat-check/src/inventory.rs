@@ -720,8 +720,7 @@ impl Inventory {
                     "an unobserved gap cannot carry a production observation; change its kind",
                 );
             }
-            if text(gap, "kind") == "observed"
-                && text(gap, "productionObservationStatus") == "none"
+            if text(gap, "kind") == "observed" && text(gap, "productionObservationStatus") == "none"
             {
                 fail(
                     p,

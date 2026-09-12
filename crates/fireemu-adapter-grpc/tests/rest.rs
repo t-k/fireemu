@@ -1261,12 +1261,22 @@ async fn a_rest_request_does_not_wait_for_locks_on_the_blocking_pool_thread() {
 #[test]
 fn negative_limit_query_error_is_a_single_array_element() {
     let s = state(None);
-    let (status, body) = call(&s, "POST", &format!("{DOCS}:runQuery"), json!({"structuredQuery":{"from":[{"collectionId":"broad"}],"limit":-1}}));
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery":{"from":[{"collectionId":"broad"}],"limit":-1}}),
+    );
     assert_eq!(status, 400);
     assert_eq!(body.as_array().map(Vec::len), Some(1));
     assert_eq!(body[0]["error"]["status"], "INVALID_ARGUMENT");
     for limit in [0, 1] {
-        let (status, body) = call(&s, "POST", &format!("{DOCS}:runQuery"), json!({"structuredQuery":{"from":[{"collectionId":"broad"}],"limit":limit}}));
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery":{"from":[{"collectionId":"broad"}],"limit":limit}}),
+        );
         assert_eq!(status, 200, "{body}");
     }
 }

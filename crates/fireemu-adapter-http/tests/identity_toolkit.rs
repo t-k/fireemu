@@ -2645,7 +2645,14 @@ fn end_user_update_cannot_select_an_account_by_local_id() {
                     "localId": victim["localId"], "idToken": token, "password": password
                 }),
             );
-            assert_eq!(status, if token.is_string() && password.len() <= 4096 { 200 } else { 400 });
+            assert_eq!(
+                status,
+                if token.is_string() && password.len() <= 4096 {
+                    200
+                } else {
+                    400
+                }
+            );
         }
     }
     let (status, _) = post(
@@ -2832,14 +2839,24 @@ fn end_user_update_session_failure_precedes_admin_field_authorization() {
         assert_eq!(status, 200);
 
         let cases = [
-            ("expired", &expired_token, Some(&expired_uid), "TOKEN_EXPIRED"),
+            (
+                "expired",
+                &expired_token,
+                Some(&expired_uid),
+                "TOKEN_EXPIRED",
+            ),
             (
                 "revoked",
                 &revoked_token,
                 Some(&revoked_uid),
                 "TOKEN_EXPIRED : credentials revoked",
             ),
-            ("disabled", &disabled_token, Some(&disabled_uid), "USER_DISABLED"),
+            (
+                "disabled",
+                &disabled_token,
+                Some(&disabled_uid),
+                "USER_DISABLED",
+            ),
             // A deleted account's token fails verification as an unknown user (INVALID_ID_TOKEN),
             // not the trailing USER_NOT_FOUND, since the verifier checks the user first.
             ("deleted", &deleted_token, None, "INVALID_ID_TOKEN"),
@@ -2860,7 +2877,11 @@ fn end_user_update_session_failure_precedes_admin_field_authorization() {
                 );
             }
             if let (Some(u), Some(b)) = (uid, before) {
-                assert_eq!(lookup(u), b, "{label}: no rejected update may mutate the account");
+                assert_eq!(
+                    lookup(u),
+                    b,
+                    "{label}: no rejected update may mutate the account"
+                );
             }
         }
     }
@@ -2872,7 +2893,10 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
     let admin_fields = [
         ("customAttributes", json!("{\"role\":\"admin\"}")),
         ("emailVerified", json!(true)),
-        ("mfa", json!({"enrollments": [{"phoneInfo": "+16505550111"}]})),
+        (
+            "mfa",
+            json!({"enrollments": [{"phoneInfo": "+16505550111"}]}),
+        ),
         (
             "linkProviderUserInfo",
             json!({"providerId": "google.com", "rawId": "attacker"}),
@@ -2931,17 +2955,28 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
             let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
             assert_eq!(status, 400, "{field}: {refused}");
             assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN", "{field}");
-            assert_eq!(lookup(&s), baseline, "{field}: tampered update must not mutate");
+            assert_eq!(
+                lookup(&s),
+                baseline,
+                "{field}: tampered update must not mutate"
+            );
 
             if *field != "emailVerified" {
-            // Valid session plus the same field: authenticated, then refused on the field.
-            let mut request = json!({"idToken": signed["idToken"], "displayName": "must-not-apply"});
-            request[*field] = value.clone();
-            let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
-            assert_eq!(status, 400, "{field}: {refused}");
-            assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED", "{field}");
-            assert_eq!(lookup(&s), baseline, "{field}: valid-token update must not mutate");
-
+                // Valid session plus the same field: authenticated, then refused on the field.
+                let mut request =
+                    json!({"idToken": signed["idToken"], "displayName": "must-not-apply"});
+                request[*field] = value.clone();
+                let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+                assert_eq!(status, 400, "{field}: {refused}");
+                assert_eq!(
+                    refused["error"]["message"], "OPERATION_NOT_ALLOWED",
+                    "{field}"
+                );
+                assert_eq!(
+                    lookup(&s),
+                    baseline,
+                    "{field}: valid-token update must not mutate"
+                );
             }
 
             // OOB code plus the same field: refused on the field, code not consumed.
@@ -2949,7 +2984,10 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
             request[*field] = value.clone();
             let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
             assert_eq!(status, 400, "{field}: {refused}");
-            assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED", "{field}");
+            assert_eq!(
+                refused["error"]["message"], "OPERATION_NOT_ALLOWED",
+                "{field}"
+            );
         }
 
         // disableUser is symmetric with the administrator-only fields: a tampered session
@@ -2969,7 +3007,11 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
 
-        assert_eq!(lookup(&s), before, "no rejected update may change the account");
+        assert_eq!(
+            lookup(&s),
+            before,
+            "no rejected update may change the account"
+        );
 
         // The unconsumed OOB code still verifies the email on its own.
         let (status, applied) = post(
@@ -3862,7 +3904,11 @@ fn account_records_follow_production_field_omissions() {
     let record = looked["users"][0].as_object().unwrap();
     let mut keys: Vec<&str> = record.keys().map(String::as_str).collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["createdAt", "lastLoginAt", "lastRefreshAt", "localId"], "{looked}");
+    assert_eq!(
+        keys,
+        ["createdAt", "lastLoginAt", "lastRefreshAt", "localId"],
+        "{looked}"
+    );
 
     let (status, signed_up) = post(
         &s,

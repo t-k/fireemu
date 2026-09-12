@@ -37,10 +37,11 @@ struct Inventory {
     packages: Value,
 }
 
-const GAP_KINDS: [&str; 5] = [
+const GAP_KINDS: [&str; 6] = [
     "mismatch",
     "unimplemented",
     "unobserved",
+    "observed",
     "unmapped",
     "untested",
 ];
@@ -717,6 +718,16 @@ impl Inventory {
                     "CI-03",
                     id,
                     "an unobserved gap cannot carry a production observation; change its kind",
+                );
+            }
+            if text(gap, "kind") == "observed"
+                && text(gap, "productionObservationStatus") == "none"
+            {
+                fail(
+                    p,
+                    "CI-03",
+                    id,
+                    "an observed gap must carry a production observation (recorded or approved)",
                 );
             }
         }

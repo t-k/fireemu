@@ -1,6 +1,6 @@
 # Broad Identity Platform and Firestore inspection
 
-This milestone changes priority, not historical evidence. Lifetime revisions1/2 retain their receipts and subjects; revision3 remains a prepared, offline-validated, production-unobserved deep-dive corpus. GAP-AUTH-007 and AUTH-U03 remain open independently of broad work. No new production operation is authorized or performed here.
+This milestone changes priority, not historical evidence. Lifetime revisions 1/2 retain their receipts and subjects; revision 3 remains a prepared, offline-validated, production-unobserved deep-dive corpus. GAP-AUTH-007 and AUTH-U03 remain open independently of broad work. No new production operation is authorized or performed here.
 
 ## Reuse and current execution
 
@@ -8,9 +8,11 @@ This milestone changes priority, not historical evidence. Lifetime revisions1/2 
 
 The entry captures a common manifest, explicit selected operation inputs and seed, case results, current source/runtime/artifact/configuration hashes, original observation identities and a generated summary. No database, UI or replacement DSL is introduced. Existing historical tools and lifetime recorders stay intact.
 
-The checked-in catalog separates pinned API-method denominators, functional families and existing executable cases. An unexecuted catalog row never becomes passed because an old receipt exists. Use the current run manifest for executed family/case status and the catalog for unselected scope. The169 pinned methods are a known-source denominator, not proof of a complete upstream specification or coverage of every field.
+The checked-in catalog separates pinned API-method denominators, functional families and existing executable cases. An unexecuted catalog row never becomes passed because an old receipt exists. Use the current run manifest for executed family/case status and the catalog for unselected scope. The 169 pinned methods are a known-source denominator, not proof of a complete upstream specification or coverage of every field.
 
 ## Initial selection and coverage
+
+The [next expansion](../../docs/compatibility/broad-expansion.md) adds exact historical transform replay, type/numeric/filter/aggregation comparisons, real SDK/Rules/Listen local checks, and an offline-reviewed production batch adapter. The table below describes the initial milestone; current selected cases and execution variants are in the catalog.
 
 | Family | Reused assets and added coverage | Important remaining limits |
 | --- | --- | --- |
@@ -44,3 +46,17 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broa
 The owned run requires a clean frozen checkout. Do not edit it during execution, review or mutation verification. Node sessions are bounded by a local-origin/redirect guard, request and wall limits; environment credentials/production probe overrides are not inherited. Firestore reset routes are permitted only on the owned instance. The new Auth sequence has a separate request/time bound. Private process registrations support PID/argv-verified cleanup; cleanup errors cannot skip parent termination or final failure recording.
 
 See the common results/triage report for exact executed SHA, artifact and commands, and the proposed production envelope for a future owner decision. Technical review is separate from execution permission and result approval. No case-level approval/publisher system is added to this broad milestone.
+
+## Prepared batch adapter
+
+`batch_adapter.py` validates the closed candidate offline by default. `batch_local.py` runs the mapped operations on a newly owned artifact; `batch_comparison.py` checks local mapping against the same current abstract inputs. The local branch never acquires Google credentials. The remote branch requires a separately supplied, manifest/observer/nonce-bound owner approval, approved metadata baselines, API-key project verification and confirmed tariff ceilings. No approval is supplied by this repository.
+
+```sh
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_adapter.py --manifest spec/compatibility/broad-batch-candidate.json
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_local.py --output /absolute/private/new-mapped-batch
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_comparison.py --batch /absolute/private/new-mapped-batch/batch/result.json --baseline spec/compatibility/broad-runs/bf12f631-expanded.json --output /absolute/private/mapping-comparison.json
+```
+
+The first candidate contains 19 Auth checks and 27 Firestore diagnostics, with at most three attempted accounts and eight possible document targets. Its collection IDs are preserved beneath owned parent documents; collection-group queries and composite-index-dependent query candidates are excluded. Journals are private, append-only and fsynced before attempts. The email/path nonce and journaled UID binding are adapter ownership evidence, not an immutable Firebase account attribute.
+
+All requests and credential commands consume one phase budget. A sequential rate limiter permits at most four starts per second; a subprocess watchdog bounds the whole request including DNS and body reading. Privileged HTTP401/403 or failed expiry verification disables subsequent privileged work, including recovery; unconfirmed targets remain in the journal/report. No broad reset, recursive root deletion or configuration mutation is implemented.

@@ -1,0 +1,93 @@
+{
+  "executionCommit": "bf12f6312f52d1009e85db3f1572b3a913b9ac64",
+  "results": [
+    {
+      "name": "client",
+      "artifactSha256": "4f534f6f2ce0e0a94892fe8e8e302346901152834db93ee89671d4c5813305dc",
+      "sourceSha256": "9aa2ebeb64c8f87976cfe98814725acfbdc7edbcd6d20a542720bff04367a68d",
+      "basis": "local-sdk-invariant",
+      "productionExecuted": false,
+      "exitCode": 0,
+      "observations": [
+        {
+          "name": "anonymous read of a protected doc is denied",
+          "ok": true,
+          "extra": "permission-denied"
+        },
+        {
+          "name": "anonymous read of a public collection",
+          "ok": true,
+          "extra": 0
+        },
+        {
+          "name": "signed-in user writes own profile",
+          "ok": true,
+          "extra": {
+            "name": "Alice"
+          }
+        },
+        {
+          "name": "signed-in user cannot write another profile",
+          "ok": true,
+          "extra": "permission-denied"
+        },
+        {
+          "name": "create note with owner claim",
+          "ok": true,
+          "extra": "ok"
+        },
+        {
+          "name": "create note for another owner is denied",
+          "ok": true,
+          "extra": "permission-denied"
+        },
+        {
+          "name": "owner-filtered query passes per-document rules",
+          "ok": true,
+          "extra": [
+            "n1"
+          ]
+        },
+        {
+          "name": "delete without a delete rule is denied",
+          "ok": true,
+          "extra": "permission-denied"
+        },
+        {
+          "name": "after sign-out the profile is protected again",
+          "ok": true,
+          "extra": "permission-denied"
+        }
+      ],
+      "processExitConfirmed": true,
+      "transportScope": "Node Firebase SDK; gRPC observed in client logs. Browser WebChannel not established."
+    },
+    {
+      "name": "listener-replacement",
+      "artifactSha256": "4f534f6f2ce0e0a94892fe8e8e302346901152834db93ee89671d4c5813305dc",
+      "sourceSha256": "a74e0138dc8f778be872f056c359ef7ba4c485632a70aebefc84ae679655548f",
+      "basis": "local-sdk-invariant",
+      "productionExecuted": false,
+      "exitCode": 0,
+      "observations": {
+        "passed": true,
+        "transport": "force-long-polling",
+        "firstValues": [
+          [
+            0
+          ]
+        ],
+        "replacementValues": [
+          [
+            0
+          ],
+          [
+            1
+          ]
+        ]
+      },
+      "processExitConfirmed": true,
+      "transportScope": "Node Firebase SDK; gRPC observed in client logs. Browser WebChannel not established."
+    }
+  ]
+}

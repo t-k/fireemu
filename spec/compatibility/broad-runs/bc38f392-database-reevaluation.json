@@ -1,0 +1,140 @@
+{
+  "kind": "offline-database-projection-reevaluation",
+  "newOracleRequests": 0,
+  "sourceCommit": "7be6cf08f1e9b1620eb0b7675b8352470b0968f5",
+  "evaluatedAtCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+  "fixtureSha256": "60a203b9340e225f0def3cb12bbe7e3029245686f4138672a4db1b6c4e67f020",
+  "v1SettingsEqual": false,
+  "v2SettingsEqual": true,
+  "observations": [
+    {
+      "phase": "approved",
+      "v1ProjectionDigest": "1a067449eec406349580f171ae760ac33f5bc6ff0e0a53e00d26096da75e8fe8",
+      "v2": {
+        "responseDigest": "557c544e9a25e843c27f032be20cf50342001c0fcb75a6b39dd9ef0b73c8bba3",
+        "projection": {
+          "name": "projects/fireemu-35fe6/databases/(default)",
+          "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+          "createTime": "2026-09-02T12:56:28.522410Z",
+          "updateTime": "2026-09-02T12:56:28.522410Z",
+          "locationId": "us-central1",
+          "type": "FIRESTORE_NATIVE",
+          "concurrencyMode": "PESSIMISTIC",
+          "versionRetentionPeriod": "3600s",
+          "appEngineIntegrationMode": "DISABLED",
+          "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+          "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+          "databaseEdition": "STANDARD",
+          "freeTier": true,
+          "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+          "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+        },
+        "projectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+        "contract": {
+          "version": "database-settings-v2",
+          "excludedResponseFields": [
+            "earliestVersionTime",
+            "etag"
+          ],
+          "retainedFields": "all other fields, including unknown fields and field presence/types",
+          "requiredIdentityFields": [
+            "name",
+            "uid",
+            "databaseEdition",
+            "type",
+            "locationId"
+          ],
+          "hashEncoding": "canonical typed JSON SHA256"
+        },
+        "contractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18"
+      }
+    },
+    {
+      "phase": "observation",
+      "v1ProjectionDigest": "d6d1e383d0ff5d937b54a3e25a84b0aa4ef7b7c6c64495afd87832ac29f0e036",
+      "v2": {
+        "responseDigest": "9444ae3b70aaddf02a13f9a3b881c7a84795e4caa1591d45347e2a99acb74e19",
+        "projection": {
+          "name": "projects/fireemu-35fe6/databases/(default)",
+          "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+          "createTime": "2026-09-02T12:56:28.522410Z",
+          "updateTime": "2026-09-02T12:56:28.522410Z",
+          "locationId": "us-central1",
+          "type": "FIRESTORE_NATIVE",
+          "concurrencyMode": "PESSIMISTIC",
+          "versionRetentionPeriod": "3600s",
+          "appEngineIntegrationMode": "DISABLED",
+          "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+          "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+          "databaseEdition": "STANDARD",
+          "freeTier": true,
+          "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+          "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+        },
+        "projectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+        "contract": {
+          "version": "database-settings-v2",
+          "excludedResponseFields": [
+            "earliestVersionTime",
+            "etag"
+          ],
+          "retainedFields": "all other fields, including unknown fields and field presence/types",
+          "requiredIdentityFields": [
+            "name",
+            "uid",
+            "databaseEdition",
+            "type",
+            "locationId"
+          ],
+          "hashEncoding": "canonical typed JSON SHA256"
+        },
+        "contractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18"
+      }
+    },
+    {
+      "phase": "recovery",
+      "v1ProjectionDigest": "be44028080673ddbc1bf9920424d2b1f92445356cd8324ac9bc3592eff022cd4",
+      "v2": {
+        "responseDigest": "15fde6461bfc0f9a8e6e376a0f2be9e0a07540e21fd1c433e40cc9ff83f434e9",
+        "projection": {
+          "name": "projects/fireemu-35fe6/databases/(default)",
+          "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+          "createTime": "2026-09-02T12:56:28.522410Z",
+          "updateTime": "2026-09-02T12:56:28.522410Z",
+          "locationId": "us-central1",
+          "type": "FIRESTORE_NATIVE",
+          "concurrencyMode": "PESSIMISTIC",
+          "versionRetentionPeriod": "3600s",
+          "appEngineIntegrationMode": "DISABLED",
+          "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+          "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+          "databaseEdition": "STANDARD",
+          "freeTier": true,
+          "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+          "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+        },
+        "projectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+        "contract": {
+          "version": "database-settings-v2",
+          "excludedResponseFields": [
+            "earliestVersionTime",
+            "etag"
+          ],
+          "retainedFields": "all other fields, including unknown fields and field presence/types",
+          "requiredIdentityFields": [
+            "name",
+            "uid",
+            "databaseEdition",
+            "type",
+            "locationId"
+          ],
+          "hashEncoding": "canonical typed JSON SHA256"
+        },
+        "contractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18"
+      }
+    }
+  ],
+  "oldRecordingComplete": false,
+  "oldProductionDataRowsExecuted": 0,
+  "compatibility": "not evaluated by settings reevaluation"
+}

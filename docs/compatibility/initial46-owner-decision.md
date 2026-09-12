@@ -97,3 +97,42 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broa
 ```
 
 The production launcher supplied the existing key only through the child environment and captured output privately. The local command ran under portctl; the artifact used OS-assigned ports and the existing ownership-aware shutdown checks. Its internal `cargo build --locked -p fireemu --message-format=json` succeeded. No new source modifications, lifetime suites, mutation campaigns, publishers or Rust regression suites were run in this execution-only step. Before another production proposal, review the meaning of etag and any narrow projection-contract correction offline. Do not update this attempt's expected baseline, suppress the mismatch or retry it automatically.
+
+
+## Database settings v2: corrected proposal after07feab41
+
+The projection over-bound volatile response metadata. The source fix is frozen at `bc38f392077784509f7fbb8993d5be66c1a8be14`. `database-settings-v2` excludes exactly `earliestVersionTime` and `etag` from settings equality. Complete saved responses and their full-response digests retain both fields. Name, UID, edition, location, settings, unknown fields and field presence/types remain compared. No document updateTime preconditions, concurrency logic, quota headers, independent API-key lookup, IAM, API enablement or runtime implementation changed.
+
+The [separate offline reevaluation](../../spec/compatibility/broad-runs/bc38f392-database-reevaluation.json) uses the saved approval/preflight/postflight responses. Their settings digests differ under v1 and agree under v2. This is a settings-only reevaluation, not a successful old execution:07feab41 and the old approval/observation files remain unchanged, with0 production data rows and incomplete recording. An independent reviewer verified all three fixture bodies against the private saved sources and verified the raw/journal/full-response/v1 projection hashes. The committed fixture and tests also tie reevaluated hashes to the immutable published old evidence.
+
+Validation passed61 broad tests, Ruff and ty. Negative cases change etag together with UID, name, edition, location, type, concurrency, delete protection, updateTime, an unknown field or boolean/numeric type; settings still differ. Two limited in-process contract mutations were killed: retaining etag and also excluding updateTime. No persistent source mutation or oracle call was used. The security delta review reported no Must Fix or Should Fix findings and grants no execution permission.
+
+The new frozen observer completed its [local46 run](../../spec/compatibility/broad-runs/bc38f392-local.json):91 requests (31 Auth,60 Firestore), including29 recovery requests, no unrecovered resources, process stopped and listeners closed. The build and wrapper exited0. This record has the exact new observer and comparison contract for a future paired comparison. It is not a production comparison. Existing193 historical comparisons,26 local invariants,23 indeterminate cases and previous mapping/SDK/Rules/Listen evidence remain separate. No lifetime production observation or existing193-case production acquisition was repeated; this correction introduces no prerequisite for other local exploration.
+
+The [new execution inputs](../../spec/compatibility/broad-runs/bc38f392-execution-inputs.json) and [single owner proposal](../../spec/compatibility/broad-runs/bc38f392-owner-decision.json) bind:
+
+| Input | Value |
+| --- | --- |
+| Execution commit | `bc38f392077784509f7fbb8993d5be66c1a8be14` |
+| Observer SHA256 | `1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f` |
+| Manifest SHA256, unchanged | `4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f` |
+| Comparison contract digest | `ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc` |
+| Projection contract digest | `24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18` |
+| Approved-response v2 settings candidate digest | `31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33` |
+| Proposed unused nonce | `377db86cda534573b00d4422bd81db77` |
+
+The same project fireemu-35fe6, `(default)` Standard Database in us-central1,46 rows,3 account attempts,8 documents,2400 requests maximum,4 sequential starts/second,1200 seconds including300 recovery seconds/requests and USD1 cap apply. The existing Auth baseline and independent key ownership evidence are carried forward as proposed inputs, with their original acquisition times. API Keys API remains enabled. Pricing evidence is reused with its recorded date; no unperformed new price or oracle check is claimed.
+
+The requested new permission covers one preflight, one production batch, owned cleanup, postflight and comparison to this prepared local result, within a proposed one-hour window beginning at approval. Owner identity/reference and actual issued/expiry times remain unset until explicit approval. The old nonce and one-run permission are consumed and are not reused. Preflight must verify current settings against this candidate; it cannot adopt drift automatically. No automatic rerun, expanded resource budget or configuration changes are proposed.
+
+Commands executed for this correction:
+
+```sh
+uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad -q
+uv tool run ruff check tools/compat-broad/batch_contract.py tools/compat-broad/test_readiness.py
+uv tool run ty check --python tools/compat-inventory/.venv tools/compat-broad/batch_contract.py tools/compat-broad/test_readiness.py
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_adapter.py --manifest spec/compatibility/broad-batch-candidate.json --prepare-inputs <private>/bc38f392-execution-inputs.json
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_local.py --output <private>/bc38f392-local
+```
+
+The local command ran under portctl with the existing owned-process wrapper and OS-assigned listener ports. Initial TDD execution failed on the expected v1/v2 contract difference; the final suite passed after the two-line production-contract correction. No full Rust regression suite, lifetime suite or publisher rerun was performed for this delta. Preparation/publication commits do not replace the stated frozen execution commit.

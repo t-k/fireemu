@@ -138,7 +138,6 @@ def auth_cases(origin, seed=SEED):
     )
     requests = 0
     deadline = time.monotonic() + 60
-    results = []
 
     def call(path, body, admin=False, form=False):
         nonlocal requests
@@ -163,6 +162,12 @@ def auth_cases(origin, seed=SEED):
         with response:
             return response.status, json.loads(response.read())
 
+    return auth_scenario(call, seed)
+
+
+def auth_scenario(call, seed=SEED):
+    """One operation sequence shared by local and admission-controlled transports."""
+    results = []
     client = "/identitytoolkit.googleapis.com/v1/accounts:"
     admin_path = f"/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:"
 

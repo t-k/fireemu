@@ -1,0 +1,693 @@
+{
+  "schemaVersion": 1,
+  "project": "fireemu-35fe6",
+  "projectNumber": "592603257417",
+  "database": "(default)",
+  "edition": "STANDARD",
+  "databaseType": "FIRESTORE_NATIVE",
+  "diagnosticRows": {
+    "auth": 19,
+    "firestore": 27
+  },
+  "firestorePrograms": [
+    {
+      "id": "broad/refusal-preserves-state",
+      "area": "writes-and-queries",
+      "seed": [
+        {
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one",
+          "fields": {
+            "n": {
+              "integerValue": "8"
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "id": "read-normal",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one",
+          "expect": "original-fields"
+        },
+        {
+          "id": "refused-overwrite",
+          "method": "PATCH",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one?currentDocument.exists=false",
+          "body": {
+            "fields": {
+              "n": {
+                "integerValue": "9"
+              }
+            }
+          },
+          "expect": "refusal"
+        },
+        {
+          "id": "read-after-refusal",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one",
+          "expect": "original-fields"
+        },
+        {
+          "id": "empty-commit",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": []
+          },
+          "expect": "success"
+        },
+        {
+          "id": "zero-limit",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+          "body": {
+            "structuredQuery": {
+              "from": [
+                {
+                  "collectionId": "broad"
+                }
+              ],
+              "limit": 0
+            }
+          },
+          "expect": "no-documents"
+        },
+        {
+          "id": "negative-limit",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+          "body": {
+            "structuredQuery": {
+              "from": [
+                {
+                  "collectionId": "broad"
+                }
+              ],
+              "limit": -1
+            }
+          },
+          "expect": "refusal"
+        },
+        {
+          "id": "read-after-query-refusal",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/broad/one",
+          "expect": "original-fields"
+        }
+      ]
+    },
+    {
+      "id": "writes/transforms",
+      "area": "writes",
+      "seed": [
+        {
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc",
+          "fields": {
+            "n": {
+              "integerValue": "1"
+            },
+            "d": {
+              "doubleValue": 1.5
+            },
+            "s": {
+              "stringValue": "not a number"
+            },
+            "tags": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "a"
+                  },
+                  {
+                    "integerValue": "1"
+                  }
+                ]
+              }
+            },
+            "m": {
+              "mapValue": {
+                "fields": {
+                  "inner": {
+                    "integerValue": "5"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "id": "server-timestamp-and-increments",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                  "fields": {}
+                },
+                "updateMask": {
+                  "fieldPaths": []
+                },
+                "updateTransforms": [
+                  {
+                    "fieldPath": "at",
+                    "setToServerValue": "REQUEST_TIME"
+                  },
+                  {
+                    "fieldPath": "n",
+                    "increment": {
+                      "integerValue": "2"
+                    }
+                  },
+                  {
+                    "fieldPath": "d",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  },
+                  {
+                    "fieldPath": "s",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  },
+                  {
+                    "fieldPath": "missing",
+                    "increment": {
+                      "doubleValue": 0.5
+                    }
+                  },
+                  {
+                    "fieldPath": "m.inner",
+                    "increment": {
+                      "integerValue": "-10"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "read-after-increments",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "maximum-and-minimum-invalid-field-path",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                  "fields": {}
+                },
+                "updateMask": {
+                  "fieldPaths": []
+                },
+                "updateTransforms": [
+                  {
+                    "fieldPath": "n",
+                    "maximum": {
+                      "integerValue": "100"
+                    }
+                  },
+                  {
+                    "fieldPath": "d",
+                    "minimum": {
+                      "doubleValue": -1
+                    }
+                  },
+                  {
+                    "fieldPath": "s",
+                    "maximum": {
+                      "integerValue": "7"
+                    }
+                  },
+                  {
+                    "fieldPath": "max-missing",
+                    "maximum": {
+                      "integerValue": "3"
+                    }
+                  },
+                  {
+                    "fieldPath": "n",
+                    "minimum": {
+                      "doubleValue": 50.5
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "read-after-invalid-max-min",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "maximum-and-minimum",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/PROJECT/databases/(default)/documents/tf/extrema",
+                  "fields": {
+                    "finite": {
+                      "integerValue": "5"
+                    },
+                    "nan": {
+                      "doubleValue": "NaN"
+                    },
+                    "equal": {
+                      "integerValue": "5"
+                    },
+                    "zero": {
+                      "doubleValue": 0
+                    },
+                    "text": {
+                      "stringValue": "text"
+                    }
+                  }
+                },
+                "updateTransforms": [
+                  {
+                    "fieldPath": "finite",
+                    "maximum": {
+                      "doubleValue": "NaN"
+                    }
+                  },
+                  {
+                    "fieldPath": "nan",
+                    "maximum": {
+                      "integerValue": "5"
+                    }
+                  },
+                  {
+                    "fieldPath": "equal",
+                    "maximum": {
+                      "doubleValue": 5
+                    }
+                  },
+                  {
+                    "fieldPath": "zero",
+                    "minimum": {
+                      "integerValue": "0"
+                    }
+                  },
+                  {
+                    "fieldPath": "text",
+                    "maximum": {
+                      "integerValue": "7"
+                    }
+                  },
+                  {
+                    "fieldPath": "max_missing",
+                    "maximum": {
+                      "integerValue": "3"
+                    }
+                  },
+                  {
+                    "fieldPath": "min_missing",
+                    "minimum": {
+                      "doubleValue": -1
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "read-after-max-min",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/extrema"
+        },
+        {
+          "id": "array-transforms",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                  "fields": {}
+                },
+                "updateMask": {
+                  "fieldPaths": []
+                },
+                "updateTransforms": [
+                  {
+                    "fieldPath": "tags",
+                    "appendMissingElements": {
+                      "values": [
+                        {
+                          "stringValue": "a"
+                        },
+                        {
+                          "stringValue": "b"
+                        },
+                        {
+                          "doubleValue": 1
+                        },
+                        {
+                          "integerValue": "1"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldPath": "s",
+                    "appendMissingElements": {
+                      "values": [
+                        {
+                          "stringValue": "x"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldPath": "tags",
+                    "removeAllFromArray": {
+                      "values": [
+                        {
+                          "integerValue": "1"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "read-after-array-transforms",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "transform-only-write-creates",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "transform": {
+                  "document": "projects/PROJECT/databases/(default)/documents/tf/created",
+                  "fieldTransforms": [
+                    {
+                      "fieldPath": "count",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    },
+                    {
+                      "fieldPath": "at",
+                      "setToServerValue": "REQUEST_TIME"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "read-transform-created",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/created"
+        },
+        {
+          "id": "transform-write-with-exists-precondition",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "transform": {
+                  "document": "projects/PROJECT/databases/(default)/documents/tf/none",
+                  "fieldTransforms": [
+                    {
+                      "fieldPath": "count",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    }
+                  ]
+                },
+                "currentDocument": {
+                  "exists": true
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "increment-with-non-numeric-operand",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                  "fields": {}
+                },
+                "updateMask": {
+                  "fieldPaths": []
+                },
+                "updateTransforms": [
+                  {
+                    "fieldPath": "n",
+                    "increment": {
+                      "stringValue": "1"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "server-timestamp-on-a-delete",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "delete": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                "updateTransforms": [
+                  {
+                    "fieldPath": "at",
+                    "setToServerValue": "REQUEST_TIME"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "set-and-transform-same-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1000"
+                    }
+                  }
+                },
+                "updateMask": {
+                  "fieldPaths": [
+                    "n"
+                  ]
+                },
+                "updateTransforms": [
+                  {
+                    "fieldPath": "n",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "read-set-and-transform",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "integer-increment-saturates",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/PROJECT/databases/(default)/documents/tf/sat",
+                  "fields": {
+                    "n": {
+                      "integerValue": "9223372036854775807"
+                    }
+                  }
+                },
+                "updateTransforms": [
+                  {
+                    "fieldPath": "n",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "read-saturated",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/sat"
+        },
+        {
+          "id": "increment-on-nan",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/PROJECT/databases/(default)/documents/tf/nan",
+                  "fields": {
+                    "n": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                },
+                "updateTransforms": [
+                  {
+                    "fieldPath": "n",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "two-transforms-on-one-field-in-one-write",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/PROJECT/databases/(default)/documents/tf/dup",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  }
+                },
+                "updateTransforms": [
+                  {
+                    "fieldPath": "n",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  },
+                  {
+                    "fieldPath": "n",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "read-dup",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/dup"
+        }
+      ]
+    }
+  ],
+  "authScenarioSha256": "58f13a62f153d82ddf20f2966e21014835176628a546c65aa5fe57e32524c302",
+  "resources": {
+    "documents": 8,
+    "accounts": 3,
+    "maxPayloadBytes": 16384,
+    "maxResponseBytes": 65536
+  },
+  "limits": {
+    "total": 2400,
+    "auth": 400,
+    "firestore": 1600,
+    "metadata": 100,
+    "recovery": 300
+  },
+  "wallSeconds": 1200,
+  "recoverySeconds": 300,
+  "cost": {
+    "units": {
+      "documentReads": 3200,
+      "documentWrites": 1600,
+      "documentDeletes": 200,
+      "indexReadBatches": 2,
+      "storageGiBMonths": 0.0625,
+      "egressGiB": 0.146484375,
+      "authMau": 3
+    },
+    "planningCeilingRatesUsd": {
+      "documentReads": 1e-05,
+      "documentWrites": 2e-05,
+      "documentDeletes": 1e-05,
+      "indexReadBatches": 1e-05,
+      "storageGiBMonths": 1,
+      "egressGiB": 1,
+      "authMau": 0.01
+    },
+    "upperEstimateUsd": 0.305004375,
+    "scanDocumentsPerQuery": 1,
+    "queries": 2,
+    "collectionGroupQueries": 0,
+    "pricingSource": "https://firebase.google.com/docs/firestore/pricing",
+    "tariffsVerified": false,
+    "approvalRequirement": "Owner must verify location/SKU tariffs do not exceed planning ceilings; no free quota deducted",
+    "retentionLimit": "Estimate includes one month of worst-case index storage; unrecovered resources require owner follow-up"
+  },
+  "productionApproval": null,
+  "excluded": [
+    "configuration mutations",
+    "global reset",
+    "collection-group queries",
+    "transactions/contention",
+    "Rules",
+    "SDK/Listen",
+    "MFA",
+    "OOB",
+    "index changes"
+  ]
+}

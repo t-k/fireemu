@@ -152,7 +152,7 @@
       "evidenceRefs": [
         "docs/compatibility/auth-pending-revocation-approval.md"
       ],
-      "nextAction": "Extend the pending-revocation recorder with one trigger per run; do not generalize the validSince result.",
+      "nextAction": "Revision 1 covers four revocation triggers against a held MFA pending credential, one run per trigger with its own scoped approval, not inheriting the explicit-validSince approval: client self password change (session accounts:update password), administrative password update (privileged accounts:update password), password reset (admin sendOobCode PASSWORD_RESET with returnOobLink, then resetPassword), and provider unlink via a real IdP flow (federate with signInWithIdp, then session accounts:update deleteProvider). Common skeleton: hold a pending credential and SMS session, fire one trigger, read back, present the held credential to start and finalize, then a fresh control and cleanup; the held rows are diagnostic. The provider-unlink trigger needs a real federated assertion against production and an IdP enabled in the oracle configuration (a production configuration change under separate approval); its mechanism is being confirmed before that run. Do not generalize the explicit-validSince result to these triggers.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

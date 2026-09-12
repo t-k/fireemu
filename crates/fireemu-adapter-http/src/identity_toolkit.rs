@@ -3743,9 +3743,11 @@ fn update(
     stateless_refresh_tokens: bool,
     privileged: bool,
 ) -> JsonResponse {
-    // Account ownership does not authorize administrative field changes. Check presence,
-    // including false/empty/null, before applying or consuming any OOB action as well.
-    if !privileged
+    // Account ownership does not authorize administrative field changes. Presence
+    // includes false/empty/null. On the OOB route the field is rejected before the code
+    // is consumed; on the end-user session route the session is authenticated first and
+    // the field authorized after (see the session branch below).
+    let has_admin_field = !privileged
         && [
             "customAttributes",
             "emailVerified",
@@ -3753,12 +3755,12 @@ fn update(
             "linkProviderUserInfo",
         ]
         .iter()
-        .any(|field| body.get(*field).is_some())
-    {
-        return error(400, "OPERATION_NOT_ALLOWED");
-    }
+        .any(|field| body.get(*field).is_some());
     // `applyActionCode`: an email verification / change code instead of a session.
     if let Some(code) = str_field(body, "oobCode") {
+        if has_admin_field {
+            return error(400, "OPERATION_NOT_ALLOWED");
+        }
         return apply_oob_code(store, code, at);
     }
     let local_id = match opt_str(body, "localId") {
@@ -3777,8 +3779,18 @@ fn update(
             None => return error(400, "USER_NOT_FOUND"),
         }
     } else {
+        // Authenticate before authorizing: an invalid session is refused before the
+        // administrator-only fields (or a disableUser flag) it carries are judged.
+        // Production returns INVALID_ID_TOKEN for a tampered token carrying an
+        // administrator-only field (auth-refusal-precedence revision 1, recorded and
+        // approved 2026-09-12). It does not establish the precedence for a valid session,
+        // so a verified session with such a field is still refused OPERATION_NOT_ALLOWED
+        // here; that refusal remains local policy, not observed production behavior.
         match verify_session(store, body, at) {
             Ok(session) => {
+                if has_admin_field {
+                    return error(400, "OPERATION_NOT_ALLOWED");
+                }
                 if body.get("disableUser").is_some_and(|v| !v.is_null()) {
                     return error(400, "OPERATION_NOT_ALLOWED");
                 }

@@ -2763,6 +2763,124 @@ fn end_user_update_rejects_admin_fields_atomically_by_presence() {
     }
 }
 
+/// AUTH-U03: production refuses a client accounts:update carrying a tampered ID token and
+/// an administrator-only field with `INVALID_ID_TOKEN`, verifying the session before the
+/// field is judged (auth-refusal-precedence revision 1, approved 2026-09-12). The
+/// end-user route now authenticates first. A valid session with such a field is still
+/// refused `OPERATION_NOT_ALLOWED` (local policy, not observed for a valid token); the OOB
+/// route still rejects the field before consuming the code, and neither refusal mutates.
+#[test]
+fn end_user_update_authenticates_before_authorizing_admin_fields() {
+    let admin_fields = [
+        ("customAttributes", json!("{\"role\":\"admin\"}")),
+        ("emailVerified", json!(true)),
+        ("mfa", json!({"enrollments": [{"phoneInfo": "+16505550111"}]})),
+        (
+            "linkProviderUserInfo",
+            json!({"providerId": "google.com", "rawId": "attacker"}),
+        ),
+    ];
+    for s in [state(), strict_state()] {
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "precedence@example.com", "password": "password1", "returnSecureToken": true}),
+        );
+        let uid = &signed["localId"];
+        let token = signed["idToken"].as_str().unwrap();
+        // A structurally intact JWT whose signature cannot verify. The local emulator
+        // issues unsigned tokens (`alg: none`, empty signature); appending a signature
+        // segment makes verification fail, matching how the production recorder alters a
+        // signed token's signature.
+        let parts: Vec<&str> = token.split('.').collect();
+        let signature = parts[2];
+        let flipped = if signature.is_empty() {
+            "AAAA".to_string()
+        } else {
+            let last = signature.chars().last().unwrap();
+            format!(
+                "{}{}",
+                &signature[..signature.len() - 1],
+                if last == 'A' { 'B' } else { 'A' }
+            )
+        };
+        let tampered = format!("{}.{}.{}", parts[0], parts[1], flipped);
+        let lookup = |s: &AuthState| {
+            admin(
+                s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            )
+            .1
+        };
+        let before = lookup(&s);
+
+        // The action-code route rejects the field before consuming a session.
+        let (_, link) = admin(
+            &s,
+            "POST",
+            &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+            &json!({"requestType": "VERIFY_EMAIL", "idToken": signed["idToken"], "returnOobLink": true}),
+        );
+        let baseline = lookup(&s);
+
+        for (field, value) in &admin_fields {
+            // Tampered session plus an administrator-only field: the token is verified
+            // first, so the refusal names the token, and nothing is applied.
+            let mut request = json!({"idToken": tampered, "displayName": "must-not-apply"});
+            request[*field] = value.clone();
+            let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400, "{field}: {refused}");
+            assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN", "{field}");
+            assert_eq!(lookup(&s), baseline, "{field}: tampered update must not mutate");
+
+            // Valid session plus the same field: authenticated, then refused on the field.
+            let mut request = json!({"idToken": signed["idToken"], "displayName": "must-not-apply"});
+            request[*field] = value.clone();
+            let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400, "{field}: {refused}");
+            assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED", "{field}");
+            assert_eq!(lookup(&s), baseline, "{field}: valid-token update must not mutate");
+
+            // OOB code plus the same field: refused on the field, code not consumed.
+            let mut request = json!({"oobCode": link["oobCode"], "displayName": "must-not-apply"});
+            request[*field] = value.clone();
+            let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400, "{field}: {refused}");
+            assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED", "{field}");
+        }
+        assert_eq!(lookup(&s), before, "no rejected update may change the account");
+
+        // The unconsumed OOB code still verifies the email on its own.
+        let (status, applied) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"oobCode": link["oobCode"]}),
+        );
+        assert_eq!(status, 200, "{applied}");
+        assert_eq!(applied["emailVerified"], true);
+
+        // A normal profile update over the valid session still succeeds.
+        let (status, normal) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": "allowed"}),
+        );
+        assert_eq!(status, 200, "{normal}");
+        assert_eq!(normal["displayName"], "allowed");
+
+        // An unprivileged localId selector is still refused, not promoted by a body flag.
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"localId": uid, "displayName": "x", "customAttributes": "{}"}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+    }
+}
+
 #[test]
 fn admin_fields_rejection_does_not_consume_an_oob_code() {
     let s = state();

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "kind": "mfa-start-disabled-case-mapping",
+  "reviewer": "Claude (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-12",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "mfa-start",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/start",
+      "locators": [
+        "request-body",
+        "response-body"
+      ]
+    },
+    {
+      "id": "mfa-finalize",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/finalize",
+      "locators": [
+        "request-body",
+        "response-body"
+      ]
+    },
+    {
+      "id": "admin-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/update",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-sign-in-email-password",
+        "section-get-account-info",
+        "section-refresh-token"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "baseline-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh pending credential completes the phone second factor while the account is enabled; its identity is confirmed by claims and a derived lookup."
+    },
+    {
+      "case": "disabled-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "The account is disabled through privileged accounts:update and read back; the pending credential obtained before the disable is presented to mfaSignIn:start. Accepted and refused are both valid observations; USER_DISABLED is not pinned as the answer."
+    },
+    {
+      "case": "disabled-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If the disabled start returned a session, that session is finalized; skipped otherwise. Either outcome is recorded."
+    },
+    {
+      "case": "reenabled-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "The account is re-enabled and read back; the same pending credential is presented to mfaSignIn:start, showing whether the disabled attempt consumed it."
+    },
+    {
+      "case": "reenabled-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If the re-enabled start returned a session, it is finalized and the identity confirmed."
+    },
+    {
+      "case": "final-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh sign-in completes the second factor after the run, bounding it against a broken account."
+    }
+  ],
+  "limitations": [
+    "URLs were read during design; no new frozen full-body source snapshot or completed page-review claim is made by this mapping.",
+    "The sources define the operations; none states whether mfaSignIn:start on a disabled account is refused or accepted, or at which step the disabled state is enforced. The observation, not the sources, answers that for the recorded conditions.",
+    "One account, one SMS session, phone MFA with a test phone number, no tenant, no blocking function, one run. The pending credential is obtained before the disable.",
+    "The oracle project's MFA, phone sign-in and SMS region configuration were changed for the run and restored; the restore readback and whole-configuration digest comparison are part of the receipt, not a claim about production defaults.",
+    "No execution approval, independent signature verification, SDK, Rules or expiry claim follows from this mapping."
+  ]
+}

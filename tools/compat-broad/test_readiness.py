@@ -153,3 +153,81 @@ def test_wrapper_failure_propagation_and_successful_mismatch_recording():
         {"batch": {"completed": False}},
     ]:
         assert wrapper_exit_code({**good, **change}) != 0
+
+
+def test_saved_database_responses_reject_v1_and_match_v2_without_losing_response():
+    import json
+    from pathlib import Path
+
+    import batch_contract as c
+
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/database-settings-7be6cf08.json").read_text()
+    )
+    bodies = [row["body"] for row in fixture["observations"]]
+    old = fixture["v1Contract"]
+    assert old["version"] == "database-settings-v1"
+    v1 = [
+        c.digest(
+            {k: v for k, v in body.items() if k not in old["excludedResponseFields"]}
+        )
+        for body in bodies
+    ]
+    assert len(set(v1)) == 3
+    records = [c.database_evidence(body) for body in bodies]
+    assert c.DATABASE_PROJECTION["version"] == "database-settings-v2"
+    assert len({r["projectionDigest"] for r in records}) == 1
+    assert len({r["responseDigest"] for r in records}) == 3
+    for body, record in zip(bodies, records):
+        assert {"etag", "earliestVersionTime"} <= body.keys()
+        assert record["responseDigest"] == c.digest(body)
+        assert "etag" not in record["projection"]
+        assert "earliestVersionTime" not in record["projection"]
+    # Never promote the incomplete historical invocation into a successful run.
+    from broad_contract import ROOT
+
+    stopped = json.loads(
+        (
+            ROOT / "spec/compatibility/broad-runs/7be6cf08-execution-result.json"
+        ).read_text()
+    )
+    assert stopped["production"]["recordingComplete"] is False
+    assert stopped["production"]["diagnosticRowsExecuted"] == 0
+    assert v1[0] == stopped["production"]["approvedDatabaseProjectionDigest"]
+    for index, old_record in enumerate(
+        stopped["production"]["databaseObservations"], 1
+    ):
+        assert v1[index] == old_record["projectionDigest"]
+        assert records[index]["responseDigest"] == old_record["responseDigest"]
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("uid", "other"),
+        ("name", "other"),
+        ("databaseEdition", "ENTERPRISE"),
+        ("locationId", "other"),
+        ("type", "other"),
+        ("concurrencyMode", "OPTIMISTIC"),
+        ("deleteProtectionState", "different"),
+        ("updateTime", "different"),
+        ("unknownSetting", {"enabled": True}),
+        ("freeTier", 1),
+    ],
+)
+def test_etag_change_cannot_hide_settings_change(key, value):
+    import json
+    from pathlib import Path
+
+    import batch_contract as c
+
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/database-settings-7be6cf08.json").read_text()
+    )
+    before = fixture["observations"][0]["body"]
+    after = {**before, "etag": "different-etag", key: value}
+    assert (
+        c.database_evidence(before)["projectionDigest"]
+        != c.database_evidence(after)["projectionDigest"]
+    )

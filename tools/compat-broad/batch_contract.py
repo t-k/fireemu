@@ -223,8 +223,8 @@ class Credential:
 
 
 DATABASE_PROJECTION = {
-    "version": "database-settings-v1",
-    "excludedResponseFields": ["earliestVersionTime"],
+    "version": "database-settings-v2",
+    "excludedResponseFields": ["earliestVersionTime", "etag"],
     "retainedFields": "all other fields, including unknown fields and field presence/types",
     "requiredIdentityFields": ["name", "uid", "databaseEdition", "type", "locationId"],
     "hashEncoding": "canonical typed JSON SHA256",

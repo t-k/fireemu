@@ -8,6 +8,7 @@ import json
 import re
 import sys
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 from batch_contract import (
@@ -18,7 +19,7 @@ from batch_contract import (
     database_evidence,
     recording_exit_code,
 )
-from broad_contract import digest, first_difference
+from broad_contract import ROOT, digest, first_difference
 
 AUTH_ROLES = [
     ("create-a", "anonymous"),
@@ -42,7 +43,7 @@ AUTH_ROLES = [
     ("deleted-absent-b", "administrator"),
 ]
 NORMALIZATION = {
-    "version": "batch-response-v1",
+    "version": "batch-response-v2",
     "preserve": "JSON types, field presence, ordinary values, relative expiry, array order, mapped ownership",
     "opaqueAuthKeys": [
         "idToken",
@@ -62,6 +63,8 @@ NORMALIZATION = {
         "passwordUpdatedAt",
     ],
     "authTimePaths": "only top-level and users/* fields; preserve JSON type and timestamp format validity",
+    "authRfc3339TimePaths": ["users/*/lastRefreshAt"],
+    "authRfc3339Validity": "calendar-valid RFC3339 string with timezone and at most 9 fractional digits",
     "firestoreTimePaths": [
         "createTime",
         "updateTime",
@@ -239,7 +242,7 @@ def row_table(manifest):
 
 def binding(manifest):
     return {
-        "version": "batch-pair-v1",
+        "version": "batch-pair-v2",
         "manifestDigest": digest(manifest),
         "rowTable": row_table(manifest),
         "abstractInputsDigest": digest(
@@ -305,6 +308,30 @@ def matches(path, pattern):
 
 def normalize(value, names, *, service, path=()):
     key = path[-1] if path else ""
+    if (
+        service == "auth"
+        and any(
+            matches(path, pattern) for pattern in NORMALIZATION["authRfc3339TimePaths"]
+        )
+        and (
+            isinstance(value, str)
+            and re.fullmatch(
+                r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)",
+                value,
+            )
+        )
+    ):
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            pass
+        else:
+            return {
+                "$absoluteTime": True,
+                "jsonType": "string",
+                "formatValid": True,
+                "format": "RFC3339",
+            }
     if isinstance(value, str):
         if service == "auth":
             if key in {"localId", "user_id"}:
@@ -381,7 +408,7 @@ def normalize(value, names, *, service, path=()):
     return value
 
 
-def compare_pair(production, local):
+def _compare_pair(production, local, *, saved=None):
     manifest = candidate()
     contract = binding(manifest)
     errors = []
@@ -393,23 +420,27 @@ def compare_pair(production, local):
         ("production", production, True),
         ("local", local, False),
     ]:
-        if (
+        saved_side = side == "production" and saved is not None
+        if not saved_side and (
             report.get("schemaVersion") != 2
             or report.get("productionExecuted") is not is_production
             or report.get("manifestDigest") != digest(manifest)
             or digest(report.get("comparisonBinding")) != digest(contract)
         ):
             errors.append(side + ":report-binding")
-        try:
-            names = report["namespace"]
-            accounts = {
-                names["authEmails"][role]: uid
-                for role, uid in names["authUids"].items()
-            }
-            if digest(namespace(manifest, names["nonce"], accounts)) != digest(names):
+        if not saved_side:
+            try:
+                names = report["namespace"]
+                accounts = {
+                    names["authEmails"][role]: uid
+                    for role, uid in names["authUids"].items()
+                }
+                if digest(namespace(manifest, names["nonce"], accounts)) != digest(
+                    names
+                ):
+                    errors.append(side + ":namespace")
+            except (KeyError, TypeError, ValueError):
                 errors.append(side + ":namespace")
-        except (KeyError, TypeError, ValueError):
-            errors.append(side + ":namespace")
         rows = report.get("rows", [])
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             rows = []
@@ -427,10 +458,16 @@ def compare_pair(production, local):
         by_side[side] = {
             row["id"]: row for row in rows if isinstance(row.get("id"), str)
         }
-    if not production.get("observerDigest") or production.get(
-        "observerDigest"
-    ) != local.get("observerDigest"):
-        errors.append("observer-difference")
+    if saved is None:
+        if not production.get("observerDigest") or production.get(
+            "observerDigest"
+        ) != local.get("observerDigest"):
+            errors.append("observer-difference")
+    else:
+        from batch_adapter import observer_digest
+
+        if local.get("observerDigest") != observer_digest():
+            errors.append("local:observer-difference")
     if production.get("configurationUnchanged") is not True:
         errors.append("production:configuration-unconfirmed")
     records = production.get("databaseObservations", [])
@@ -494,7 +531,14 @@ def compare_pair(production, local):
         else "match"
     )
     return {
-        "mode": "production-versus-local",
+        "mode": "saved-production-versus-local"
+        if saved is not None
+        else "production-versus-local",
+        **(
+            {"source": saved, "localObserverDigest": local.get("observerDigest")}
+            if saved is not None
+            else {}
+        ),
         "evidenceKind": "input-fixture"
         if production.get("fixtureOnly") or local.get("fixtureOnly")
         else "recorded-observations",
@@ -510,6 +554,77 @@ def compare_pair(production, local):
     }
 
 
+def compare_pair(production, local):
+    """The live-pair path continues to require the same current observer on both sides."""
+    return _compare_pair(production, local)
+
+
+SAVED_FILES = {
+    "bc38f392-paired-observations.json": "a7809362c9c3a69d6a03a4f68e69aea0de34e29771f5bd36b2053359c609114c",
+    "bc38f392-execution-result.json": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88",
+}
+
+
+def load_saved_reference(directory=ROOT / "spec/compatibility/broad-runs"):
+    """Only the immutable ab7bd698 publication is accepted, including its cleanup receipt."""
+    documents = []
+    for name, sha in SAVED_FILES.items():
+        data = (directory / name).read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha:
+            raise ValueError("saved reference hash mismatch: " + name)
+        documents.append(json.loads(data))
+    return documents
+
+
+def compare_saved(local):
+    """Explicit re-evaluation, never relabel the old observer/manifest as the current one."""
+    paired, receipt = load_saved_reference()
+    names = {"authUids": {}, "authEmails": {}, "firestoreParents": {}}
+    # Already mapped UID/token values cannot be recovered. Only the previously
+    # retained lastRefreshAt strings receive the newly specified normalization.
+    rows = []
+    for row in paired["rows"]:
+        observation = row["production"]
+        rows.append(
+            {
+                "id": row["id"],
+                "principal": row["principal"],
+                "operation": row["operation"],
+                "observation": {
+                    **observation,
+                    "body": normalize(
+                        observation["body"], names, service=row["operation"]["service"]
+                    ),
+                },
+            }
+        )
+    source = {
+        "publicationCommit": "ab7bd698",
+        "executionCommit": receipt["executionCommit"],
+        "observerDigest": receipt["observerSha256"],
+        "manifestDigest": receipt["manifestSha256"],
+        "comparisonContractDigest": receipt["comparisonContractDigest"],
+        "fileSha256": SAVED_FILES,
+        "originalComparisonCounts": {"match": 35, "mismatch": 11},
+        "limitation": "Uses pinned published normalized observations; previously removed token bytes and absolute times are not recovered. No new production execution.",
+    }
+    reference = {
+        "rows": rows,
+        "observerDigest": source["observerDigest"],
+        "manifestDigest": source["manifestDigest"],
+        "completed": receipt["recordingComplete"],
+        "failure": None
+        if receipt["recordingComplete"]
+        else "saved recording incomplete",
+        "unrecovered": receipt["unrecovered"]
+        if receipt["cleanupComplete"]
+        else ["saved cleanup unconfirmed"],
+        "configurationUnchanged": receipt["configurationUnchanged"],
+        "databaseObservations": receipt["databaseObservations"],
+    }
+    return _compare_pair(reference, local, saved=source)
+
+
 def exit_code(result, check=False):
     return (
         2
@@ -522,13 +637,18 @@ def exit_code(result, check=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--production", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--production", type=Path)
+    source.add_argument("--saved-ab7bd698", action="store_true")
     parser.add_argument("--local", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    result = compare_pair(
-        json.loads(args.production.read_bytes()), json.loads(args.local.read_bytes())
+    local = json.loads(args.local.read_bytes())
+    result = (
+        compare_saved(local)
+        if args.saved_ab7bd698
+        else compare_pair(json.loads(args.production.read_bytes()), local)
     )
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(

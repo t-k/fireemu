@@ -327,3 +327,128 @@ def test_raw_id_mapping_requires_password_provider_path_and_observed_owner():
     }
     result = p.normalize(body, names, service="auth")
     assert result["users"][0]["providerUserInfo"][0]["rawId"] == {"$email": "b"}
+
+
+def test_last_refresh_normalization_is_rfc3339_and_path_specific():
+    p = module()
+    _, local = fixture_pair()
+    names = local["namespace"]
+
+    def normalized(value):
+        return p.normalize({"users": [{"lastRefreshAt": value}]}, names, service="auth")
+
+    first = normalized("2026-09-12T13:02:03.123456789Z")
+    assert first == normalized("2026-09-13T14:03:04Z")
+    assert first == normalized("2026-09-13T14:03:04+09:00")
+    assert first == normalized("2026-09-13T14:03:04-05:30")
+    for invalid in [
+        None,
+        True,
+        123,
+        "123",
+        "2026-02-30T13:02:03Z",
+        "2026-09-12",
+        "",
+        "2026-09-12T13:02:03+00:60",
+        "2026-09-12T13:02:03+01:99",
+        "2026-09-12T13:02:03+24:00",
+    ]:
+        assert normalized(invalid)["users"][0]["lastRefreshAt"] == invalid
+        assert normalized(invalid) != first
+    for body in [
+        {"lastRefreshAt": "2026-09-12T13:02:03Z"},
+        {"nested": {"users": [{"lastRefreshAt": "2026-09-12T13:02:03Z"}]}},
+    ]:
+        assert p.normalize(body, names, service="auth") == body
+    assert (
+        p.normalize(
+            {"users": [{"lastRefreshAt": "2026-09-12T13:02:03Z"}]},
+            names,
+            service="firestore",
+        )
+        != first
+    )
+
+
+def saved_local_fixture():
+    import json
+
+    from batch_adapter import observer_digest
+    from broad_contract import ROOT
+
+    p = module()
+    _, local = fixture_pair()
+    saved = json.loads(
+        (
+            ROOT / "spec/compatibility/broad-runs/bc38f392-paired-observations.json"
+        ).read_bytes()
+    )
+    local["observerDigest"] = observer_digest()
+    local["rows"] = [
+        {
+            "id": r["id"],
+            "principal": r["principal"],
+            "operation": r["operation"],
+            "observation": {
+                **r["production"],
+                "body": p.normalize(
+                    r["production"]["body"],
+                    local["namespace"],
+                    service=r["operation"]["service"],
+                ),
+            },
+        }
+        for r in saved["rows"]
+    ]
+    return local
+
+
+def test_saved_reference_reevaluation_binds_operations_and_completeness():
+    p = module()
+    local = saved_local_fixture()
+    result = p.compare_saved(local)
+    assert result["recordingComplete"] and result["compatibility"] == "match"
+    assert result["mode"] == "saved-production-versus-local"
+    assert result["evidenceKind"] == "input-fixture"
+    assert result["source"]["originalComparisonCounts"] == {"match": 35, "mismatch": 11}
+    assert result["source"]["observerDigest"] != result["localObserverDigest"]
+    changed = copy.deepcopy(local)
+    changed["rows"][0]["observation"]["body"]["extra"] = True
+    result = p.compare_saved(changed)
+    assert result["recordingComplete"] and result["compatibility"] == "mismatch"
+    for field, value in [
+        ("completed", False),
+        ("unrecovered", ["owned"]),
+        ("observerDigest", "unknown"),
+    ]:
+        assert not p.compare_saved({**local, field: value})["recordingComplete"]
+    for change in ["missing", "order", "principal", "operation", "namespace"]:
+        changed = copy.deepcopy(local)
+        if change == "missing":
+            changed["rows"].pop()
+        if change == "order":
+            changed["rows"].reverse()
+        if change == "principal":
+            changed["rows"][0]["principal"] = "anonymous"
+        if change == "operation":
+            changed["rows"][0]["operation"]["body"] = {"different": True}
+        if change == "namespace":
+            changed["namespace"]["authEmails"]["a"] = "foreign@example.invalid"
+        assert not p.compare_saved(changed)["recordingComplete"]
+
+
+def test_saved_reference_files_are_pinned(tmp_path):
+    import shutil
+
+    import pytest
+    from broad_contract import ROOT
+
+    p = module()
+    source = ROOT / "spec/compatibility/broad-runs"
+    for name in ["bc38f392-paired-observations.json", "bc38f392-execution-result.json"]:
+        shutil.copyfile(source / name, tmp_path / name)
+    p.load_saved_reference(tmp_path)
+    path = tmp_path / "bc38f392-paired-observations.json"
+    path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="saved reference hash"):
+        p.load_saved_reference(tmp_path)

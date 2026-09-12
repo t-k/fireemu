@@ -266,13 +266,27 @@ def auth_scenario(call, seed=SEED, *, on_row=None):
         ("unauthenticated-update", {"displayName": "must-not-apply"}),
     ]:
         status, body = call(client + "update?key=fake", payload)
+        anonymous = name == "unauthenticated-update"
+        owner = a if name == "self-admin-field" else b
+        checks = (
+            {
+                "rejected": status == 400,
+                "errorCode": body.get("error", {}).get("message") == "INVALID_REQ_TYPE",
+            }
+            if anonymous
+            else {
+                "tokenOwner": body.get("localId") == owner["uid"],
+                "displayNameApplied": body.get("displayName") == "must-not-apply",
+                "notVerified": body.get("emailVerified") is False,
+            }
+        )
         emit(
             name,
             "auth-authorization",
-            status == 400,
+            status == (400 if anonymous else 200),
             status,
             body,
-            {"rejected": status == 400},
+            checks,
         )
     for user in users:
         status, body = call(
@@ -289,7 +303,7 @@ def auth_scenario(call, seed=SEED, *, on_row=None):
             {
                 "sameUid": record.get("localId") == user["uid"],
                 "sameOwnerEmail": record.get("email") == user["email"],
-                "displayNameUnchanged": record.get("displayName", "") == "",
+                "displayNameApplied": record.get("displayName") == "must-not-apply",
                 "notVerified": record.get("emailVerified", False) is False,
             },
         )

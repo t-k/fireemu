@@ -19,6 +19,7 @@ from broad_contract import ROOT, local_origin
 from owned_runner import (
     build_artifact,
     control_get,
+    local_addresses,
     sanitized_environment,
     socket_closed,
 )
@@ -29,7 +30,9 @@ def child(output, nonce):
         "auth": local_origin("http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"]),
         "firestore": local_origin("http://" + os.environ["FIRESTORE_EMULATOR_HOST"]),
     }
-    control = local_origin(os.environ["FIREEMU_CONTROL_URL"])
+    _, control = local_addresses(
+        os.environ["FIRESTORE_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
+    )
     token = os.environ["FIREEMU_CONTROL_TOKEN"]
     status, body = control_get(control, "/v1/sessions/default/resources", token)
     wrong, _ = control_get(control, "/v1/sessions/default/resources", token + "-wrong")
@@ -129,6 +132,10 @@ def run(output):
             cleanup_run(process, output, nonce, report)
     if before != source_inputs():
         raise ValueError("observer changed during execution")
+    if not (output / "instance.json").exists():
+        raise ValueError(
+            "owned child failed before identity confirmation; see private stderr"
+        )
     instance = json.loads((output / "instance.json").read_bytes())
     report["ownedProcess"] = {
         "pid": process.pid,

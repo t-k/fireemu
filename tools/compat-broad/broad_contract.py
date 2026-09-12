@@ -147,7 +147,16 @@ def compare_program(current, old, actual, expected):
         }
         got = actual.get("steps", {}).get(name)
         want = expected.get(name, {}).get("production")
-        if current != old:
+        row["localExecution"] = (
+            "observed"
+            if got and got.get("status", 0) > 0
+            else "indeterminate"
+            if got
+            else "not-run"
+        )
+        if got is not None:
+            row["actual"] = got
+        if digest(current) != digest(old):
             row["reason"] = "operation-sequence-changed-or-not-recorded"
         elif got is None:
             row.update(status="not-run", reason="missing-local-step")
@@ -345,7 +354,7 @@ FAMILY_SPECS = [
         "pipeline/full-text/Enterprise Native",
         "REST/gRPC",
         "user/admin",
-        "unimplemented-or-unobserved",
+        "not-selected",
         "Next: map existing Enterprise capability stubs; separate edition oracle required",
     ),
     (
@@ -354,7 +363,7 @@ FAMILY_SPECS = [
         "MongoDB wire compatibility",
         "MongoDB",
         "database user",
-        "unimplemented-or-unobserved",
+        "not-selected",
         "Separate protocol and database; never import Standard expectations",
     ),
     (
@@ -400,6 +409,8 @@ def catalog():
             "principal": principal,
             "availability": availability,
             "currentStatus": "not-run",
+            "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+            "capabilitySource": "spec/compatibility/contract.json",
             "reasonAndNextUnit": reason,
         }
         for key, edition, feature, transport, principal, availability, reason in FAMILY_SPECS
@@ -460,6 +471,58 @@ def catalog():
                     "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
                 }
             )
+    family_map = {family["id"]: family for family in families}
+    for case in cases:
+        family = family_map[case["family"]]
+        case.update(
+            service=family["service"],
+            edition=family["edition"],
+            transport="REST",
+            principal=family["principal"],
+            comparator="tools/compat-broad/broad_contract.py:compare_program",
+            currentArtifactReplay="available",
+            currentConfiguration="strict; Standard Native; historical pinned index file",
+            basis="historical-reference; not current execution",
+        )
+    from broad_cases import SEED, generated_programs
+
+    for program in generated_programs():
+        cases.append(
+            {
+                "id": "firestore:" + program["id"],
+                "family": "fs-writes/fs-queries",
+                "entry": "tools/compat-broad/broad_cases.py:generated_programs",
+                "programDigest": digest(program),
+                "seed": SEED,
+                "selected": True,
+                "currentStatus": "not-run",
+                "basis": "local-invariant",
+                "dimensions": ["normal", "single-refusal", "boundary", "state"],
+                "historicalReference": None,
+                "reason": "New seeded template; no fabricated production observation",
+            }
+        )
+    for family in ("auth-accounts", "auth-credentials", "auth-authorization"):
+        cases.append(
+            {
+                "id": family + ":short-state-sequence",
+                "family": family,
+                "entry": "tools/compat-broad/broad_cases.py:auth_cases",
+                "seed": SEED,
+                "selected": True,
+                "currentStatus": "not-run",
+                "basis": "local-invariant",
+                "dimensions": [
+                    "normal",
+                    "single-refusal",
+                    "boundary",
+                    "state",
+                    "sequence",
+                ],
+                "historicalReference": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+                "reason": "Reuses local regression obligations; runtime UID/token relationships are booleans, not historical token replay",
+            }
+        )
     return {
         "schemaVersion": 1,
         "scope": "known pinned API methods, not all fields or all upstream semantics",

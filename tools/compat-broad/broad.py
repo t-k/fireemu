@@ -1,5 +1,6 @@
 """Thin offline-only entry over existing conformance sessions and a fixed owned artifact."""
 
+# ruff: noqa: BLE001 -- Continue independent cleanup; record only sanitized exception types.
 from __future__ import annotations
 
 import argparse
@@ -40,6 +41,7 @@ from owned_runner import (
 )
 
 HERE = Path(__file__).resolve().parent
+FIRESTORE_CONFIG = {"edition": "standard", "apiMode": "native"}
 CONFIG = {
     "schemaVersion": 1,
     "profile": "strict",
@@ -204,46 +206,88 @@ def child(output, nonce):
         "selectedPrograms": selected,
         "productionExecuted": False,
         "formalCompatibilityClaim": False,
+        "localObservations": actual,
+        "requestStats": {
+            service: json.loads((output / f"{service}-stats.json").read_bytes())
+            for service in selected
+        },
     }
     save(output / "cases.json", report)
     return report
 
 
 def stop_registered(output, parent_pid, nonce):
-    # PID-specific identity validation, never broad process-group/name killing.
-    registrations = list(output.glob("*-process.json"))
+    """Attempt each owned child independently; aggregate failures without unsafe signals."""
+    registrations = sorted(output.glob("*-process.json"))
     instance_path = output / "instance.json"
     if instance_path.exists():
-        instance = json.loads(instance_path.read_bytes())
-        if instance["parentPid"] != parent_pid or instance["nonce"] != nonce:
-            raise ValueError("unexpected child ownership")
         registrations.append(instance_path)
+    failures = []
     for path in registrations:
-        info = json.loads(path.read_bytes())
-        pid = info["pid"]
-        if type(pid) is not int or pid <= 1:
-            raise ValueError("invalid owned pid")
-        expected = info["argv"]
-        if path == instance_path:
-            expected = [sys.executable, *expected]
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            state = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "comm=", "-o", "args="],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if not state.stdout.strip():
-                break
-            fields = state.stdout.strip().split(maxsplit=1)
-            if (
-                len(fields) != 2
-                or fields[1] != " ".join(expected)
-                or Path(fields[0]).name != Path(expected[0]).name
+        try:
+            info = json.loads(path.read_bytes())
+            if path == instance_path and (
+                info["parentPid"] != parent_pid or info["nonce"] != nonce
             ):
-                raise ValueError("owned pid reused; refusing signal")
-            os.kill(pid, sig)
-            time.sleep(0.2)
+                raise ValueError("unexpected child ownership")
+            pid, expected = info["pid"], info["argv"]
+            if type(pid) is not int or pid <= 1:
+                raise ValueError("invalid owned pid")
+            if path == instance_path:
+                expected = [sys.executable, *expected]
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                state = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "comm=", "-o", "args="],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if not state.stdout.strip():
+                    break
+                fields = state.stdout.strip().split(maxsplit=1)
+                comm = Path(fields[0]).name.lower()
+                same_binary = comm == Path(expected[0]).name.lower() or (
+                    comm.startswith("python")
+                    and Path(expected[0]).name.lower().startswith("python")
+                )
+                if (
+                    len(fields) != 2
+                    or fields[1] != " ".join(expected)
+                    or not same_binary
+                ):
+                    raise ValueError("owned pid reused; refusing signal")
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.2)
+        except Exception as error:
+            failures.append(type(error).__name__)
+    if failures:
+        raise ValueError("one or more owned registrations could not be confirmed")
+
+
+def cleanup_run(process, output, nonce, report):
+    """Registration errors must never skip stopping the owned parent or recording failure."""
+    try:
+        stop_registered(output, process.pid, nonce)
+    except Exception as error:
+        report.update(status="incomplete", cleanupFailure=type(error).__name__)
+    finally:
+        try:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        except Exception as error:
+            report.update(
+                status="incomplete", parentCleanupFailure=type(error).__name__
+            )
+        finally:
+            save(output / "manifest.json", report)
 
 
 def summarize(report):
@@ -296,8 +340,25 @@ def run(output):
         artifact.chmod(0o500)
         if hashlib.sha256(artifact.read_bytes()).hexdigest() != build["artifactSha256"]:
             raise ValueError("artifact copy mismatch")
+        index_commit = "2526c61eda5fc53ac91250307786127ae3c601be"
+        index_bytes = subprocess.check_output(
+            ["git", "show", f"{index_commit}:conformance/firestore.indexes.json"],
+            cwd=ROOT,
+        )
+        index_sha = hashlib.sha256(index_bytes).hexdigest()
+        if (
+            index_sha
+            != "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c"
+        ):
+            raise ValueError("historical index bytes do not match production evidence")
+        index_file = private / "indexes.json"
+        index_file.write_bytes(index_bytes)
+        actual_config = {
+            **CONFIG,
+            "firestore": {**FIRESTORE_CONFIG, "indexFile": str(index_file)},
+        }
         config = private / "config.json"
-        save(config, CONFIG)
+        save(config, actual_config)
         command = [
             str(artifact),
             "exec",
@@ -359,7 +420,19 @@ def run(output):
                     artifactSha256=build["artifactSha256"],
                     runtimeInputs=build["inputs"],
                     executionInputs=before,
-                    configurationDigest=digest(CONFIG),
+                    configurationDigest=digest(actual_config),
+                    configuration={
+                        **CONFIG,
+                        "firestore": {
+                            **FIRESTORE_CONFIG,
+                            "indexFile": "<owned-private-index-file>",
+                        },
+                    },
+                    indexConfiguration={
+                        "sha256": index_sha,
+                        "sourceCommit": index_commit,
+                        "value": json.loads(index_bytes),
+                    },
                     build=build,
                     ownedProcess={
                         "pid": process.pid,
@@ -369,15 +442,7 @@ def run(output):
                 )
                 report["summary"] = summarize(report)
             finally:
-                stop_registered(output, process.pid, nonce)
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-                save(output / "manifest.json", report)
+                cleanup_run(process, output, nonce, report)
     return report
 
 
@@ -408,4 +473,10 @@ def main():
 
 
 if __name__ == "__main__":
+
+    def interrupted(signum, frame):
+        raise InterruptedError("owned run interrupted")
+
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGHUP, interrupted)
     main()

@@ -100,6 +100,10 @@ def check_generated(program, actual):
                 good
                 and isinstance(body, dict)
                 and body.get("fields") == program["seed"][0]["fields"]
+                and body.get("name")
+                == program["seed"][0]["path"]
+                .removeprefix("/v1/")
+                .replace("PROJECT", PROJECT)
             )
         elif expectation == "no-documents":
             good = (

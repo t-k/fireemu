@@ -100,6 +100,10 @@ jobs:
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-disable-comparison-approval.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-readback-comparison-approval.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-create-disable-comparison-approval.py --check
+      - name: Check broad local inventory and comparison safety
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --check-catalog
       - name: Check lifetime corpora and published candidates
         run: |
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-lifetime tools/auth-pending-lifetime-boundary tools/auth-pending-lifetime-window -q

@@ -11,6 +11,8 @@
       "principal": "anonymous/self/local-admin",
       "availability": "selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Existing account lifecycle programs and new state readbacks"
     },
     {
@@ -22,6 +24,8 @@
       "principal": "self",
       "availability": "selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Existing sign-in programs plus password-change/refresh sequence"
     },
     {
@@ -33,6 +37,8 @@
       "principal": "multiple principals",
       "availability": "selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "New refusal and unchanged-account checks; preserved GAP-AUTH-005 regressions"
     },
     {
@@ -44,6 +50,8 @@
       "principal": "tenant admin/user",
       "availability": "external-dependency",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: isolated local tenant corpus; production tenant/config scope needs approval"
     },
     {
@@ -55,6 +63,8 @@
       "principal": "IdP/user",
       "availability": "external-dependency",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: existing custom-token fixtures; real IdP integration needs separately scoped credentials"
     },
     {
@@ -66,6 +76,8 @@
       "principal": "self/admin",
       "availability": "prepared",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Keep lifetime revision 3 independent and production-unobserved; GAP-AUTH-007 and AUTH-U03 remain open"
     },
     {
@@ -77,6 +89,8 @@
       "principal": "self/email recipient",
       "availability": "not-selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: existing OOB fixtures; no real email delivery in this milestone"
     },
     {
@@ -88,6 +102,8 @@
       "principal": "service account/user",
       "availability": "external-dependency",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: preserved blocking receipts/fixtures; live function/config scope separate"
     },
     {
@@ -99,6 +115,8 @@
       "principal": "project administrator",
       "availability": "not-selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: existing capability/admin tests; configuration mutation requires exclusive scope"
     },
     {
@@ -110,6 +128,8 @@
       "principal": "local-owner/production OAuth",
       "availability": "selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Existing stateful writes programs; changed transform corpus is incomparable to old rows"
     },
     {
@@ -121,6 +141,8 @@
       "principal": "local-owner/production OAuth",
       "availability": "selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Existing cursor program plus seeded refusal-state case; more type/filter programs next"
     },
     {
@@ -132,6 +154,8 @@
       "principal": "local-owner/production OAuth",
       "availability": "selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Existing transaction lifecycle; no-response historical rows remain indeterminate"
     },
     {
@@ -143,6 +167,8 @@
       "principal": "local-owner/production OAuth",
       "availability": "not-selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: reuse tools/compat-inventory aggregation corpus and pinned receipts"
     },
     {
@@ -154,6 +180,8 @@
       "principal": "admin/query caller",
       "availability": "not-selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: pinned index fixture/config matching; shared index changes require exclusive scope"
     },
     {
@@ -165,6 +193,8 @@
       "principal": "user/anonymous",
       "availability": "not-selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: conformance Rules sessions; owner data operations do not test Rules"
     },
     {
@@ -176,6 +206,8 @@
       "principal": "user/admin",
       "availability": "not-selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: existing SDK listen fixtures with invariant/partial-order checks"
     },
     {
@@ -187,6 +219,8 @@
       "principal": "user/admin",
       "availability": "not-selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: conformance SDK corpus and tools/sdk-smoke; REST pass does not cover SDK"
     },
     {
@@ -196,8 +230,10 @@
       "feature": "pipeline/full-text/Enterprise Native",
       "transport": "REST/gRPC",
       "principal": "user/admin",
-      "availability": "unimplemented-or-unobserved",
+      "availability": "not-selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Next: map existing Enterprise capability stubs; separate edition oracle required"
     },
     {
@@ -207,8 +243,10 @@
       "feature": "MongoDB wire compatibility",
       "transport": "MongoDB",
       "principal": "database user",
-      "availability": "unimplemented-or-unobserved",
+      "availability": "not-selected",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Separate protocol and database; never import Standard expectations"
     },
     {
@@ -220,6 +258,8 @@
       "principal": "project administrator",
       "availability": "external-dependency",
       "currentStatus": "not-run",
+      "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
+      "capabilitySource": "spec/compatibility/contract.json",
       "reasonAndNextUnit": "Managed-service boundaries; enumerate capability limitations before owned database scope"
     }
   ],
@@ -1636,7 +1676,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/auth-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "transport": "REST",
+      "principal": "self",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "auth:password/validation",
@@ -1671,7 +1719,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/auth-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "transport": "REST",
+      "principal": "self",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "auth:anonymous/lifecycle",
@@ -1701,7 +1757,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/auth-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "transport": "REST",
+      "principal": "anonymous/self/local-admin",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "auth:tokens/errors",
@@ -1751,7 +1815,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/auth-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Identity Platform",
+      "edition": "Identity Platform",
+      "transport": "REST",
+      "principal": "multiple principals",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:values/type-order",
@@ -1796,7 +1868,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:values/numeric-ties",
@@ -1861,7 +1941,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:queries/filters",
@@ -2026,7 +2114,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:queries/cursors",
@@ -2116,7 +2212,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:queries/collection-group",
@@ -2181,7 +2285,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:queries/aggregations",
@@ -2311,7 +2423,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:queries/projection-and-listing",
@@ -2416,7 +2536,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:writes/preconditions-and-masks",
@@ -2601,7 +2729,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:writes/transforms",
@@ -2716,7 +2852,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:writes/batch-write",
@@ -2756,7 +2900,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:transactions/lifecycle",
@@ -2931,7 +3083,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:errors/rest-shapes",
@@ -3406,7 +3566,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard/Enterprise",
+      "transport": "REST",
+      "principal": "project administrator",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:emulator/routes",
@@ -3526,7 +3694,15 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard/Enterprise",
+      "transport": "REST",
+      "principal": "project administrator",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
     },
     {
       "id": "firestore:reads/read-time",
@@ -3591,7 +3767,87 @@
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
-      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions"
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "service": "Firestore",
+      "edition": "Standard/Enterprise",
+      "transport": "REST",
+      "principal": "project administrator",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state",
+      "family": "fs-writes/fs-queries",
+      "entry": "tools/compat-broad/broad_cases.py:generated_programs",
+      "programDigest": "a2c9de0047d77eeed093459d6c78663fb6b39efc68cd62513fd795bce8b8c777",
+      "seed": 20260912,
+      "selected": true,
+      "currentStatus": "not-run",
+      "basis": "local-invariant",
+      "dimensions": [
+        "normal",
+        "single-refusal",
+        "boundary",
+        "state"
+      ],
+      "historicalReference": null,
+      "reason": "New seeded template; no fabricated production observation"
+    },
+    {
+      "id": "auth-accounts:short-state-sequence",
+      "family": "auth-accounts",
+      "entry": "tools/compat-broad/broad_cases.py:auth_cases",
+      "seed": 20260912,
+      "selected": true,
+      "currentStatus": "not-run",
+      "basis": "local-invariant",
+      "dimensions": [
+        "normal",
+        "single-refusal",
+        "boundary",
+        "state",
+        "sequence"
+      ],
+      "historicalReference": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+      "reason": "Reuses local regression obligations; runtime UID/token relationships are booleans, not historical token replay"
+    },
+    {
+      "id": "auth-credentials:short-state-sequence",
+      "family": "auth-credentials",
+      "entry": "tools/compat-broad/broad_cases.py:auth_cases",
+      "seed": 20260912,
+      "selected": true,
+      "currentStatus": "not-run",
+      "basis": "local-invariant",
+      "dimensions": [
+        "normal",
+        "single-refusal",
+        "boundary",
+        "state",
+        "sequence"
+      ],
+      "historicalReference": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+      "reason": "Reuses local regression obligations; runtime UID/token relationships are booleans, not historical token replay"
+    },
+    {
+      "id": "auth-authorization:short-state-sequence",
+      "family": "auth-authorization",
+      "entry": "tools/compat-broad/broad_cases.py:auth_cases",
+      "seed": 20260912,
+      "selected": true,
+      "currentStatus": "not-run",
+      "basis": "local-invariant",
+      "dimensions": [
+        "normal",
+        "single-refusal",
+        "boundary",
+        "state",
+        "sequence"
+      ],
+      "historicalReference": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+      "reason": "Reuses local regression obligations; runtime UID/token relationships are booleans, not historical token replay"
     }
   ],
   "currentExecutionInherited": false

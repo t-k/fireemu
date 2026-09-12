@@ -16,6 +16,7 @@ prove that a refusal is due to expiry rather than some other cause (that proof, 
 pending against an independently valid code, is a later corpus).
 """
 
+import itertools
 import sys
 from pathlib import Path
 
@@ -75,6 +76,30 @@ FINALIZE_CHECKS = {
 START_CHECKS = {"sessionInfoPresent"}
 # The session opened fresh at a diagnostic must be young when the finalize consumes it.
 MAX_SESSION_AGE_SECONDS = 30
+# Timing key sets. The pending credential is issued between its acquisition request's send
+# and receive, so a conservative age interval brackets it: the lower bound divides by the
+# LATEST possible birth (pendingReceived) and the upper bound by the EARLIEST (pendingSent),
+# so the interval always covers the pending's true age including the acquisition latency.
+START_TIMING = {
+    "pendingSent",
+    "pendingReceived",
+    "startSent",
+    "startReceived",
+    "pendingAgeAtStart",
+}
+FINALIZE_TIMING = {
+    "pendingSent",
+    "pendingReceived",
+    "startSent",
+    "startReceived",
+    "finalizeSent",
+    "finalizeReceived",
+    "sessionAgeAtFinalize",
+    "pendingAgeAtFinalize",
+}
+# Timestamps that must appear in program order on the aging clock, per row kind.
+START_ORDER = ("pendingSent", "pendingReceived", "startSent", "startReceived")
+FINALIZE_ORDER = (*START_ORDER, "finalizeSent", "finalizeReceived")
 # The budget keys every run declares. maxRequests covers auth API calls (admin/client/mfa);
 # recoveryRequestReserve is the slice of maxRequests kept for cleanup so a request-exhausted
 # observation can still delete its accounts. Configuration reads/writes are counted and
@@ -126,60 +151,66 @@ def _interval(value):
     )
 
 
+def _ordered(timing, order):
+    """The named timestamps are non-negative numbers in non-decreasing program order."""
+    for key in order:
+        require(_number(timing[key]))
+    for earlier, later in itertools.pairwise(order):
+        require(timing[earlier] <= timing[later])
+
+
+def _derived(timing, interval_key, low_from, low_sub, high_from, high_sub):
+    """The interval equals the raw timestamps it is derived from, exactly. Verifying this
+    closes the gap where a tampered interval could disagree with its own timestamps."""
+    require(_interval(timing[interval_key]))
+    require(timing[interval_key]["lower"] == timing[low_from] - timing[low_sub])
+    require(timing[interval_key]["upper"] == timing[high_from] - timing[high_sub])
+
+
 def validate_timing(timing, name, outcome, skipped):
     """The timing region for one row. Measured on the aging clock (monotonic in production,
     the virtual clock locally). Saved on acceptance and refusal alike; empty only when the
-    row was skipped (its request was never sent)."""
+    row was skipped (its request was never sent). Every derived age interval is checked
+    against its raw timestamps, and the timestamps must be in program order."""
     require(isinstance(timing, dict))
     if skipped:
         require(timing == {})
         return
-    is_start = name.endswith("-start")
-    if is_start:
-        require(
-            set(timing)
-            == {"pendingAcquiredAt", "startSent", "startReceived", "pendingAgeAtStart"}
-        )
-        for key in ("pendingAcquiredAt", "startSent", "startReceived"):
-            require(_number(timing[key]))
-        require(timing["startSent"] <= timing["startReceived"])
-        require(_interval(timing["pendingAgeAtStart"]))
-        return
-    # A finalize row (a control or an age finalize) that actually ran: it sent both a start
-    # and a finalize, so it carries both timestamps and both derived age intervals.
-    require(
-        set(timing)
-        == {
-            "pendingAcquiredAt",
+    if name.endswith("-start"):
+        require(set(timing) == START_TIMING)
+        _ordered(timing, START_ORDER)
+        # Pending age at start: [startSent - pendingReceived, startReceived - pendingSent].
+        _derived(
+            timing,
+            "pendingAgeAtStart",
             "startSent",
+            "pendingReceived",
             "startReceived",
-            "finalizeSent",
-            "finalizeReceived",
-            "sessionAgeAtFinalize",
-            "pendingAgeAtFinalize",
-        }
-    )
-    for key in (
-        "pendingAcquiredAt",
-        "startSent",
-        "startReceived",
-        "finalizeSent",
-        "finalizeReceived",
-    ):
-        require(_number(timing[key]))
-    require(timing["startSent"] <= timing["startReceived"] <= timing["finalizeSent"])
-    require(timing["finalizeSent"] <= timing["finalizeReceived"])
-    require(_interval(timing["sessionAgeAtFinalize"]))
-    require(_interval(timing["pendingAgeAtFinalize"]))
+            "pendingSent",
+        )
+        return
+    # A finalize row (a control or an age finalize) that ran: a start and a finalize were
+    # sent, so it carries both round-trips and both derived age intervals.
+    require(set(timing) == FINALIZE_TIMING)
+    _ordered(timing, FINALIZE_ORDER)
     # The session was minted during the start request, so its age at finalize is bounded by
-    # (finalizeSent - startReceived, finalizeReceived - startSent); require exactly that.
-    require(
-        timing["sessionAgeAtFinalize"]["lower"]
-        == timing["finalizeSent"] - timing["startReceived"]
+    # [finalizeSent - startReceived, finalizeReceived - startSent].
+    _derived(
+        timing,
+        "sessionAgeAtFinalize",
+        "finalizeSent",
+        "startReceived",
+        "finalizeReceived",
+        "startSent",
     )
-    require(
-        timing["sessionAgeAtFinalize"]["upper"]
-        == timing["finalizeReceived"] - timing["startSent"]
+    # Pending age at finalize brackets the acquisition latency the same way as at start.
+    _derived(
+        timing,
+        "pendingAgeAtFinalize",
+        "finalizeSent",
+        "pendingReceived",
+        "finalizeReceived",
+        "pendingSent",
     )
     if outcome == "accepted":
         require(timing["sessionAgeAtFinalize"]["upper"] <= MAX_SESSION_AGE_SECONDS)
@@ -286,7 +317,12 @@ def complete(report):
         require(
             not any(
                 k in report
-                for k in ("failure", "cleanupFailure", "configRestoreFailure")
+                for k in (
+                    "failure",
+                    "cleanupFailure",
+                    "configRestoreFailure",
+                    "recoveryIncomplete",
+                )
             )
         )
         require(
@@ -305,11 +341,19 @@ def complete(report):
         rows = {r["id"]: r for r in report["cases"]}
         for a in AGE_SECONDS:
             start = rows[f"age-{a}s-start"]
+            finalize = rows[f"age-{a}s-finalize"]
             accepted = (
                 start["outcome"] == "accepted"
                 and start["checks"].get("sessionInfoPresent") is True
             )
-            require(rows[f"age-{a}s-finalize"]["skipped"] == (not accepted))
+            require(finalize["skipped"] == (not accepted))
+            # The recorded pending age at start is at least the sampled age.
+            require(start["timing"]["pendingAgeAtStart"]["lower"] >= a)
+            # A finalize that ran shares its start's acquisition and start timestamps, so the
+            # two rows describe one credential and one session, not a re-derived guess.
+            if not finalize["skipped"]:
+                for key in START_ORDER:
+                    require(finalize["timing"][key] == start["timing"][key])
         if report["target"] == "production":
             require(
                 report["committedCheckout"] is True

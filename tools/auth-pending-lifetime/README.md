@@ -45,27 +45,40 @@ configuration-hold time; and a cleanup reserve. Two clocks are kept apart: the a
 measures a pending credential's age (real monotonic time in production, the virtual clock
 locally), while the wall clock (always real monotonic time) enforces the budget, so a local
 run's instant virtual aging never trips a wall-time budget and a production run's real
-waiting does. Before each diagnostic and inside the aging wait, a guard stops the run if the
-wall clock has reached the total-time or configuration-hold deadline minus the cleanup
-reserve; the observation request counter is capped at the total minus the recovery reserve,
-so cleanup (five admin calls per account) is always affordable even when observation is
-exhausted. Reaching any guard is a clean early stop recorded in `stopReason`
-(`time-budget` / `config-hold-budget` / `request-budget`), not a crash, and the run still
-restores configuration and deletes every account in `finally`. The report records the
-request counts (observation, recovery, configuration), the total wall elapsed and the
-configuration-hold seconds, and `complete()` checks all of them against the declared budget.
-Restore and deletion are always attempted; success is confirmed by the restore readback,
-the whole-configuration digest, and per-account UID and email absence, and a failure is
-reported (`configRestoreFailure` / `cleanupFailure`) rather than assumed from reaching
-`finally`.
+waiting does. The guard is on every request path, not only the aging wait: each request
+(preflight and the configuration change included) reserves the transport's worst-case
+timeout before it is sent, so a request that starts always finishes before its phase
+deadline, and configuration is never enabled once the deadline has passed. Observation must
+finish by the total-time or configuration-hold deadline minus the cleanup reserve, and its
+request counter is capped at the total minus the recovery reserve, so cleanup (five admin
+calls per account) is always affordable even when observation is exhausted. Recovery runs
+under its own deadline (it may spend the cleanup reserve) and its own request reserve, and
+each recovery request is time-guarded too. Reaching any guard is a clean early stop recorded
+in `stopReason` (`time-budget` / `config-hold-budget` / `request-budget`), not a crash, and
+the run still restores configuration and deletes accounts in `finally`. The report records
+the request counts (observation, recovery, configuration, each counted per attempt so a
+failed request still counts), the total wall elapsed and the configuration-hold seconds, and
+`complete()` checks all of them against the declared budget. Restore and deletion are always
+attempted; success is confirmed by the restore readback, the whole-configuration digest, and
+per-account UID and email absence, and a failure is reported (`configRestoreFailure` /
+`cleanupFailure`) rather than assumed from reaching `finally`. Whatever recovery cannot
+confirm within budget is left with its recovery journal for a later `--recover`, recorded as
+`recoveryIncomplete` with an `unrecoveredCount`, so the run never silently exceeds the total.
 
 Every row carries a `timing` region measured on the aging clock, saved on acceptance and
 refusal alike, so a refused start keeps its measured pending age. It records the pending
-acquisition time and the start and finalize send and receive times, and derives the pending
-age at start and, at a finalize, the session age and pending age as intervals: the session
-is minted during the start request, so its age at finalize is
-`[finalizeSent - startReceived, finalizeReceived - startSent]`, and the fresh-session
-condition (`<= 30 s`) is judged on that finalize-time interval, not on a start round-trip.
+acquisition send and receive times and the start and finalize send and receive times, and
+derives the pending age and session age as intervals from those raw timestamps. The pending
+credential is issued between its acquisition request's send and receive, so its age at start
+is `[startSent - pendingReceived, startReceived - pendingSent]`: the lower bound divides by
+the latest possible birth and the upper by the earliest, so the interval always covers the
+pending's true age including the acquisition latency. The session is minted during the start
+request, so its age at finalize is `[finalizeSent - startReceived, finalizeReceived -
+startSent]`, and the fresh-session condition (`<= 30 s`) is judged on that finalize-time
+interval, not on a start round-trip. `validate_timing` checks every derived interval against
+its raw timestamps and the timestamps against their program order, so an interval that
+disagrees with its own times is rejected; `complete()` also requires a finalize row to share
+its start row's acquisition and start timestamps, so the two rows describe one credential.
 Raw send and receive times are kept so second rounding never loses a boundary. A diagnostic
 row records any refusal, including an unlisted class, a throttle or a server error, and the
 run continues; a transient throttle or quota answer never completes a run. Only the two
@@ -99,11 +112,12 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pendin
 `observe()` against it with no configuration change, codes read from the emulator inspection
 route, and pendings aged by advancing the owned instance's virtual clock. On 2026-09-12 the
 owned local run accepted `mfaSignIn:start` and `mfaSignIn:finalize` at all three sampled
-ages, with the recorded pending age at start at least the sampled age (2.001, 120.001,
-300.000 s) and the session age at finalize near zero, establishing a verified local lower
-bound of 300 s with no upper bound (every sampled age is below the 3600 s fireemu-local
-pending lifetime). The wall budget was untouched by the virtual aging, and all five accounts
-were deleted with absence confirmation. This is the local behavior, not evidence of
+ages, with the pending age at start recorded as an interval whose lower bound is at least
+the sampled age (2.001, 120.000, 300.000 s) and the session age at finalize near zero,
+establishing a verified local lower bound of 300 s with no upper bound (every sampled age is
+below the 3600 s fireemu-local pending lifetime). The wall budget was untouched by the
+virtual aging, and all five accounts were deleted with absence confirmation. This is the
+local behavior, not evidence of
 production. The production run, its publication, comparison and approval are separate steps.
 
 ```sh

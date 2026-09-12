@@ -12,6 +12,7 @@ establishes an upper bound; a transient row never completes a run; and no creden
 any file."""
 
 import base64
+import copy
 import json
 import os
 import signal
@@ -104,6 +105,12 @@ class World:
             raise TimeoutError("request lost")
         if self.terminate == (action, self.counts[action]):
             os.kill(os.getpid(), signal.SIGTERM)
+        # A request occupies time on the aging clock (which is the wall clock in production),
+        # so a delayed setup, diagnostic or recovery request advances real time and can cross
+        # a budget deadline. signInWithPassword is handled in client() so its pending's birth
+        # is stamped at send time, before the acquisition latency.
+        if action != "signInWithPassword":
+            self.aging.advance(self.delay.get(action, 0))
 
     @staticmethod
     def error(message):
@@ -189,10 +196,11 @@ class World:
             assert user.get("emailVerified") is True
             credential = "pending-secret-" + str(self.pending_counter)
             self.pending_counter += 1
-            self.pendings[credential] = {
-                "uid": user["localId"],
-                "born": self.aging.now(),
-            }
+            # Birth is stamped at send time; the acquisition latency (if any) is added after,
+            # so the recorder's [pendingSent, pendingReceived] bracket brackets this birth.
+            born = self.aging.now()
+            self.aging.advance(self.delay.get("signInWithPassword", 0))
+            self.pendings[credential] = {"uid": user["localId"], "born": born}
             return 200, {
                 "mfaPendingCredential": credential,
                 "mfaInfo": user["mfaInfo"],
@@ -210,9 +218,9 @@ class World:
         if entry is None:
             return self.error("INVALID_MFA_PENDING_CREDENTIAL")
         if action == "mfaSignIn:start":
+            # count() already advanced the aging clock by any start delay.
             age = self.aging.now() - entry["born"]
             self.start_ages.append(age)
-            self.aging.advance(self.delay.get(action, 0))
             if age > self.ttl:
                 return self.error("INVALID_MFA_PENDING_CREDENTIAL")
             session = "session-secret-" + str(self.session_counter)
@@ -225,7 +233,6 @@ class World:
             return 200, {"phoneResponseInfo": {"sessionInfo": session}}
         info = body["phoneVerificationInfo"]
         session = self.sessions.get(info["sessionInfo"])
-        self.aging.advance(self.delay.get(action, 0))
         if session is None or session["consumed"]:
             return self.error("INVALID_SESSION_INFO")
         if session["credential"] != body["mfaPendingCredential"]:
@@ -472,10 +479,11 @@ def test_a_failed_restore_is_visible_and_not_complete(tmp_path, monkeypatch):
     world = World(tmp_path / "run", Clock(), Clock(), ttl=10_000)
     wire(world, monkeypatch)
 
-    def raise_restore(access, original):
+    def raise_restore(original):
         raise TimeoutError("restore lost")
 
-    monkeypatch.setattr(recorder, "restore_configuration", raise_restore)
+    # The inline recovery restore builds the restore body via revocation.restore_body.
+    monkeypatch.setattr(recorder.revocation, "restore_body", raise_restore)
     recorder.observe(world.output)
     saved = json.loads((world.output / "observation.json").read_bytes())
     assert saved["configRestoreFailure"] == "TimeoutError"
@@ -555,6 +563,136 @@ def test_a_stale_session_at_an_accepted_finalize_fails_the_freshness_check(
     )
     assert report["status"] == "incomplete" and saved["failure"] == "ValueError"
     assert not complete(saved)
+
+
+# --- Time budget reaches setup, individual requests and recovery --------------------
+
+# Every request occupies up to the transport timeout (REQUEST_BUDGET_SECONDS = 20 s); the
+# tests below use per-request delays below that, so the reservation is meant to hold.
+NEAR_TIMEOUT = 19
+
+
+def test_a_slow_setup_stops_before_the_deadline_and_recovers(tmp_path, monkeypatch):
+    # A slow setup (each sign-up ~19 s) crosses the observation deadline before the corpus
+    # even begins. The run must not start a request past the deadline: setup does not finish,
+    # no diagnostics run, and the accounts created so far are still deleted.
+    tight = {
+        "maxAccounts": 5,
+        "maxRequests": 200,
+        "recoveryRequestReserve": 40,
+        "totalBudgetSeconds": 120,
+        "configHoldMaxSeconds": 100_000,
+        "cleanupReserveSeconds": 20,
+    }
+    world, report, saved = run(
+        tmp_path, monkeypatch, ttl=10_000, budget=tight, delay={"signUp": NEAR_TIMEOUT}
+    )
+    assert report["status"] == "incomplete" and saved["stopReason"] == "time-budget"
+    # Setup did not finish and no diagnostic ran; no sign-up was issued past the deadline.
+    assert saved["setup"] is False and saved["cases"] == []
+    assert world.counts.get("signUp", 0) < len(AGE_SECONDS) + 2
+    # Every fully created account was deleted; a partial account whose creation was blocked
+    # cannot be confirmed clean and is left for --recover, so cleanup is not full.
+    assert world.users == {} and not complete(saved)
+
+
+def test_a_slow_observation_request_is_stopped_before_the_deadline(
+    tmp_path, monkeypatch
+):
+    # Not only the aging wait: a slow observation request (here the held-pending sign-ins)
+    # is itself time-guarded, so once the deadline is near no further request is sent.
+    tight = {
+        "maxAccounts": 5,
+        "maxRequests": 200,
+        "recoveryRequestReserve": 40,
+        "totalBudgetSeconds": 80,
+        "configHoldMaxSeconds": 100_000,
+        "cleanupReserveSeconds": 20,
+    }
+    world, report, saved = run(
+        tmp_path,
+        monkeypatch,
+        ttl=10_000,
+        budget=tight,
+        delay={"signInWithPassword": NEAR_TIMEOUT},
+    )
+    assert report["status"] == "incomplete" and saved["stopReason"] == "time-budget"
+    assert "failure" not in saved
+    assert world.users == {} and saved["cleanup"] == {
+        "uidAbsent": True,
+        "emailAbsent": True,
+    }
+    assert not complete(saved)
+
+
+def test_slow_recovery_stops_within_budget_and_leaves_accounts_for_re_recovery(
+    tmp_path, monkeypatch
+):
+    # Observation completes, then deletion is slow (~19 s per delete, a recovery-only
+    # request that spends the wall budget). Recovery must stop at the total budget rather
+    # than run past it, marking the accounts it could not confirm as un-recovered (their
+    # journals persist for a later --recover).
+    tight = {
+        "maxAccounts": 5,
+        "maxRequests": 200,
+        "recoveryRequestReserve": 40,
+        "totalBudgetSeconds": 400,
+        "configHoldMaxSeconds": 100_000,
+        "cleanupReserveSeconds": 40,
+    }
+    world, report, saved = run(
+        tmp_path,
+        monkeypatch,
+        ttl=10_000,
+        budget=tight,
+        delay={"admin:delete": NEAR_TIMEOUT},
+    )
+    assert report["status"] == "observed" and saved["stopReason"] == "completed"
+    # The run never exceeded its declared total wall budget.
+    assert saved["wallElapsedSeconds"] <= saved["budget"]["totalBudgetSeconds"]
+    # Recovery could not confirm every account, so it is incomplete and not a complete run.
+    assert saved["recoveryIncomplete"] is True and saved["unrecoveredCount"] >= 1
+    # Some accounts were deleted; the rest are left with their journals for re-recovery.
+    assert 0 < len(world.deleted) < len(AGE_SECONDS) + 2
+    assert saved["cleanup"] == {} and not complete(saved)
+    journals = list((tmp_path / "run").rglob("recovery.json"))
+    assert len(journals) >= saved["unrecoveredCount"]
+
+
+def test_a_slow_pending_acquisition_is_covered_by_the_age_interval(
+    tmp_path, monkeypatch
+):
+    # A 3 s latency between the pending being issued and its response: the reported age
+    # interval must COVER the pending's true age, i.e. its upper bound includes the latency.
+    _world, report, saved = run(
+        tmp_path, monkeypatch, ttl=10_000, delay={"signInWithPassword": 3}
+    )
+    assert report["status"] == "observed", report.get("lastStep")
+    assert complete(saved)
+    rows = rows_of(saved)
+    for a in AGE_SECONDS:
+        interval = rows[f"age-{a}s-start"]["timing"]["pendingAgeAtStart"]
+        # Lower bound is still at least the sampled age; upper bound covers the 3 s latency,
+        # so the pending's true age (born at send, aged past a) lies inside the interval.
+        assert interval["lower"] >= a
+        assert interval["upper"] >= a + 3
+
+
+def test_timing_intervals_must_agree_with_their_raw_timestamps(tmp_path, monkeypatch):
+    # The derived age intervals are checked against the raw send/receive times, so a report
+    # whose interval or whose timestamps were tampered independently is rejected.
+    base = complete_report(tmp_path, monkeypatch)
+    # (a) keep the raw times, corrupt only the derived interval.
+    stale = copy.deepcopy(base)
+    row = next(r for r in stale["cases"] if r["id"] == "age-300s-start")
+    row["timing"]["pendingAgeAtStart"] = {"lower": 300.0, "upper": 300.0}
+    row["timing"]["pendingReceived"] = row["timing"]["startSent"] - 1
+    assert complete(stale) is False
+    # (b) keep the derived interval, corrupt only a raw timestamp out of order.
+    reordered = copy.deepcopy(base)
+    row = next(r for r in reordered["cases"] if r["id"] == "age-300s-start")
+    row["timing"]["startSent"] = row["timing"]["startReceived"] + 5
+    assert complete(reordered) is False
 
 
 # --- Owned local run (virtual-clock aging) ------------------------------------------

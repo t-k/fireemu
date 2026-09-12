@@ -229,7 +229,7 @@
   "databaseRawResponseSha256": "05fc90573f9cff8a92d9e8ddd031d47a408e255bf836a24ca9a2dff5980852d3",
   "databaseAcquiredAt": "2026-09-12T13:57:54.552050+00:00",
   "remainingInputs": [
-    "Independent API-key ownership remains unconfirmed: API Keys API lookup returned403 disabled/not-used. API enablement is outside all granted permissions.",
+    "Independent API-key ownership remains unconfirmed after successful service enablement; immediate lookup still403. Propagation delay is possible; no failed-request retry was performed.",
     "Resolve quota-header requirement for unchanged frozen production transport; do not silently replace a32fa8a7",
     "Owner acceptance of collected settings and billing conditions",
     "Production ownerIdentity/permissionReference, validity window and unused nonce"
@@ -253,7 +253,7 @@
     "automaticRetries": 0,
     "wallSeconds": 180,
     "permission": {
-      "status": "used-once-and-stopped",
+      "status": "historical-read-window-used-and-stopped; later API enablement separately authorized and recorded",
       "source": "User \u8a31\u53ef response authorizing the new key-only read window; no reusable retry or API-enablement permission"
     },
     "dataOrConfigMutation": false,
@@ -360,6 +360,84 @@
     "iamChanges": 0,
     "principalSwitches": 0
   },
-  "currentStatus": "blocked-before-production-permission; API-key ownership unconfirmed; all granted read windows ended",
-  "apiKeyOwnershipConfirmed": false
+  "currentStatus": "API Keys API enabled and confirmed; independent key ownership remains unconfirmed after immediate403; production batch unapproved",
+  "apiKeyOwnershipConfirmed": false,
+  "apiEnablementResult": {
+    "authorizationSource": "User asked assistant to enable the required API; scope limited to API Keys API on fireemu-35fe6 and verification, without IAM changes or production batch permission.",
+    "quotaProject": "fireemu-35fe6",
+    "serviceName": "projects/592603257417/services/apikeys.googleapis.com",
+    "serviceState": "ENABLED",
+    "serviceEnabledConfirmed": true,
+    "startedAt": "2026-09-12T14:20:39.487064+00:00",
+    "elapsedSeconds": 8.405119084054604,
+    "adcCommandAttempts": 1,
+    "httpRequestAttempts": 5,
+    "requests": [
+      {
+        "label": "tokeninfo",
+        "quotaProject": null,
+        "requestedAt": "2026-09-12T14:20:41.014298+00:00",
+        "receivedAt": "2026-09-12T14:20:41.161684+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "4e43b150d39aa0943c6e32388a806f0690df2b79c68074edea531da1d32bf9e9",
+        "parsedResponseDigest": "f0e513efeef7165b2cd102e005a09752a871efed20226370287b1463b934a266"
+      },
+      {
+        "label": "enable-api",
+        "quotaProject": "fireemu-35fe6",
+        "requestedAt": "2026-09-12T14:20:41.162580+00:00",
+        "receivedAt": "2026-09-12T14:20:42.433950+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "c75e598169670e2e5a54771282693f6bb787d3eca5d26fc4dd7677fa26ebcc68",
+        "parsedResponseDigest": "5aacb6c9df679a1352b5b6a84f614dc7e80cf579596304b3a367438c3f704f32"
+      },
+      {
+        "label": "operation-0",
+        "quotaProject": "fireemu-35fe6",
+        "requestedAt": "2026-09-12T14:20:45.444513+00:00",
+        "receivedAt": "2026-09-12T14:20:45.744364+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "6f0f8e03c12fd64f498ec0684ed5e5ba214140e6060dd131553467e899107f30",
+        "parsedResponseDigest": "04c23717ece9f31cc86d1cc6b4c6e15bc5245637779a626b04d100b6ab4182e2"
+      },
+      {
+        "label": "enabled-state",
+        "quotaProject": "fireemu-35fe6",
+        "requestedAt": "2026-09-12T14:20:45.744771+00:00",
+        "receivedAt": "2026-09-12T14:20:46.838586+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "b966d9c31fceb4cde2cc470006a8ae0a525be77bf553a970f234adae8730ecb8",
+        "parsedResponseDigest": "990335611db79420cccdacd8a01b8be32140e710373afca4a95a6038d05af3b6"
+      },
+      {
+        "label": "api-key-ownership",
+        "quotaProject": "fireemu-35fe6",
+        "requestedAt": "2026-09-12T14:20:46.839147+00:00",
+        "receivedAt": "2026-09-12T14:20:47.870724+00:00",
+        "httpStatus": 403,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "5c4b83724d748f3c57d48fd66dd1d7f87ca6ee948ea6e3aab3825a5d97d79147",
+        "parsedResponseDigest": "c937bc6dc61f6533e25ef3665d6390dd366f6dc7771f90f8d819114af92d02d6"
+      }
+    ],
+    "operationName": "operations/acat.p2-592603257417-eef3de67-0f21-4b25-b4e8-0761d6da0d7f",
+    "sameAdcPrincipalConfirmed": true,
+    "persistentAdcAndGcloudConfigUnchanged": true,
+    "enableRequests": 1,
+    "operationPolls": 1,
+    "apiKeyOwnershipConfirmed": false,
+    "verificationStopReason": "Immediate lookup still returned403 API-not-used-or-disabled despite ENABLED readback. Propagation delay is possible, not established. No failed-request retry.",
+    "iamChanges": 0,
+    "dataMutations": 0,
+    "productionBatchExecuted": false,
+    "technicalScopeReview": {
+      "mustFix": [],
+      "shouldFix": [],
+      "scope": "exact API enablement and bounded verification only; not new46-row review"
+    }
+  }
 }

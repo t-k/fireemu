@@ -1,6 +1,6 @@
 # Initial46 owner decision draft
 
-Current status: API-key ownership lookup was refused because API Keys API is unavailable for this project. Successful Database/Auth acquisitions remain recorded, but all authorized read windows have ended and production execution remains unapproved.
+Current status: API Keys API has now been enabled with owner authorization and its ENABLED state verified. The immediate key-ownership lookup still returned 403, so ownership remains unconfirmed. Successful Database/Auth acquisitions remain recorded and production execution remains unapproved.
 
 The [single decision draft](../../spec/compatibility/broad-runs/a32fa8a7-owner-decision.json) references the immutable a32fa8a7 execution-input package and records the partial authorized metadata acquisition. It is not a production execution permission. Execution source remains a32fa8a7; b76b96b9 remains its original report publication, and subsequent input records do not replace either.
 
@@ -49,3 +49,12 @@ A new 180-second key-only window was explicitly authorized after the stopped hel
 The lookup returned `PERMISSION_DENIED`, stating that API Keys API had not been used in this project or was disabled. Its raw response hash `39519b2a17edecab25820250ab64c3139ebb0180ecabd66c0fd86fafd0637fcf` is refusal evidence, not ownership confirmation or a settings digest. No retries, API enablement, IAM changes, principal switch, persistent quota configuration or oracle data mutation followed. API-key ownership remains unconfirmed.
 
 The [single decision draft](../../spec/compatibility/broad-runs/a32fa8a7-owner-decision.json) retains all three distinct read windows, successful Database/Auth baselines and hashes, pricing conditions, and this final blocker. All granted read windows have ended. API enablement is explicitly outside the granted scope and requires a separate owner decision; it is not implied by the API's error message. The unchanged frozen production adapter also still needs its quota-header execution binding resolved. Therefore the initial 46-row production batch is not ready for execution permission, and no production-batch recording/cleanup/compatibility result is claimed.
+
+
+## Owner-authorized API enablement
+
+The owner subsequently asked the assistant to enable the required API. Using the same ADC principal and request-level quota project fireemu-35fe6, one `services.enable` request enabled only `projects/592603257417/services/apikeys.googleapis.com`. One operation poll reported completion and an exact-service readback confirmed `ENABLED`. The operation followed the documented [Service Usage enable method](https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services/enable); no IAM grants or global credential/quota changes were made.
+
+The action ran at 2026-09-12T14:20:41–14:20:47 UTC and stopped after 8.4051 seconds: one ADC command and five directly issued HTTP requests (tokeninfo, enable, operation poll, service-state readback, key lookup). The private response hashes and per-request quota project are in the single decision draft. Persistent ADC/gcloud configuration hashes were unchanged and the ADC principal matched the prior authorized reads. A narrow independent security review of this enablement scope had no Must Fix or Should Fix findings; it was not a repeated 46-row technical review.
+
+The immediate API-key lookup still returned 403 with the prior API-not-used-or-disabled message. Propagation delay after enablement is possible but has not been established. No failed-request retry occurred, and ownership is not marked confirmed. Service enablement itself succeeded and was left enabled as requested; it was not rolled back because a later lookup remained unconfirmed. No account/document mutation, key creation/regeneration or 46-row production execution occurred. Frozen a32fa8a7 and its execution bindings remain unchanged.

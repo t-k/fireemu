@@ -154,7 +154,7 @@
         "docs/compatibility/auth-pending-trigger-client-password-change.md",
         "tools/auth-pending-triggers/README.md"
       ],
-      "nextAction": "Trigger 1 of 4 closed (client-password-change): production and comparison approved, held credential survived. Trigger 2 (admin-password-update) observed: the held credential also survived the administrative password update in production (matching fireemu), so AUTH-U04's question is answered for it; a side finding, that fireemu issues tokens on the administrative password update while production returns none, is tracked separately as GAP-AUTH-004 and gates that trigger's comparison approval. Remaining: password-reset, provider-unlink. Close AUTH-U04 as observed-in-scope when all four held-credential observations and their comparisons are approved.",
+      "nextAction": "Trigger 1 of 4 closed (client-password-change): production and comparison approved, held credential survived. Trigger 2 (admin-password-update) observed: the held credential also survived the administrative password update in production (matching fireemu), so AUTH-U04's question is answered for it; a side finding, that fireemu issues tokens on the administrative password update while production returns none, is tracked separately as GAP-AUTH-004 and gates that trigger's comparison approval. Trigger 3 (password-reset) closed: production and comparison approved, held credential survived (all seven rows agree). Remaining: provider-unlink. Close AUTH-U04 as observed-in-scope when all four held-credential observations and their comparisons are approved.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

@@ -1,0 +1,172 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "baseline-fresh-finalize",
+      "trigger",
+      "held-start",
+      "held-finalize",
+      "held-lookup",
+      "held-refresh",
+      "final-fresh-finalize"
+    ],
+    "revision": 1,
+    "slice": "auth-pending-trigger-password-reset"
+  },
+  "production": {
+    "cases": [
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 3542,
+        "httpStatus": 200,
+        "id": "baseline-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "accountPresent": true,
+          "noError": true,
+          "tokensReturned": false
+        },
+        "elapsedMs": 6562,
+        "httpStatus": 200,
+        "id": "trigger",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "sessionInfoPresent": true
+        },
+        "elapsedMs": 6855,
+        "httpStatus": 200,
+        "id": "held-start",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 7439,
+        "httpStatus": 200,
+        "id": "held-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "ownerMatches": true
+        },
+        "elapsedMs": 7762,
+        "httpStatus": 200,
+        "id": "held-lookup",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "bearerType": true,
+          "derivedLookup": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 8415,
+        "httpStatus": 200,
+        "id": "held-refresh",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 9617,
+        "httpStatus": 200,
+        "id": "final-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "committedCheckout": true,
+    "configDigestMatches": true,
+    "configRestored": true,
+    "configRestoredReadback": {
+      "mfa": {
+        "state": "DISABLED"
+      },
+      "phoneNumber": {},
+      "smsRegionConfig": {
+        "allowlistOnly": {}
+      }
+    },
+    "configuration": {
+      "adminPasswordPolicyAbsent": true,
+      "blockingTriggersAbsent": true,
+      "emailEnabled": true,
+      "improvedEmailPrivacy": true,
+      "passwordRequired": true,
+      "sha256": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+    },
+    "privateReceiptSha256": "1c1907818afe1f0340ad3c3f0fc41a317488039e72c70b8fbc1303eb168d5a61",
+    "probeSourceCommit": "35929c23acdf395cf679672da9cbf16199d8c8b4",
+    "providerLinked": false,
+    "recordedAt": "2026-09-12T01:48:23.572247+00:00",
+    "recordedWith": {
+      "probeSourceCommit": "35929c23acdf395cf679672da9cbf16199d8c8b4",
+      "recorderCommit": "35929c23acdf395cf679672da9cbf16199d8c8b4",
+      "recorderInputs": {
+        "tools/auth-pending-revocation/revocation_recorder.py": "83c65d82b5b3c7ce7de0aee814cea7fefafda48b6bbb5665ea8758f147f4c553",
+        "tools/auth-pending-triggers/triggers_contract.py": "d4f4ac7486528c7783cdb09e243234a1005d6df818d7d4c83bfb889ab8613da8",
+        "tools/auth-pending-triggers/triggers_recorder.py": "841f652823506d861e0174f3754d55f9216675f3f51ab1243cfca9f0d80d07b1"
+      }
+    },
+    "reevaluatedWith": {
+      "commit": "35929c23acdf395cf679672da9cbf16199d8c8b4",
+      "contractSha256": "d4f4ac7486528c7783cdb09e243234a1005d6df818d7d4c83bfb889ab8613da8"
+    },
+    "setup": true,
+    "target": "production",
+    "trigger": "password-reset"
+  },
+  "publicationContractSha256": "d5686cc7ac626881c567cc06281242d2cc85c298c94fdddebbe384ecf683a929",
+  "schemaVersion": 1,
+  "scope": "Seven sequential REST observations in production only for the password-reset trigger: a fresh phone MFA completion (control) whose session is reused; a pending credential and SMS session are held; then, as the one transition, an admin PASSWORD_RESET OOB link is issued and resetPassword sets a new password; the held credential is presented to mfaSignIn:start and :finalize on the session opened before the transition, with lookup and refresh of any returned tokens; a fresh completion (control) closes the run. Phone MFA with one test phone number, no tenant, no blocking function, one run. For provider-unlink the federated identity is linked administratively as a precondition before the held credential (a refused link aborts the run). The oracle configuration was changed for the run and restored with a digest comparison. Admin is used for owned account setup, readback and cleanup. No human approval, no local artifact comparison, and no claim about other triggers, tenants, SDK or Rules; the held rows are the observation, not a rule about revocation.",
+  "sourceReviewSha256": "e79144abc528b6619fc253a34cbb23658057fc020791c5ae0050dda65428f4be"
+}

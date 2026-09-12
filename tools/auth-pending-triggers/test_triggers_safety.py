@@ -31,7 +31,15 @@ ORIGINAL_CONFIG = {
     "client": {"apiKey": "config-secret-api-key"},
 }
 CONFIG_SHA = "0" * 64
-SECRET_MARKERS = ("-secret-", "Aa9!", "config-secret", "access-secret", "key-secret")
+SECRET_MARKERS = (
+    "-secret-",
+    "Aa9!",
+    "config-secret",
+    "access-secret",
+    "key-secret",
+    contract.TEST_CODE,
+    contract.TEST_PHONE,
+)
 
 
 def jwt(payload, marker):
@@ -52,7 +60,12 @@ class World:
         self.link_refused = options.pop("link_refused", False)
         self.lose = options.pop("lose", None)
         self.terminate = options.pop("terminate", None)
+        self.reject_post_trigger_sessions = options.pop(
+            "reject_post_trigger_sessions", False
+        )
+        self.bump_volatile_on_unlink = options.pop("bump_volatile_on_unlink", False)
         assert not options, options
+        self.trigger_fired = False
         self.users = {}
         self.pendings = {}
         self.sessions = {}
@@ -106,8 +119,11 @@ class World:
             assert body is None and token == "access-secret-token"
             return 200, json.loads(json.dumps(self.config))
         assert url.startswith(
-            "https://identitytoolkit.googleapis.com/"
-        ) or url.startswith("https://securetoken.googleapis.com/")
+            (
+                "https://identitytoolkit.googleapis.com/",
+                "https://securetoken.googleapis.com/",
+            )
+        )
         if "securetoken" in url:
             self.count("token")
             token_row = body["refresh_token"]
@@ -174,6 +190,7 @@ class World:
         user = self.users[body["localId"]]
         if "password" in body:
             user["_password"] = body["password"]
+            self.trigger_fired = True
             self.revoke_held()
             return 200, {**self.issue(user, False), "localId": user["localId"]}
         if "emailVerified" in body:
@@ -212,7 +229,10 @@ class World:
                 "MFA sign-in of an unverified email"
             )
             credential = "pending-secret-" + str(len(self.pendings))
-            self.pendings[credential] = {"uid": user["localId"], "revoked": False}
+            self.pendings[credential] = {
+                "uid": user["localId"],
+                "after_trigger": self.trigger_fired,
+            }
             return 200, {
                 "mfaPendingCredential": credential,
                 "mfaInfo": user["mfaInfo"],
@@ -228,6 +248,7 @@ class World:
             if uid is None:
                 return self.error("INVALID_OOB_CODE")
             self.users[uid]["_password"] = body["newPassword"]
+            self.trigger_fired = True
             self.revoke_held()
             return 200, {
                 "email": self.users[uid]["email"],
@@ -240,6 +261,7 @@ class World:
             user = self.users[uid]
             if "password" in body:
                 user["_password"] = body["password"]
+                self.trigger_fired = True
                 self.revoke_held()
                 return 200, {**self.issue(user, False), "localId": uid}
             if "deleteProvider" in body:
@@ -248,6 +270,10 @@ class World:
                     for p in user.get("providerUserInfo", [])
                     if p["providerId"] not in body["deleteProvider"]
                 ]
+                self.trigger_fired = True
+                if self.bump_volatile_on_unlink:
+                    user["validSince"] = "999"
+                    user["lastLoginAt"] = "111"
                 self.revoke_held()
                 return 200, {"localId": uid}
             return 200, {"localId": uid}
@@ -256,7 +282,11 @@ class World:
             if pending is None or body["mfaPendingCredential"] in self.revoked_pendings:
                 return self.error("INVALID_MFA_PENDING_CREDENTIAL")
             session = "session-secret-" + str(len(self.sessions))
-            self.sessions[session] = {"uid": pending["uid"], "consumed": False}
+            self.sessions[session] = {
+                "uid": pending["uid"],
+                "consumed": False,
+                "after_trigger": self.trigger_fired,
+            }
             return 200, {"phoneResponseInfo": {"sessionInfo": session}}
         assert action == "mfaSignIn:finalize"
         pending = self.pendings.get(body["mfaPendingCredential"])
@@ -269,6 +299,11 @@ class World:
             or session["consumed"]
             or session["uid"] != pending["uid"]
             or info["sessionInfo"] in self.revoked_sessions
+            or (
+                self.reject_post_trigger_sessions
+                and session["after_trigger"]
+                and not pending["after_trigger"]
+            )
         ):
             return self.error("INVALID_SESSION_INFO")
         if info["code"] != TEST_CODE:
@@ -390,6 +425,65 @@ def test_a_lost_request_keeps_no_credentials_and_restores(tmp_path, monkeypatch)
     assert saved["lastStep"] == "update" and saved["lastStatus"] is None
     assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
     assert world.patches[-1]["mfa"] == {"state": "DISABLED"}
+
+
+def test_held_finalize_uses_the_session_opened_before_the_trigger(
+    tmp_path, monkeypatch
+):
+    # The scripted world refuses any SMS session opened after the trigger fires. The
+    # recorder must finalize on the session it opened before the trigger, so the held
+    # finalize is still accepted; a recorder that reused the post-trigger start session
+    # would be refused here (invariant 6).
+    for trigger in TRIGGERS:
+        _world, report, saved = run(
+            trigger, tmp_path / trigger, monkeypatch, reject_post_trigger_sessions=True
+        )
+        assert report["status"] == "observed", (trigger, report.get("lastStep"))
+        assert complete(saved), trigger
+        rows = rows_of(saved)
+        assert rows["held-start"]["outcome"] == "accepted", trigger
+        assert rows["held-finalize"]["outcome"] == "accepted", trigger
+        assert rows["held-lookup"]["outcome"] == "accepted", trigger
+
+
+def test_provider_unlink_ignores_volatile_timestamp_changes(tmp_path, monkeypatch):
+    # The unlink bumps validSince and lastLoginAt; otherStateUnchanged must stay True
+    # because those fields are excluded from the projection (invariant 7).
+    _world, report, saved = run(
+        "provider-unlink", tmp_path, monkeypatch, bump_volatile_on_unlink=True
+    )
+    assert report["status"] == "observed", report.get("lastStep")
+    assert complete(saved)
+    checks = rows_of(saved)["trigger"]["checks"]
+    assert checks["providerAbsentAfter"] is True
+    assert checks["otherStateUnchanged"] is True
+
+
+def test_a_failed_restore_is_visible_and_not_complete(tmp_path, monkeypatch):
+    world = World(tmp_path / "run")
+
+    def raise_restore(access, original):
+        raise TimeoutError("restore lost")
+
+    monkeypatch.setattr(recorder.core, "production_preflight", world.preflight)
+    monkeypatch.setattr(recorder.core, "request", world.request)
+    monkeypatch.setattr(recorder.revocation, "patch", world.patch)
+    monkeypatch.setattr(recorder.core, "command", git(False))
+    monkeypatch.setattr(
+        recorder.core, "config_projection", lambda s, c: {"sha256": CONFIG_SHA}
+    )
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
+    monkeypatch.setattr(recorder, "restore_configuration", raise_restore)
+    recorder.observe("admin-password-update", world.output)
+    saved = json.loads((world.output / "observation.json").read_bytes())
+    assert saved["configRestoreFailure"] == "TimeoutError"
+    assert "configRestored" not in saved
+    assert complete(saved) is False
+    # The account is still cleaned up even though the configuration restore raised.
+    assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
+    # The private record still allows the manual restore.
+    recovery = json.loads((world.output / "config-recovery.json").read_bytes())
+    assert recovery["configSha256"] == CONFIG_SHA
 
 
 def test_no_configuration_write_when_preconditions_fail(tmp_path, monkeypatch):
@@ -571,6 +665,33 @@ def test_complete_rejects_inconsistencies():
         "admin-password-update",
     )
     assert complete(report) is False
+
+
+def test_a_throttled_or_server_errored_diagnostic_is_recorded_but_not_complete():
+    for status, error in (
+        (429, "TOO_MANY_ATTEMPTS_TRY_LATER"),
+        (500, "UNCLASSIFIED_ERROR"),
+    ):
+        report = complete_report()
+        row = refused("held-start", error, status)
+        validate_row(
+            row, "held-start", "admin-password-update"
+        )  # recorded without raising
+        report["cases"] = [
+            row if r["id"] == "held-start" else r for r in report["cases"]
+        ]
+        # held-start refused is allowed (held-finalize is a separate row); the run is
+        # recorded but a non-400/403 status is not classified, so it is not complete.
+        assert complete(report) is False, (status, error)
+    # A 403 with an allowlisted class is classified and, with the rest consistent, complete.
+    report = complete_report()
+    report["cases"] = [
+        refused("held-start", "PERMISSION_DENIED", 403)
+        if r["id"] == "held-start"
+        else r
+        for r in report["cases"]
+    ]
+    assert complete(report)
 
 
 def test_control_rows_may_not_be_refused():

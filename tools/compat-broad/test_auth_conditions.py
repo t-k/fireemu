@@ -115,3 +115,26 @@ def test_profile_update_cannot_link_or_remove_a_provider():
     after = copy.deepcopy(before)
     after["b"]["providerUserInfo"] = [{"providerId": "password"}]
     assert not all(module().assess(200, before, after).values())
+
+
+def test_provider_display_name_mirror_is_not_an_identity_change():
+    before = states()
+    before["b"]["providerUserInfo"] = [
+        {"providerId": "password", "rawId": "B", "displayName": "B-before"}
+    ]
+    after = copy.deepcopy(before)
+    after["b"]["displayName"] = "updated"
+    after["b"]["providerUserInfo"][0]["displayName"] = "updated"
+    assert all(module().assess(200, before, after).values())
+    assert not all(module().assess(400, before, after).values())
+    for mutation in ["identity", "missing", "duplicate"]:
+        changed = copy.deepcopy(after)
+        if mutation == "identity":
+            changed["b"]["providerUserInfo"][0]["rawId"] = "other"
+        elif mutation == "missing":
+            del changed["b"]["providerUserInfo"][0]["rawId"]
+        else:
+            changed["b"]["providerUserInfo"].append(
+                copy.deepcopy(changed["b"]["providerUserInfo"][0])
+            )
+        assert not all(module().assess(200, before, changed).values())

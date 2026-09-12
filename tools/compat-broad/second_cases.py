@@ -15,6 +15,7 @@ from batch_adapter import Adapter, observer_digest
 from batch_contract import NUMBER, PROJECT, candidate, wrapper_exit_code
 from batch_pair import normalize
 from broad import run, save, session
+from broad_cases import PROJECT as FIRESTORE_PROJECT
 from broad_contract import compare_program, digest, historical, local_origin
 from owned_runner import control_get, local_addresses
 
@@ -489,6 +490,60 @@ def exit_code(report):
     return 1 if any(r["status"] == "fail" for r in report.get("cases", [])) else 0
 
 
+def usable_readback(value, expected_name):
+    """A state comparison requires the requested document, not merely HTTP200."""
+    return (
+        valid_observation(value)
+        and value.get("status") == 200
+        and value.get("code") == "OK"
+        and isinstance(value.get("body"), dict)
+        and value["body"].get("name") == expected_name
+        and isinstance(value["body"].get("fields"), dict)
+    )
+
+
+def state_row(program, observations):
+    reads = {s["id"]: s for s in program["steps"] if s["id"] in {"before", "after"}}
+    usable = all(
+        key in reads
+        and reads[key].get("method") == "GET"
+        and usable_readback(
+            observations.get(key),
+            reads[key]["path"]
+            .split("?", 1)[0]
+            .removeprefix("/v1/")
+            .replace("PROJECT", FIRESTORE_PROJECT),
+        )
+        for key in ["before", "after"]
+    )
+    if not usable:
+        return {
+            "status": "indeterminate",
+            "reason": "unusable-state-readback",
+            "applies": None,
+        }
+    diagnostic = observations.get("diagnostic")
+    if not valid_observation(diagnostic):
+        return {
+            "status": "indeterminate",
+            "reason": "unusable-diagnostic",
+            "applies": None,
+        }
+    before, after = (observations[k]["body"] for k in ["before", "after"])
+    invariant = state_invariant(diagnostic["status"], before, after)
+    if program["area"] in ["filters", "cursors"]:
+        invariant = same(before, after)
+    return {
+        "status": "pass"
+        if invariant is True
+        else "observed"
+        if invariant is None
+        else "fail",
+        "reason": None,
+        "applies": invariant is not None,
+    }
+
+
 def firestore_rows(selected, actual, old, matrix):
     old_by_id = {p["id"]: p for p in old}
     expected = {p["id"]: p for p in matrix["programs"]}
@@ -509,32 +564,12 @@ def firestore_rows(selected, actual, old, matrix):
                         "productionCompatibility": "unobserved",
                     }
                 )
-            diagnostic = observations.get("diagnostic", {})
-            before = observations.get("before", {})
-            after = observations.get("after", {})
-            # A read or refused operation must not change stored fields. Exact status/body
-            # of these new sequences remains an observation, not a compatibility assertion.
-            invariant = state_invariant(
-                diagnostic.get("status", 0), before.get("body"), after.get("body")
-            )
-            if program["area"] in ["filters", "cursors"]:
-                invariant = same(before.get("body"), after.get("body"))
-            complete = (
-                before.get("status") == 200
-                and after.get("status") == 200
-                and valid_observation(diagnostic)
-            )
             rows.append(
                 {
                     "id": "firestore:" + program["id"] + "#state-invariant",
                     "family": "fs-" + program["area"],
-                    "status": "pass"
-                    if complete and invariant is True
-                    else "observed"
-                    if complete and invariant is None
-                    else "fail",
+                    **state_row(program, observations),
                     "basis": "local-safety-invariant",
-                    "applies": invariant is not None,
                     "productionCompatibility": "unobserved",
                 }
             )

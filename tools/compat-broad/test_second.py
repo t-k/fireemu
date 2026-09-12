@@ -141,3 +141,47 @@ def test_second_manifest_is_reproducible_and_has_no_inherited_permission():
     )
     assert stored == s.manifest()
     assert not stored["productionExecutable"] and stored["productionApproval"] is None
+
+
+def test_readback_identity_and_fields_are_required_before_state_comparison():
+    s = second()
+    program = s.firestore_cases()[0]
+    name = "projects/demo-firestore-probe/databases/(default)/documents/cur/c"
+    good: dict = {
+        "status": 200,
+        "code": "OK",
+        "body": {"name": name, "fields": {"n": {"integerValue": "2"}}},
+    }
+
+    def result(before, after):
+        steps = {
+            "before": before,
+            "after": after,
+            "diagnostic": {"status": 400, "code": "INVALID_ARGUMENT"},
+        }
+        return s.firestore_rows(
+            [program], {program["id"]: {"steps": steps}}, [], {"programs": []}
+        )[-1]
+
+    assert result(good, good)["status"] == "pass"
+    changed = copy.deepcopy(good)
+    changed["body"]["fields"]["n"]["integerValue"] = "3"
+    assert result(good, changed)["status"] == "fail"
+    bad = [
+        {"status": 200, "code": "non-json"},
+        {"status": 200, "code": "OK"},
+        {"status": 200, "code": "OK", "body": None},
+        {"status": 200, "code": "OK", "body": []},
+        {"status": 200, "code": "OK", "body": "text"},
+        {"status": 200, "code": "OK", "body": {"fields": {}}},
+        {"status": 200, "code": "OK", "body": {"name": name}},
+        {"status": 200, "code": "OK", "body": {"name": name, "fields": None}},
+        {"status": 200, "code": "OK", "body": {"name": name, "fields": []}},
+        {"status": 200, "code": "OK", "body": {"name": name + "-other", "fields": {}}},
+        {"status": 404, "code": "NOT_FOUND", "body": good["body"]},
+    ]
+    for invalid in bad:
+        for before, after in [(invalid, good), (good, invalid), (invalid, invalid)]:
+            row = result(before, after)
+            assert row["status"] == "indeterminate", row
+            assert row["reason"] == "unusable-state-readback"

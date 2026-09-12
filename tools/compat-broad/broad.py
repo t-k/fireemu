@@ -318,6 +318,147 @@ def cleanup_run(process, output, nonce, report):
             save(output / "manifest.json", report)
 
 
+def supervise(command, output, nonce, report, *, timeout=240):
+    """Persist immutable parent inputs before launch; retain partial results on every exit."""
+    report.update(status="incomplete", recordingComplete=False, cases=[])
+    save(output / "manifest.json", report)
+    process = None
+    try:
+        with (output / "owned-stderr.log").open("wb") as errors:
+            process = subprocess.Popen(
+                command,
+                cwd=output,
+                env=sanitized_environment(dict(os.environ)),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=errors,
+            )
+            try:
+                report["exitCode"] = process.wait(timeout=timeout)
+                report["stopReason"] = (
+                    "child-completed" if report["exitCode"] == 0 else "child-nonzero"
+                )
+            except subprocess.TimeoutExpired:
+                report.update(exitCode=None, stopReason="child-timeout")
+    except Exception as error:
+        report.update(
+            stopReason="process-start-failure"
+            if process is None
+            else "supervision-failure",
+            failureType=type(error).__name__,
+        )
+    finally:
+        if process is not None:
+            # Stop owned processes even when the child result is absent or malformed.
+            cleanup_run(process, output, nonce, report)
+        try:
+            partial_path = output / "cases.json"
+            if partial_path.exists():
+                partial = json.loads(partial_path.read_bytes())
+                report["partialResultSha256"] = hashlib.sha256(
+                    partial_path.read_bytes()
+                ).hexdigest()
+                if (
+                    not isinstance(partial, dict)
+                    or not isinstance(partial.get("cases"), list)
+                    or not partial["cases"]
+                    or not all(
+                        isinstance(row, dict)
+                        and all(
+                            isinstance(row.get(key), str)
+                            for key in ["id", "status", "family"]
+                        )
+                        for row in partial["cases"]
+                    )
+                    or any(
+                        row["status"] in {"fail", "mismatch"}
+                        and not isinstance(row.get("basis"), str)
+                        for row in partial["cases"]
+                    )
+                ):
+                    raise ValueError("invalid child report")
+                # Child data cannot replace parent artifact/configuration/provenance.
+                for key in [
+                    "schemaVersion",
+                    "kind",
+                    "cases",
+                    "manifest",
+                    "manifestDigest",
+                    "auth",
+                    "selectedPrograms",
+                    "historicalSources",
+                    "localObservations",
+                    "requestStats",
+                    "historicalReplayPrograms",
+                    "historicalReplayObservations",
+                    "target",
+                    "project",
+                    "edition",
+                    "profile",
+                    "seed",
+                    "formalCompatibilityClaim",
+                ]:
+                    if key in partial:
+                        report[key] = partial[key]
+                report["recordingComplete"] = (
+                    partial.get("recordingComplete", report.get("exitCode") == 0)
+                    is True
+                )
+                report["partialResultSha256"] = hashlib.sha256(
+                    partial_path.read_bytes()
+                ).hexdigest()
+        except Exception as error:
+            report.update(
+                recordingComplete=False, partialResultFailure=type(error).__name__
+            )
+        stopped = process is None or process.poll() is not None
+        closed = None
+        try:
+            instance = json.loads((output / "instance.json").read_bytes())
+            if (
+                process is None
+                or instance["parentPid"] != process.pid
+                or instance["nonce"] != nonce
+            ):
+                raise ValueError("owned process identity mismatch")
+            closed = all(
+                socket_closed(local_origin(instance[k]))
+                for k in ("authOrigin", "firestoreOrigin", "controlOrigin")
+            )
+        except Exception as error:
+            report["terminationVerificationFailure"] = type(error).__name__
+        report["ownedProcess"] = {
+            "pid": process.pid if process else None,
+            "stopped": stopped,
+            "listenersClosed": closed,
+        }
+        complete = (
+            report.get("stopReason") == "child-completed"
+            and report["recordingComplete"]
+            and stopped
+            and closed is True
+            and not any(
+                report.get(k)
+                for k in [
+                    "cleanupFailure",
+                    "parentCleanupFailure",
+                    "terminationVerificationFailure",
+                    "partialResultFailure",
+                ]
+            )
+        )
+        report["status"] = "completed" if complete else "incomplete"
+        try:
+            report["summary"] = summarize(report)
+        except Exception as error:
+            report.update(
+                status="incomplete", summaryFailure=type(error).__name__, summary={}
+            )
+        finally:
+            save(output / "manifest.json", report)
+    return report
+
+
 def summarize(report):
     from collections import Counter
 
@@ -421,61 +562,30 @@ def run(output, *, child_script=None, project=PROJECT, configuration=None):
             "--nonce",
             nonce,
         ]
-        with (output / "owned-stderr.log").open("wb") as errors:
-            process = subprocess.Popen(
-                command,
-                cwd=private,
-                env=sanitized_environment(dict(os.environ)),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=errors,
-            )
-            try:
-                code = process.wait(timeout=240)
-                if code != 0:
-                    raise ValueError(
-                        "owned runner failed; inspect private sanitized logs"
-                    )
-                report = json.loads((output / "cases.json").read_bytes())
-                instance = json.loads((output / "instance.json").read_bytes())
-                if instance["parentPid"] != process.pid or instance["nonce"] != nonce:
-                    raise ValueError("owned process mismatch")
-                if not all(
-                    socket_closed(instance[k])
-                    for k in ("authOrigin", "firestoreOrigin", "controlOrigin")
-                ):
-                    raise ValueError("owned listeners remain open")
-                if source_inputs() != before or runtime_inputs(ROOT) != build["inputs"]:
-                    raise ValueError("execution inputs changed")
-                report.update(
-                    status="completed",
-                    executionCommit=commit,
-                    artifactSha256=build["artifactSha256"],
-                    runtimeInputs=build["inputs"],
-                    executionInputs=before,
-                    configurationDigest=digest(actual_config),
-                    configuration={
-                        **base_config,
-                        "firestore": {
-                            **FIRESTORE_CONFIG,
-                            "indexFile": "<owned-private-index-file>",
-                        },
-                    },
-                    indexConfiguration={
-                        "sha256": index_sha,
-                        "sourceCommit": index_commit,
-                        "value": json.loads(index_bytes),
-                    },
-                    build=build,
-                    ownedProcess={
-                        "pid": process.pid,
-                        "stopped": True,
-                        "listenersClosed": True,
-                    },
-                )
-                report["summary"] = summarize(report)
-            finally:
-                cleanup_run(process, output, nonce, report)
+        report.update(
+            executionCommit=commit,
+            artifactSha256=build["artifactSha256"],
+            runtimeInputs=build["inputs"],
+            executionInputs=before,
+            configurationDigest=digest(actual_config),
+            configuration={
+                **base_config,
+                "firestore": {
+                    **FIRESTORE_CONFIG,
+                    "indexFile": "<owned-private-index-file>",
+                },
+            },
+            indexConfiguration={
+                "sha256": index_sha,
+                "sourceCommit": index_commit,
+                "value": json.loads(index_bytes),
+            },
+            build=build,
+        )
+        supervise(command, output, nonce, report)
+        if source_inputs() != before or runtime_inputs(ROOT) != build["inputs"]:
+            report.update(status="incomplete", stopReason="execution-inputs-changed")
+            save(output / "manifest.json", report)
     return report
 
 
@@ -501,6 +611,7 @@ def main():
     elif args.run and args.output:
         report = run(args.output.resolve())
         print(json.dumps({"status": report["status"], "summary": report["summary"]}))
+        return 0 if report["status"] == "completed" else 2
     else:
         parser.error("select a catalog command or --run --output")
 
@@ -512,4 +623,4 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGHUP, interrupted)
-    main()
+    sys.exit(main())

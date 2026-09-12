@@ -233,7 +233,8 @@
         "loggingPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "clockStart": { "type": "string", "format": "date-time" },
         "seed": { "type": "integer", "minimum": 0 },
-        "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+        "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "authProjectNumbers": { "type": "object", "propertyNames": { "pattern": "^[a-z0-9-]+$" }, "additionalProperties": { "type": "string", "pattern": "^[1-9][0-9]*$", "maxLength": 20 } }
       }
     },
     "storage": {

@@ -628,6 +628,23 @@ fn sign_response_tokens(
     response
 }
 
+/// Commit the issuance timestamp only after a successful response has been signed.
+fn finish_token_response(
+    response: JsonResponse,
+    signer: Option<&dyn fireemu_core_auth::jwt::IdTokenSigner>,
+    store: &Arc<Mutex<AuthStore>>,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let response = sign_response_tokens(response, signer);
+    if response.status == 200 && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some()) {
+        if let Some(refresh) = response.body.get("refreshToken").or_else(|| response.body.get("refresh_token")).and_then(Value::as_str) {
+            let Ok(mut store) = store.lock() else { return error(500, "INTERNAL"); };
+            store.record_token_issuance(refresh, at);
+        }
+    }
+    response
+}
+
 /// The envelope of a path the official emulator does not serve (measured:
 /// `auth/identity-toolkit-error-shapes#unknown-method`). It carries `status` and no `domain`,
 /// unlike the `BadRequestError` shape every 400 uses.
@@ -2236,7 +2253,7 @@ pub fn handle_with(
         } else {
             response
         };
-        return sign_response_tokens(response, signer.as_deref());
+        return finish_token_response(response, signer.as_deref(), &store_arc, at);
     }
     let signer = store.signer_arc();
     let response = if let Some(blocking) = state
@@ -2276,7 +2293,7 @@ pub fn handle_with(
     } else {
         response
     };
-    sign_response_tokens(response, signer.as_deref())
+    finish_token_response(response, signer.as_deref(), &store_arc, at)
 }
 
 /// The credential and project checks of a route class.
@@ -3265,6 +3282,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "passwordHash": has_password.then_some(REDACTED_PASSWORD_HASH),
         "passwordUpdatedAt": store.password_updated_at(uid).map(|t| t.as_nanos() / 1_000_000),
         "createdAt": (u.created_at.as_nanos() / 1_000_000).to_string(),
+        "lastRefreshAt": u.last_refresh_at.and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
         "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
     })
@@ -3735,6 +3753,16 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     })
 }
 
+// A verified client may update normal profile fields, but email verification remains
+// server-controlled. OOB and Admin planning do not use this projection.
+fn parse_client_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
+    let mut client = body.clone();
+    if let Some(fields) = client.as_object_mut() {
+        fields.remove("emailVerified");
+    }
+    parse_update(&client)
+}
+
 #[allow(clippy::too_many_lines)]
 fn update(
     store: &mut AuthStore,
@@ -3763,12 +3791,18 @@ fn update(
         }
         return apply_oob_code(store, code, at);
     }
-    let local_id = match opt_str(body, "localId") {
-        Ok(v) => v,
-        Err(r) => return r,
+    let self_service = !privileged;
+    let local_id = if privileged {
+        match opt_str(body, "localId") {
+            Ok(v) => v,
+            Err(r) => return r,
+        }
+    } else {
+        None
     };
-    if !privileged && local_id.is_some() {
-        return error(400, "OPERATION_NOT_ALLOWED");
+    // The saved production input is displayName-only; do not change shared token errors.
+    if self_service && body.as_object().is_some_and(|o| o.len() == 1 && o.contains_key("displayName")) {
+        return error(400, "INVALID_REQ_TYPE");
     }
     // The provider the request's session signed in with, when it carries one: the official
     // emulator re-issues tokens for a session whose credentials it just changed.
@@ -3779,22 +3813,17 @@ fn update(
             None => return error(400, "USER_NOT_FOUND"),
         }
     } else {
-        // Authenticate before authorizing: an invalid session is refused before the
-        // administrator-only fields (or a disableUser flag) it carries are judged.
-        // Production returns INVALID_ID_TOKEN for a tampered token carrying an
-        // administrator-only field (auth-refusal-precedence revision 1, recorded and
-        // approved 2026-09-12). It does not establish the precedence for a valid session,
-        // so a verified session with such a field is still refused OPERATION_NOT_ALLOWED
-        // here; that refusal remains local policy, not observed production behavior.
+        // Authenticate the client before planning any mutation. A supplied localId is
+        // never a client selector, and does not change self-service invalidation rules.
         match verify_session(store, body, at) {
             Ok(session) => {
-                if has_admin_field {
+                if has_admin_field && ["customAttributes", "mfa", "linkProviderUserInfo"].iter().any(|key| body.get(*key).is_some()) {
                     return error(400, "OPERATION_NOT_ALLOWED");
                 }
                 if body.get("disableUser").is_some_and(|v| !v.is_null()) {
                     return error(400, "OPERATION_NOT_ALLOWED");
                 }
-                session_provider = Some(provider_from_id(&session.provider));
+                session_provider = self_service.then(|| provider_from_id(&session.provider));
                 session.uid
             }
             Err(r) => return r,
@@ -3802,7 +3831,7 @@ fn update(
     };
     // Validate the whole request before touching the store (a rejected request changes
     // nothing); email / phone uniqueness is part of the validation.
-    let plan = match parse_update(body) {
+    let plan = match if self_service { parse_client_update(body) } else { parse_update(body) } {
         Ok(p) => p,
         Err(r) => return r,
     };
@@ -3820,7 +3849,7 @@ fn update(
     // It also removes the legacy setAccountInfo email/password linking path; clients link
     // through accounts:signUp with the current ID token instead. Privileged Admin updates
     // remain available for account administration.
-    if local_id.is_none()
+    if self_service
         && store.config().enable_improved_email_privacy
         && (plan.email.is_some() || plan.clear_email)
     {
@@ -3917,7 +3946,7 @@ fn update(
         // (localId, no session) issues nothing: production returns no tokens for an
         // administrative password update, of an enabled account as of a disabled one
         // (auth-pending-trigger admin-password-update, recorded and approved 2026-09-12).
-        if local_id.is_none() {
+        if self_service {
             session_provider = Some(fireemu_core_auth::store::Provider::Password);
         }
     }
@@ -3938,7 +3967,6 @@ fn update(
     if credentials_changed || (stateless_refresh_tokens && plan.disable == Some(true)) {
         let _ = store.revoke_tokens(&uid, plan.revoke_at.unwrap_or(at));
     }
-    let self_service = local_id.is_none();
     if !stateless_refresh_tokens
         && (plan.revoke_at.is_some() || (credentials_changed && !self_service))
     {
@@ -4539,6 +4567,7 @@ fn batch_row_user(
         custom_claims,
         created_at: millis_field(row, "createdAt").unwrap_or(at),
         last_sign_in_at: millis_field(row, "lastLoginAt"),
+        last_refresh_at: str_field(row, "lastRefreshAt").and_then(|v| LogicalInstant::parse_rfc3339(v).ok()),
         tokens_valid_after: at,
         federated,
         password,
@@ -4931,7 +4960,7 @@ fn refresh(
                     "expires_in": "3600",
                     "token_type": "Bearer",
                     "user_id": session.uid.as_str(),
-                    "project_id": store.project_id(),
+                    "project_id": store.project_number().map_or_else(|| store.project_id().to_owned(), |number| number.to_string()),
                 }),
             }
         }

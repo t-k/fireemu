@@ -998,7 +998,16 @@ impl RestState {
             consistency_selector,
         };
         let guard = self.read_guard(principal);
-        let (responses, _warnings) = self.local.run_query(&req, &*guard)?;
+        let (responses, _warnings) = match self.local.run_query(&req, &*guard) {
+            Ok(result) => result,
+            // Observed production negative-limit error is a stream element. Keep
+            // other validation/authentication errors on their existing paths.
+            Err(status) if status.code() == Code::InvalidArgument && status.message() == "invalid query: negative limit" => {
+                let response = error_response(&status);
+                return Ok(RestResponse { status: response.status, body: json!([response.body]) });
+            }
+            Err(status) => return Err(status),
+        };
         let out: Vec<Value> = responses
             .iter()
             .map(|r| {

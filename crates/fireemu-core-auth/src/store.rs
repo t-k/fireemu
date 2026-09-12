@@ -315,6 +315,8 @@ pub struct UserRecord {
     pub mfa: MfaState,
     /// Creation time.
     pub created_at: LogicalInstant,
+    /// Last successful ID token issuance (never advanced by lookup).
+    pub last_refresh_at: Option<LogicalInstant>,
     /// Last sign-in.
     pub last_sign_in_at: Option<LogicalInstant>,
     /// Tokens issued before this instant are revoked.
@@ -444,6 +446,8 @@ pub struct ImportedUser {
     pub custom_claims: CustomClaims,
     /// When the account was created.
     pub created_at: LogicalInstant,
+    /// Last successful token issuance retained by the import artifact.
+    pub last_refresh_at: Option<LogicalInstant>,
     /// When the account last signed in.
     pub last_sign_in_at: Option<LogicalInstant>,
     /// Tokens minted before this instant are refused.
@@ -570,6 +574,7 @@ impl PendingSignInId {
 #[derive(Debug, Clone)]
 pub struct AuthStore {
     project_id: String,
+    project_number: Option<u64>,
     tenant_id: Option<String>,
     rng: SplitMix64,
     policy: TotpPolicy,
@@ -783,6 +788,7 @@ impl AuthStore {
     pub fn new(project_id: &str, rng: SplitMix64, policy: TotpPolicy) -> Self {
         Self {
             project_id: project_id.to_owned(),
+            project_number: None,
             tenant_id: None,
             rng,
             policy,
@@ -877,6 +883,18 @@ impl AuthStore {
     pub fn project_id(&self) -> &str {
         &self.project_id
     }
+
+    /// Explicit numeric identity for API response metadata; JWT audience remains project ID.
+    pub fn set_project_number(&mut self, number: Option<u64>) {
+        self.project_number = number;
+    }
+
+    /// Numeric project identity, when configured by the owning namespace.
+    #[must_use]
+    pub const fn project_number(&self) -> Option<u64> {
+        self.project_number
+    }
+
 
     /// Looks up a user by its ID text.
     #[must_use]
@@ -1242,6 +1260,7 @@ impl AuthStore {
                 mfa,
                 created_at: user.created_at,
                 last_sign_in_at: user.last_sign_in_at,
+                last_refresh_at: user.last_refresh_at,
                 tokens_valid_after: user.tokens_valid_after,
                 tokens_revoked: user.tokens_valid_after > Self::whole_second(user.created_at),
                 federated: user.federated,
@@ -1557,6 +1576,7 @@ impl AuthStore {
             mfa: MfaState::default(),
             created_at: now,
             last_sign_in_at: None,
+            last_refresh_at: None,
             tokens_valid_after: Self::whole_second(now),
             tokens_revoked: false,
             federated: Vec::new(),
@@ -2418,6 +2438,16 @@ impl AuthStore {
                 .contains(&sha256(token.as_bytes()))
     }
 
+    /// Records a completed issuance by its exact refresh session, without activating
+    /// email ownership. Deleted/replaced sessions cannot mutate a reused UID.
+    pub fn record_token_issuance(&mut self, token: &str, at: LogicalInstant) {
+        let Ok(session) = self.stateless_refresh_session(token) else { return; };
+        let uid = session.uid.clone();
+        if let Some(user) = self.users.get_mut(&uid).map(Arc::make_mut) {
+            user.last_refresh_at = Some(user.last_refresh_at.map_or(at, |old| old.max(at)));
+        }
+    }
+
     /// ID token claims for a refreshed session.
     pub fn id_token_claims_for_session(
         &self,
@@ -2982,6 +3012,7 @@ impl AuthSnapshot {
             restored.tokens_by_user = Arc::new(BTreeMap::new());
         }
         live.project_id.clone_into(&mut restored.project_id);
+        restored.project_number = live.project_number;
         live.tenant_id.clone_into(&mut restored.tenant_id);
         let mut report = RestoreReport::default();
         for user in restored.users.values_mut() {
@@ -3074,6 +3105,7 @@ pub enum RefreshTokenStoreMatch {
 #[derive(Debug)]
 pub struct AuthRegistry {
     default_project: String,
+    project_numbers: BTreeMap<String, u64>,
     default: SharedAuthStore,
     scoped_refresh_routing: bool,
     projects: Mutex<ProjectStores>,
@@ -3118,6 +3150,17 @@ pub struct TenantMetadataPatch {
 }
 
 impl AuthRegistry {
+    /// Configured project numbers are isolated by project ID, including routed stores.
+    #[must_use]
+    pub fn with_project_numbers(default_project: &str, default: SharedAuthStore, numbers: BTreeMap<String, u64>) -> Self {
+        if let Ok(mut store) = default.lock() {
+            store.set_project_number(numbers.get(default_project).copied());
+        }
+        let mut registry = Self::new(default_project, default);
+        registry.project_numbers = numbers;
+        registry
+    }
+
     /// A registry around the default project's store.
     #[must_use]
     pub fn new(default_project: &str, default: Arc<Mutex<AuthStore>>) -> Self {
@@ -3126,6 +3169,7 @@ impl AuthRegistry {
         });
         Self {
             default_project: default_project.to_owned(),
+            project_numbers: BTreeMap::new(),
             default,
             scoped_refresh_routing,
             projects: Mutex::new(ProjectStores::default()),
@@ -3184,6 +3228,7 @@ impl AuthRegistry {
             });
         let mut store = AuthStore::new(project, SplitMix64::new(seed), policy);
         store.set_config(config);
+        store.set_project_number(self.project_numbers.get(project).copied());
         if let Some(signer) = signer {
             store.set_signer(signer);
         }
@@ -3307,7 +3352,7 @@ impl AuthRegistry {
     }
 
     /// Registers a project's store; `false` when the project already has one.
-    pub fn register(&self, project: &str, store: AuthStore) -> bool {
+    pub fn register(&self, project: &str, mut store: AuthStore) -> bool {
         if project == self.default_project
             || store.project_id() != project
             || store.tenant_id().is_some()
@@ -3320,6 +3365,7 @@ impl AuthRegistry {
         if projects.registered.contains_key(project) || projects.routed.contains_key(project) {
             return false;
         }
+        store.set_project_number(self.project_numbers.get(project).copied());
         projects
             .registered
             .insert(project.to_owned(), Arc::new(Mutex::new(store)));
@@ -3370,9 +3416,9 @@ impl AuthRegistry {
 
     fn build_tenant_store(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
         let parent = self.store_for(project)?;
-        let (policy, config, signer) = {
+        let (policy, config, signer, number) = {
             let parent = parent.lock().ok()?;
-            (*parent.policy(), parent.config(), parent.signer_arc())
+            (*parent.policy(), parent.config(), parent.signer_arc(), parent.project_number())
         };
         let seed = project
             .bytes()
@@ -3382,6 +3428,7 @@ impl AuthRegistry {
             });
         let mut store = AuthStore::new_tenant(project, tenant, SplitMix64::new(seed), policy);
         store.set_config(config);
+        store.set_project_number(number);
         if let Some(signer) = signer {
             store.set_signer(signer);
         }
@@ -4656,4 +4703,44 @@ mod compatibility_routing_tests {
         owned.remove(&generated);
         owned.insert(legacy.to_owned());
     }
+}
+
+#[cfg(test)]
+mod broad_project_number_tests {
+    use super::*;
+
+    #[test]
+    fn configured_numbers_follow_namespace_not_default_or_snapshot_source() {
+        let default = Arc::new(Mutex::new(AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default())));
+        let registry = AuthRegistry::with_project_numbers("demo-one", default.clone(), BTreeMap::from([("demo-one".to_owned(), 111), ("demo-two".to_owned(), 222)]));
+        assert_eq!(default.lock().unwrap().project_number(), Some(111));
+        let second = registry.routed_candidate("demo-two").unwrap();
+        assert_eq!(second.project_number(), Some(222));
+        assert_eq!(registry.routed_candidate("demo-unset").unwrap().project_number(), None);
+        assert!(registry.register("demo-two", second));
+        let tenant = registry.ensure_tenant("demo-two", "tenant").unwrap();
+        assert_eq!(tenant.lock().unwrap().project_number(), Some(222));
+        let snapshot = AuthSnapshot::capture(&default.lock().unwrap());
+        snapshot.restore_into(&mut tenant.lock().unwrap());
+        assert_eq!(tenant.lock().unwrap().project_number(), Some(222));
+        assert_eq!(tenant.lock().unwrap().project_id(), "demo-two");
+    }
+    #[test]
+    fn issuance_metadata_does_not_activate_email_owner_or_touch_recreated_uid() {
+        let mut store = AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default());
+        store.set_config(ProjectAuthConfig { allow_duplicate_emails: true, ..ProjectAuthConfig::default() });
+        let at = LogicalInstant::from_unix_seconds(100);
+        let a = store.create_user_with_id(NewUser::email("shared@example.com"), Some("a"), at).unwrap();
+        let token = store.issue_refresh_session(&a, at, None, CustomClaims::default(), None).unwrap();
+        let b = store.create_user_with_id(NewUser::email("shared@example.com"), Some("b"), at).unwrap();
+        assert_eq!(store.user_by_email("shared@example.com").unwrap().local_id, b);
+        store.record_token_issuance(&token, at);
+        assert_eq!(store.user(&a).unwrap().last_refresh_at, Some(at));
+        assert_eq!(store.user_by_email("shared@example.com").unwrap().local_id, b);
+        store.delete_user_by_id("a").unwrap();
+        let replacement = store.create_user_with_id(NewUser::anonymous(), Some("a"), at).unwrap();
+        store.record_token_issuance(&token, at);
+        assert_eq!(store.user(&replacement).unwrap().last_refresh_at, None);
+    }
+
 }

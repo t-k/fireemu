@@ -1125,6 +1125,7 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         custom_claims,
         created_at,
         last_sign_in_at: millis_instant(record.last_login_at.as_deref()),
+        last_refresh_at: record.last_refresh_at.as_deref().map(LogicalInstant::parse_rfc3339).transpose().map_err(|e| refuse(format!("invalid lastRefreshAt: {e}")))?,
         tokens_valid_after: seconds_instant(record.valid_since.as_deref()).unwrap_or(created_at),
         federated: record
             .provider_user_info
@@ -1792,7 +1793,7 @@ fn exported_account(
             last_login_at: user
                 .last_sign_in_at
                 .map(|t| (t.as_nanos() / 1_000_000).to_string()),
-            last_refresh_at: None,
+            last_refresh_at: user.last_refresh_at.and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
             custom_attributes: (claims != "{}").then_some(claims),
             tenant_id: tenant_id.map(str::to_owned),
             provider_user_info: providers,
@@ -2742,4 +2743,21 @@ mod tests {
         assert_eq!(std::fs::read_dir(&base).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(base);
     }
+    #[test]
+    fn last_token_issuance_round_trips_without_lookup_time_fabrication() {
+        use fireemu_core_auth::{store::{AuthStore, NewUser}, mfa::TotpPolicy};
+        use fireemu_core_types::determinism::SplitMix64;
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        let at = LogicalInstant::from_unix_seconds(100);
+        let uid = store.create_user(NewUser::anonymous(), at).unwrap();
+        let token = store.issue_refresh_session(&uid, at, None, super::CustomClaims::default(), None).unwrap();
+        store.record_token_issuance(&token, at);
+        let exported = super::exported_account(&store, store.user(&uid).unwrap(), None);
+        assert_eq!(exported.last_refresh_at.as_deref(), Some("1970-01-01T00:01:40Z"));
+        let imported = super::imported_user(&exported, std::path::Path::new("offline.json")).unwrap();
+        let mut restored = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+        restored.import_user(imported).unwrap();
+        assert_eq!(super::exported_account(&restored, restored.user_by_id(uid.as_str()).unwrap(), None).last_refresh_at, exported.last_refresh_at);
+    }
+
 }

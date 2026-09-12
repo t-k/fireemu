@@ -172,6 +172,8 @@ pub struct RuntimeConfig {
     pub seed: u64,
     /// Project ID used for Auth token issuance.
     pub auth_project: String,
+    /// Explicit project ID to number mappings for Auth response metadata.
+    pub auth_project_numbers: BTreeMap<String, u64>,
     /// fireemu-only TOTP policy. Absence preserves the official Auth emulator's rejection
     /// of TOTP enrollment; declaring `auth.totp` explicitly enables the extension.
     pub auth_totp: Option<TotpPolicy>,
@@ -438,6 +440,7 @@ impl Default for RuntimeConfig {
             clock_start_pinned: false,
             seed: 42,
             auth_project: "demo-app".to_owned(),
+            auth_project_numbers: BTreeMap::new(),
             auth_totp: None,
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
@@ -1771,6 +1774,7 @@ impl RuntimeConfig {
                 "clockStart",
                 "seed",
                 "authProject",
+                "authProjectNumbers",
             ]
             .contains(&key.as_str())
             {
@@ -1828,6 +1832,19 @@ impl RuntimeConfig {
         if let Some(p) = d.get("authProject").and_then(Value::as_str) {
             p.clone_into(&mut cfg.auth_project);
         }
+        if let Some(value) = d.get("authProjectNumbers") {
+            let mappings = value.as_object().ok_or_else(|| ConfigError("daemon.authProjectNumbers must be an object".into()))?;
+            for (project, value) in mappings {
+                if project.is_empty() || !project.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+                    return Err(ConfigError("invalid Auth project ID in number mapping".into()));
+                }
+                let number = value.as_str().filter(|s| !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|s| s.parse::<u64>().ok()).filter(|n| *n != 0)
+                    .ok_or_else(|| ConfigError("Auth project number must be a positive decimal string within u64".into()))?;
+                cfg.auth_project_numbers.insert(project.clone(), number);
+            }
+        }
+
 
         Ok(())
     }
@@ -3664,4 +3681,15 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn auth_project_numbers_are_explicit_validated_namespace_mappings() {
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion":1,"daemon":{"authProjectNumbers":{"demo-one":"111111111111","demo-two":"222222222222"}}})).unwrap();
+        assert_eq!(cfg.auth_project_numbers.get("demo-one"), Some(&111_111_111_111));
+        assert_eq!(cfg.auth_project_numbers.get("demo-two"), Some(&222_222_222_222));
+        assert_eq!(cfg.auth_project_numbers.get("demo-unset"), None);
+        for invalid in [json!(0), json!("0"), json!("-1"), json!("x"), json!("18446744073709551616")] {
+            assert!(RuntimeConfig::from_json(&json!({"schemaVersion":1,"daemon":{"authProjectNumbers":{"demo-one":invalid}}})).is_err());
+        }
+    }
+
 }

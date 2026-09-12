@@ -40,6 +40,7 @@ fn account(local_id: &str) -> ImportedUser {
         custom_claims: CustomClaims::default(),
         created_at: t(-1_000),
         last_sign_in_at: None,
+        last_refresh_at: None,
         tokens_valid_after: t(-1_000),
         federated: Vec::new(),
         password: None,

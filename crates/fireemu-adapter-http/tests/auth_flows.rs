@@ -13,7 +13,7 @@ use fireemu_core_auth::store::{AuthStore, PendingSignInId};
 use fireemu_core_auth::{base32, totp::totp_at};
 use fireemu_core_functions::manifest::{BlockingAuthEvent, BlockingAuthTokenPolicy};
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_types::determinism::SplitMix64;
+use fireemu_core_types::determinism::{Clock, SplitMix64};
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
@@ -5144,4 +5144,105 @@ fn the_verify_and_change_email_link_switches_the_address() {
         body,
         json!({"authEmulator": {"error": "Your request to change your email has expired or the link has already been used.", "instructions": "Try changing your email again."}})
     );
+}
+
+/// Saved production batch ab7bd698: client selectors never select another account.
+#[test]
+fn broad_client_update_uses_verified_owner_and_ignores_observed_admin_fields() {
+    let (s, _) = oob_authorization_state(true);
+    let a = sign_up(&s, "broad-owner-a@example.com");
+    let b = sign_up(&s, "broad-owner-b@example.com");
+    let update = format!("{V1}/accounts:update");
+    let admin_update = format!("{V1}/projects/demo-app/accounts:update");
+    assert_eq!(admin(&s, &admin_update, &json!({"localId": a["localId"], "displayName": "A-original"})).0, 200);
+    let (status, changed) = post(&s, &update, &json!({"idToken": b["idToken"], "localId": a["localId"], "emailVerified": true, "displayName": "B-self"}));
+    assert_eq!(status, 200, "{changed}");
+    assert_eq!(changed["localId"], b["localId"]);
+    assert_eq!(changed["emailVerified"], false);
+    let lookup = |uid: &Value| admin(&s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [uid]})).1["users"][0].clone();
+    assert_eq!(lookup(&a["localId"])["displayName"], "A-original");
+    assert_eq!(lookup(&b["localId"])["displayName"], "B-self");
+    assert_eq!(lookup(&b["localId"])["emailVerified"], false);
+    // Ignored selector must not turn a self-service password change into an Admin plan.
+    let (status, changed) = post(&s, &update, &json!({"idToken": b["idToken"], "localId": a["localId"], "password": "replacement-22", "returnSecureToken": true}));
+    assert_eq!(status, 200, "{changed}");
+    assert!(changed["idToken"].is_string() && changed["refreshToken"].is_string());
+    assert_eq!(changed["localId"], b["localId"]);
+    assert_eq!(admin(&s, &admin_update, &json!({"localId": a["localId"], "emailVerified": true})).0, 200);
+    assert_eq!(lookup(&a["localId"])["emailVerified"], true);
+}
+
+#[test]
+fn broad_client_update_failed_credentials_never_apply_regular_attributes() {
+    for failure in ["invalid", "expired", "revoked", "disabled"] {
+        let (s, _) = oob_authorization_state(true);
+        let a = sign_up(&s, "broad-failed-a@example.com");
+        let b = sign_up(&s, "broad-failed-b@example.com");
+        let token = if failure == "invalid" { json!("invalid-token") } else { b["idToken"].clone() };
+        if failure == "expired" {
+            s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(3601)).unwrap();
+        } else if failure == "disabled" {
+            assert_eq!(admin(&s, &format!("{V1}/projects/demo-app/accounts:update"), &json!({"localId": b["localId"], "disableUser": true})).0, 200);
+        } else if failure == "revoked" {
+            s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(2)).unwrap();
+            assert_eq!(admin(&s, &format!("{V1}/projects/demo-app/accounts:update"), &json!({"localId": b["localId"], "password": "revoke-22"})).0, 200);
+        }
+        let (status, result) = post(&s, &format!("{V1}/accounts:update"), &json!({"idToken": token, "localId": a["localId"], "emailVerified": true, "displayName": "forbidden"}));
+        assert_eq!(status, 400, "{failure}: {result}");
+        for uid in [&a["localId"], &b["localId"]] {
+            let row = admin(&s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [uid]})).1["users"][0].clone();
+            assert!(row.get("displayName").is_none(), "{failure}: {row}");
+            assert_eq!(row["emailVerified"], false);
+        }
+    }
+}
+
+#[test]
+fn broad_display_name_only_update_preserves_production_error_code() {
+    let (s, _) = oob_authorization_state(true);
+    let (status, response) = post(&s, &format!("{V1}/accounts:update"), &json!({"displayName": "must-not-apply"}));
+    assert_eq!(status, 400);
+    assert_eq!(response["error"]["message"], "INVALID_REQ_TYPE");
+}
+
+#[test]
+fn broad_last_refresh_tracks_successful_token_issuance_not_reads_or_failures() {
+    let (mut s, _) = oob_authorization_state(true);
+    let user = sign_up(&s, "mint-clock@example.com");
+    let lookup = |s: &AuthState| admin(s, &format!("{V1}/projects/demo-app/accounts:lookup"), &json!({"localId": [user["localId"]]})).1["users"][0]["lastRefreshAt"].clone();
+    let expected = |s: &AuthState| LogicalInstant::to_rfc3339(s.clock.lock().unwrap().now()).unwrap();
+    let first = lookup(&s);
+    assert_eq!(first, expected(&s));
+    s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(30)).unwrap();
+    assert_eq!(lookup(&s), first);
+    assert_eq!(post(&s, &format!("{V1}/accounts:signInWithPassword"), &json!({"email": "mint-clock@example.com", "password": "wrong"})).0, 400);
+    assert_eq!(lookup(&s), first);
+    assert_eq!(post(&s, "/securetoken.googleapis.com/v1/token", &json!({"grant_type":"refresh_token", "refresh_token":"invalid"})).0, 400);
+    assert_eq!(lookup(&s), first);
+    assert_eq!(post(&s, "/securetoken.googleapis.com/v1/token", &json!({"grant_type":"refresh_token", "refresh_token":user["refreshToken"]})).0, 200);
+    let refreshed = lookup(&s);
+    assert_eq!(refreshed, expected(&s));
+    assert_ne!(refreshed, first);
+    s.clock.lock().unwrap().advance(fireemu_core_types::time::LogicalDuration::from_seconds(30)).unwrap();
+    s.blocking = Some(Arc::new(RejectBeforeSignInHook { timeout: false }));
+    assert_ne!(post(&s, &format!("{V1}/accounts:signInWithPassword"), &json!({"email": "mint-clock@example.com", "password": "hunter22"})).0, 200);
+    assert_eq!(lookup(&s), refreshed);
+}
+
+#[test]
+fn broad_refresh_project_number_is_separate_from_jwt_project_identity() {
+    for (project, number) in [("demo-one", Some(111_111_111_111_u64)), ("demo-two", Some(222_222_222_222_u64)), ("demo-unset", None)] {
+        let mut s = state();
+        s.stateless_refresh_tokens = false;
+        let mut store = AuthStore::new(project, SplitMix64::new(8), TotpPolicy::default());
+        store.set_project_number(number);
+        s.store = Arc::new(Mutex::new(store));
+        let user = sign_up(&s, "project-mapping@example.com");
+        let (status, response) = post(&s, "/securetoken.googleapis.com/v1/token", &json!({"grant_type":"refresh_token", "refresh_token":user["refreshToken"]}));
+        assert_eq!(status, 200, "{response}");
+        assert_eq!(response["project_id"], number.map_or_else(|| project.to_owned(), |n| n.to_string()));
+        let token_claims = claims(response["id_token"].as_str().unwrap());
+        assert_eq!(token_claims["aud"], project);
+        assert_eq!(token_claims["iss"], format!("https://securetoken.google.com/{project}"));
+    }
 }

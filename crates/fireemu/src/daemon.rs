@@ -1017,9 +1017,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         };
         let barrier = backend.barrier();
         // Session projects other than the default get their own Auth store (same signer).
-        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::with_project_numbers(
             &cfg.auth_project,
             auth_store.clone(),
+            cfg.auth_project_numbers.clone(),
         ));
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));
         let mut database_rules = std::collections::BTreeMap::new();

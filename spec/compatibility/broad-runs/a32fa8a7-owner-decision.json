@@ -1,0 +1,260 @@
+{
+  "kind": "owner-decision-draft-not-permission",
+  "executionInputsPath": "spec/compatibility/broad-runs/a32fa8a7-execution-inputs.json",
+  "executionInputsFileSha256": "7c65133ba139d25d42ef1fcfa82c34d0bc2b3e792e1c9ec9b710842ed9093d92",
+  "frozenCommit": "a32fa8a7fa9b2b3f4e286a3d8167723c8c26fcf0",
+  "observerSha256": "de284c0a6c8496eb91f5765d9822a1c60d1d4c4e2bcd26a728fd187d95adb34a",
+  "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+  "comparisonContractDigest": "453565e1eb4f74219d8648f3409ee996a0514d83222669f3edf29d8f7feb6434",
+  "readOnlyCollectionProposal": {
+    "project": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "database": "(default)",
+    "permission": {
+      "scope": "four metadata reads, one ADC acquisition and one tokeninfo; no retry, 180s, no data/config changes",
+      "source": "User replied \u8a31\u53ef\u3059\u308b immediately after this read-only proposal; this is not production-batch permission."
+    },
+    "operations": [
+      "GET project identity",
+      "GET Database metadata",
+      "GET Auth project configuration",
+      "GET API-key ownership"
+    ],
+    "credentialOperations": [
+      "one existing ADC print-access-token command, timeout60s",
+      "one tokeninfo expiry verification, timeout12s"
+    ],
+    "metadataGetRequests": 4,
+    "requestTimeoutSeconds": 12,
+    "totalWallLimitSeconds": 180,
+    "automaticRetries": 0,
+    "mutations": false,
+    "resourceEnumeration": false,
+    "rawResponses": "private files only; preserve acquisition times and canonical JSON hashes; also retain Database response bytes hash"
+  },
+  "productionBatchProposal": {
+    "diagnosticRows": 46,
+    "authRows": 19,
+    "firestoreRows": 27,
+    "accounts": 3,
+    "documents": 8,
+    "requests": {
+      "total": 2400,
+      "auth": 400,
+      "firestore": 1600,
+      "metadata": 100,
+      "recovery": 300
+    },
+    "wallSeconds": 1200,
+    "observationSeconds": 900,
+    "recoverySeconds": 300,
+    "sequential": true,
+    "maxStartsPerSecond": 4,
+    "costCapUsd": 1,
+    "planningEstimateUsd": 0.3051264453125,
+    "queries": 2,
+    "maxOwnedDocumentsScannedPerQuery": 1,
+    "executions": 1,
+    "automaticRetries": 0,
+    "permission": null
+  },
+  "pricingResearch": {
+    "checkedDate": "2026-09-12",
+    "sources": [
+      "https://cloud.google.com/firestore/pricing",
+      "https://cloud.google.com/identity-platform/pricing"
+    ],
+    "identityPlatform": {
+      "method": "email/password Tier1",
+      "highestPublishedPaidUsdPerMau": 0.0055,
+      "manifestCeilingUsdPerMau": 0.01,
+      "threeMauAtHighestPublishedRateUsd": 0.0165,
+      "belowPlanningRate": true,
+      "freeQuotaDeducted": false
+    },
+    "firestore": {
+      "confirmedLocation": "us-central1",
+      "publishedUsdRatesUsed": {
+        "documentReads": 3e-07,
+        "documentWrites": 9e-07,
+        "documentDeletes": 1e-07,
+        "indexReadBatches": 3e-07,
+        "storageGiBMonths": 0.152876376,
+        "egressGiB": 0.23,
+        "authMau": 0.0055
+      },
+      "storageHoursBudgeted": 744,
+      "egressAssumption": "Maximum published destination rate0.23 USD/GiB; no free quota or discounts deducted",
+      "manifestUnits": {
+        "documentReads": 3200,
+        "documentWrites": 1600,
+        "documentDeletes": 200,
+        "indexReadBatches": 2,
+        "storageGiBMonths": 0.0626220703125,
+        "egressGiB": 0.146484375,
+        "authMau": 3
+      },
+      "perDimensionBelowPlanningCeiling": {
+        "documentReads": true,
+        "documentWrites": true,
+        "documentDeletes": true,
+        "indexReadBatches": true,
+        "storageGiBMonths": true,
+        "egressGiB": true,
+        "authMau": true
+      },
+      "conditionalEstimateUsd": 0.062185441416992185,
+      "tariffsConfirmedBelowPlanningCeilings": null,
+      "remainingConditions": [
+        "Owner confirmation of applicable billing terms/currency",
+        "Auth configuration unavailable; no confirmation that external blocking integrations are absent",
+        "Retention beyond the budgeted month remains outside this cost estimate"
+      ]
+    }
+  },
+  "ownerIdentity": null,
+  "permissionReference": null,
+  "issuedAt": null,
+  "expiresAt": null,
+  "nonce": null,
+  "databaseProjection": {
+    "name": "projects/fireemu-35fe6/databases/(default)",
+    "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+    "createTime": "2026-09-02T12:56:28.522410Z",
+    "updateTime": "2026-09-02T12:56:28.522410Z",
+    "locationId": "us-central1",
+    "type": "FIRESTORE_NATIVE",
+    "concurrencyMode": "PESSIMISTIC",
+    "versionRetentionPeriod": "3600s",
+    "appEngineIntegrationMode": "DISABLED",
+    "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+    "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+    "databaseEdition": "STANDARD",
+    "freeTier": true,
+    "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+    "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+    "etag": "INvzo7OZ6ZYDMODt3eb7z5YD"
+  },
+  "databaseResponseDigest": "557c544e9a25e843c27f032be20cf50342001c0fcb75a6b39dd9ef0b73c8bba3",
+  "authConfigDigest": null,
+  "productionExecuted": false,
+  "readOnlyResult": {
+    "completed": false,
+    "requests": [
+      {
+        "label": "tokeninfo",
+        "requestedAt": "2026-09-12T13:57:52.435179+00:00",
+        "receivedAt": "2026-09-12T13:57:52.606515+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "78a0bf49c7be9d50ee26360132ba9ece0421f50c1396252f23c77d7f1a88ea71",
+        "parsedResponseDigest": "bad8d210d06dda4b2695af9cbd1c549e45e2750fec3a7c0469aae04ce87a7a60"
+      },
+      {
+        "label": "project",
+        "requestedAt": "2026-09-12T13:57:52.606888+00:00",
+        "receivedAt": "2026-09-12T13:57:53.436495+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "9f346de6e7c01d3996869d0d93d66786f6fcc03b0869246e1474c9026aba9285",
+        "parsedResponseDigest": "a9ea0c9c963c6b48d58d5efa768e3049fad4cc3f064da32b7ae1eeac5be1397c"
+      },
+      {
+        "label": "database",
+        "requestedAt": "2026-09-12T13:57:53.437216+00:00",
+        "receivedAt": "2026-09-12T13:57:54.552050+00:00",
+        "httpStatus": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "05fc90573f9cff8a92d9e8ddd031d47a408e255bf836a24ca9a2dff5980852d3",
+        "parsedResponseDigest": "557c544e9a25e843c27f032be20cf50342001c0fcb75a6b39dd9ef0b73c8bba3"
+      },
+      {
+        "label": "auth-config",
+        "requestedAt": "2026-09-12T13:57:54.552784+00:00",
+        "receivedAt": "2026-09-12T13:57:54.915166+00:00",
+        "httpStatus": 403,
+        "contentType": "application/json; charset=UTF-8",
+        "rawResponseSha256": "78ff403dd96f1e1ddacb31c25e59f9473e768a1f0fe481f606c88ec8e6eab41d",
+        "parsedResponseDigest": "47afe13e923b3f16aa2868c92fb7ad6314b8749f9d519512ab7a6ac718a9ddb1"
+      }
+    ],
+    "elapsedSeconds": 5.183640833944082,
+    "projectConfirmed": true,
+    "databaseConfirmed": true,
+    "authConfigurationConfirmed": false,
+    "apiKeyOwnershipConfirmed": false,
+    "stopReason": "metadata read refused: auth-config",
+    "dataMutations": 0,
+    "configurationMutations": 0
+  },
+  "databaseEvidence": {
+    "responseDigest": "557c544e9a25e843c27f032be20cf50342001c0fcb75a6b39dd9ef0b73c8bba3",
+    "projection": {
+      "name": "projects/fireemu-35fe6/databases/(default)",
+      "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+      "createTime": "2026-09-02T12:56:28.522410Z",
+      "updateTime": "2026-09-02T12:56:28.522410Z",
+      "locationId": "us-central1",
+      "type": "FIRESTORE_NATIVE",
+      "concurrencyMode": "PESSIMISTIC",
+      "versionRetentionPeriod": "3600s",
+      "appEngineIntegrationMode": "DISABLED",
+      "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+      "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+      "databaseEdition": "STANDARD",
+      "freeTier": true,
+      "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+      "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+      "etag": "INvzo7OZ6ZYDMODt3eb7z5YD"
+    },
+    "projectionDigest": "1a067449eec406349580f171ae760ac33f5bc6ff0e0a53e00d26096da75e8fe8",
+    "contract": {
+      "version": "database-settings-v1",
+      "excludedResponseFields": [
+        "earliestVersionTime"
+      ],
+      "retainedFields": "all other fields, including unknown fields and field presence/types",
+      "requiredIdentityFields": [
+        "name",
+        "uid",
+        "databaseEdition",
+        "type",
+        "locationId"
+      ],
+      "hashEncoding": "canonical typed JSON SHA256"
+    },
+    "contractDigest": "79690548d106bfdacef8d5440e12c07d3384cbfb8ce7908ca6b93c3098268627"
+  },
+  "databaseProjectionDigest": "1a067449eec406349580f171ae760ac33f5bc6ff0e0a53e00d26096da75e8fe8",
+  "databaseRawResponseSha256": "05fc90573f9cff8a92d9e8ddd031d47a408e255bf836a24ca9a2dff5980852d3",
+  "databaseAcquiredAt": "2026-09-12T13:57:54.552050+00:00",
+  "remainingInputs": [
+    "Successful Auth configuration digest",
+    "API-key project ownership",
+    "Owner acceptance of complete configuration and billing conditions",
+    "Production ownerIdentity/permissionReference, validity window and unused nonce"
+  ],
+  "executionBlocker": {
+    "kind": "quota-project-required",
+    "observedHttpStatus": 403,
+    "scope": "Auth configuration metadata read with current authorized_user ADC",
+    "frozenSourceUnchanged": true,
+    "note": "Frozen a32fa8a7 sends Authorization but no x-goog-user-project. Do not substitute another project or silently alter frozen request headers. No IAM/ADC config changes or automatic retry performed.",
+    "officialGuidance": "https://docs.cloud.google.com/docs/authentication/rest#user-credentials"
+  },
+  "proposedRemainingReadScope": {
+    "quotaProject": "fireemu-35fe6",
+    "header": "x-goog-user-project",
+    "metadataGets": [
+      "Auth project configuration",
+      "API-key ownership using key from authorized Auth config or existing approved input"
+    ],
+    "credentialAcquisitions": 1,
+    "tokeninfoRequests": 1,
+    "automaticRetries": 0,
+    "wallSeconds": 180,
+    "permission": null,
+    "dataOrConfigMutation": false,
+    "iamMutation": false
+  }
+}

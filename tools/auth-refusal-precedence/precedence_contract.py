@@ -169,6 +169,8 @@ def complete(report):
             require(classified(row))
         require(report["setup"] == {"a": True, "b": True})
         require(report["held"] == {"a": True, "b": True})
+        if report["target"] == "production":
+            require(report["committedCheckout"] is True)
         # The tampered-token row is followed by an administrative readback of A; whether
         # the privileged field or the sentinel was applied is an observation, so only the
         # presence of the projection is required, and it must agree with the row.

@@ -137,6 +137,22 @@ def note(report, step, status, response):
     )
 
 
+# Every source file the run's digests cover must be committed: a production run from a
+# checkout with local edits would bind its receipt to code that is not in history.
+PROBE_TREES = (
+    "tools/auth-refusal-precedence",
+    "tools/auth-pending-revocation",
+    "tools/auth-password-maximum",
+    "tools/compat-inventory",
+)
+
+
+def committed_checkout():
+    """True when no probe tree has uncommitted changes or untracked files."""
+    status = core.command(["git", "status", "--porcelain", "--", *PROBE_TREES])
+    return status == ""
+
+
 def inputs():
     own = {
         str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -207,6 +223,10 @@ def observe(output, origin=None):
     try:
         access, key = "owner", "local-test-key"
         if production:
+            # Refused before the preflight, so nothing is read or written from a
+            # checkout whose recorder differs from the commit the report names.
+            require(committed_checkout())
+            report["committedCheckout"] = True
             access, key, report["configReadback"] = core.production_preflight()
 
             def config(patch_body=None, mask=None):

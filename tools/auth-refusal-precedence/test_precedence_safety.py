@@ -72,6 +72,7 @@ class World:
         self.fail_restore = options.pop("fail_restore", False)
         self.fail_delete = options.pop("fail_delete", False)
         self.ignore_disable = options.pop("ignore_disable", False)
+        self.dirty = options.pop("dirty", False)
         assert not options, options
         self.users = {}
         self.pendings = {}
@@ -290,11 +291,26 @@ class World:
         return 200, self.issue(user, True)
 
 
+def git(dirty):
+    def command(argv):
+        if argv[:3] == ["git", "status", "--porcelain"]:
+            assert argv[3] == "--" and set(argv[4:]) == set(recorder.PROBE_TREES)
+            return (
+                " M tools/auth-refusal-precedence/precedence_recorder.py"
+                if dirty
+                else ""
+            )
+        assert argv == ["git", "rev-parse", "HEAD"]
+        return "deadbeef"
+
+    return command
+
+
 def run(tmp_path, monkeypatch, world, projection_sha=CONFIG_SHA):
     monkeypatch.setattr(recorder.core, "production_preflight", world.preflight)
     monkeypatch.setattr(recorder.core, "request", world.request)
     monkeypatch.setattr(recorder.revocation, "patch", world.patch)
-    monkeypatch.setattr(recorder.core, "command", lambda argv: "deadbeef")
+    monkeypatch.setattr(recorder.core, "command", git(world.dirty))
     monkeypatch.setattr(
         recorder.core,
         "config_projection",
@@ -562,6 +578,15 @@ def test_a_disable_that_does_not_read_back_aborts_before_the_overlap_rows(
     assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
 
 
+def test_a_production_run_refuses_to_start_from_a_dirty_checkout(tmp_path, monkeypatch):
+    w = world(tmp_path, dirty=True)
+    report, saved = run(tmp_path, monkeypatch, w)
+    assert report["status"] == "incomplete" and saved["failure"] == "ValueError"
+    assert "committedCheckout" not in saved and "configReadback" not in saved
+    assert w.patches == [] and w.counts == {}, "nothing may be read or written"
+    assert not (tmp_path / "run" / "config-recovery.json").exists()
+
+
 def test_no_configuration_write_when_preconditions_fail(tmp_path, monkeypatch):
     w = world(tmp_path)
     w.config["mfa"] = {"state": "ENABLED"}
@@ -758,6 +783,8 @@ def complete_report():
     }
     return {
         "status": "observed",
+        "target": "production",
+        "committedCheckout": True,
         "cases": [rows.get(name) or accepted(name, finalize) for name in CASES],
         "setup": {"a": True, "b": True},
         "held": {"a": True, "b": True},
@@ -779,6 +806,11 @@ def test_complete_report_is_complete():
 def test_complete_rejects_missing_or_inconsistent_projections():
     assert complete({**complete_report(), "configDigestMatches": False}) is False
     assert complete({**complete_report(), "configRestored": False}) is False
+    assert complete({**complete_report(), "committedCheckout": False}) is False
+    report = complete_report()
+    del report["committedCheckout"]
+    assert complete(report) is False
+    assert complete({**report, "target": "local"})
     assert complete({**complete_report(), "cleanup": {}}) is False
     assert complete({**complete_report(), "setup": {"a": True}}) is False
     assert complete({**complete_report(), "held": {"a": True}}) is False

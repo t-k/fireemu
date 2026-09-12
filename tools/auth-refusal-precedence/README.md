@@ -36,4 +36,4 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-refusa
 uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-refusal-precedence/precedence_owned.py --output /absolute/private/new-local
 ```
 
-The production run, its publication as a receipt and page, and any human approval are separate steps that each need their own decision.
+A production run refuses to start, before the preflight, when any probe tree (`tools/auth-refusal-precedence`, `tools/auth-pending-revocation`, `tools/auth-password-maximum`, `tools/compat-inventory`) has uncommitted changes or untracked files, so the receipt's digests always name committed code. This was added after a run on 2026-09-12 executed with a reviewer's leftover mutation of the recorder (the digest comparison hard-coded to true); that run's rows were consistent with the later run but it was discarded because its recorder digest did not match any commit and the in-run digest check had not executed. The production run, its publication as a receipt and page, and any human approval are separate steps that each need their own decision.

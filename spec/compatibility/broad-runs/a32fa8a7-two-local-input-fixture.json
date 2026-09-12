@@ -1,0 +1,244 @@
+{
+  "mode": "production-versus-local",
+  "evidenceKind": "input-fixture",
+  "recordingComplete": true,
+  "bindingsValid": true,
+  "bindingErrors": [],
+  "cleanupComplete": true,
+  "compatibility": "match",
+  "rows": [
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-normal",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#refused-overwrite",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-after-refusal",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#empty-commit",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#zero-limit",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#negative-limit",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-after-query-refusal",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#server-timestamp-and-increments",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-increments",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#maximum-and-minimum-invalid-field-path",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-invalid-max-min",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#maximum-and-minimum",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-max-min",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#array-transforms",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-array-transforms",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#transform-only-write-creates",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-transform-created",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#transform-write-with-exists-precondition",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#increment-with-non-numeric-operand",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#server-timestamp-on-a-delete",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#set-and-transform-same-field",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-set-and-transform",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#integer-increment-saturates",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-saturated",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#increment-on-nan",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#two-transforms-on-one-field-in-one-write",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-dup",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/create-a",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/create-b",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/short-password-refused",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/refused-create-absent",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/self-admin-field",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/other-user-selector",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/unauthenticated-update",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/refusal-state-a",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/refusal-state-b",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/admin-update",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/self-sees-admin-state",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/password-change",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/old-password",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/new-password",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/refresh-after-change",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/delete-a",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/deleted-absent-a",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/delete-b",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/deleted-absent-b",
+      "status": "match",
+      "firstDifference": null
+    }
+  ],
+  "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+  "comparisonContractDigest": "453565e1eb4f74219d8648f3409ee996a0514d83222669f3edf29d8f7feb6434",
+  "source": "Two actual local runs with synthetic production-side metadata; no oracle observation. Exercises the comparison CLI only."
+}

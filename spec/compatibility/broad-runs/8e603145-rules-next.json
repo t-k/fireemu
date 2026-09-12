@@ -1,0 +1,231 @@
+{
+  "status": "completed",
+  "productionExecuted": false,
+  "reference": "historical official emulator, not production",
+  "artifactSha256": "918381fb5f2358ee6fea4763170464885426f63f9215eea8a23ccfb9e3ad2c07",
+  "command": [
+    "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/broad-batch-local-final/fireemu",
+    "exec",
+    "--config",
+    "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/broad-rules-next/config.json",
+    "--project",
+    "demo-rules-matrix",
+    "--only",
+    "firestore",
+    "--firestore-port",
+    "0",
+    "--http-port",
+    "0",
+    "--hub-port",
+    "0",
+    "--ui-port",
+    "0",
+    "--logging-port",
+    "0",
+    "--log-verbosity",
+    "silent",
+    "--",
+    "/Users/tk/work/firebase-emulator/.worktree/compatibility-inventory/tools/compat-inventory/.venv/bin/python3",
+    "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/broad-rules-next/run.py",
+    "--child",
+    "1e75af5766874cc3a554be4f6382e27a"
+  ],
+  "executionCommit": "8e60314554ab20c05b8bee9d356648d6cc396d6b",
+  "sourceInputs": {
+    "conformance/src/rules-probe/programs.mjs": "72ec2aeb340fd5f308b1ed2aa39c1fcf873c1910b10e0c1039309ae55855b004",
+    "conformance/src/rules-probe/session-programs.mjs": "8a81033c87e80eeec924302648cd36442718c8557deecf258bc6cacca8abef7a",
+    "conformance/rules-programs.json": "38bf374ec8103bec3f7d9cfbef8968250250bb7363fa8f72c0b7e40e5b02eef5",
+    "tools/compat-broad/local-guard.mjs": "02d69cb419900a4676ab4a9b2d7314123e1d02a7db09f1da78b8862df9b10f39"
+  },
+  "exitCode": 0,
+  "rows": [
+    {
+      "program": "query-limit",
+      "step": "limit-5",
+      "actual": {
+        "status": 200,
+        "code": "OK",
+        "shape": "stream(1 entries, 0 documents)"
+      },
+      "reference": {
+        "status": 200,
+        "code": "OK",
+        "shape": "stream(1 entries, 0 documents)"
+      },
+      "result": "match"
+    },
+    {
+      "program": "query-limit",
+      "step": "limit-50",
+      "actual": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "list on probe/fireemu-placeholder denied by Security Rules: no allow statement evaluated to true"
+      },
+      "reference": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "\nfalse for 'list' @ L5"
+      },
+      "result": "match"
+    },
+    {
+      "program": "query-limit",
+      "step": "no-limit",
+      "actual": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "list on probe/fireemu-placeholder denied by Security Rules: no allow statement evaluated to true"
+      },
+      "reference": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "\nUnsupported operation error. Received: null <= int. Expected: string <= string, bytes <= bytes, int <= int, float <= float, duration <= duration, timestamp <= timestamp, constraint <= any, any <= constraint. for 'list' @ L5"
+      },
+      "result": "match"
+    },
+    {
+      "program": "query-resource-proof",
+      "step": "constrained",
+      "actual": {
+        "status": 200,
+        "code": "OK",
+        "shape": "stream(1 entries, 1 documents)"
+      },
+      "reference": {
+        "status": 200,
+        "code": "OK",
+        "shape": "stream(1 entries, 1 documents)"
+      },
+      "result": "match"
+    },
+    {
+      "program": "query-resource-proof",
+      "step": "unconstrained",
+      "actual": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "list on probe/fireemu-placeholder denied by Security Rules: no allow statement evaluated to true"
+      },
+      "reference": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "\nProperty owner is undefined on object. for 'list' @ L5"
+      },
+      "result": "match"
+    },
+    {
+      "program": "query-resource-proof",
+      "step": "wrongly-constrained",
+      "actual": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "list on probe/fireemu-placeholder denied by Security Rules: no allow statement evaluated to true"
+      },
+      "reference": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "\nfalse for 'list' @ L5"
+      },
+      "result": "match"
+    },
+    {
+      "program": "getafter-in-a-commit",
+      "step": "both-written",
+      "actual": {
+        "status": 200,
+        "code": "OK",
+        "shape": "commit(2 results)"
+      },
+      "reference": {
+        "status": 200,
+        "code": "OK",
+        "shape": "commit(2 results)"
+      },
+      "result": "match"
+    },
+    {
+      "program": "getafter-in-a-commit",
+      "step": "mirror-missing",
+      "actual": {
+        "status": 200,
+        "code": "OK",
+        "shape": "commit(1 results)"
+      },
+      "reference": {
+        "status": 200,
+        "code": "OK",
+        "shape": "commit(1 results)"
+      },
+      "result": "match"
+    },
+    {
+      "program": "create-update-delete-methods",
+      "step": "create-ok",
+      "actual": {
+        "status": 200,
+        "code": "OK",
+        "shape": "document"
+      },
+      "reference": {
+        "status": 200,
+        "code": "OK",
+        "shape": "document"
+      },
+      "result": "match"
+    },
+    {
+      "program": "create-update-delete-methods",
+      "step": "update-ok",
+      "actual": {
+        "status": 200,
+        "code": "OK",
+        "shape": "document"
+      },
+      "reference": {
+        "status": 200,
+        "code": "OK",
+        "shape": "document"
+      },
+      "result": "match"
+    },
+    {
+      "program": "create-update-delete-methods",
+      "step": "update-again-denied",
+      "actual": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "update on probe/m denied by Security Rules: no allow statement evaluated to true"
+      },
+      "reference": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "\nfalse for 'create' @ L5, evaluation error at L6:24 for 'update' @ L6, false for 'update' @ L6"
+      },
+      "result": "match"
+    },
+    {
+      "program": "create-update-delete-methods",
+      "step": "delete-denied",
+      "actual": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "delete on probe/m denied by Security Rules: no allow statement evaluated to true"
+      },
+      "reference": {
+        "status": 403,
+        "code": "PERMISSION_DENIED",
+        "message": "\nfalse for 'delete' @ L7"
+      },
+      "result": "match"
+    }
+  ],
+  "recordedAgainst": {
+    "firebaseTools": "15.28.2"
+  },
+  "ownedProcess": {
+    "pid": 36118,
+    "stopped": true,
+    "listenersClosed": true
+  }
+}

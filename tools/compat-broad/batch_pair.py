@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 
 from batch_contract import (
@@ -49,6 +50,7 @@ NORMALIZATION = {
         "refreshToken",
         "refresh_token",
         "accessToken",
+        "access_token",
         "passwordHash",
         "salt",
         "passwordSalt",
@@ -82,6 +84,135 @@ NORMALIZATION = {
         "error prose equality",
     ],
 }
+
+
+def canonical_operation(path, method, body, service, names, token_roles):
+    def transform(value):
+        if isinstance(value, str):
+            if value in token_roles:
+                return {"$credential": token_roles[value]}
+            for role, uid in names["authUids"].items():
+                if value == uid:
+                    return {"$account": role}
+            for role, email in names["authEmails"].items():
+                if value == email:
+                    return {"$email": role}
+            for role, parent in names["firestoreParents"].items():
+                if value == parent or value.startswith((parent + "/", "/v1/" + parent)):
+                    return value.replace(parent, "documents/" + role, 1)
+            return value
+        if isinstance(value, dict):
+            return {k: transform(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [transform(v) for v in value]
+        return value
+
+    route, _, query = path.partition("?")
+    pairs = [
+        [
+            k,
+            {"$apiKey": "approved-project"}
+            if service == "auth" and k == "key"
+            else transform(v),
+        ]
+        for k, v in urllib.parse.parse_qsl(query, keep_blank_values=True)
+    ]
+    return {
+        "path": transform(route),
+        "query": pairs,
+        "method": method,
+        "body": transform(body),
+        "service": service,
+    }
+
+
+def expected_operations(manifest):
+    # Closed first batch, not a general scenario language. These requests are checked
+    # independently against recorded requests from the shared Auth scenario.
+    names = namespace(manifest, "0" * 32, {})
+    result = {}
+    for program in compile_firestore(manifest, "0" * 32):
+        for step in program["steps"]:
+            result["firestore:" + program["id"] + "#" + step["id"]] = (
+                canonical_operation(
+                    step["path"],
+                    step["method"],
+                    step.get("body"),
+                    "firestore",
+                    names,
+                    {},
+                )
+            )
+    client = "identitytoolkit.googleapis.com/v1/accounts:"
+    admin = f"identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:"
+    credential = lambda role: {"$credential": role}
+    email = lambda role: {"$email": role}
+    uid = lambda role: {"$account": role}
+    requests = [
+        (
+            client + "signUp?key=fake",
+            {"email": email("a"), "password": "abc123", "returnSecureToken": True},
+        ),
+        (
+            client + "signUp?key=fake",
+            {"email": email("b"), "password": "abc123", "returnSecureToken": True},
+        ),
+        (
+            client + "signUp?key=fake",
+            {"email": email("weak"), "password": "12345", "returnSecureToken": True},
+        ),
+        (admin + "lookup", {"email": [email("weak")]}),
+        (
+            client + "update?key=fake",
+            {
+                "idToken": credential("self:a"),
+                "emailVerified": True,
+                "displayName": "must-not-apply",
+            },
+        ),
+        (
+            client + "update?key=fake",
+            {
+                "idToken": credential("self:b"),
+                "localId": uid("a"),
+                "displayName": "must-not-apply",
+            },
+        ),
+        (client + "update?key=fake", {"displayName": "must-not-apply"}),
+        (admin + "lookup", {"localId": [uid("a")]}),
+        (admin + "lookup", {"localId": [uid("b")]}),
+        (admin + "update", {"localId": uid("a"), "emailVerified": True}),
+        (client + "lookup?key=fake", {"idToken": credential("self:a")}),
+        (
+            client + "update?key=fake",
+            {
+                "idToken": credential("self:a"),
+                "password": "newpass7",
+                "returnSecureToken": True,
+            },
+        ),
+        (
+            client + "signInWithPassword?key=fake",
+            {"email": email("a"), "password": "abc123", "returnSecureToken": True},
+        ),
+        (
+            client + "signInWithPassword?key=fake",
+            {"email": email("a"), "password": "newpass7", "returnSecureToken": True},
+        ),
+        (
+            "securetoken.googleapis.com/v1/token?key=fake",
+            {"grant_type": "refresh_token", "refresh_token": credential("refresh:a")},
+        ),
+        (admin + "delete", {"localId": uid("a")}),
+        (admin + "lookup", {"localId": [uid("a")]}),
+        (admin + "delete", {"localId": uid("b")}),
+        (admin + "lookup", {"localId": [uid("b")]}),
+    ]
+    for (name, _), (path, body) in zip(AUTH_ROLES, requests, strict=True):
+        result["auth:broad/" + name] = canonical_operation(
+            path, "POST", body, "auth", names, {}
+        )
+    return result
 
 
 def row_table(manifest):
@@ -179,7 +310,7 @@ def normalize(value, names, *, service, path=()):
                 for role, uid in names["authUids"].items():
                     if value == uid:
                         return {"$account": role}
-            if key == "email":
+            if key in {"email", "federatedId"}:
                 for role, email in names["authEmails"].items():
                     if value == email:
                         return {"$email": role}
@@ -243,6 +374,7 @@ def compare_pair(production, local):
     errors = []
     table = row_table(manifest)
     expected = [row["id"] for row in table]
+    operations = expected_operations(manifest)
     by_side = {}
     for side, report, is_production in [
         ("production", production, True),
@@ -314,9 +446,8 @@ def compare_pair(production, local):
             if (
                 a.get("principal") != spec["principal"]
                 or b.get("principal") != spec["principal"]
-                or "operation" not in a
-                or "operation" not in b
-                or digest(a["operation"]) != digest(b["operation"])
+                or digest(a.get("operation")) != digest(operations[spec["id"]])
+                or digest(b.get("operation")) != digest(operations[spec["id"]])
             ):
                 errors.append(spec["id"] + ":operation/principal")
             oa, ob = a.get("observation"), b.get("observation")

@@ -359,33 +359,11 @@ class Adapter:
         }
 
     def normal_operation(self, path, method, body, service):
-        names = self.names()
+        from batch_pair import canonical_operation
 
-        def transform(value):
-            if isinstance(value, str):
-                if value in self.token_roles:
-                    return {"$credential": self.token_roles[value]}
-                for role, uid in names["authUids"].items():
-                    if value == uid:
-                        return {"$account": role}
-                for role, email in names["authEmails"].items():
-                    if value == email:
-                        return {"$email": role}
-                for role, parent in names["firestoreParents"].items():
-                    value = value.replace(parent, "documents/" + role)
-                return value
-            if isinstance(value, dict):
-                return {k: transform(v) for k, v in value.items()}
-            if isinstance(value, list):
-                return [transform(v) for v in value]
-            return value
-
-        return {
-            "path": transform(path.split("?", 1)[0]),
-            "method": method,
-            "body": transform(body),
-            "service": service,
-        }
+        return canonical_operation(
+            path, method, body, service, self.names(), self.token_roles
+        )
 
     def emit_auth(self, row, body):
         if self.last_auth_operation is None:

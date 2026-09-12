@@ -222,6 +222,12 @@ def test_privileged_http_refusal_stops_transport_and_preserves_unconfirmed_clean
         with pytest.raises(ValueError, match="credential rejected"):
             run.request("firestore", "/v1/" + name, method="GET", privileged=True)
         assert run.credential.failed
+        captured = json.loads(
+            (run.output / "responses.jsonl").read_text().splitlines()[0]
+        )
+        assert captured["response"]["httpStatus"] == status
+        assert captured["response"]["body"]["error"]["status"] == "PERMISSION_DENIED"
+        assert (run.output / "responses.jsonl").stat().st_mode & 0o777 == 0o600
         result = run.execute()
         assert not result["completed"]
         assert result["unrecovered"] == [{"kind": "document", "name": name}]

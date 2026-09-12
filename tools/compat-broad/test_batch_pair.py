@@ -19,6 +19,7 @@ def fixture_pair():
     from test_readiness import database
 
     manifest = candidate()
+    operations = p.expected_operations(manifest)
     reports = []
     for production, label in [(True, "prod"), (False, "local")]:
         nonce = ("a" if production else "b") * 32
@@ -47,7 +48,7 @@ def fixture_pair():
                 {
                     "id": item["id"],
                     "principal": item["principal"],
-                    "operation": {"fixtureInput": item["id"]},
+                    "operation": operations[item["id"]],
                     "observation": {
                         "httpStatus": 200,
                         "mediaType": "application/json",
@@ -198,3 +199,101 @@ def test_projection_settings_mutations_and_response_changes_remain_visible():
         mutate(changed["rows"][0])
         result = p.compare_pair(production, changed)
         assert result["recordingComplete"] and result["compatibility"] == "mismatch"
+
+
+def test_both_sides_cannot_substitute_a_different_or_missing_operation():
+    p = module()
+    for value in [None, {}, {"method": "DELETE"}]:
+        production, local = fixture_pair()
+        production["rows"][0]["operation"] = value
+        local["rows"][0]["operation"] = value
+        assert not p.compare_pair(production, local)["recordingComplete"]
+
+
+def test_request_query_preconditions_are_bound():
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from batch_adapter import Adapter
+    from batch_contract import candidate
+
+    with TemporaryDirectory() as tmp:
+        a = Adapter(
+            candidate(),
+            "a" * 32,
+            Path(tmp) / "output",
+            local_origins={
+                "auth": "http://127.0.0.1:11001",
+                "firestore": "http://127.0.0.1:11002",
+            },
+        )
+        operations = [
+            a.normal_operation("/v1/doc" + query, "PATCH", {}, "firestore")
+            for query in [
+                "?currentDocument.exists=false",
+                "?currentDocument.exists=true",
+                "",
+            ]
+        ]
+        assert len({module().digest(o) for o in operations}) == 3
+
+
+def test_owned_provider_email_and_access_token_normalization_is_bounded():
+    p = module()
+    production, local = fixture_pair()
+    normalized = []
+    for report in (production, local):
+        names = report["namespace"]
+        normalized.append(
+            p.normalize(
+                {
+                    "providerUserInfo": [
+                        {
+                            "providerId": "password",
+                            "federatedId": names["authEmails"]["a"],
+                        }
+                    ],
+                    "access_token": names["nonce"],
+                },
+                names,
+                service="auth",
+            )
+        )
+        unknown = p.normalize(
+            {"federatedId": "foreign@example.invalid", "access_token": False},
+            names,
+            service="auth",
+        )
+        assert unknown == {
+            "federatedId": "foreign@example.invalid",
+            "access_token": False,
+        }
+    assert normalized[0] == normalized[1]
+
+
+def test_finite_recording_and_check_outcomes():
+    import itertools
+
+    from batch_contract import recording_exit_code
+
+    p = module()
+    checked = 0
+    for completed, failure, recovered, matching, check in itertools.product(
+        [False, True], repeat=5
+    ):
+        recording = {
+            "completed": completed,
+            "failure": "fixture" if failure else None,
+            "unrecovered": [] if recovered else ["owned"],
+        }
+        is_complete = completed and not failure and recovered
+        assert (recording_exit_code(recording) == 0) is is_complete
+        result = {
+            "recordingComplete": is_complete,
+            "compatibility": "match" if matching else "mismatch",
+        }
+        assert (p.exit_code(result, check) == 0) is (
+            is_complete and (matching or not check)
+        )
+        checked += 1
+    assert checked == 32

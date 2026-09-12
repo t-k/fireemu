@@ -10,6 +10,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SELECTED_FS = (
+    "values/type-order",
+    "values/numeric-ties",
+    "queries/filters",
+    "queries/aggregations",
     "writes/preconditions-and-masks",
     "writes/batch-write",
     "queries/cursors",
@@ -104,6 +108,14 @@ def historical(service):
             ],
         },
     )
+
+
+def replay_selection():
+    """Keep unchanged historical input separate from the current same-ID program."""
+    current = [p for p in programs("firestore")[0] if p["id"] in SELECTED_FS]
+    old, _, _ = historical("firestore")
+    legacy = [p for p in old if p["id"] == "writes/transforms"]
+    return current, legacy
 
 
 def first_difference(left, right, path="$"):
@@ -283,7 +295,7 @@ FAMILY_SPECS = [
         "REST",
         "local-owner/production OAuth",
         "selected",
-        "Existing stateful writes programs; changed transform corpus is incomparable to old rows",
+        "Current transforms remain separate from exact historical transform replay",
     ),
     (
         "fs-queries",
@@ -292,7 +304,7 @@ FAMILY_SPECS = [
         "REST",
         "local-owner/production OAuth",
         "selected",
-        "Existing cursor program plus seeded refusal-state case; more type/filter programs next",
+        "Types, numeric ties, filters and cursors plus seeded refusal-state cases",
     ),
     (
         "fs-transactions",
@@ -309,8 +321,8 @@ FAMILY_SPECS = [
         "count/sum/average",
         "REST",
         "local-owner/production OAuth",
-        "not-selected",
-        "Next: reuse tools/compat-inventory aggregation corpus and pinned receipts",
+        "selected",
+        "Existing aggregation program with pinned production reference",
     ),
     (
         "fs-indexes",
@@ -388,7 +400,9 @@ def family_for(service, program_id):
             else "auth-authorization"
         )
     return (
-        "fs-transactions"
+        "fs-aggregations"
+        if program_id == "queries/aggregations"
+        else "fs-transactions"
         if program_id.startswith("transactions/")
         else "fs-queries"
         if program_id.startswith(("queries/", "values/"))

@@ -130,7 +130,7 @@
       "currentStatus": "not-run",
       "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
       "capabilitySource": "spec/compatibility/contract.json",
-      "reasonAndNextUnit": "Existing stateful writes programs; changed transform corpus is incomparable to old rows"
+      "reasonAndNextUnit": "Current transforms remain separate from exact historical transform replay"
     },
     {
       "id": "fs-queries",
@@ -143,7 +143,7 @@
       "currentStatus": "not-run",
       "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
       "capabilitySource": "spec/compatibility/contract.json",
-      "reasonAndNextUnit": "Existing cursor program plus seeded refusal-state case; more type/filter programs next"
+      "reasonAndNextUnit": "Types, numeric ties, filters and cursors plus seeded refusal-state cases"
     },
     {
       "id": "fs-transactions",
@@ -165,11 +165,11 @@
       "feature": "count/sum/average",
       "transport": "REST",
       "principal": "local-owner/production OAuth",
-      "availability": "not-selected",
+      "availability": "selected",
       "currentStatus": "not-run",
       "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
       "capabilitySource": "spec/compatibility/contract.json",
-      "reasonAndNextUnit": "Next: reuse tools/compat-inventory aggregation corpus and pinned receipts"
+      "reasonAndNextUnit": "Existing aggregation program with pinned production reference"
     },
     {
       "id": "fs-indexes",
@@ -1864,7 +1864,7 @@
           "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
         }
       ],
-      "selected": false,
+      "selected": true,
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
@@ -1937,7 +1937,7 @@
           "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
         }
       ],
-      "selected": false,
+      "selected": true,
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
@@ -2110,7 +2110,7 @@
           "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery"
         }
       ],
-      "selected": false,
+      "selected": true,
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
@@ -2297,7 +2297,7 @@
     },
     {
       "id": "firestore:queries/aggregations",
-      "family": "fs-queries",
+      "family": "fs-aggregations",
       "entry": "conformance/src/firestore-probe/session.mjs",
       "corpus": "conformance/src/firestore-probe/programs.mjs",
       "corpusDigest": "9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
@@ -2419,7 +2419,7 @@
           "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery"
         }
       ],
-      "selected": false,
+      "selected": true,
       "currentStatus": "not-run",
       "historicalReference": "conformance/firestore-production-matrix.json",
       "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",

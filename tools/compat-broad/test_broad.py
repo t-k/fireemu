@@ -357,3 +357,25 @@ for (const [path, method] of [["/redirect", "GET"], ["/emulator/reset", "DELETE"
             server.server_close()
         for thread in threads:
             thread.join(timeout=2)
+
+
+def test_expanded_selection_keeps_legacy_and_current_transforms_separate():
+    import broad_contract as contract
+
+    assert hasattr(contract, "replay_selection"), (
+        "explicit historical replay selection required"
+    )
+    current, legacy = contract.replay_selection()
+    by_id = {p["id"]: p for p in current}
+    assert {
+        "values/type-order",
+        "values/numeric-ties",
+        "queries/filters",
+        "queries/aggregations",
+    } <= by_id.keys()
+    old, _, _ = contract.historical("firestore")
+    original = next(p for p in old if p["id"] == "writes/transforms")
+    assert legacy == [original]
+    assert contract.digest(by_id[original["id"]]) != contract.digest(original)
+    assert len(original["steps"]) == 18
+    assert contract.family_for("firestore", "queries/aggregations") == "fs-aggregations"

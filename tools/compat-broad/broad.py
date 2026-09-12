@@ -20,7 +20,6 @@ from pathlib import Path
 from broad_cases import PROJECT, SEED, auth_cases, check_generated, generated_programs
 from broad_contract import (
     ROOT,
-    SELECTED_FS,
     catalog,
     compare_program,
     digest,
@@ -28,6 +27,7 @@ from broad_contract import (
     historical,
     local_origin,
     programs,
+    replay_selection,
 )
 
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
@@ -155,10 +155,10 @@ def child(output, nonce):
         },
     )
     definitions = {s: programs(s)[0] for s in ("auth", "firestore")}
+    current_fs, legacy = replay_selection()
     selected = {
         "auth": definitions["auth"],
-        "firestore": [p for p in definitions["firestore"] if p["id"] in SELECTED_FS]
-        + generated_programs(),
+        "firestore": current_fs + generated_programs(),
     }
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         jobs = {
@@ -195,6 +195,29 @@ def child(output, nonce):
                 }
                 for row in compared
             )
+    # Execute the exact historical sequence in a separate session/output identity.
+    legacy_output = output / "historical-transform"
+    legacy_output.mkdir()
+    legacy_actual = session("firestore", legacy, firestore, legacy_output)
+    _, legacy_matrix, _ = historical("firestore")
+    legacy_expected = {p["id"]: p for p in legacy_matrix["programs"]}
+    for program in legacy:
+        rows.extend(
+            {
+                **row,
+                "id": "firestore:historical/" + row["id"],
+                "family": "fs-writes",
+                "basis": "historical-production-reference",
+                "executionVariant": "exact-historical-operation-sequence",
+                "currentOperationDigest": digest(program),
+            }
+            for row in compare_program(
+                program,
+                program,
+                legacy_actual.get(program["id"], {}),
+                legacy_expected[program["id"]]["steps"],
+            )
+        )
     rows.extend(auth_cases(auth))
     report = {
         "schemaVersion": 1,
@@ -207,6 +230,8 @@ def child(output, nonce):
         "historicalSources": sources,
         "cases": rows,
         "selectedPrograms": selected,
+        "historicalReplayPrograms": legacy,
+        "historicalReplayObservations": legacy_actual,
         "productionExecuted": False,
         "formalCompatibilityClaim": False,
         "localObservations": actual,
@@ -221,7 +246,7 @@ def child(output, nonce):
 
 def stop_registered(output, parent_pid, nonce):
     """Attempt each owned child independently; aggregate failures without unsafe signals."""
-    registrations = sorted(output.glob("*-process.json"))
+    registrations = sorted(output.rglob("*-process.json"))
     instance_path = output / "instance.json"
     if instance_path.exists():
         registrations.append(instance_path)

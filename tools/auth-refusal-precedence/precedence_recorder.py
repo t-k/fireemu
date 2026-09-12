@@ -18,8 +18,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from precedence_contract import (
+    CLAIM_SENTINEL_KEY,
     CORPUS,
-    DISPLAY_SENTINEL_PREFIX,
+    DIAGNOSTIC_FINALIZES,
+    PHOTO_SENTINEL_PREFIX,
     TEST_CODE,
     TEST_PHONES,
     WRONG_CODE,
@@ -58,6 +60,16 @@ require(revocation.TEST_CODE == TEST_CODE)
 
 def patch(url, body, token):
     return revocation.patch(url, body, token)
+
+
+def begin(report, step):
+    """The step about to be requested: a transport failure leaves it with no status."""
+    if "failure" in report:
+        return
+    report["lastStep"] = step
+    report["lastStatus"] = None
+    report["lastError"] = None
+    report["lastErrorDetail"] = None
 
 
 def note(report, step, status, response):
@@ -106,7 +118,7 @@ def tampered(id_token):
     require(isinstance(id_token, str) and id_token.count(".") == 2)
     head, payload, signature = id_token.split(".")
     if signature == "":
-        return ".".join([head, payload, UNSIGNED_SIGNATURE])
+        return f"{head}.{payload}.{UNSIGNED_SIGNATURE}"
     require(len(signature) > TAMPER_INDEX + 1)
     replacement = "B" if signature[TAMPER_INDEX] != "B" else "C"
     return ".".join(
@@ -199,6 +211,7 @@ def observe(output, origin=None):
 
         def admin(action, body):
             require(action in {"lookup", "update", "delete"})
+            begin(report, f"admin:{action}")
             status, response = core.request(
                 f"{identity}/v1/projects/{PROJECT}/accounts:{action}",
                 body,
@@ -210,6 +223,7 @@ def observe(output, origin=None):
 
         def client(action, body):
             require(action in {"signUp", "signInWithPassword", "lookup", "update"})
+            begin(report, action)
             status, response = core.request(
                 f"{identity}/v1/accounts:{action}{query}", body
             )
@@ -218,6 +232,7 @@ def observe(output, origin=None):
 
         def mfa(action, body):
             require(action in {"mfaSignIn:start", "mfaSignIn:finalize"})
+            begin(report, action)
             status, response = core.request(
                 f"{identity}/v2/accounts/{action}{query}", body
             )
@@ -228,11 +243,6 @@ def observe(output, origin=None):
             records = users(*admin("lookup", {"localId": [account["uid"]]}))
             owned(records, account["email"], account["marker"], account["uid"])
             return records[0]
-
-        def derived_lookup(account, id_token):
-            records = users(*client("lookup", {"idToken": id_token}))
-            owned(records, account["email"], account["marker"], account["uid"])
-            return True
 
         def pending(account):
             status, response = client(
@@ -255,6 +265,7 @@ def observe(output, origin=None):
         def code_for(session):
             if production:
                 return TEST_CODE
+            begin(report, "emulator:verificationCodes")
             status, listing = core.request(
                 f"{origin}/emulator/v1/projects/{PROJECT}/verificationCodes"
             )
@@ -308,7 +319,26 @@ def observe(output, origin=None):
             report["cases"].append(result)
             return result
 
-        def token_checks(account, response):
+        def derived_lookup_ok(account, id_token):
+            """Whether the ID token resolves to the owned account; a refusal (for
+            example USER_DISABLED for a token issued to a disabled account) is False."""
+            status, seen = client("lookup", {"idToken": id_token})
+            if status != 200:
+                return False
+            try:
+                owned(
+                    users(status, seen),
+                    account["email"],
+                    account["marker"],
+                    account["uid"],
+                )
+            except ValueError:
+                return False
+            return True
+
+        def token_checks(account, response, diagnostic=False):
+            """Control rows require every check; diagnostic rows record each as a
+            boolean so an unexpected acceptance is kept as an observation."""
             checks = {
                 "noError": "error" not in response,
                 "idTokenPresent": isinstance(response.get("idToken"), str)
@@ -316,14 +346,23 @@ def observe(output, origin=None):
                 "refreshTokenPresent": isinstance(response.get("refreshToken"), str)
                 and bool(response["refreshToken"]),
             }
-            require(all(v is True for v in checks.values()))
-            payload = claims(response["idToken"])
+            payload = {}
+            if checks["idTokenPresent"]:
+                try:
+                    payload = claims(response["idToken"])
+                except ValueError:
+                    payload = {}
             checks["claimSubMatches"] = payload.get("sub") == account["uid"]
             checks["claimEmailMatches"] = payload.get("email") == account["email"]
             checks["secondFactorClaim"] = (
-                payload.get("firebase", {}).get("sign_in_second_factor") == "phone"
+                isinstance(payload.get("firebase"), dict)
+                and payload["firebase"].get("sign_in_second_factor") == "phone"
             )
-            checks["derivedLookup"] = derived_lookup(account, response["idToken"])
+            checks["derivedLookup"] = checks["idTokenPresent"] and derived_lookup_ok(
+                account, response["idToken"]
+            )
+            if not diagnostic:
+                require(all(v is True for v in checks.values()))
             return checks
 
         def fresh_finalize(name, account):
@@ -336,13 +375,16 @@ def observe(output, origin=None):
 
         def held_finalize(name, account, code):
             """A diagnostic finalize of the held credential and session: either outcome
-            is recorded; an accepted one is checked like any finalize."""
+            is recorded; an accepted one has its token checks recorded as booleans."""
+            require(name in DIAGNOSTIC_FINALIZES)
             status, signed = finalize(account["held"], account["session"], code)
             return row(
                 name,
                 status,
                 signed,
-                token_checks(account, signed) if status == 200 else None,
+                token_checks(account, signed, diagnostic=True)
+                if status == 200
+                else None,
             )
 
         def transition(disabled):
@@ -424,32 +466,43 @@ def observe(output, origin=None):
         fresh_finalize("baseline-b-fresh-finalize", b)
 
         # Invalid signature against an administrator-only field, before any disable, so
-        # that only these two conditions overlap. The sentinel display name shows whether
-        # a client-permitted field was applied alongside the privileged one. The readback
-        # is projected as a boolean whatever the outcome; nothing here aborts the run.
-        sentinel = DISPLAY_SENTINEL_PREFIX + secrets.token_hex(8)
+        # that only these two conditions overlap. The privileged field is a custom claim
+        # and the client field a photo URL: an unexpected acceptance cannot change A's
+        # verified email, factor enrollment, ownership marker or MFA eligibility. The
+        # readback is projected as booleans whatever the outcome; nothing here aborts.
+        claim = {CLAIM_SENTINEL_KEY: secrets.token_hex(8)}
+        photo = PHOTO_SENTINEL_PREFIX + secrets.token_hex(8) + ".png"
+        fields = ("customAttributes", "photoUrl", "displayName", "emailVerified")
+        before_update = {k: lookup(a).get(k) for k in fields}
+        require(before_update["customAttributes"] is None)
+        require(before_update["photoUrl"] is None)
         status, response = client(
             "update",
             {
                 "idToken": tampered(baseline["idToken"]),
-                "emailVerified": False,
-                "displayName": sentinel,
+                "customAttributes": json.dumps(claim),
+                "photoUrl": photo,
                 "returnSecureToken": False,
             },
         )
         record = lookup(a)
-        unverified = record.get("emailVerified") is not True
-        renamed = record.get("displayName") == sentinel
+        after_update = {k: record.get(k) for k in fields}
+        try:
+            stored_claims = json.loads(after_update["customAttributes"] or "{}")
+        except (TypeError, ValueError):
+            stored_claims = None
+        claim_applied = stored_claims == claim
+        photo_applied = after_update["photoUrl"] == photo
         checks = None
         if status == 200:
             checks = {
                 "noError": "error" not in response,
-                "emailVerifiedApplied": unverified,
-                "displayNameApplied": renamed,
+                "customAttributesApplied": claim_applied,
+                "photoUrlApplied": photo_applied,
             }
         row("invalid-token-admin-field-update", status, response, checks)
         report["invalidTokenStateUnchanged"] = (
-            not unverified and not renamed and record.get("displayName") == a["marker"]
+            after_update == before_update and not claim_applied and not photo_applied
         )
 
         # Both accounts hold a pending credential and an open SMS session before the

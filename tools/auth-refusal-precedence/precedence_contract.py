@@ -13,11 +13,13 @@ from maximum_contract import require
 # Two owned accounts with a phone factor. Baseline finalizes succeed. A tampered ID token
 # of A is sent to the client `accounts:update` together with an administrator-only field
 # before anything is disabled, so the only overlap is an invalid signature against a
-# privileged field. Both accounts then hold a pending credential and an SMS session,
-# both are disabled and read back, and the same session is finalized with a wrong code
-# for A and the correct code for B. After re-enablement the same pending credential and
-# session are finalized with the correct code, showing whether the earlier refusal
-# consumed them. Fresh finalizes close the run.
+# privileged field; the fields are chosen so that an unexpected acceptance cannot change
+# A's MFA eligibility (custom claims and a photo URL, never the verified email). Both
+# accounts then hold a pending credential and an SMS session, both are disabled and read
+# back, and the same session is finalized with a wrong code for A and the correct code
+# for B. After re-enablement the same pending credential and session are finalized with
+# the correct code, showing whether the earlier refusal consumed them. Fresh finalizes
+# close the run.
 CASES = (
     "baseline-a-fresh-finalize",
     "baseline-b-fresh-finalize",
@@ -34,6 +36,7 @@ DIAGNOSTIC = tuple(
     for name in CASES
     if name.startswith(("invalid-token-", "disabled-", "reenabled-"))
 )
+DIAGNOSTIC_FINALIZES = tuple(n for n in DIAGNOSTIC if n.endswith("-finalize"))
 CORPUS = {"slice": "auth-refusal-precedence", "revision": 1, "cases": list(CASES)}
 ERRORS = {
     "INVALID_MFA_PENDING_CREDENTIAL",
@@ -63,14 +66,16 @@ FINALIZE_CHECKS = {
     "derivedLookup",
 }
 # An accepted update with a tampered token would be the surprising outcome; the row then
-# records whether the privileged field and the sentinel were applied (either value). A
-# refusal from the harness's own readback is impossible: the readback is privileged.
-UPDATE_CHECKS = {"noError", "emailVerifiedApplied", "displayNameApplied"}
+# records whether the privileged field and the client field were applied (either value).
+UPDATE_CHECKS = {"noError", "customAttributesApplied", "photoUrlApplied"}
 TEST_PHONES = {"a": "+15555550100", "b": "+15555550101"}
 TEST_CODE = "135790"
 # Syntactically valid six digits that differ from the test code in every position.
 WRONG_CODE = "246801"
-DISPLAY_SENTINEL_PREFIX = "fireemu-precedence-sentinel-"
+# Sentinels for the tampered-token row: a custom claim (administrator-only) and a photo
+# URL (client-permitted). Neither affects MFA eligibility, ownership markers or cleanup.
+CLAIM_SENTINEL_KEY = "fireemuPrecedence"
+PHOTO_SENTINEL_PREFIX = "https://example.test/precedence-"
 
 
 def error_code(value):
@@ -115,8 +120,13 @@ def validate_row(row, name):
         require(row["checks"]["noError"] is True)
         require(all(type(row["checks"][k]) is bool for k in UPDATE_CHECKS))
         return
-    require(all(v is True for v in row["checks"].values()))
     require(set(row["checks"]) == FINALIZE_CHECKS)
+    if name in DIAGNOSTIC_FINALIZES:
+        # An unexpected acceptance is an observation: every token check is recorded as a
+        # boolean, including a derived lookup that the account state may refuse.
+        require(all(type(v) is bool for v in row["checks"].values()))
+        return
+    require(all(v is True for v in row["checks"].values()))
 
 
 def complete(report):
@@ -147,8 +157,8 @@ def complete(report):
             require(
                 report["invalidTokenStateUnchanged"]
                 == (
-                    not applied["emailVerifiedApplied"]
-                    and not applied["displayNameApplied"]
+                    not applied["customAttributesApplied"]
+                    and not applied["photoUrlApplied"]
                 )
             )
         require(

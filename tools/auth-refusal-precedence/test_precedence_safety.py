@@ -38,9 +38,10 @@ class World:
     """Password accounts with an administratively enrolled phone factor.
 
     `order` is the refusal precedence on finalize: "code-first" checks the code before
-    the account state, "disabled-first" the reverse. `consumes` makes a refusal consume
-    the held session. `tampered_accepted` applies a client update whose token does not
-    verify. `lose` names a request (action, ordinal) that times out."""
+    the account state, "disabled-first" the reverse, "ignores-disabled" issues tokens
+    to a disabled account and refuses only their lookup. `consumes` makes a refusal
+    consume the held session. `tampered_accepted` applies a client update whose token
+    does not verify. `lose` names a request (action, ordinal) that times out."""
 
     def __init__(
         self, order="code-first", consumes=False, tampered_accepted=False, lose=None
@@ -122,6 +123,10 @@ class World:
             user["disabled"] = body["disableUser"]
         if "emailVerified" in body:
             user["emailVerified"] = body["emailVerified"]
+        if "customAttributes" in body:
+            user["customAttributes"] = body["customAttributes"]
+        if "photoUrl" in body:
+            user["photoUrl"] = body["photoUrl"]
         if "mfa" in body:
             user["mfaInfo"] = [
                 {
@@ -150,6 +155,11 @@ class World:
                 return 400, {"error": {"message": "INVALID_LOGIN_CREDENTIALS"}}
             if user.get("disabled"):
                 return 400, {"error": {"message": "USER_DISABLED"}}
+            # Production requires a verified email for multi-factor users; the recorder
+            # must never leave A unverified before an MFA sign-in.
+            assert user.get("emailVerified") is True, (
+                "MFA sign-in of an unverified email"
+            )
             credential = "pending-secret-" + secrets.token_hex(4)
             self.pendings[credential] = user["localId"]
             return 200, {
@@ -161,6 +171,8 @@ class World:
             uid = self.tokens.get(body["idToken"])
             if uid is None:
                 return 400, {"error": {"message": "INVALID_ID_TOKEN"}}
+            if self.users[uid].get("disabled"):
+                return 400, {"error": {"message": "USER_DISABLED"}}
             return 200, {"users": [self.public(self.users[uid])]}
         if action == "update":
             uid = self.tokens.get(body["idToken"])
@@ -169,8 +181,8 @@ class World:
             if uid is None:
                 uid = next(iter(self.users))
             user = self.users[uid]
-            user["emailVerified"] = body["emailVerified"]
-            user["displayName"] = body["displayName"]
+            user["customAttributes"] = body["customAttributes"]
+            user["photoUrl"] = body["photoUrl"]
             return 200, {"localId": uid, "email": user["email"]}
         if action == "mfaSignIn:start":
             uid = self.pendings.get(body["mfaPendingCredential"])
@@ -197,6 +209,8 @@ class World:
         ]
         if self.order == "code-first":
             checks.reverse()
+        if self.order == "ignores-disabled":
+            checks = checks[1:]
         for kind, failed in checks:
             if failed:
                 if self.consumes:
@@ -222,7 +236,12 @@ def run(tmp_path, monkeypatch, world):
     text = json.dumps(saved)
     # Every credential the scripted world hands out carries "-secret-"; the password
     # prefix and the sentinel display name must not appear either.
-    for marker in ("-secret-", "Aa9!", contract.DISPLAY_SENTINEL_PREFIX):
+    for marker in (
+        "-secret-",
+        "Aa9!",
+        contract.PHOTO_SENTINEL_PREFIX,
+        'fireemuPrecedence":',
+    ):
         assert marker not in text, marker
     return report, saved
 
@@ -283,17 +302,47 @@ def test_a_consuming_refusal_is_recorded_not_fatal(tmp_path, monkeypatch):
 
 
 def test_an_accepted_tampered_update_is_an_observation(tmp_path, monkeypatch):
-    report, saved = run(tmp_path, monkeypatch, World(tampered_accepted=True))
+    world = World(tampered_accepted=True)
+    report, saved = run(tmp_path, monkeypatch, world)
+    # The unexpected acceptance changed only the sentinels: the later MFA rows still ran.
     assert report["status"] == "observed", report.get("lastStep")
     assert complete(saved)
     row = rows_of(saved)["invalid-token-admin-field-update"]
     assert row["outcome"] == "accepted"
     assert row["checks"] == {
         "noError": True,
-        "emailVerifiedApplied": True,
-        "displayNameApplied": True,
+        "customAttributesApplied": True,
+        "photoUrlApplied": True,
     }
     assert saved["invalidTokenStateUnchanged"] is False
+    assert rows_of(saved)["final-a-fresh-finalize"]["outcome"] == "accepted"
+
+
+def test_tokens_issued_to_a_disabled_account_are_recorded_as_booleans(
+    tmp_path, monkeypatch
+):
+    report, saved = run(tmp_path, monkeypatch, World(order="ignores-disabled"))
+    assert report["status"] == "observed", report.get("lastStep")
+    assert complete(saved)
+    rows = rows_of(saved)
+    accepted_disabled = rows["disabled-b-correct-code-finalize"]
+    assert accepted_disabled["outcome"] == "accepted"
+    assert accepted_disabled["checks"] == {
+        "noError": True,
+        "idTokenPresent": True,
+        "refreshTokenPresent": True,
+        "claimSubMatches": True,
+        "claimEmailMatches": True,
+        "secondFactorClaim": True,
+        "derivedLookup": False,
+    }
+    assert rows["disabled-a-wrong-code-finalize"]["observedError"] == "INVALID_CODE"
+    # The consumed pending credential is then refused after re-enablement, recorded too.
+    assert (
+        rows["reenabled-b-held-finalize"]["observedError"]
+        == "INVALID_MFA_PENDING_CREDENTIAL"
+    )
+    assert rows["final-b-fresh-finalize"]["outcome"] == "accepted"
 
 
 def test_a_lost_finalize_keeps_no_credentials_and_restores(tmp_path, monkeypatch):
@@ -301,7 +350,9 @@ def test_a_lost_finalize_keeps_no_credentials_and_restores(tmp_path, monkeypatch
     world = World(lose=("mfaSignIn:finalize", 3))
     report, saved = run(tmp_path, monkeypatch, world)
     assert report["status"] == "incomplete" and saved["failure"] == "TimeoutError"
-    assert saved["lastStep"] == "admin:lookup"
+    # The request that never answered is named, with no status or error class.
+    assert saved["lastStep"] == "mfaSignIn:finalize" and saved["lastStatus"] is None
+    assert saved["lastError"] is None
     assert [r["id"] for r in saved["cases"]] == list(CASES[:3])
     assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
     assert world.users == {}
@@ -314,9 +365,9 @@ def test_a_lost_update_keeps_the_failing_step_through_cleanup(tmp_path, monkeypa
     world = World(lose=("update", 1))
     report, saved = run(tmp_path, monkeypatch, world)
     assert report["status"] == "incomplete" and saved["failure"] == "TimeoutError"
-    # The derived lookup of baseline B was the last completed request; the cleanup
-    # lookups and deletes after the failure do not overwrite it.
-    assert saved["lastStep"] == "lookup" and saved["lastStatus"] == 200
+    # The lost client update is named; the cleanup lookups and deletes after the
+    # failure do not overwrite it.
+    assert saved["lastStep"] == "update" and saved["lastStatus"] is None
     assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
     assert world.patches[-1]["mfa"] == {"state": "DISABLED"}
 
@@ -492,16 +543,34 @@ def test_complete_rejects_missing_or_inconsistent_projections():
     report = complete_report()
     report["cases"][2] = accepted(
         "invalid-token-admin-field-update",
-        {"noError": True, "emailVerifiedApplied": True, "displayNameApplied": False},
+        {"noError": True, "customAttributesApplied": True, "photoUrlApplied": False},
     )
     assert complete(report) is False
     report["invalidTokenStateUnchanged"] = False
     assert complete(report)
-    report["cases"][2]["checks"]["emailVerifiedApplied"] = False
-    report["cases"][2]["checks"]["displayNameApplied"] = False
+    report["cases"][2]["checks"]["customAttributesApplied"] = False
+    report["cases"][2]["checks"]["photoUrlApplied"] = False
     assert complete(report) is False
     report["invalidTokenStateUnchanged"] = True
     assert complete(report)
+
+
+def test_diagnostic_finalizes_may_carry_false_checks_but_controls_may_not():
+    report = complete_report()
+    partial = {**dict.fromkeys(FINALIZE_CHECKS, True), "derivedLookup": False}
+    report["cases"][4] = accepted("disabled-b-correct-code-finalize", partial)
+    assert complete(report)
+    report["cases"][0] = accepted("baseline-a-fresh-finalize", partial)
+    assert complete(report) is False
+    # A diagnostic finalize still needs the full check set with boolean values.
+    report = complete_report()
+    report["cases"][4] = accepted("disabled-b-correct-code-finalize", {"noError": True})
+    assert complete(report) is False
+    report["cases"][4] = accepted(
+        "disabled-b-correct-code-finalize",
+        {**dict.fromkeys(FINALIZE_CHECKS, True), "derivedLookup": "no"},
+    )
+    assert complete(report) is False
 
 
 def test_complete_rejects_a_failed_or_unrestored_run():

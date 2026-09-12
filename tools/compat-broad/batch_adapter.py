@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -150,6 +151,8 @@ class Adapter:
         self.last_request = time.monotonic()
 
     def access(self):
+        if self.credential.failed:
+            raise ValueError("administrator credential rejected; failure latched")
         if self.local:
             return "owner"
         c = self.credential
@@ -237,6 +240,9 @@ class Adapter:
             headers,
             local=bool(self.local),
         )
+        if privileged and status in {401, 403}:
+            self.credential.fail()
+            raise ValueError("administrator credential rejected")
         if status >= 500 or status == 429 or "nonJson" in result:
             raise ValueError("unexpected response; stop observations")
         return status, result
@@ -573,5 +579,11 @@ def main():
     )
 
 
+def interrupted(_signum, _frame):
+    raise InterruptedError("stop requested; unwind owned cleanup")
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGHUP, interrupted)
     main()

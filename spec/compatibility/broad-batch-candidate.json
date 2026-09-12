@@ -656,7 +656,7 @@
       "documentWrites": 1600,
       "documentDeletes": 200,
       "indexReadBatches": 2,
-      "storageGiBMonths": 0.0625,
+      "storageGiBMonths": 0.0626220703125,
       "egressGiB": 0.146484375,
       "authMau": 3
     },
@@ -669,7 +669,7 @@
       "egressGiB": 1,
       "authMau": 0.01
     },
-    "upperEstimateUsd": 0.305004375,
+    "upperEstimateUsd": 0.3051264453125,
     "scanDocumentsPerQuery": 1,
     "queries": 2,
     "collectionGroupQueries": 0,

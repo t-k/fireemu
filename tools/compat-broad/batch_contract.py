@@ -33,7 +33,7 @@ def candidate():
         "documentWrites": 1600,
         "documentDeletes": 200,
         "indexReadBatches": 2,
-        "storageGiBMonths": 8 * 8 / 1024,
+        "storageGiBMonths": 8 * (8 * 1024 * 1024 + 16384) / 2**30,
         "egressGiB": 2400 * 65536 / 2**30,
         "authMau": 3,
     }
@@ -64,7 +64,7 @@ def candidate():
             "maxPayloadBytes": 16384,
             "maxResponseBytes": 65536,
         },
-        "limits": LIMITS,
+        "limits": dict(LIMITS),
         "wallSeconds": 1200,
         "recoverySeconds": 300,
         "cost": {

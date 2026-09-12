@@ -485,6 +485,24 @@ def catalog():
                     "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
                 }
             )
+    old, _, reference = historical("firestore")
+    legacy = next(p for p in old if p["id"] == "writes/transforms")
+    template = next(c for c in cases if c["id"] == "firestore:writes/transforms")
+    cases.append(
+        {
+            **template,
+            "id": "firestore:historical/writes/transforms",
+            "programDigest": digest(legacy),
+            "corpusDigest": reference["corpusDigest"],
+            "corpusCommit": reference["executionCommit"],
+            "executionVariant": "exact-historical-operation-sequence",
+            "selected": True,
+            "steps": [
+                {"id": step["id"], "method": step["method"], "path": step["path"]}
+                for step in legacy["steps"]
+            ],
+        }
+    )
     family_map = {family["id"]: family for family in families}
     for case in cases:
         family_key = case["family"]
@@ -538,6 +556,36 @@ def catalog():
                 ],
                 "historicalReference": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
                 "reason": "Reuses local regression obligations; runtime UID/token relationships are booleans, not historical token replay",
+            }
+        )
+    for entry, family, feature in [
+        (
+            "client.mjs",
+            "fs-rules",
+            "Real SDK-issued identities: self, other owner, anonymous and sign-out",
+        ),
+        ("client.mjs", "fs-sdk", "Node client SDK Auth and Firestore gRPC operations"),
+        (
+            "listener-replacement.mjs",
+            "fs-listen",
+            "Node SDK listener replacement; not browser WebChannel proof",
+        ),
+    ]:
+        cases.append(
+            {
+                "id": family + ":" + entry,
+                "family": family,
+                "entry": "tools/sdk-smoke/" + entry,
+                "selected": True,
+                "currentStatus": "not-run",
+                "basis": "local-sdk-invariant",
+                "feature": feature,
+                "productionReference": None,
+                "reexecute": "See docs/compatibility/broad-expansion.md for owned artifact commands and configuration",
+                "dimensions": ["normal", "single-refusal", "state", "sequence"]
+                if entry == "client.mjs"
+                else ["sequence"],
+                "coverageDebt": "No production comparison; listener callback history is a smoke invariant, not a universal stream ordering oracle",
             }
         )
     return {

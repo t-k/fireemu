@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import uuid
@@ -152,7 +153,13 @@ def run(output):
     )
 
 
+def interrupted(_signum, _frame):
+    raise InterruptedError("stop requested; unwind owned cleanup")
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGHUP, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--child", type=Path)

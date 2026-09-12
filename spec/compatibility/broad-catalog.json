@@ -3778,6 +3778,121 @@
       "basis": "historical-reference; not current execution"
     },
     {
+      "id": "firestore:historical/writes/transforms",
+      "family": "fs-writes",
+      "entry": "conformance/src/firestore-probe/session.mjs",
+      "corpus": "conformance/src/firestore-probe/programs.mjs",
+      "corpusDigest": "d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b",
+      "programDigest": "b6cf42bea907f63553c645a5a03b0aa3d60c346174c9f228c3056ee8d117a6c5",
+      "steps": [
+        {
+          "id": "server-timestamp-and-increments",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-increments",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "maximum-and-minimum",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-max-min",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "array-transforms",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-after-array-transforms",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "transform-only-write-creates",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-transform-created",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/created"
+        },
+        {
+          "id": "transform-write-with-exists-precondition",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "increment-with-non-numeric-operand",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "server-timestamp-on-a-delete",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "set-and-transform-same-field",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-set-and-transform",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+        },
+        {
+          "id": "integer-increment-saturates",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-saturated",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/sat"
+        },
+        {
+          "id": "increment-on-nan",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "two-transforms-on-one-field-in-one-write",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit"
+        },
+        {
+          "id": "read-dup",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/dup"
+        }
+      ],
+      "selected": true,
+      "currentStatus": "not-run",
+      "historicalReference": "conformance/firestore-production-matrix.json",
+      "reexecute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --run --output /absolute/private/new-run",
+      "dimensions": "See explicit ordered operations; per-family coverage ledger records covered and missing dimensions",
+      "corpusCommit": "2526c61eda5fc53ac91250307786127ae3c601be",
+      "executionVariant": "exact-historical-operation-sequence",
+      "service": "Firestore",
+      "edition": "Standard",
+      "transport": "REST",
+      "principal": "local-owner/production OAuth",
+      "comparator": "tools/compat-broad/broad_contract.py:compare_program",
+      "currentArtifactReplay": "available",
+      "currentConfiguration": "strict; Standard Native; historical pinned index file",
+      "basis": "historical-reference; not current execution"
+    },
+    {
       "id": "firestore:broad/refusal-preserves-state",
       "family": "fs-writes/fs-queries",
       "entry": "tools/compat-broad/broad_cases.py:generated_programs",
@@ -3848,6 +3963,57 @@
       ],
       "historicalReference": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
       "reason": "Reuses local regression obligations; runtime UID/token relationships are booleans, not historical token replay"
+    },
+    {
+      "id": "fs-rules:client.mjs",
+      "family": "fs-rules",
+      "entry": "tools/sdk-smoke/client.mjs",
+      "selected": true,
+      "currentStatus": "not-run",
+      "basis": "local-sdk-invariant",
+      "feature": "Real SDK-issued identities: self, other owner, anonymous and sign-out",
+      "productionReference": null,
+      "reexecute": "See docs/compatibility/broad-expansion.md for owned artifact commands and configuration",
+      "dimensions": [
+        "normal",
+        "single-refusal",
+        "state",
+        "sequence"
+      ],
+      "coverageDebt": "No production comparison; listener callback history is a smoke invariant, not a universal stream ordering oracle"
+    },
+    {
+      "id": "fs-sdk:client.mjs",
+      "family": "fs-sdk",
+      "entry": "tools/sdk-smoke/client.mjs",
+      "selected": true,
+      "currentStatus": "not-run",
+      "basis": "local-sdk-invariant",
+      "feature": "Node client SDK Auth and Firestore gRPC operations",
+      "productionReference": null,
+      "reexecute": "See docs/compatibility/broad-expansion.md for owned artifact commands and configuration",
+      "dimensions": [
+        "normal",
+        "single-refusal",
+        "state",
+        "sequence"
+      ],
+      "coverageDebt": "No production comparison; listener callback history is a smoke invariant, not a universal stream ordering oracle"
+    },
+    {
+      "id": "fs-listen:listener-replacement.mjs",
+      "family": "fs-listen",
+      "entry": "tools/sdk-smoke/listener-replacement.mjs",
+      "selected": true,
+      "currentStatus": "not-run",
+      "basis": "local-sdk-invariant",
+      "feature": "Node SDK listener replacement; not browser WebChannel proof",
+      "productionReference": null,
+      "reexecute": "See docs/compatibility/broad-expansion.md for owned artifact commands and configuration",
+      "dimensions": [
+        "sequence"
+      ],
+      "coverageDebt": "No production comparison; listener callback history is a smoke invariant, not a universal stream ordering oracle"
     }
   ],
   "currentExecutionInherited": false

@@ -15,7 +15,7 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
 use fireemu_core_firestore::value::Value as FsValue;
 use fireemu_core_functions::manifest::{
-    BlockingAuthEvent, TaskRateLimits, TaskRetryConfig, Trigger,
+    BlockingAuthEvent, TaskRateLimits, TaskRetryConfig, Trigger, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration, ObjectEvent};
 use fireemu_core_session::clock::VirtualClock;
@@ -26,6 +26,7 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::json;
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+const RUNNER_HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::test]
 async fn runner_log_frames_preserve_function_and_user_metadata() {
@@ -34,7 +35,7 @@ async fn runner_log_frames_preserve_function_and_user_metadata() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(60),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
     })
     .await
     .unwrap();
@@ -139,7 +140,7 @@ async fn start_with_runtime_options(
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(60),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -167,6 +168,42 @@ async fn start_with_runtime_options(
     );
     tokio::spawn(runtime.clone().dispatch_loop());
     (runtime, clock)
+}
+
+async fn wait_for_runner(runtime: &FunctionsRuntime) {
+    let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT;
+    while !runtime.runner_alive() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the runner did not restart within its hello timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn wait_for_ok_since(
+    runtime: &FunctionsRuntime,
+    cursor: fireemu_adapter_functions::runtime::HistoryCursor,
+) {
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(u64::from(DEFAULT_TIMEOUT_SECONDS) + 1);
+    loop {
+        let delta = runtime.history_since(Some(cursor));
+        assert!(!delta.resync, "the current-epoch cursor remains valid");
+        if delta
+            .records
+            .iter()
+            .any(|r| r.record.function == "ok" && r.record.outcome == "ok")
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the current-epoch completion was not recorded: {:?}",
+            delta.records
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 async fn start_task_runtime(
@@ -1203,23 +1240,14 @@ async fn reset_discards_in_flight_work() {
     runtime.reset();
     assert!(runtime.is_idle());
     assert_eq!(runtime.status()["epoch"], 1);
-    for _ in 0..100 {
-        if runtime.runner_alive() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(runtime.runner_alive(), "the runner was restarted");
+    wait_for_runner(&runtime).await;
+    let cursor = runtime.history_since(None).cursor;
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/c", 1).path,
         before: None,
         after: Some(doc("items/c", 1).into()),
     }]));
-    let _ = runtime.await_idle(Duration::from_secs(5)).await;
-    assert!(runtime
-        .history()
-        .iter()
-        .any(|r| r.function == "ok" && r.outcome == "ok" && r.event_id > 1));
+    wait_for_ok_since(&runtime, cursor).await;
     runtime.runner().shutdown().await;
 }
 
@@ -2245,28 +2273,14 @@ async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
     );
 
     // FN-EPOCH-03: a current-epoch completion is still recorded.
-    for _ in 0..200 {
-        if runtime.runner_alive() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_runner(&runtime).await;
+    let cursor = runtime.history_since(None).cursor;
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/z", 1).path,
         before: None,
         after: Some(doc("items/z", 1).into()),
     }]));
-    let _ = runtime.await_idle(Duration::from_secs(5)).await;
-    assert!(
-        runtime
-            .history()
-            .iter()
-            .filter(|r| r.function == "ok" && r.outcome == "ok")
-            .count()
-            >= 2,
-        "{:?}",
-        runtime.history()
-    );
+    wait_for_ok_since(&runtime, cursor).await;
     runtime.runner().shutdown().await;
 }
 

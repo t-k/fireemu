@@ -151,6 +151,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
+      # Cargo authority resolves the locked Linux projection with `--offline`. A host build does
+      # not populate another target's registry sources, so fetch the whole locked graph first.
+      - name: fetch locked dependency graph for offline authority checks
+        if: runner.os == 'macOS'
+        run: cargo fetch --locked
       # The process-census integration suites shell out to `ps` and `kill` to prove that a
       # daemon leaves nothing running; they are POSIX-only by construction, so Windows runs the
       # in-crate unit tests. Making them portable is tracked in the distribution issue.

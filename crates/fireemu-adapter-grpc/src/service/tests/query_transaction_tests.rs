@@ -209,6 +209,109 @@ async fn run_query_multipage_read_write_commits_after_complete_delivery() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_pipeline_snapshot_remains_stable_across_page_boundary() {
+    let backend = test_backend();
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let mut service = GatewayService::local(gateway, backend.clone());
+    let query = seeded_query(&backend, 65, false);
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let ready_tx = Mutex::new(Some(ready_tx));
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    service.first_query_page_ready = Some(Arc::new(move || {
+        ready_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+        release_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+    }));
+    let request = pb::ExecutePipelineRequest {
+        database: "projects/demo-app/databases/(default)".to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline {
+                        stages: vec![pb::pipeline::Stage {
+                            name: "collection".to_owned(),
+                            args: vec![pb::Value {
+                                value_type: Some(pb::value::ValueType::StringValue(
+                                    "/items".to_owned(),
+                                )),
+                            }],
+                            ..Default::default()
+                        }],
+                    }),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    let task = tokio::spawn(async move {
+        Firestore::execute_pipeline(&service, Request::new(request))
+            .await
+            .unwrap()
+            .into_inner()
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    backend
+        .commit(&pb::CommitRequest {
+            database: database_name_from_query_parent(&query.parent),
+            writes: vec![
+                pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: format!("{}/items/000", query.parent),
+                        fields: [(
+                            "rank".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::IntegerValue(-1)),
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                pb::Write {
+                    operation: Some(pb::write::Operation::Delete(format!(
+                        "{}/items/001",
+                        query.parent
+                    ))),
+                    ..Default::default()
+                },
+                pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: format!("{}/items/999", query.parent),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+    release_tx.send(()).unwrap();
+    let mut stream = task.await.unwrap();
+    let mut names = Vec::new();
+    while let Some(response) = stream.next().await {
+        let response = response.unwrap();
+        names.extend(response.results.into_iter().map(|document| document.fields));
+    }
+    assert_eq!(names.len(), 65);
+    assert!(names.iter().any(|fields| fields.get("rank")
+        == Some(&pb::Value {
+            value_type: Some(pb::value::ValueType::IntegerValue(64)),
+        })));
+    assert!(!names.iter().any(|fields| fields.is_empty()));
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn failed_commit_keeps_transaction_usable_and_locked_until_rollback() {

@@ -4743,6 +4743,136 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
     assert_eq!(response.results.len(), 1);
     assert_eq!(response.results[0].fields.len(), 1);
     assert_eq!(response.results[0].fields["label"], s("one"));
+    assert!(response.results[0].name.is_empty());
+    assert!(response.results[0].create_time.is_none());
+    assert!(response.results[0].update_time.is_none());
+    let run = |collection: &str, limit: i64| pb::ExecutePipelineRequest {
+        database: DB.to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline {
+                        stages: vec![
+                            pb::pipeline::Stage {
+                                name: "collection".to_owned(),
+                                args: vec![s(collection)],
+                                options: HashMap::new(),
+                            },
+                            pb::pipeline::Stage {
+                                name: "limit".to_owned(),
+                                args: vec![i(limit)],
+                                options: HashMap::new(),
+                            },
+                        ],
+                    }),
+                    options: HashMap::new(),
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    let zero = client
+        .execute_pipeline(run("items", 0))
+        .await
+        .unwrap()
+        .into_inner()
+        .next()
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(zero.results.is_empty());
+    let empty = client
+        .execute_pipeline(run("empty", 10))
+        .await
+        .unwrap()
+        .into_inner()
+        .next()
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(empty.results.is_empty());
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write(
+                "rooms/r1/messages/m1",
+                &[("name", s("nested"))],
+            )],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let nested = client
+        .execute_pipeline(run("rooms/r1/messages", 10))
+        .await
+        .unwrap()
+        .into_inner()
+        .next()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(nested.results.len(), 1);
+    assert_eq!(nested.results[0].fields["name"], s("nested"));
+    let mut transaction = run("items", 1);
+    transaction.consistency_selector =
+        Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1]));
+    assert_eq!(
+        client
+            .execute_pipeline(transaction)
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Unimplemented
+    );
+    let mut duplicate = run("items", 1);
+    if let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        duplicate.pipeline_type.as_mut()
+    {
+        structured
+            .pipeline
+            .as_mut()
+            .unwrap()
+            .stages
+            .push(pb::pipeline::Stage {
+                name: "limit".to_owned(),
+                args: vec![i(2)],
+                options: HashMap::new(),
+            });
+    }
+    assert_eq!(
+        client.execute_pipeline(duplicate).await.unwrap_err().code(),
+        tonic::Code::Unimplemented
+    );
+    let mut dotted = run("items", 1);
+    if let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        dotted.pipeline_type.as_mut()
+    {
+        structured.pipeline.as_mut().unwrap().stages.insert(
+            1,
+            pb::pipeline::Stage {
+                name: "select".to_owned(),
+                args: vec![pb::Value {
+                    value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                        fields: [(
+                            "label".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::FieldReferenceValue(
+                                    "profile.name".to_owned(),
+                                )),
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                    })),
+                }],
+                options: HashMap::new(),
+            },
+        );
+    }
+    assert_eq!(
+        client.execute_pipeline(dotted).await.unwrap_err().code(),
+        tonic::Code::Unimplemented
+    );
     handle.abort();
 }
 

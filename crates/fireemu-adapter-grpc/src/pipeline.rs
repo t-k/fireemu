@@ -142,6 +142,11 @@ pub fn execute_supported(
     parent: &Parent,
     backend: &LocalBackend,
 ) -> Result<Vec<pb::Document>, Status> {
+    if req.consistency_selector.is_some() || req.auto_commit_transaction {
+        return Err(Status::unimplemented(
+            "pipeline consistency and auto-commit are unsupported locally",
+        ));
+    }
     let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
         &req.pipeline_type
     else {
@@ -182,6 +187,8 @@ pub fn execute_supported(
     let mut query = Query::new(QueryScope::collection(parent_doc, collection_id));
     let mut projection: Option<Vec<(String, FieldPath)>> = None;
     let mut last_rank = 0u8;
+    let mut seen_select = false;
+    let mut seen_limit = false;
     for stage in pipeline.stages.iter().skip(1) {
         let rank = match stage.name.as_str() {
             "select" => 1,
@@ -196,6 +203,12 @@ pub fn execute_supported(
         last_rank = rank;
         match stage.name.as_str() {
             "limit" => {
+                if seen_limit {
+                    return Err(Status::unimplemented(
+                        "duplicate limit stage is unsupported locally",
+                    ));
+                }
+                seen_limit = true;
                 let Some(pb::value::ValueType::IntegerValue(n)) =
                     stage.args.first().and_then(|v| v.value_type.as_ref())
                 else {
@@ -207,6 +220,12 @@ pub fn execute_supported(
                 );
             }
             "select" => {
+                if seen_select {
+                    return Err(Status::unimplemented(
+                        "duplicate select stage is unsupported locally",
+                    ));
+                }
+                seen_select = true;
                 let Some(pb::value::ValueType::MapValue(map)) =
                     stage.args.first().and_then(|v| v.value_type.as_ref())
                 else {
@@ -226,6 +245,11 @@ pub fn execute_supported(
                         FieldPath::parse(field)
                             .map_err(|e| Status::invalid_argument(e.to_string()))?,
                     ));
+                    if aliases.last().unwrap().1.segments().len() != 1 {
+                        return Err(Status::unimplemented(
+                            "nested select field references are unsupported locally",
+                        ));
+                    }
                 }
                 if aliases.is_empty() {
                     return Err(Status::invalid_argument(
@@ -260,7 +284,11 @@ pub fn execute_supported(
                 }
                 doc.fields = fields;
             }
-            encode_document(&doc)
+            let mut encoded = encode_document(&doc);
+            encoded.name.clear();
+            encoded.create_time = None;
+            encoded.update_time = None;
+            encoded
         })
         .collect())
 }

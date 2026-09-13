@@ -325,7 +325,7 @@
       "id": "FS-PIPELINE",
       "title": "Pipeline validation and finite local read execution",
       "goal": "FS-ENT-NATIVE",
-      "appliesTo": "Enterprise / Native; owner-authorized local latest reads with collection, optional single where(equal(top-level field, scalar literal)), optional select and limit",
+      "appliesTo": "Enterprise / Native; owner-authorized local latest reads with collection, optional single where(equal(top-level field, scalar literal)), optional select, optional non-negative int32 offset and optional limit",
       "sources": [
         "FS-EDITIONS",
         "FS-PROTO"
@@ -343,7 +343,7 @@
         "FS-CLAIM-PIPELINE"
       ],
       "limitations": [
-        "Only collection / optional single where(equal(top-level field reference, scalar literal)) / optional top-level field-reference select / optional limit execute locally in that order. Null and NaN use unary predicates; missing fields do not match. All other functions/stages, reversed operands, nested/metadata fields, array/map/expression literals and consistency selectors remain unsupported. Production execution and exact production error parity remain unobserved; parser acceptance is not execution support."
+        "Only collection / optional single where(equal(top-level field reference, scalar literal)) / optional top-level field-reference select / optional non-negative int32 offset / optional limit execute locally in that order. Offset skips filtered rows once across the existing paged stream. Null and NaN use unary predicates; missing fields do not match. All other functions/stages, reversed operands, nested/metadata fields, array/map/expression literals and consistency selectors remain unsupported. Production execution, ordering and exact production error parity remain unobserved; parser acceptance is not execution support."
       ]
     },
     {

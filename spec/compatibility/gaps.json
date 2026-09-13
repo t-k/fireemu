@@ -58,7 +58,7 @@
       "id": "GAP-FS-001",
       "feature": "FS-PIPELINE",
       "kind": "unimplemented",
-      "scope": "Enterprise / Native general pipeline execution remains unsupported beyond the owner-authorized local latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional select / optional limit subset. The finite subset has tonic tests; production execution and exact production error parity remain unobserved.",
+      "scope": "Enterprise / Native general pipeline execution remains unsupported beyond the owner-authorized local latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional select / optional non-negative int32 offset / optional limit subset. The finite subset has tonic tests; production execution, ordering and exact production error parity remain unobserved.",
       "implementationStatus": "unimplemented",
       "localTestStatus": "passing",
       "productionObservationStatus": "none",

@@ -453,9 +453,10 @@
       "input stage placement, arity, argument shape (paths, integers, boolean expressions, ascending / descending orderings, alias maps, vectors and distance measures, modes) and per-stage option checks (find_nearest limit / distance_field, sample mode, unnest index_field)",
       "write stages (update, delete) refused as FS-PIPE-WRITE-0",
       "unknown stages refused (FS_PIPE_UNSUPPORTED_STAGE), never skipped",
-      "local latest-read collection input (root or nested), optional single where(equal(top-level field reference, scalar literal)), optional top-level field-reference select aliases, then optional non-negative limit; no repeated or reordered stages",
-      "exact equal accepts boolean, integer/double numeric equality, timestamp, string, bytes, reference, geo point, infinity, null and NaN; missing fields do not match; filtering precedes projection and limit",
-      "malformed exact equal arity/options, field paths and missing values return INVALID_ARGUMENT FS_PIPE_INVALID; well-formed unsupported operand arrangements return UNIMPLEMENTED FS_PIPE_UNSUPPORTED_STAGE, with canonical pipeline context"
+      "local latest-read collection input (root or nested), optional single where(equal(top-level field reference, scalar literal)), optional top-level field-reference select aliases, optional non-negative int32 offset, then optional non-negative limit; no repeated or reordered stages",
+      "exact equal accepts boolean, integer/double numeric equality, timestamp, string, bytes, reference, geo point, infinity, null and NaN; missing fields do not match; filtering precedes projection, offset and limit",
+      "offset skips matching rows once before the existing limit and paged stream; zero, past-end and empty results preserve the existing finite response shape",
+      "malformed exact equal or offset arity/options, field paths and missing values return INVALID_ARGUMENT FS_PIPE_INVALID; well-formed unsupported operand arrangements and offsets above int32 return UNIMPLEMENTED FS_PIPE_UNSUPPORTED_STAGE, with canonical pipeline context"
     ],
     "notes": [
       "Standard edition answers FAILED_PRECONDITION FS_PIPE_EDITION",
@@ -465,7 +466,7 @@
     "precision": "finite-local-read-subset",
     "status": "partial",
     "unimplemented": [
-      "execution outside collection / optional single where(equal(top-level field, scalar literal)) / optional select / optional limit latest reads; transaction and read_time execution, nested field extraction and metadata expressions",
+      "execution outside collection / optional single where(equal(top-level field, scalar literal)) / optional select / optional offset / optional limit latest reads; transaction and read_time execution, nested field extraction and metadata expressions",
       "all functions other than exact equal in the finite where shape (including eq), general expressions, reversed operands, array/map literals and all other execution stages",
       "text search functions against the text index catalog",
       "proxy / record-only modes"

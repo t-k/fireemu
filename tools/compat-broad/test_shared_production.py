@@ -408,10 +408,20 @@ def _g0_local_runtime_fixture(production, local):
 
 
 def _g0_production_source():
-    source = Path(os.environ.get("FIREEMU_G0_PRODUCTION_RESULT", ""))
-    if not source.exists():
+    configured = os.environ.get("FIREEMU_G0_PRODUCTION_RESULT")
+    source = Path(configured) if configured else None
+    if source is None or not source.is_file():
         pytest.skip("private G0 production record is unavailable")
     return source
+
+
+def test_g0_production_source_skips_without_a_private_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("FIREEMU_G0_PRODUCTION_RESULT", raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        _g0_production_source()
+    monkeypatch.setenv("FIREEMU_G0_PRODUCTION_RESULT", str(tmp_path))
+    with pytest.raises(pytest.skip.Exception):
+        _g0_production_source()
 
 
 def test_g0_runtime_recompare_pins_production_and_does_not_reuse_old_local_hash(
@@ -463,6 +473,16 @@ def test_g0_runtime_recompare_rejects_local_safety_or_state_without_true_value(
     production = json.loads(source.read_bytes())
     local = _g0_local_runtime_fixture(production, local_fixture())
     local["jobs"]["partial"][field] = value
+    result = _compare(production, local, g0_recompare=True)
+    assert result["compatibility"] == "indeterminate"
+
+
+@pytest.mark.parametrize("field", ["safety", "stateVerified"])
+def test_g0_runtime_recompare_rejects_missing_local_safety_or_state(field):
+    source = _g0_production_source()
+    production = json.loads(source.read_bytes())
+    local = _g0_local_runtime_fixture(production, local_fixture())
+    del local["jobs"]["partial"][field]
     result = _compare(production, local, g0_recompare=True)
     assert result["compatibility"] == "indeterminate"
 

@@ -61,7 +61,11 @@ class Production45Adapter(LocalAdapter):
 
     def reserve(self, service, duration=12):
         delay = max(0, self.last_request + 0.25 - time.monotonic())
-        if time.time() + duration + delay > self.permission["expiresAt"]:
+        permission = self.permission
+        if (
+            permission is None
+            or time.time() + duration + delay > permission["expiresAt"]
+        ):
             raise ValueError("owner permission deadline cannot cover operation")
         super().reserve(service, duration)
 

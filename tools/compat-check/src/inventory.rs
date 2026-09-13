@@ -671,16 +671,7 @@ impl Inventory {
             if strings(gap, "evidenceRefs").is_empty() {
                 fail(p, "CI-03", id, "gaps need at least one evidence reference");
             }
-            for reference in strings(gap, "evidenceRefs") {
-                if reference.contains("..") || !root.join(reference).exists() {
-                    fail(
-                        p,
-                        "CI-03",
-                        id,
-                        &format!("evidence reference {reference} does not exist"),
-                    );
-                }
-            }
+            validate_gap_evidence_refs(root, gap, id, p);
             if !gap
                 .get("requiresProductionChange")
                 .is_some_and(Value::is_boolean)
@@ -729,6 +720,19 @@ impl Inventory {
                     "an observed gap must carry a production observation (recorded or approved)",
                 );
             }
+        }
+    }
+}
+
+fn validate_gap_evidence_refs(root: &Path, gap: &Value, id: &str, p: &mut Vec<String>) {
+    for reference in strings(gap, "evidenceRefs") {
+        if reference.contains("..") || !root.join(reference).exists() {
+            fail(
+                p,
+                "CI-03",
+                id,
+                &format!("evidence reference {reference} does not exist"),
+            );
         }
     }
 }

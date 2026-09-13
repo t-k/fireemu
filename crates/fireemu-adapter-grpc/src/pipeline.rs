@@ -166,8 +166,9 @@ pub fn project_document(
     document
 }
 
-/// Compiles the finite local Enterprise subset: collection, field-reference select aliases and
-/// limit. Every other stage or option is refused explicitly by the caller.
+/// Compiles the finite local Enterprise subset: collection, exact field equality,
+/// field-reference select aliases, offset and limit. Every other stage or option is refused
+/// explicitly by the caller.
 #[allow(clippy::too_many_lines)]
 pub fn compile_supported(
     req: &pb::ExecutePipelineRequest,
@@ -217,15 +218,18 @@ pub fn compile_supported(
     };
     let mut projection: Option<Vec<(String, FieldPath)>> = None;
     let mut where_filter = None;
+    let mut offset = 0;
     let mut limit = None;
     let mut last_rank = 0u8;
     let mut seen_select = false;
+    let mut seen_offset = false;
     let mut seen_limit = false;
     for stage in pipeline.stages.iter().skip(1) {
         let rank = match stage.name.as_str() {
             "where" | "select" => 1,
-            "limit" => 2,
-            _ => 3,
+            "offset" => 2,
+            "limit" => 3,
+            _ => 4,
         };
         if rank < last_rank {
             return Err(Status::unimplemented(
@@ -255,6 +259,22 @@ pub fn compile_supported(
                 let value = u32::try_from(*n)
                     .map_err(|_| Status::invalid_argument("limit is out of range"))?;
                 limit = Some(value);
+            }
+            "offset" => {
+                if seen_offset {
+                    return Err(Status::unimplemented(
+                        "duplicate offset stage is unsupported locally",
+                    ));
+                }
+                seen_offset = true;
+                let Some(pb::value::ValueType::IntegerValue(n)) =
+                    stage.args.first().and_then(|v| v.value_type.as_ref())
+                else {
+                    return Err(Status::invalid_argument("offset must be an integer"));
+                };
+                offset = i32::try_from(*n).map_err(|_| {
+                    Status::unimplemented("offset exceeds the finite local execution range")
+                })?;
             }
             "select" => {
                 if seen_select {
@@ -327,7 +347,7 @@ pub fn compile_supported(
         order_by: Vec::new(),
         start_at: None,
         end_at: None,
-        offset: 0,
+        offset,
         limit: limit_i32,
         find_nearest: None,
     };

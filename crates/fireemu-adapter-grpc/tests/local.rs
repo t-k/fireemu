@@ -4755,6 +4755,10 @@ fn pipeline_select(field: &str) -> pb::pipeline::Stage {
     )
 }
 
+fn pipeline_offset(value: i64) -> pb::pipeline::Stage {
+    pipeline_stage("offset", i(value))
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing_fields() {
@@ -5303,6 +5307,249 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
     );
     assert!(stream.message().await.unwrap().is_none());
     handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_preserves_state() {
+    let (mut client, _clock, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    let collection = "pipeline-offset";
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..67)
+                .map(|index| {
+                    let mut fields = vec![
+                        ("group", s(if index % 2 == 0 { "match" } else { "other" })),
+                        ("value", i(index)),
+                    ];
+                    if index != 4 {
+                        fields.push(("label", s(&format!("row-{index:03}"))));
+                    }
+                    update_write(&format!("{collection}/{index:03}"), &fields)
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let collection_stage = || pipeline_stage("collection", s(collection));
+    let limit = |value| pipeline_stage("limit", i(value));
+    let execute = |stages| pipeline_request(stages);
+
+    let baseline = drain_pipeline(
+        client
+            .execute_pipeline(execute(vec![collection_stage(), pipeline_select("value")]))
+            .await
+            .unwrap()
+            .into_inner(),
+        67,
+    )
+    .await;
+    for (offset, limit_value) in [
+        (0, None),
+        (1, Some(33)),
+        (31, Some(33)),
+        (32, Some(33)),
+        (33, Some(33)),
+        (64, None),
+        (65, None),
+        (66, None),
+        (67, None),
+        (68, None),
+        (i64::from(i32::MAX), None),
+    ] {
+        let mut stages = vec![
+            collection_stage(),
+            pipeline_select("value"),
+            pipeline_offset(offset),
+        ];
+        if let Some(limit_value) = limit_value {
+            stages.push(limit(limit_value));
+        }
+        let expected = baseline
+            .iter()
+            .skip(usize::try_from(offset).unwrap())
+            .take(limit_value.map_or(usize::MAX, |value| value as usize))
+            .cloned()
+            .collect::<Vec<_>>();
+        let messages = expected.len().max(1);
+        let actual = drain_pipeline(
+            client
+                .execute_pipeline(execute(stages))
+                .await
+                .unwrap()
+                .into_inner(),
+            messages,
+        )
+        .await;
+        assert_eq!(actual, expected, "offset={offset}, limit={limit_value:?}");
+    }
+
+    let filtered_baseline = drain_pipeline(
+        client
+            .execute_pipeline(execute(vec![
+                collection_stage(),
+                pipeline_equal("group", s("match")),
+                pipeline_select("label"),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        34,
+    )
+    .await;
+    let filtered = drain_pipeline(
+        client
+            .execute_pipeline(execute(vec![
+                collection_stage(),
+                pipeline_equal("group", s("match")),
+                pipeline_select("label"),
+                pipeline_offset(1),
+                limit(33),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        33,
+    )
+    .await;
+    assert_eq!(filtered, filtered_baseline[1..]);
+    assert!(filtered.iter().any(|document| document.fields.is_empty()));
+
+    for (label, stages) in [
+        (
+            "duplicate offset",
+            vec![collection_stage(), pipeline_offset(1), pipeline_offset(2)],
+        ),
+        (
+            "offset after limit",
+            vec![collection_stage(), limit(1), pipeline_offset(1)],
+        ),
+        (
+            "where after offset",
+            vec![
+                collection_stage(),
+                pipeline_offset(1),
+                pipeline_equal("group", s("match")),
+            ],
+        ),
+        (
+            "select after offset",
+            vec![
+                collection_stage(),
+                pipeline_offset(1),
+                pipeline_select("value"),
+            ],
+        ),
+    ] {
+        let error = client.execute_pipeline(execute(stages)).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{label}: {error}");
+        assert_eq!(
+            error.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_UNSUPPORTED_STAGE",
+            "{label}: {error}"
+        );
+        assert!(error.metadata().get("fireemu-pipeline").is_some());
+    }
+    let too_large = client
+        .execute_pipeline(execute(vec![
+            collection_stage(),
+            pipeline_offset(i64::from(i32::MAX) + 1),
+        ]))
+        .await
+        .unwrap_err();
+    assert_eq!(too_large.code(), tonic::Code::Unimplemented);
+    assert_eq!(
+        too_large.metadata().get("fireemu-code").unwrap(),
+        "FS_PIPE_UNSUPPORTED_STAGE"
+    );
+    assert!(too_large.metadata().get("fireemu-pipeline").is_some());
+
+    for (label, value) in [
+        ("negative", i(-1)),
+        (
+            "double",
+            pb::Value {
+                value_type: Some(pb::value::ValueType::DoubleValue(1.0)),
+            },
+        ),
+        ("unset", pb::Value::default()),
+    ] {
+        let error = client
+            .execute_pipeline(execute(vec![
+                collection_stage(),
+                pipeline_stage("offset", value),
+            ]))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            tonic::Code::InvalidArgument,
+            "{label}: {error}"
+        );
+        assert_eq!(
+            error.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_INVALID",
+            "{label}: {error}"
+        );
+        assert!(error.metadata().get("fireemu-pipeline").is_none());
+    }
+    for (label, offset) in [
+        (
+            "missing argument",
+            pb::pipeline::Stage {
+                name: "offset".to_owned(),
+                ..Default::default()
+            },
+        ),
+        (
+            "extra argument",
+            pb::pipeline::Stage {
+                name: "offset".to_owned(),
+                args: vec![i(1), i(2)],
+                ..Default::default()
+            },
+        ),
+        (
+            "stage option",
+            pb::pipeline::Stage {
+                name: "offset".to_owned(),
+                args: vec![i(1)],
+                options: [("mode".to_owned(), s("ignored"))].into_iter().collect(),
+            },
+        ),
+    ] {
+        let error = client
+            .execute_pipeline(execute(vec![collection_stage(), offset]))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            tonic::Code::InvalidArgument,
+            "{label}: {error}"
+        );
+        assert_eq!(
+            error.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_INVALID",
+            "{label}: {error}"
+        );
+        assert!(error.metadata().get("fireemu-pipeline").is_none());
+    }
+
+    let after = drain_pipeline(
+        client
+            .execute_pipeline(execute(vec![collection_stage(), pipeline_select("value")]))
+            .await
+            .unwrap()
+            .into_inner(),
+        67,
+    )
+    .await;
+    assert_eq!(after, baseline);
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test]

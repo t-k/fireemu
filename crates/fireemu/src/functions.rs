@@ -3697,6 +3697,7 @@ mod tests {
             // Python launch cannot consume the test's unrelated timeout budget.
             hello_timeout: Duration::from_secs(60),
         };
+        let replacement_timeout = spec.hello_timeout;
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
         let mut blocking = parse_manifest(&json!({"functions": [{
@@ -3751,7 +3752,11 @@ mod tests {
             .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
             .is_err());
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        // A replacement is a fresh process and owns the same bounded hello handshake as the
+        // initial runner. Cold macOS hosts can spend most of that allowance starting Python,
+        // so the assertion must cover the declared spawn contract rather than an unrelated
+        // three-second scheduler assumption.
+        let deadline = tokio::time::Instant::now() + replacement_timeout + Duration::from_secs(1);
         loop {
             let replacement = runtime.runner();
             if !Arc::ptr_eq(&retired, &replacement) && replacement.is_alive() {

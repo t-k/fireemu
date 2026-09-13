@@ -177,3 +177,28 @@ def test_symmetric_or_detached_results_never_become_production_match(
     assert result["compatibility"] == (
         "mismatch" if mutation == "non-json" else "indeterminate"
     ), result
+
+
+def test_successful_remote_delete_is_complete_but_different(
+    production_inputs, tmp_path
+):
+    from second_mapped import execute_45
+    from second_production import Production45Adapter
+    from second_production_contract import manifest as production_manifest
+    from second_production_pair import compare
+
+    permission, backend = production_inputs
+    adapter = Production45Adapter(
+        production_manifest(), permission, permission["nonce"], tmp_path / "pair"
+    )
+    remote = execute_45(adapter, adapter.output, {"executionCommit": "c" * 40})
+    changed = deleted_receipt()
+    remote.update(rows=changed["rows"], trace=changed["trace"])
+    result = compare(remote, current_local(backend.source))
+    assert result["recordingComplete"] and result["cleanupComplete"]
+    assert result["stateValidation"] is True
+    assert result["compatibility"] == "mismatch", result["errors"]
+    assert [r["id"] for r in result["rows"] if r["compatibility"] == "mismatch"] == [
+        FS_IDS[1] + "/diagnostic",
+        FS_IDS[1] + "/after",
+    ]

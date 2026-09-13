@@ -9,6 +9,9 @@
 pub mod coverage;
 pub mod json;
 
+#[cfg(test)]
+mod transaction_tests;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

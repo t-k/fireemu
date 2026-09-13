@@ -14,7 +14,6 @@ use fireemu_core_firestore::query::{Direction, Query};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
 use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
-use tokio_stream::StreamExt;
 use tonic::codegen::tokio_stream;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
@@ -625,19 +624,9 @@ impl Firestore for GatewayService {
         if self.local_backend().is_some() {
             let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
-            let compiled = crate::pipeline::compile_supported(request.get_ref(), &parent).map_err(
-                |mut error| {
-                    if let Ok(value) = ast.canonical_text().parse() {
-                        error.metadata_mut().insert("fireemu-pipeline", value);
-                    }
-                    if error.code() == tonic::Code::Unimplemented {
-                        if let Ok(value) = "FS_PIPE_UNSUPPORTED_STAGE".parse() {
-                            error.metadata_mut().insert("fireemu-code", value);
-                        }
-                    }
-                    error
-                },
-            )?;
+            let canonical = ast.canonical_text();
+            let compiled = crate::pipeline::compile_supported(request.get_ref(), &parent)
+                .map_err(|error| pipeline_status(error, &canonical))?;
             let mut query = compiled.query;
             if compiled.limit.is_some_and(|limit| limit > i32::MAX as u32) {
                 if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
@@ -646,35 +635,17 @@ impl Firestore for GatewayService {
                     query.limit = None;
                 }
             }
-            let response = self.run_query_with_caller(caller, query).await?;
-            if compiled.limit == Some(0) {
-                drop(response);
-                return Ok(Response::new(Box::pin(tokio_stream::iter([Ok(
-                    pb::ExecutePipelineResponse::default(),
-                )]))));
-            }
-            let projection = compiled.projection;
-            let limit = compiled.limit.map(u64::from);
-            let delivered = Arc::new(std::sync::atomic::AtomicU64::new(0));
-            let stream = response.into_inner().filter_map(move |item| {
-                let delivered = Arc::clone(&delivered);
-                match item {
-                    Ok(item) => item.document.and_then(|document| {
-                        if limit.is_some_and(|limit| {
-                            delivered.load(std::sync::atomic::Ordering::Acquire) >= limit
-                        }) {
-                            return None;
-                        }
-                        delivered.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                        Some(Ok(pb::ExecutePipelineResponse {
-                            results: vec![crate::pipeline::project_document(document, &projection)],
-                            ..Default::default()
-                        }))
-                    }),
-                    Err(error) => Some(Err(error)),
-                }
-            });
-            return Ok(Response::new(Box::pin(stream)));
+            let response = self
+                .run_query_with_caller(caller, query)
+                .await
+                .map_err(|error| pipeline_status(error, &canonical))?;
+            return Ok(Response::new(Box::pin(PipelineResponseStream {
+                inner: Some(response.into_inner()),
+                projection: compiled.projection,
+                canonical,
+                remaining: compiled.limit,
+                emitted: false,
+            })));
         }
         let mut status = Status::unimplemented(format!(
             "FS-PIPE-RPC-1 strict-validation-only: the pipeline is valid ({}) but pipelines are not executed locally",
@@ -960,6 +931,84 @@ impl tokio_stream::Stream for QueryResponseStream {
             }
         }
         response
+    }
+}
+
+fn pipeline_status(mut error: Status, canonical: &str) -> Status {
+    if let Ok(value) = canonical.parse() {
+        error.metadata_mut().insert("fireemu-pipeline", value);
+    }
+    if error.code() == tonic::Code::Unimplemented {
+        if let Ok(value) = "FS_PIPE_UNSUPPORTED_STAGE".parse() {
+            error.metadata_mut().insert("fireemu-code", value);
+        }
+    }
+    error
+}
+
+// Own the inner receiver directly: reaching the limit or dropping the public stream
+// releases backpressure/transaction ownership without draining the remaining query.
+struct PipelineResponseStream {
+    inner: Option<BoxStream<pb::RunQueryResponse>>,
+    projection: Option<Vec<(String, fireemu_core_firestore::field_path::FieldPath)>>,
+    remaining: Option<u32>,
+    canonical: String,
+    emitted: bool,
+}
+
+impl tokio_stream::Stream for PipelineResponseStream {
+    type Item = Result<pb::ExecutePipelineResponse, Status>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        loop {
+            let next = match this.inner.as_mut() {
+                Some(inner) => inner.as_mut().poll_next(cx),
+                None => return Poll::Ready(None),
+            };
+            match next {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Some(Err(error))) => {
+                    this.inner = None;
+                    return Poll::Ready(Some(Err(pipeline_status(error, &this.canonical))));
+                }
+                Poll::Ready(None) => {
+                    this.inner = None;
+                    return Poll::Ready(
+                        (!this.emitted).then(|| Ok(pb::ExecutePipelineResponse::default())),
+                    );
+                }
+                Poll::Ready(Some(Ok(response))) => {
+                    let Some(document) = response.document else {
+                        continue;
+                    };
+                    if this.remaining == Some(0) {
+                        this.inner = None;
+                        return Poll::Ready(
+                            (!this.emitted).then(|| Ok(pb::ExecutePipelineResponse::default())),
+                        );
+                    }
+                    this.emitted = true;
+                    if let Some(remaining) = &mut this.remaining {
+                        *remaining -= 1;
+                        if *remaining == 0 {
+                            this.inner = None;
+                        }
+                    }
+                    return Poll::Ready(Some(Ok(pb::ExecutePipelineResponse {
+                        results: vec![crate::pipeline::project_document(
+                            document,
+                            &this.projection,
+                        )],
+                        ..Default::default()
+                    })));
+                }
+            }
+        }
     }
 }
 
@@ -1407,30 +1456,47 @@ mod tests {
 
     #[tokio::test]
     async fn execute_pipeline_guard_refuses_a_stale_epoch_inside_the_read() {
+        use tokio_stream::StreamExt;
         let backend = test_backend();
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        let service = GatewayService::local(gateway, backend.clone());
         let old_epoch = backend.barrier().epoch();
         drop(backend.barrier().exclusive());
-        for (epoch, stale) in [(old_epoch, true), (backend.barrier().epoch(), false)] {
-            let caller = Caller {
-                principal: Principal::Owner,
-                epoch,
-            };
-            let result = blocking_read(backend.clone(), None, caller, move |local, guard| {
+        for limit in [0, 1] {
+            for (epoch, stale) in [(old_epoch, true), (backend.barrier().epoch(), false)] {
+                let caller = Caller {
+                    principal: Principal::Owner,
+                    epoch,
+                };
                 let req = pb::ExecutePipelineRequest {
                     database: "projects/demo-app/databases/(default)".to_owned(),
                     pipeline_type: Some(
                         pb::execute_pipeline_request::PipelineType::StructuredPipeline(
                             pb::StructuredPipeline {
                                 pipeline: Some(pb::Pipeline {
-                                    stages: vec![pb::pipeline::Stage {
-                                        name: "collection".to_owned(),
-                                        args: vec![pb::Value {
-                                            value_type: Some(pb::value::ValueType::StringValue(
-                                                "items".to_owned(),
-                                            )),
-                                        }],
-                                        ..Default::default()
-                                    }],
+                                    stages: vec![
+                                        pb::pipeline::Stage {
+                                            name: "collection".to_owned(),
+                                            args: vec![pb::Value {
+                                                value_type: Some(
+                                                    pb::value::ValueType::StringValue(
+                                                        "items".to_owned(),
+                                                    ),
+                                                ),
+                                            }],
+                                            ..Default::default()
+                                        },
+                                        pb::pipeline::Stage {
+                                            name: "limit".to_owned(),
+                                            args: vec![pb::Value {
+                                                value_type: Some(
+                                                    pb::value::ValueType::IntegerValue(limit),
+                                                ),
+                                            }],
+                                            ..Default::default()
+                                        },
+                                    ],
                                 }),
                                 ..Default::default()
                             },
@@ -1440,15 +1506,74 @@ mod tests {
                 };
                 let parent =
                     parse_parent("projects/demo-app/databases/(default)/documents").unwrap();
-                crate::pipeline::execute_supported(&req, &parent, local, guard)
-            })
-            .await;
-            if stale {
-                assert_eq!(result.unwrap_err().code(), tonic::Code::Unavailable);
-            } else {
-                assert!(result.unwrap().is_empty());
+                let compiled = crate::pipeline::compile_supported(&req, &parent).unwrap();
+                let result = service.run_query_with_caller(caller, compiled.query).await;
+                if stale {
+                    assert_eq!(result.err().unwrap().code(), tonic::Code::Unavailable);
+                } else {
+                    let mut stream = result.unwrap().into_inner();
+                    while let Some(response) = stream.next().await {
+                        assert!(response.unwrap().document.is_none());
+                    }
+                }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn execute_pipeline_stream_limit_stops_polling_and_empty_error_are_distinct() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio_stream::StreamExt;
+        let polls = Arc::new(AtomicUsize::new(0));
+        let count = polls.clone();
+        let source = tokio_stream::iter((0..10).map(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(pb::RunQueryResponse {
+                document: Some(pb::Document::default()),
+                ..Default::default()
+            })
+        }));
+        let mut stream = PipelineResponseStream {
+            inner: Some(Box::pin(source)),
+            projection: None,
+            canonical: "collection(items)".to_owned(),
+            remaining: Some(3),
+            emitted: false,
+        };
+        for _ in 0..3 {
+            assert_eq!(stream.next().await.unwrap().unwrap().results.len(), 1);
+        }
+        assert!(stream.inner.is_none());
+        assert!(stream.next().await.is_none());
+        assert_eq!(polls.load(Ordering::SeqCst), 3);
+        let mut empty = PipelineResponseStream {
+            inner: Some(Box::pin(tokio_stream::iter([Ok(
+                pb::RunQueryResponse::default(),
+            )]))),
+            projection: None,
+            canonical: "collection(items)".to_owned(),
+            remaining: None,
+            emitted: false,
+        };
+        assert_eq!(
+            empty.next().await.unwrap().unwrap(),
+            pb::ExecutePipelineResponse::default()
+        );
+        assert!(empty.next().await.is_none());
+        let mut failed = PipelineResponseStream {
+            inner: Some(Box::pin(tokio_stream::iter([Err(Status::unavailable(
+                "fixture error",
+            ))]))),
+            projection: None,
+            canonical: "collection(items)".to_owned(),
+            remaining: None,
+            emitted: false,
+        };
+        assert_eq!(
+            failed.next().await.unwrap().unwrap_err().code(),
+            tonic::Code::Unavailable
+        );
+        assert!(failed.next().await.is_none());
     }
 
     fn transaction_stats(

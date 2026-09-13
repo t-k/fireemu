@@ -13,12 +13,6 @@ use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
 use crate::decode::Parent;
-#[cfg(test)]
-use crate::encode::encode_document;
-#[cfg(test)]
-use crate::local::LocalBackend;
-#[cfg(test)]
-use crate::rules::ReadGuard;
 
 /// Option keys a `StructuredPipeline` may carry.
 const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
@@ -343,27 +337,6 @@ pub fn compile_supported(
         projection,
         limit,
     })
-}
-
-/// Compatibility helper retained for focused unit tests of the old local compiler contract.
-#[cfg(test)]
-pub fn execute_supported(
-    req: &pb::ExecutePipelineRequest,
-    parent: &Parent,
-    backend: &LocalBackend,
-    guard: ReadGuard<'_>,
-) -> Result<Vec<pb::Document>, Status> {
-    let compiled = compile_supported(req, parent)?;
-    let Some(pb::run_query_request::QueryType::StructuredQuery(structured)) =
-        compiled.query.query_type.as_ref()
-    else {
-        return Err(Status::internal("compiled pipeline query is missing"));
-    };
-    let query = crate::decode::decode_structured_query(parent, structured)
-        .map_err(|error| Status::invalid_argument(error.to_string()))?;
-    backend
-        .run_query_latest_guarded(parent, &query, guard)
-        .map(|docs| docs.into_iter().map(|doc| encode_document(&doc)).collect())
 }
 
 /// A wire value as a validation argument. A nested pipeline is typed but its stages are

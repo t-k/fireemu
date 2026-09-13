@@ -1,0 +1,160 @@
+{
+  "kind": "second45-production-preparation-local-result-v1",
+  "executionCommit": "b0c1f3ef9646cdee400d25a5a61ec818e32daa1f",
+  "productionExecuted": false,
+  "productionCompatibility": "unobserved",
+  "manifestDigest": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
+  "observerDigest": "8774e7c20cc7a21f718a7624506f9f8d05aafa2a07959b1922dad2580aeeb526",
+  "comparisonContractDigest": "99fa75e87625e9af687a9be9c19819406475d784180e411fd85e91a72d4ee29d",
+  "local": {
+    "rows": 45,
+    "recordingComplete": true,
+    "cleanupComplete": true,
+    "safety": true,
+    "independentAdmissionValidation": true,
+    "artifactSha256": "4736579f44e710da8255612051cfa1e0087a1cb558b01af51a100b7d12cb0d58",
+    "runtimeIdentity": {
+      "artifactSha256": "4736579f44e710da8255612051cfa1e0087a1cb558b01af51a100b7d12cb0d58",
+      "executionCommit": "b0c1f3ef9646cdee400d25a5a61ec818e32daa1f",
+      "configurationDigest": "fd84a08c1006e57c2aa3fd7c80b854a5119c4de0404959b62b1d3a302c117bb5"
+    },
+    "counts": {
+      "auth": 302,
+      "firestore": 28,
+      "metadata": 0,
+      "recovery": 17,
+      "total": 330
+    },
+    "elapsedIncludingBuildSeconds": 86.75,
+    "ownedProcess": {
+      "stopped": true,
+      "listenersClosed": true
+    },
+    "resultSha256": "50c03b29d19c57c12ccf72f57836ac27d28094aacc4697bf466d3d499fe8af98",
+    "rowIds": [
+      "second/auth/01",
+      "second/auth/02",
+      "second/auth/03",
+      "second/auth/04",
+      "second/auth/05",
+      "second/auth/06",
+      "second/auth/07",
+      "second/auth/08",
+      "second/auth/09",
+      "second/auth/10",
+      "second/auth/11",
+      "second/auth/12",
+      "second/auth/13",
+      "second/auth/14",
+      "second/auth/15",
+      "second/auth/16",
+      "second/auth/17",
+      "second/auth/18",
+      "second/auth/19",
+      "second/auth/20",
+      "second/auth/21",
+      "second/auth/22",
+      "second/auth/23",
+      "second/auth/24",
+      "second/auth/25",
+      "second/auth/26",
+      "second/auth/27",
+      "second/auth/28",
+      "second/auth/29",
+      "second/auth/30",
+      "second/auth/31",
+      "second/auth/32",
+      "second/masks/ancestor-overlap-state/normal",
+      "second/masks/ancestor-overlap-state/before",
+      "second/masks/ancestor-overlap-state/diagnostic",
+      "second/masks/ancestor-overlap-state/after",
+      "second/preconditions/stale-delete-state/original",
+      "second/preconditions/stale-delete-state/normal",
+      "second/preconditions/stale-delete-state/before",
+      "second/preconditions/stale-delete-state/diagnostic",
+      "second/preconditions/stale-delete-state/after",
+      "second/transforms/invalid-path-state/normal",
+      "second/transforms/invalid-path-state/before",
+      "second/transforms/invalid-path-state/diagnostic",
+      "second/transforms/invalid-path-state/after"
+    ]
+  },
+  "first46Regression": {
+    "matches": 46,
+    "compatibility": "match",
+    "recordingComplete": true,
+    "cleanupComplete": true,
+    "artifactSha256": "c82c03a20571cf7103558f4b0ef109c2134c6f2123e4e6eb0443396b8f17e282",
+    "elapsedIncludingBuildSeconds": 25.22,
+    "comparisonSha256": "7950934e7f1bb7d32fa1fcf18cb22c86daa82df99280d1c8ff01a89a2110487c",
+    "source": {
+      "publicationCommit": "ab7bd698",
+      "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+      "observerDigest": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+      "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+      "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+      "fileSha256": {
+        "bc38f392-paired-observations.json": "a7809362c9c3a69d6a03a4f68e69aea0de34e29771f5bd36b2053359c609114c",
+        "bc38f392-execution-result.json": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88"
+      },
+      "originalComparisonCounts": {
+        "match": 35,
+        "mismatch": 11
+      },
+      "limitation": "Uses pinned published normalized observations; previously removed token bytes and absolute times are not recovered. No new production execution."
+    },
+    "ownedProcess": {
+      "stopped": true,
+      "listenersClosed": true
+    }
+  },
+  "verification": {
+    "pytest": {
+      "passed": 203,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 57.56,
+      "scope": "tools/compat-broad",
+      "commit": "b0c1f3ef9646cdee400d25a5a61ec818e32daa1f"
+    },
+    "ruff": "pass",
+    "ty": "pass",
+    "independentReview": "approved; no remaining Must Fix or Should Fix",
+    "mutation": {
+      "killed": 4,
+      "productionBoundaryCommit": "aeaa401a",
+      "independentRecipeCommit": "7cc1879d",
+      "scope": "API-key binding, client principal, explicit cost confirmation, independent repeated-query admission"
+    },
+    "comparisonCli": {
+      "matchCheckExit": 0,
+      "mismatchRecordExit": 0,
+      "mismatchCheckExit": 1,
+      "incompleteCleanupExit": 1,
+      "basis": "offline fixture"
+    }
+  },
+  "fixtureOnlyCoverage": [
+    "complete normal path",
+    "match and different response",
+    "missing operation and symmetric malformed operation",
+    "unexpected successful delete and absent document cleanup",
+    "unsafe successful Auth mutation and stop",
+    "authentication rejection",
+    "configuration drift",
+    "missing readback",
+    "non-JSON",
+    "interrupted response",
+    "timeout",
+    "observation budget stop with reserved recovery",
+    "failed refresh latch and unrecovered resources",
+    "expired owner permission",
+    "detached permission or missing execution identity"
+  ],
+  "limitations": [
+    "No production45 observation exists.",
+    "Non-JSON production body content is retained as digest/count, not inspectable raw text.",
+    "No new current Cloud setting or tariff confirmation.",
+    "Previous mapping/history/SDK/Rules/Listen/lifetime evidence remains unchanged."
+  ]
+}

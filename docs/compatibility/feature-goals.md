@@ -1,5 +1,7 @@
 # Feature-group development queue
 
+The [merge acceptance table](merge-readiness.md) fixes which completed Goals and remaining decisions belong to the current pull request. New child Goals do not extend that merge scope automatically.
+
 This queue starts from 8f2e4850 and preserves all previous observations and their limitations. Only the coordinator integrates and pushes to `feat/compatibility-inventory`. No new Cloud authentication, reads or data operations are authorized. The prepared G0 frame is independent of the newer development runtime.
 
 | Goal | Finite conditions and evidence | Owner model | State and fixed evidence | Remaining parent scope |

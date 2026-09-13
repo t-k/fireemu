@@ -901,6 +901,7 @@ fn python_authority_helpers_ignore_startup_injection() {
         let output = Command::new(&helper)
             .env("PYTHONPATH", &temporary.0)
             .env("PYTHONHOME", &temporary.0)
+            .env_remove("QUINT_HOME")
             .env("SENTINEL", &sentinel)
             .output()
             .expect("isolated Python helper must launch");

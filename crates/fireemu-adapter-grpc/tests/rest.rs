@@ -173,6 +173,116 @@ fn document_crud_over_rest() {
 }
 
 #[test]
+fn batch_write_rest_preserves_slots_and_omits_success_status_defaults() {
+    let s = state(None);
+    let middle = "projects/demo-app/databases/(default)/documents/batch/1";
+    let (status, _) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/batch?documentId=1"),
+        json!({"fields": {"existing": {"integerValue": "7"}}}),
+    );
+    assert_eq!(status, 200);
+
+    let first = "projects/demo-app/databases/(default)/documents/batch/0";
+    let last = "projects/demo-app/databases/(default)/documents/batch/2";
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [
+                {"update": {"name": first, "fields": {
+                    "zero": {"integerValue": "0"},
+                    "empty": {"stringValue": ""},
+                    "map": {"mapValue": {"fields": {}}}
+                }}},
+                {"update": {"name": middle, "fields": {"existing": {"integerValue": "8"}}},
+                 "currentDocument": {"exists": false}},
+                {"update": {"name": last, "fields": {"value": {"integerValue": "9"}}}}
+            ]
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["status"],
+        json!([
+            {},
+            {"code": 6, "message": format!("Document already exists: {middle}")},
+            {}
+        ]),
+        "{body}"
+    );
+    assert_eq!(body["writeResults"].as_array().unwrap().len(), 3);
+    assert_eq!(body["writeResults"][1], json!({}));
+
+    let (status, first_document) = call(&s, "GET", &format!("{DOCS}/batch/0"), json!({}));
+    assert_eq!(status, 200, "{first_document}");
+    assert_eq!(first_document["fields"]["zero"]["integerValue"], "0");
+    assert_eq!(first_document["fields"]["empty"]["stringValue"], "");
+    assert_eq!(first_document["fields"]["map"]["mapValue"], json!({}));
+    let (status, middle_document) = call(&s, "GET", &format!("{DOCS}/batch/1"), json!({}));
+    assert_eq!(status, 200, "{middle_document}");
+    assert_eq!(middle_document["fields"]["existing"]["integerValue"], "7");
+    let (status, last_document) = call(&s, "GET", &format!("{DOCS}/batch/2"), json!({}));
+    assert_eq!(status, 200, "{last_document}");
+    assert_eq!(last_document["fields"]["value"]["integerValue"], "9");
+}
+
+#[test]
+fn batch_write_rest_unknown_transaction_rejects_before_writes() {
+    let s = state(None);
+    let created = "projects/demo-app/databases/(default)/documents/guard/would-be-created";
+    let (status, _) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/guard?documentId=1"),
+        json!({"fields": {"a": {"integerValue": "3"}}}),
+    );
+    assert_eq!(status, 200);
+    let (status, before) = call(&s, "GET", &format!("{DOCS}/guard/1"), json!({}));
+    assert_eq!(status, 200, "{before}");
+
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [{"update": {"name": created, "fields": {"a": {"integerValue": "4"}}}}],
+            "transaction": "AA=="
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body,
+        json!({
+            "error": {
+                "code": 400,
+                "message": "Invalid JSON payload received. Unknown name \"transaction\": Cannot find field.",
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{
+                        "description": "Invalid JSON payload received. Unknown name \"transaction\": Cannot find field."
+                    }]
+                }]
+            }
+        }),
+        "{body}"
+    );
+    let (status, after) = call(&s, "GET", &format!("{DOCS}/guard/1"), json!({}));
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after, before);
+    let (status, _) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/guard/would-be-created"),
+        json!({}),
+    );
+    assert_eq!(status, 404);
+}
+
+#[test]
 fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() {
     let s = state(None);
     let mut read_time = String::new();

@@ -159,6 +159,50 @@ fn bad(e: &JsonError) -> Status {
     Status::invalid_argument(e.to_string())
 }
 
+fn batch_write_status_to_json(status: &fireemu_proto_firestore::google::rpc::Status) -> Value {
+    let mut out = json!({});
+    if status.code != 0 {
+        out["code"] = json!(status.code);
+    }
+    if !status.message.is_empty() {
+        out["message"] = json!(status.message);
+    }
+    if !status.details.is_empty() {
+        out["details"] = Value::Array(
+            status
+                .details
+                .iter()
+                .map(|detail| {
+                    json!({
+                        "@type": detail.type_url,
+                        "value": json::base64_encode(&detail.value),
+                    })
+                })
+                .collect(),
+        );
+    }
+    out
+}
+
+fn batch_write_unknown_field_response(field: &str) -> RestResponse {
+    let message =
+        format!("Invalid JSON payload received. Unknown name \"{field}\": Cannot find field.");
+    RestResponse {
+        status: 400,
+        body: json!({
+            "error": {
+                "code": 400,
+                "message": message.clone(),
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{"description": message}]
+                }]
+            }
+        }),
+    }
+}
+
 /// Parsed query parameters (repeated keys keep every value).
 fn query_params(query: &str) -> BTreeMap<String, Vec<String>> {
     fn decode(s: &str) -> String {
@@ -862,6 +906,11 @@ impl RestState {
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
+        if let Some(field) = json::first_unknown_key(body, &["writes", "labels"])
+            .filter(|field| *field == "transaction")
+        {
+            return Ok(batch_write_unknown_field_response(field));
+        }
         json::strict_keys(body, &["writes", "labels"]).map_err(|e| bad(&e))?;
         let req = pb::BatchWriteRequest {
             database: database_of(resource)?,
@@ -873,7 +922,7 @@ impl RestState {
         let response = self.local.batch_write_with(&req, &*guard)?;
         Ok(ok(json::without_empty(json!({
             "writeResults": response.write_results.iter().map(write_result_to_json).collect::<Vec<_>>(),
-            "status": response.status.iter().map(|s| json!({"code": s.code, "message": s.message})).collect::<Vec<_>>(),
+            "status": response.status.iter().map(batch_write_status_to_json).collect::<Vec<_>>(),
         }))))
     }
 

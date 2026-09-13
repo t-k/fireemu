@@ -141,6 +141,14 @@ pub fn strict_keys(v: &Value, allowed: &[&str]) -> Result<(), JsonError> {
     Ok(())
 }
 
+/// Returns the first request key that is not part of the endpoint's accepted key set.
+pub fn first_unknown_key<'a>(v: &'a Value, allowed: &[&str]) -> Option<&'a str> {
+    v.as_object()?
+        .keys()
+        .find(|key| !allowed.contains(&key.as_str()))
+        .map(String::as_str)
+}
+
 fn timestamp_from_json(v: &Value) -> Result<prost_types::Timestamp, JsonError> {
     let Some(s) = v.as_str() else {
         return err("timestamp must be an RFC 3339 string");

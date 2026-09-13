@@ -64,6 +64,7 @@ def endpoint(target: str, origin: str | None) -> str:
         )
     return str(origin)
 
+
 BUILD_COMMAND = ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
 
 
@@ -133,8 +134,41 @@ def validate_build(receipt: dict, artifact: str, inputs: dict) -> None:
     )
 
 
+MUTATION_OUTPUT_MARKER = ".fireemu-mutation-output"
+
+
+def reject_mutation_artifact(path: Path) -> None:
+    for parent in (path.resolve(), *path.resolve().parents):
+        if (parent / MUTATION_OUTPUT_MARKER).exists():
+            raise ValueError("mutation output cannot be adopted by normal verification")
+
+
+def validate_normal_build(workspace: Path, environment: dict) -> None:
+    metadata = subprocess.run(
+        [
+            "cargo",
+            "metadata",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "--format-version",
+            "1",
+        ],
+        cwd=workspace,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    value = json.loads(metadata.stdout)
+    for key in ("target_directory", "build_directory"):
+        reject_mutation_artifact(Path(value[key]))
+
+
 def build_artifact() -> tuple[Path, dict]:
     inputs = runtime_inputs(ROOT)
+    validate_normal_build(ROOT, sanitized_environment(dict(os.environ)))
     completed = subprocess.run(
         BUILD_COMMAND,
         cwd=ROOT,
@@ -156,6 +190,7 @@ def build_artifact() -> tuple[Path, dict]:
         len(paths) == 1 and inputs == runtime_inputs(ROOT),
         "build output or input stability mismatch",
     )
+    reject_mutation_artifact(paths[0])
     return paths[0], {
         "command": BUILD_COMMAND,
         "exitCode": 0,
@@ -305,6 +340,7 @@ def run_owned(binary: Path, output: Path, build: dict | None = None) -> dict:
     from aggregation_corpus import CONFIG, index_definition
 
     binary = binary.resolve(strict=True)
+    reject_mutation_artifact(binary)
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     inputs = runtime_inputs(ROOT)

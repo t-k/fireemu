@@ -53,7 +53,7 @@ const waitFor = async (
       );
     }
     try {
-      const r = await fetch(url);
+      const r = await fetch(url, { signal: AbortSignal.timeout(1_000) });
       if (r.ok) return;
     } catch {
       // not up yet
@@ -64,7 +64,7 @@ const waitFor = async (
 };
 
 const stop = async (pid: number | undefined, status: ChildStatus): Promise<void> => {
-  if (pid === undefined || status.exit) return;
+  if (pid === undefined) return;
   const signal = (value: NodeJS.Signals) => {
     try {
       process.kill(-pid, value);
@@ -132,7 +132,9 @@ export default async function globalSetup(): Promise<void> {
     // allowing a cold, contended hosted runner enough time to schedule the process.
     await waitFor(`http://127.0.0.1:${PORTS.http}/health/live`, 240, status, () => banner);
     await waitFor(`http://127.0.0.1:${PORTS.ui}/ui/`, 40, status, () => banner);
-    const html = await (await fetch(`http://127.0.0.1:${PORTS.ui}/ui/`)).text();
+    const html = await (
+      await fetch(`http://127.0.0.1:${PORTS.ui}/ui/`, { signal: AbortSignal.timeout(1_000) })
+    ).text();
     const config = /window\.__FIREEMU__ = (\{.*?\});<\/script>/.exec(html)?.[1];
     const token = config
       ? ((JSON.parse(config) as { controlToken?: string }).controlToken ?? "")

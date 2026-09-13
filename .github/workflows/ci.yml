@@ -158,7 +158,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cargo nextest run --workspace --lib --profile pr
+            # The private Quint authority and its traceability CLI supervise Unix process groups;
+            # production libraries remain in this native Windows test run.
+            cargo nextest run --workspace --exclude fireemu-verification-quint --exclude traceability-check --lib --profile pr
           else
             cargo nextest run --workspace --profile pr
           fi

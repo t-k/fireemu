@@ -250,6 +250,11 @@ pub fn execute_supported(
                             "nested select field references are unsupported locally",
                         ));
                     }
+                    if aliases.last().unwrap().1.is_document_name() {
+                        return Err(Status::unimplemented(
+                            "__name__ select field references are unsupported locally",
+                        ));
+                    }
                 }
                 if aliases.is_empty() {
                     return Err(Status::invalid_argument(

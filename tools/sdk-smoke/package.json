@@ -10,6 +10,7 @@
     "bench:firestore": "node firestore-performance.mjs",
     "smoke:client": "node client.mjs",
     "smoke:g3": "node g3-sdk.mjs",
+    "smoke:g3-pending-switch": "node pending-switch.mjs",
     "smoke:lite": "node lite.mjs",
     "smoke:storage": "node storage.mjs",
     "smoke:storage-targets": "node storage-targets.mjs",

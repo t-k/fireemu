@@ -14,6 +14,7 @@ use fireemu_core_firestore::query::{Direction, Query};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
 use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+use tokio_stream::StreamExt;
 use tonic::codegen::tokio_stream;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
@@ -647,7 +648,6 @@ impl Firestore for GatewayService {
             }
             let response = self.run_query_with_caller(caller, query).await?;
             let projection = compiled.projection;
-            use tokio_stream::StreamExt;
             let stream = response.into_inner().filter_map(move |item| match item {
                 Ok(item) => item.document.map(|document| {
                     Ok(pb::ExecutePipelineResponse {
@@ -965,6 +965,7 @@ impl Drop for QueryTransactionGuard {
 }
 
 impl GatewayService {
+    #[allow(clippy::too_many_lines)]
     async fn run_query_with_caller(
         &self,
         caller: Caller,

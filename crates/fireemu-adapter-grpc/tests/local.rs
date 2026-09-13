@@ -4705,6 +4705,123 @@ async fn drain_pipeline(
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
+async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
+    let (mut client, _clock, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    let collection = "pipeline-scale";
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| {
+                    update_write(
+                        &format!("{collection}/{index:03}"),
+                        &[("value", i(index)), ("extra", s("retained"))],
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let request = |limit: i64| pb::ExecutePipelineRequest {
+        database: DB.to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline {
+                        stages: vec![
+                            pb::pipeline::Stage {
+                                name: "collection".to_owned(),
+                                args: vec![pb::Value {
+                                    value_type: Some(pb::value::ValueType::StringValue(format!(
+                                        "/{collection}"
+                                    ))),
+                                }],
+                                ..Default::default()
+                            },
+                            pb::pipeline::Stage {
+                                name: "select".to_owned(),
+                                args: vec![pb::Value {
+                                    value_type: Some(pb::value::ValueType::MapValue(
+                                        pb::MapValue {
+                                            fields: [(
+                                                "out".to_owned(),
+                                                pb::Value {
+                                                    value_type: Some(
+                                                        pb::value::ValueType::FieldReferenceValue(
+                                                            "value".to_owned(),
+                                                        ),
+                                                    ),
+                                                },
+                                            )]
+                                            .into_iter()
+                                            .collect(),
+                                        },
+                                    )),
+                                }],
+                                ..Default::default()
+                            },
+                            pb::pipeline::Stage {
+                                name: "limit".to_owned(),
+                                args: vec![i(limit)],
+                                ..Default::default()
+                            },
+                        ],
+                    }),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(request(65))
+            .await
+            .unwrap()
+            .into_inner(),
+        65,
+    )
+    .await;
+    assert_eq!(docs.len(), 65);
+    assert_eq!(docs.first().unwrap().fields.get("out"), Some(&i(0)));
+    assert_eq!(docs.last().unwrap().fields.get("out"), Some(&i(64)));
+    assert!(docs.iter().all(|doc| doc.fields.len() == 1));
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(request(33))
+            .await
+            .unwrap()
+            .into_inner(),
+        33,
+    )
+    .await;
+    assert_eq!(docs.len(), 33);
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(request(i64::from(i32::MAX) + 1))
+            .await
+            .unwrap()
+            .into_inner(),
+        65,
+    )
+    .await;
+    assert_eq!(docs.len(), 65);
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(request(0))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert!(docs.is_empty());
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit() {
     use pb::execute_pipeline_request::ConsistencySelector;
 

@@ -139,10 +139,10 @@ pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst
 }
 
 /// The compiled finite local Enterprise subset. The query is deliberately represented as the
-/// ordinary RunQuery wire request so execution can reuse its snapshot and paging machinery.
+/// ordinary `RunQuery` wire request so execution can reuse its snapshot and paging machinery.
 #[derive(Debug, Clone)]
 pub struct CompiledPipeline {
-    /// The equivalent RunQuery request used by the streaming executor.
+    /// The equivalent `RunQuery` request used by the streaming executor.
     pub query: pb::RunQueryRequest,
     /// Optional aliases applied to each streamed document.
     pub projection: Option<Vec<(String, FieldPath)>>,
@@ -150,7 +150,7 @@ pub struct CompiledPipeline {
     pub limit: Option<u32>,
 }
 
-/// Applies the pipeline's per-document projection to a RunQuery response document.
+/// Applies the pipeline's per-document projection to a `RunQuery` response document.
 pub fn project_document(
     mut document: pb::Document,
     projection: &Option<Vec<(String, FieldPath)>>,
@@ -313,7 +313,7 @@ pub fn compile_supported(
                 parent.project, parent.database
             )
         },
-        |doc| doc.resource_name(),
+        DocumentPath::resource_name,
     );
     let limit_i32 = limit.and_then(|value| i32::try_from(value).ok());
     let structured = pb::StructuredQuery {
@@ -354,9 +354,10 @@ pub fn execute_supported(
     guard: ReadGuard<'_>,
 ) -> Result<Vec<pb::Document>, Status> {
     let compiled = compile_supported(req, parent)?;
-    let structured = match compiled.query.query_type.as_ref() {
-        Some(pb::run_query_request::QueryType::StructuredQuery(query)) => query,
-        None => return Err(Status::internal("compiled pipeline query is missing")),
+    let Some(pb::run_query_request::QueryType::StructuredQuery(structured)) =
+        compiled.query.query_type.as_ref()
+    else {
+        return Err(Status::internal("compiled pipeline query is missing"));
     };
     let query = crate::decode::decode_structured_query(parent, structured)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;

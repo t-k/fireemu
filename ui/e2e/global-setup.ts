@@ -1,9 +1,8 @@
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ownedProcessCommand, stopOwnedProcess } from "../src/lib/processTarget";
+import { spawnOwnedProcess, stopOwnedProcess } from "../src/lib/processTarget";
 
 // Starts a real daemon (release binary when built, debug otherwise) with the smoke
 // functions project and a pinned clock, and retains its child handle for teardown.
@@ -89,17 +88,14 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   ];
   mkdirSync(dirname(STATE_FILE), { recursive: true });
   rmSync(STATE_FILE, { force: true });
-  const processCommand = ownedProcessCommand(
+  const owned = spawnOwnedProcess(
     bin,
     args,
     process.platform,
-    resolve(repo, "verification/quint/bin/process-group"),
+    resolve(here, "bin/process-supervisor"),
+    { cwd: repo },
   );
-  const child = spawn(processCommand.command, processCommand.args, {
-    cwd: repo,
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const { child } = owned;
   let banner = "";
   const status: ChildStatus = {};
   child.stdout?.on("data", (d: Buffer) => {
@@ -128,13 +124,19 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       : "";
     if (!token) throw new Error(`the served UI page carries no control token\n${banner}`);
     writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner, token }));
-    // Playwright retains this closure until global teardown, including the captured process group.
+    // Playwright retains the supervisor handle and its private cleanup evidence until teardown.
     return async () => {
-      await stopOwnedProcess(child);
+      await stopOwnedProcess(owned);
       rmSync(STATE_FILE, { force: true });
     };
   } catch (error) {
-    await stopOwnedProcess(child);
+    try {
+      await stopOwnedProcess(owned);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "daemon startup and cleanup both failed", {
+        cause: cleanupError,
+      });
+    }
     throw error;
   }
 }

@@ -27,74 +27,194 @@ function relativeFiles(root, directory = root) {
   });
 }
 
-test("public RSA test fixtures are referenced only by signing or hashed compatibility provenance", () => {
-  const trackedFiles = execFileSync("git", ["ls-files", "-z"], {
-    cwd: repoRoot,
+function hasDuplicateJsonObjectKey(text, targetKey) {
+  let index = 0;
+
+  const skipWhitespace = () => {
+    while (/\s/.test(text[index] ?? "")) index += 1;
+  };
+  const skipString = () => {
+    const start = index;
+    index += 1;
+    while (index < text.length) {
+      if (text[index] === "\\") {
+        index += 2;
+      } else if (text[index++] === '"') {
+        return JSON.parse(text.slice(start, index));
+      }
+    }
+    throw new SyntaxError("unterminated JSON string");
+  };
+  const scanValue = () => {
+    skipWhitespace();
+    if (text[index] === "{") return scanObject();
+    if (text[index] === "[") return scanArray();
+    if (text[index] === '"') {
+      skipString();
+      return false;
+    }
+    while (index < text.length && !",]}".includes(text[index])) index += 1;
+    return false;
+  };
+  const scanArray = () => {
+    index += 1;
+    skipWhitespace();
+    if (text[index] === "]") {
+      index += 1;
+      return false;
+    }
+    while (true) {
+      const duplicate = scanValue();
+      if (duplicate) return true;
+      skipWhitespace();
+      if (text[index] === "]") {
+        index += 1;
+        return false;
+      }
+      index += 1;
+    }
+  };
+  const scanObject = () => {
+    const keys = new Set();
+    index += 1;
+    skipWhitespace();
+    if (text[index] === "}") {
+      index += 1;
+      return false;
+    }
+    while (true) {
+      skipWhitespace();
+      const key = skipString();
+      skipWhitespace();
+      index += 1;
+      const duplicate = keys.has(key) && key === targetKey;
+      keys.add(key);
+      scanValue();
+      if (duplicate) return true;
+      skipWhitespace();
+      if (text[index] === "}") {
+        index += 1;
+        return false;
+      }
+      index += 1;
+    }
+  };
+
+  return scanValue();
+}
+
+function fixtureReferenceViolations({ fixtureName, fixtureBytes, files }) {
+  const fixturePath = `crates/fireemu-adapter-http/tests/fixtures/${fixtureName}`;
+  const fixtureDigest = createHash("sha256").update(fixtureBytes).digest("hex");
+  const canonicalFixtureBytes = Buffer.from(fixtureBytes.toString("utf8").trimEnd());
+  const violations = [];
+
+  for (const { path, contents } of files) {
+    if (path === fixturePath) continue;
+
+    if (contents.includes(fixtureBytes) || contents.includes(canonicalFixtureBytes)) {
+      violations.push(`${path}: contains the fixture bytes`);
+      continue;
+    }
+
+    const text = contents.toString("utf8");
+    const isCompatibilityJson =
+      path.startsWith("spec/compatibility/") && path.endsWith(".json");
+    if (!isCompatibilityJson) {
+      if (
+        path !== "crates/fireemu-adapter-http/tests/signing.rs" &&
+        text.includes(fixtureName)
+      ) {
+        violations.push(`${path}: mentions the fixture name`);
+      }
+      continue;
+    }
+
+    let document;
+    try {
+      document = JSON.parse(contents);
+    } catch {
+      if (text.includes(fixtureName)) {
+        violations.push(`${path}: fixture name is not in a JSON object key`);
+      }
+      continue;
+    }
+    if (hasDuplicateJsonObjectKey(text, fixturePath)) {
+      violations.push(`${path}: fixture key occurs more than once`);
+    }
+
+    const inspect = (value) => {
+      if (Array.isArray(value)) {
+        value.forEach((entry) => inspect(entry));
+      } else if (value && typeof value === "object") {
+        Object.entries(value).forEach(([key, entry]) => {
+          if (key === fixturePath) {
+            if (entry !== fixtureDigest) {
+              violations.push(`${path}: fixture key has the wrong SHA256`);
+            }
+            return;
+          }
+          inspect(key);
+          inspect(entry);
+        });
+      } else if (typeof value === "string" && value.includes(fixtureName)) {
+        violations.push(`${path}: fixture name is a value or free text`);
+      }
+    };
+    inspect(document);
+  }
+
+  return violations;
+}
+
+function trackedFiles(root) {
+  return execFileSync("git", ["ls-files", "-z"], {
+    cwd: root,
     encoding: "utf8",
-  }).split("\0").filter(Boolean);
+  })
+    .split("\0")
+    .filter(Boolean)
+    .map((path) => ({ path, contents: readFileSync(join(root, path)) }));
+}
+
+test("public RSA test fixtures are referenced only by signing or hashed compatibility provenance", () => {
+  const files = trackedFiles(repoRoot);
 
   for (const suffix of ["A.der.hex", "B.der.hex"]) {
     const fixtureName = ["INSECURE", "TEST", "ONLY", "RSA", suffix].join("_");
     const fixturePath = `crates/fireemu-adapter-http/tests/fixtures/${fixtureName}`;
     const fixtureBytes = readFileSync(join(repoRoot, fixturePath));
-    const fixtureDigest = createHash("sha256").update(fixtureBytes).digest("hex");
-    const violations = [];
-
-    for (const path of trackedFiles) {
-      if (path === fixturePath) continue;
-
-      const contents = readFileSync(join(repoRoot, path));
-      if (contents.includes(fixtureBytes)) {
-        violations.push(`${path}: contains the fixture bytes`);
-        continue;
-      }
-
-      const text = contents.toString("utf8");
-      const isCompatibilityJson =
-        path.startsWith("spec/compatibility/") && path.endsWith(".json");
-      if (!isCompatibilityJson) {
-        if (
-          path !== "crates/fireemu-adapter-http/tests/signing.rs" &&
-          text.includes(fixtureName)
-        ) {
-          violations.push(`${path}: mentions the fixture name`);
-        }
-        continue;
-      }
-
-      let document;
-      try {
-        document = JSON.parse(contents);
-      } catch {
-        if (text.includes(fixtureName)) {
-          violations.push(`${path}: fixture name is not in a JSON object key`);
-        }
-        continue;
-      }
-
-      const inspect = (value) => {
-        if (Array.isArray(value)) {
-          value.forEach((entry) => inspect(entry));
-        } else if (value && typeof value === "object") {
-          Object.entries(value).forEach(([key, entry]) => {
-            if (key === fixturePath) {
-              if (entry !== fixtureDigest) {
-                violations.push(`${path}: fixture key has the wrong SHA256`);
-              }
-              return;
-            }
-            inspect(key);
-            inspect(entry);
-          });
-        } else if (typeof value === "string" && value.includes(fixtureName)) {
-          violations.push(`${path}: fixture name is a value or free text`);
-        }
-      };
-      inspect(document);
-    }
+    const violations = fixtureReferenceViolations({ fixtureName, fixtureBytes, files });
 
     assert.deepEqual(violations, [], `${fixtureName} has unauthorized references`);
   }
+});
+
+test("fixture reference checks reject canonical payload recurrence without its trailing newline", () => {
+  const fixtureName = ["INSECURE", "TEST", "ONLY", "RSA", "A.der.hex"].join("_");
+  const fixtureBytes = Buffer.from("deadbeef\n");
+  const violations = fixtureReferenceViolations({
+    fixtureName,
+    fixtureBytes,
+    files: [{ path: "docs/fixture-copy.txt", contents: Buffer.from("deadbeef") }],
+  });
+
+  assert.deepEqual(violations, ["docs/fixture-copy.txt: contains the fixture bytes"]);
+});
+
+test("fixture reference checks reject duplicate compatibility JSON keys", () => {
+  const fixtureName = ["INSECURE", "TEST", "ONLY", "RSA", "A.der.hex"].join("_");
+  const fixtureBytes = Buffer.from("deadbeef\n");
+  const fixturePath = `crates/fireemu-adapter-http/tests/fixtures/${fixtureName}`;
+  const digest = createHash("sha256").update(fixtureBytes).digest("hex");
+  const document = `{"${fixturePath}":"wrong","${fixturePath}":"${digest}"}`;
+  const violations = fixtureReferenceViolations({
+    fixtureName,
+    fixtureBytes,
+    files: [{ path: "spec/compatibility/duplicate.json", contents: Buffer.from(document) }],
+  });
+
+  assert.deepEqual(violations, ["spec/compatibility/duplicate.json: fixture key occurs more than once"]);
 });
 
 test("the copied Firebase CLI widget retains its MIT attribution", () => {

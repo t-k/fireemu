@@ -299,6 +299,17 @@ class Adapter:
             "mediaType": content_type.split(";", 1)[0].strip().lower(),
             "body": result,
         }
+        if gate is not None:
+            observation["sharedRequestDigest"] = digest(
+                {
+                    "service": service,
+                    "path": path,
+                    "body": body,
+                    "method": method,
+                    "privileged": privileged,
+                    "form": form,
+                }
+            )
         self.last_observation = observation
         # Private bounded responses survive even when a stop condition prevents a row.
         fd = os.open(

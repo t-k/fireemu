@@ -357,3 +357,40 @@ def test_existing_adapter_wire_failure_is_retained_by_gate(tmp_path, wire_server
     assert state["events"][0]["failure"]
     assert not state["jobs"]["a"]["complete"]
     assert adapter.budget.counts["total"] == 1
+
+
+@pytest.mark.parametrize("version", [None, "", 7])
+def test_invalid_recovery_version_keeps_independent_cleanup_available(
+    tmp_path, version
+):
+    p = plan()
+    read = p["jobs"]["a"]["observation"][0]
+    p["jobs"]["a"]["recovery"] = [
+        read,
+        {**read, "method": "DELETE", "versionFrom": 0},
+        read,
+    ]
+    p["costMicrousd"] = 600
+    path = tmp_path / "gate"
+    create(path, p)
+    gate = Gate(path, "a")
+    gate.claim()
+    gate.dispatch(read, False, lambda: (404, {}))
+    gate.dispatch(
+        read, True, lambda: (200, {"name": "a", "fields": {}, "updateTime": version})
+    )
+    status, _ = gate.dispatch(
+        {**read, "method": "DELETE"}, True, lambda: pytest.fail("unsafe delete")
+    )
+    assert status is None
+    gate.dispatch(read, True, lambda: (200, {"name": "a", "fields": {}}))
+    with pytest.raises(ValueError):
+        gate.finish()
+    assert gate.snapshot()["jobs"]["a"]["recovery"] == 3
+
+
+def test_fixed_cost_cannot_spend_recovery_reservation(tmp_path):
+    p = plan()
+    p.update(fixedCostMicrousd=101)
+    with pytest.raises(ValueError):
+        create(tmp_path / "gate", p)

@@ -41,6 +41,7 @@ def create(path, plan):
     resources = [r for job in jobs.values() for r in job["resources"]]
     recovery = sum(len(job["recovery"]) for job in jobs.values())
     overhead = plan.get("coordinatorRequests", 0)
+    fixed_cost = plan.get("fixedCostMicrousd", 0)
     if (
         plan["contract"] != "shared-local-v1"
         or not 1 <= len(jobs) <= 2
@@ -54,9 +55,12 @@ def create(path, plan):
         or plan["observationRequests"] < 0
         or type(plan["requestCostMicrousd"]) is not int
         or plan["requestCostMicrousd"] <= 0
+        or type(fixed_cost) is not int
+        or fixed_cost < 0
         or type(overhead) is not int
         or not 0 <= overhead <= 2
-        or plan["costMicrousd"] < (recovery + overhead) * plan["requestCostMicrousd"]
+        or plan["costMicrousd"]
+        < fixed_cost + (recovery + overhead) * plan["requestCostMicrousd"]
     ):
         raise ValueError("invalid shared allocation")
     path.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -69,7 +73,7 @@ def create(path, plan):
         "observation": 0,
         "recovery": 0,
         "reservedRecovery": recovery,
-        "costMicrousd": overhead * plan["requestCostMicrousd"],
+        "costMicrousd": fixed_cost + overhead * plan["requestCostMicrousd"],
         "lastSent": 0,
         "stopped": False,
         "coordinatorPid": os.getpid(),
@@ -201,14 +205,19 @@ class Gate:
                 raise ValueError("scenario request capacity")
             expected = dict(operations[index])
             source = expected.pop("versionFrom", None)
+            valid_version = False
             if source is not None:
                 capture = job["captures"].get(str(source))
-                if capture and capture["status"] == 200:
+                valid_version = bool(
+                    capture
+                    and capture["status"] == 200
+                    and isinstance(capture.get("updateTime"), str)
+                    and capture["updateTime"]
+                )
+                if valid_version:
                     from urllib.parse import quote
 
                     version = capture.get("updateTime")
-                    if not isinstance(version, str) or not version:
-                        raise ValueError("cleanup version missing")
                     expected["path"] += "?currentDocument.updateTime=" + quote(
                         version, safe=""
                     )
@@ -219,7 +228,7 @@ class Gate:
                 raise ValueError("cleanup target has no absent-before-use proof")
             if recovery:
                 job["stopped"] = True  # Recovery is a one-way transition.
-            if source is not None and (not capture or capture["status"] != 200):
+            if source is not None and not valid_version:
                 job[phase] += 1
                 state["reservedRecovery"] -= 1
                 state.setdefault("skips", []).append(

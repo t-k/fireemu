@@ -8,7 +8,6 @@ import itertools
 import json
 import multiprocessing as mp
 import time
-import uuid
 from urllib.parse import quote
 
 from batch_adapter import Adapter, observer_digest
@@ -84,7 +83,8 @@ def manifest(nonce):
         "observationRequests": 12,
         "intervalSeconds": 0.25,
         "requestCostMicrousd": 100,
-        "costMicrousd": 2600,
+        "costMicrousd": 42600,
+        "fixedCostMicrousd": 40000,
         "coordinatorRequests": 2,
         "accounts": 0,
         "configurationChanges": 0,
@@ -113,9 +113,7 @@ def worker(output, key, origins):
     )
     gate = Gate(output / "gate", key)
     gate.claim()
-    adapter = Adapter(
-        candidate(), uuid.uuid4().hex, output / key, local_origins=origins
-    )
+    adapter = Adapter(candidate(), plan["nonce"], output / key, local_origins=origins)
     adapter.shared_gate = gate
     rows, cleanup = [], []
     failure = None
@@ -152,11 +150,10 @@ def worker(output, key, origins):
                 prior = cleanup[source] if source < len(cleanup) else {}
                 if prior.get("status") == 200:
                     version = prior.get("body", {}).get("updateTime")
-                    if not isinstance(version, str):
-                        break
-                    operation["path"] += "?currentDocument.updateTime=" + quote(
-                        version, safe=""
-                    )
+                    if isinstance(version, str) and version:
+                        operation["path"] += "?currentDocument.updateTime=" + quote(
+                            version, safe=""
+                        )
             try:
                 status, body = adapter.request(**operation)
                 cleanup.append(
@@ -230,12 +227,34 @@ def execute(output, origins):
     invariant = (
         state["total"] <= 26
         and state["recovery"] <= 12
-        and state["costMicrousd"] <= 2600
+        and state["costMicrousd"] <= 42600
         and all(
             b["started"] - a["started"] >= 0.25 for a, b in itertools.pairwise(events)
         )
         and all(process.exitcode == 0 for process in processes)
     )
+    wire_audit = True
+    for key in jobs:
+        receipt_path = output / key / "responses.jsonl"
+        receipts = (
+            [json.loads(line) for line in receipt_path.read_text().splitlines()]
+            if receipt_path.exists()
+            else []
+        )
+        dispatched = [event for event in events if event["job"] == key]
+        wire_audit = (
+            wire_audit
+            and len(receipts) == len(dispatched)
+            and all(
+                receipt["phase"] == event["phase"]
+                and receipt["response"].get("sharedRequestDigest")
+                == event["requestDigest"]
+                and receipt["response"]["httpStatus"] == event.get("status")
+                and digest(receipt["response"]["body"]) == event.get("responseDigest")
+                for receipt, event in zip(receipts, dispatched, strict=True)
+            )
+        )
+    invariant = invariant and wire_audit
     completed = invariant and all(
         r["recordingComplete"] and r["cleanupComplete"] and r.get("safety")
         for r in results.values()
@@ -251,6 +270,7 @@ def execute(output, origins):
             ],
             "productionExecuted": False,
             "sharedConstraints": invariant,
+            "wireHistoryMatchesReservations": wire_audit,
             "jobs": results,
             "gate": state,
             "manifestSha256": digest(state["plan"]),

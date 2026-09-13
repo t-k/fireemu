@@ -184,6 +184,34 @@ fn response_reader_rejects_connection_reset_without_http_response() {
 }
 
 #[test]
+fn response_reader_rejects_reset_after_a_close_delimited_partial_response() {
+    let error = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\n\r\npartial",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("a reset cannot delimit a close-delimited response");
+    assert_eq!(error, "response is not self-delimiting");
+}
+
+#[test]
+fn response_reader_rejects_reset_after_an_incomplete_chunked_response() {
+    let error = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\ntransfer-encoding: chunked\r\n\r\n3\r\nno!\r\n0\r\n",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("a reset cannot complete chunked terminal framing");
+    assert_eq!(error, "response is not self-delimiting");
+}
+
+#[test]
 fn response_reader_rejects_other_read_errors() {
     let error = response_after_read(
         b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nno!",
@@ -205,10 +233,81 @@ fn response_after_read(
     match read {
         Ok(_) => fireemu_adapter_functions::http::parse_response(raw, method),
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {
-            fireemu_adapter_functions::http::parse_response(raw, method)
+            let response = fireemu_adapter_functions::http::parse_response(raw, method)?;
+            ensure_self_delimiting(raw, method, response.status)?;
+            Ok(response)
         }
         Err(error) => Err(format!("reading response: {error}")),
     }
+}
+
+fn ensure_self_delimiting(raw: &[u8], method: &str, status: u16) -> Result<(), String> {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| "malformed response from the functions runner".to_owned())?;
+    if method.eq_ignore_ascii_case("HEAD")
+        || matches!(status, 204 | 304)
+        || (100..200).contains(&status)
+    {
+        return Ok(());
+    }
+
+    let head = std::str::from_utf8(&raw[..header_end])
+        .map_err(|_| "malformed response header text".to_owned())?;
+    let mut transfer_encoding_chunked = false;
+    let mut content_length = None;
+    for line in head.split("\r\n").skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        match name.trim().to_ascii_lowercase().as_str() {
+            "transfer-encoding" => {
+                transfer_encoding_chunked = value.trim().eq_ignore_ascii_case("chunked");
+            }
+            "content-length" => {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+            _ => {}
+        }
+    }
+
+    let body = &raw[header_end + 4..];
+    if let Some(length) = content_length {
+        return (body.len() >= length)
+            .then_some(())
+            .ok_or_else(|| "response is not self-delimiting".to_owned());
+    }
+    if transfer_encoding_chunked {
+        let mut rest = body;
+        loop {
+            let line_end = rest
+                .windows(2)
+                .position(|window| window == b"\r\n")
+                .ok_or_else(|| "response is not self-delimiting".to_owned())?;
+            let size = usize::from_str_radix(
+                rest[..line_end]
+                    .split(|byte| *byte == b';')
+                    .next()
+                    .and_then(|value| std::str::from_utf8(value).ok())
+                    .unwrap_or("")
+                    .trim(),
+                16,
+            )
+            .map_err(|_| "response is not self-delimiting".to_owned())?;
+            rest = &rest[line_end + 2..];
+            if size == 0 {
+                return (rest.starts_with(b"\r\n") || rest.windows(4).any(|window| window == b"\r\n\r\n"))
+                    .then_some(())
+                    .ok_or_else(|| "response is not self-delimiting".to_owned());
+            }
+            if rest.len() < size + 2 || &rest[size..size + 2] != b"\r\n" {
+                return Err("response is not self-delimiting".to_owned());
+            }
+            rest = &rest[size + 2..];
+        }
+    }
+    Err("response is not self-delimiting".to_owned())
 }
 
 impl Harness {

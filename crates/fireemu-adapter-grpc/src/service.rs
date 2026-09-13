@@ -1378,6 +1378,52 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn execute_pipeline_guard_refuses_a_stale_epoch_inside_the_read() {
+        let backend = test_backend();
+        let old_epoch = backend.barrier().epoch();
+        drop(backend.barrier().exclusive());
+        for (epoch, stale) in [(old_epoch, true), (backend.barrier().epoch(), false)] {
+            let caller = Caller {
+                principal: Principal::Owner,
+                epoch,
+            };
+            let result = blocking_read(backend.clone(), None, caller, move |local, guard| {
+                let req = pb::ExecutePipelineRequest {
+                    database: "projects/demo-app/databases/(default)".to_owned(),
+                    pipeline_type: Some(
+                        pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                            pb::StructuredPipeline {
+                                pipeline: Some(pb::Pipeline {
+                                    stages: vec![pb::pipeline::Stage {
+                                        name: "collection".to_owned(),
+                                        args: vec![pb::Value {
+                                            value_type: Some(pb::value::ValueType::StringValue(
+                                                "items".to_owned(),
+                                            )),
+                                        }],
+                                        ..Default::default()
+                                    }],
+                                }),
+                                ..Default::default()
+                            },
+                        ),
+                    ),
+                    ..Default::default()
+                };
+                let parent =
+                    parse_parent("projects/demo-app/databases/(default)/documents").unwrap();
+                crate::pipeline::execute_supported(&req, &parent, local, guard)
+            })
+            .await;
+            if stale {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Unavailable);
+            } else {
+                assert!(result.unwrap().is_empty());
+            }
+        }
+    }
+
     fn transaction_stats(
         backend: &LocalBackend,
     ) -> fireemu_core_firestore::store::TransactionBookkeepingStats {

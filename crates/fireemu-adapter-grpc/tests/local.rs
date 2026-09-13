@@ -4546,7 +4546,7 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
         "FS_PIPE_EDITION"
     );
     handle.abort();
-    // Enterprise: decoded, canonicalized, refused explicitly or answered validation-only.
+    // Enterprise: supported reads execute; other shapes retain explicit refusals.
     let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
     let valid = client
         .execute_pipeline(request(vec![
@@ -4679,201 +4679,249 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
     handle.abort();
 }
 
+async fn drain_pipeline(
+    mut stream: tonic::Streaming<pb::ExecutePipelineResponse>,
+    messages: usize,
+) -> Vec<pb::Document> {
+    let mut documents = Vec::new();
+    let mut received = 0;
+    while let Some(response) = stream.next().await {
+        let response = response.unwrap();
+        assert!(
+            response.results.len() <= 1,
+            "one document per wire response"
+        );
+        for doc in &response.results {
+            assert!(doc.name.is_empty());
+            assert!(doc.create_time.is_none());
+            assert!(doc.update_time.is_none());
+        }
+        documents.extend(response.results);
+        received += 1;
+    }
+    assert_eq!(received, messages);
+    documents
+}
+
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit() {
+    use pb::execute_pipeline_request::ConsistencySelector;
+
     let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![
-                update_write("items/one", &[("name", s("one")), ("ignored", i(1))]),
+                update_write(
+                    "items/one",
+                    &[
+                        ("name", s("one")),
+                        ("ignored", i(1)),
+                        ("literal.dot", s("literal")),
+                    ],
+                ),
                 update_write("items/two", &[("name", s("two")), ("ignored", i(2))]),
+                update_write("rooms/r1/messages/m1", &[("name", s("nested"))]),
+                update_write("rooms/r2/messages/m1", &[("name", s("sibling"))]),
+                update_write("messages/m1", &[("name", s("root"))]),
             ],
             ..Default::default()
         })
         .await
         .unwrap();
-    let select = pb::Value {
-        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
-            fields: [(
-                "label".to_owned(),
-                pb::Value {
-                    value_type: Some(pb::value::ValueType::FieldReferenceValue("name".to_owned())),
-                },
-            )]
-            .into_iter()
-            .collect(),
-        })),
+    let stage = |name: &str, value: pb::Value| pb::pipeline::Stage {
+        name: name.to_owned(),
+        args: vec![value],
+        options: HashMap::new(),
     };
-    let mut stream = client
-        .execute_pipeline(pb::ExecutePipelineRequest {
-            database: DB.to_owned(),
-            pipeline_type: Some(
-                pb::execute_pipeline_request::PipelineType::StructuredPipeline(
-                    pb::StructuredPipeline {
-                        pipeline: Some(pb::Pipeline {
-                            stages: vec![
-                                pb::pipeline::Stage {
-                                    name: "collection".to_owned(),
-                                    args: vec![s("items")],
-                                    options: HashMap::new(),
-                                },
-                                pb::pipeline::Stage {
-                                    name: "select".to_owned(),
-                                    args: vec![select],
-                                    options: HashMap::new(),
-                                },
-                                pb::pipeline::Stage {
-                                    name: "limit".to_owned(),
-                                    args: vec![i(1)],
-                                    options: HashMap::new(),
-                                },
-                            ],
-                        }),
-                        options: HashMap::new(),
-                    },
-                ),
-            ),
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .into_inner();
-    let response = stream.next().await.unwrap().unwrap();
-    assert_eq!(response.results.len(), 1);
-    assert_eq!(response.results[0].fields.len(), 1);
-    assert_eq!(response.results[0].fields["label"], s("one"));
-    assert!(response.results[0].name.is_empty());
-    assert!(response.results[0].create_time.is_none());
-    assert!(response.results[0].update_time.is_none());
-    let run = |collection: &str, limit: i64| pb::ExecutePipelineRequest {
+    let select = |field: &str| {
+        stage(
+            "select",
+            pb::Value {
+                value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                    fields: [(
+                        "label".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::FieldReferenceValue(
+                                field.to_owned(),
+                            )),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                })),
+            },
+        )
+    };
+    let request = |stages: Vec<pb::pipeline::Stage>| pb::ExecutePipelineRequest {
         database: DB.to_owned(),
         pipeline_type: Some(
             pb::execute_pipeline_request::PipelineType::StructuredPipeline(
                 pb::StructuredPipeline {
-                    pipeline: Some(pb::Pipeline {
-                        stages: vec![
-                            pb::pipeline::Stage {
-                                name: "collection".to_owned(),
-                                args: vec![s(collection)],
-                                options: HashMap::new(),
-                            },
-                            pb::pipeline::Stage {
-                                name: "limit".to_owned(),
-                                args: vec![i(limit)],
-                                options: HashMap::new(),
-                            },
-                        ],
-                    }),
+                    pipeline: Some(pb::Pipeline { stages }),
                     options: HashMap::new(),
                 },
             ),
         ),
         ..Default::default()
     };
-    let zero = client
-        .execute_pipeline(run("items", 0))
-        .await
-        .unwrap()
-        .into_inner()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(zero.results.is_empty());
-    let empty = client
-        .execute_pipeline(run("empty", 10))
-        .await
-        .unwrap()
-        .into_inner()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(empty.results.is_empty());
-    client
-        .commit(pb::CommitRequest {
-            database: DB.to_owned(),
-            writes: vec![update_write(
-                "rooms/r1/messages/m1",
-                &[("name", s("nested"))],
-            )],
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let nested = client
-        .execute_pipeline(run("rooms/r1/messages", 10))
-        .await
-        .unwrap()
-        .into_inner()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(nested.results.len(), 1);
-    assert_eq!(nested.results[0].fields["name"], s("nested"));
-    let mut transaction = run("items", 1);
-    transaction.consistency_selector =
-        Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1]));
-    assert_eq!(
+    let collection = |name: &str| stage("collection", s(name));
+    let limit = |n| stage("limit", i(n));
+    let projected = drain_pipeline(
         client
-            .execute_pipeline(transaction)
+            .execute_pipeline(request(vec![collection("items"), select("name"), limit(1)]))
             .await
-            .unwrap_err()
-            .code(),
-        tonic::Code::Unimplemented
-    );
-    let mut duplicate = run("items", 1);
-    if let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
-        duplicate.pipeline_type.as_mut()
-    {
-        structured
-            .pipeline
-            .as_mut()
             .unwrap()
-            .stages
-            .push(pb::pipeline::Stage {
-                name: "limit".to_owned(),
-                args: vec![i(2)],
-                options: HashMap::new(),
-            });
-    }
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(projected.len(), 1);
     assert_eq!(
-        client.execute_pipeline(duplicate).await.unwrap_err().code(),
-        tonic::Code::Unimplemented
+        projected[0].fields,
+        [("label".to_owned(), s("one"))].into_iter().collect()
     );
-    let mut dotted = run("items", 1);
-    if let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
-        dotted.pipeline_type.as_mut()
-    {
-        structured.pipeline.as_mut().unwrap().stages.insert(
+    // Drain both responses, preserving multiplicity; collection input does not promise ordering.
+    let all = drain_pipeline(
+        client
+            .execute_pipeline(request(vec![collection("items"), select("name")]))
+            .await
+            .unwrap()
+            .into_inner(),
+        2,
+    )
+    .await;
+    assert_eq!(all.len(), 2);
+    assert_eq!(
+        all.iter()
+            .filter(|doc| doc.fields.get("label") == Some(&s("one")))
+            .count(),
+        1
+    );
+    assert_eq!(
+        all.iter()
+            .filter(|doc| doc.fields.get("label") == Some(&s("two")))
+            .count(),
+        1
+    );
+    for (path, count, expected) in [
+        ("items", 0, None),
+        ("empty", 10, None),
+        ("rooms/r1/messages", 10, Some("nested")),
+        ("rooms/r2/messages", 10, Some("sibling")),
+        ("messages", 10, Some("root")),
+    ] {
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(request(vec![collection(path), limit(count)]))
+                .await
+                .unwrap()
+                .into_inner(),
             1,
-            pb::pipeline::Stage {
-                name: "select".to_owned(),
-                args: vec![pb::Value {
-                    value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
-                        fields: [(
-                            "label".to_owned(),
-                            pb::Value {
-                                value_type: Some(pb::value::ValueType::FieldReferenceValue(
-                                    "profile.name".to_owned(),
-                                )),
-                            },
-                        )]
-                        .into_iter()
-                        .collect(),
-                    })),
-                }],
-                options: HashMap::new(),
-            },
+        )
+        .await;
+        match expected {
+            None => assert!(docs.is_empty()),
+            Some(name) => {
+                assert_eq!(docs.len(), 1);
+                assert_eq!(
+                    docs[0].fields,
+                    [("name".to_owned(), s(name))].into_iter().collect()
+                );
+            }
+        }
+    }
+    // A quoted literal dot is one field, unlike the unsupported nested extraction below.
+    let literal = drain_pipeline(
+        client
+            .execute_pipeline(request(vec![
+                collection("items"),
+                select("`literal.dot`"),
+                limit(1),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(literal[0].fields.get("label"), Some(&s("literal")));
+    for (label, stages) in [
+        (
+            "duplicate limit",
+            vec![collection("items"), limit(1), limit(2)],
+        ),
+        (
+            "duplicate select",
+            vec![collection("items"), select("name"), select("label")],
+        ),
+        (
+            "limit before select",
+            vec![collection("items"), limit(1), select("name")],
+        ),
+        (
+            "nested reference",
+            vec![collection("items"), select("profile.name")],
+        ),
+        (
+            "document metadata",
+            vec![collection("items"), select("__name__")],
+        ),
+    ] {
+        let err = client.execute_pipeline(request(stages)).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+    }
+    for selector in [
+        ConsistencySelector::Transaction(vec![1]),
+        ConsistencySelector::NewTransaction(pb::TransactionOptions::default()),
+        ConsistencySelector::ReadTime(prost_types::Timestamp {
+            seconds: 1_700_000_000,
+            nanos: 0,
+        }),
+    ] {
+        let mut req = request(vec![collection("items")]);
+        req.consistency_selector = Some(selector);
+        assert_eq!(
+            client.execute_pipeline(req).await.unwrap_err().code(),
+            tonic::Code::Unimplemented
         );
     }
+    let mut req = request(vec![collection("items")]);
+    req.consistency_selector = Some(ConsistencySelector::NewTransaction(
+        pb::TransactionOptions::default(),
+    ));
+    req.auto_commit_transaction = true;
     assert_eq!(
-        client.execute_pipeline(dotted).await.unwrap_err().code(),
+        client.execute_pipeline(req).await.unwrap_err().code(),
         tonic::Code::Unimplemented
     );
+    let mut req = request(vec![collection("items")]);
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        req.pipeline_type.as_mut()
+    else {
+        panic!("structured request")
+    };
+    structured
+        .options
+        .insert("index_mode".to_owned(), s("recommended"));
+    assert_eq!(
+        client.execute_pipeline(req).await.unwrap_err().code(),
+        tonic::Code::Unimplemented
+    );
+    // Refusals do not consume or alter the source data.
+    let after = drain_pipeline(
+        client
+            .execute_pipeline(request(vec![collection("items"), select("name")]))
+            .await
+            .unwrap()
+            .into_inner(),
+        2,
+    )
+    .await;
+    assert_eq!(after, all);
     handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test]

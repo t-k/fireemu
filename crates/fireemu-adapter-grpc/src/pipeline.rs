@@ -1,6 +1,7 @@
 //! `ExecutePipeline` decoding for the strict validator (`FS-PIPE-RPC-1`): the request's
 //! database, consistency selector and options are checked, the wire stages become
-//! [`StageSpec`]s with typed arguments that the core canonicalizes; nothing is executed.
+//! [`StageSpec`]s with typed arguments that the core canonicalizes. The finite latest-read
+//! collection/select/limit subset executes locally; other semantics are refused.
 
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
@@ -138,6 +139,7 @@ pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst
 
 /// Executes the finite local Enterprise subset: collection, field-reference select aliases and
 /// limit. Every other stage or option is refused explicitly by the caller.
+#[allow(clippy::too_many_lines)]
 pub fn execute_supported(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,

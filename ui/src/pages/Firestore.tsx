@@ -439,9 +439,16 @@ const DocumentView: Component<{
   onDeleted: () => void;
 }> = (props) => {
   const navigate = useNavigate();
+  let readGeneration = 0;
+  const readGenerations = new WeakMap<object, number>();
   const [doc, { refetch, mutate }] = createResource(
     () => [props.root, props.path, props.version] as const,
-    ([root, path]) => settle(getDocument(root, path)),
+    async ([root, path]) => {
+      const generation = ++readGeneration;
+      const result = await settle(getDocument(root, path));
+      readGenerations.set(result, generation);
+      return result;
+    },
   );
   const [editing, setEditing] = createSignal(false);
   const [fields, setFields] = createFieldsStore([]);
@@ -578,7 +585,7 @@ const DocumentView: Component<{
     if (parsedDraft.isErr()) return;
     const draftChanges = diffFields(session.fields, parsedDraft.value);
     const operation = ++editOperation;
-    const viewAtStart = doc();
+    const reloadGeneration = ++readGeneration;
     setEditBusy(true);
     const reloaded = await getDocument(session.root, session.path);
     if (
@@ -598,17 +605,29 @@ const DocumentView: Component<{
       return;
     }
     const observed = doc();
-    if (observed !== viewAtStart && observed?.isErr() && observed.error.status === 404) {
+    const observedGeneration = observed ? (readGenerations.get(observed) ?? 0) : 0;
+    if (
+      observedGeneration > reloadGeneration &&
+      observed?.isErr() &&
+      observed.error.status === 404
+    ) {
       setError(t("firestore.editConflictDeleted"));
       return;
     }
-    const selected = selectReloadDocument(reloaded.value, current());
+    // Publication order alone cannot distinguish an older read held across this operation.
+    // Read issuance also permits an authoritative restore to decrease updateTime.
+    const selected = selectReloadDocument(
+      { document: reloaded.value, generation: reloadGeneration },
+      observed?.isOk() ? { document: observed.value, generation: observedGeneration } : null,
+    );
     if (selected.isErr()) {
       setError(t("firestore.editConflict"));
       return;
     }
     const latest = selected.value;
-    mutate(reloaded.map(() => latest));
+    const published = reloaded.map(() => latest);
+    readGenerations.set(published, Math.max(reloadGeneration, observedGeneration));
+    mutate(published);
     // Supersede older pending view reads, then converge to the current server state.
     // Ordering is local to this reload so a later snapshot restore can still move time back.
     void refetch();

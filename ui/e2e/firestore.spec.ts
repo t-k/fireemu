@@ -317,6 +317,55 @@ test.describe("Firestore data browser", () => {
     await expect(await valueFor("local")).toHaveValue("deleted-draft");
   });
 
+  test("rebases onto a restored snapshot with a lower update time", async ({ page, request }) => {
+    await page.clock.install();
+    const documentPath = `${DOCS}/reload-restore/one`;
+    const restored = (await api(request, "PATCH", documentPath, {
+      fields: { local: { stringValue: "before" }, remote: { stringValue: "snapshot" } },
+    })) as { updateTime: string };
+    await api(request, "POST", "control/v1/sessions/default/snapshots", {
+      name: "reload-basis",
+      allowNonQuiescent: true,
+    });
+    await api(request, "POST", "control/v1/sessions/default/clock:advance", { seconds: 1 });
+    const beforeRestore = (await api(request, "PATCH", documentPath, {
+      fields: { local: { stringValue: "before" }, remote: { stringValue: "later" } },
+    })) as { updateTime: string };
+    expect(beforeRestore.updateTime > restored.updateTime).toBe(true);
+    await gotoApp(page, "/firestore/reload-restore/one");
+    await expect(page.getByTestId("live-badge")).toHaveText("Live");
+    const editor = page.getByTestId("document-view");
+    await expect(editor.getByText(beforeRestore.updateTime, { exact: true })).toBeVisible();
+    await page.getByTestId("document-edit").click();
+    await editor.getByLabel("Value").first().fill("draft");
+    // Hold the watch debounce so the explicit reload sees a restored server behind the view.
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    await api(request, "POST", "control/v1/sessions/default/snapshots/reload-basis:restore", {});
+    await expect(editor.getByText(beforeRestore.updateTime, { exact: true })).toBeVisible();
+    await page.getByTestId("document-save").click();
+    const reloadDraft = page.getByTestId("document-reload-draft");
+    await expect(reloadDraft).toBeVisible();
+    await reloadDraft.click();
+    await expect(reloadDraft).not.toBeVisible();
+    await expect(editor.getByLabel("Value").first()).toHaveValue("draft");
+    await expect(editor.getByLabel("Value").nth(1)).toHaveValue("snapshot");
+    await expect(editor.getByText(restored.updateTime, { exact: true }).last()).toBeVisible();
+    const savedRequest = page.waitForRequest(`**/${documentPath}?*`);
+    await page.getByTestId("document-save").click();
+    const outgoing = await savedRequest;
+    expect(new URL(outgoing.url()).searchParams.get("currentDocument.updateTime")).toBe(
+      restored.updateTime,
+    );
+    const response = await outgoing.response();
+    expect(response).not.toBeNull();
+    expect(response!.ok(), await response!.text()).toBe(true);
+    expect(((await api(request, "GET", documentPath)) as { fields: unknown }).fields).toEqual({
+      local: { stringValue: "draft" },
+      remote: { stringValue: "snapshot" },
+    });
+    await page.clock.resume();
+  });
+
   test("rebases onto a newer live document that arrives before the manual reload", async ({
     page,
     request,
@@ -400,95 +449,111 @@ test.describe("Firestore data browser", () => {
     });
   });
 
-  test("supersedes an older pending live read after publishing a newer reload", async ({
-    page,
-    request,
-  }) => {
-    await page.clock.install();
-    const documentPath = `${DOCS}/pending-reload/one`;
-    await api(request, "PATCH", documentPath, {
-      fields: { value: { stringValue: "before" } },
-    });
-    await gotoApp(page, "/firestore/pending-reload/one");
-    await expect(page.getByTestId("live-badge")).toHaveText("Live");
-    await page.getByTestId("document-edit").click();
-    await page.getByLabel("Value").fill("draft");
-    const first = (await api(request, "PATCH", documentPath, {
-      fields: { value: { stringValue: "A" } },
-    })) as { updateTime: string };
-    await expect(page.getByText(first.updateTime, { exact: true })).toBeVisible();
-    await page.getByTestId("document-save").click();
-    const reloadDraft = page.getByTestId("document-reload-draft");
-    await expect(reloadDraft).toBeVisible();
+  for (const olderFinishesFirst of [false, true]) {
+    test(`supersedes an older pending live read ${olderFinishesFirst ? "before" : "after"} publishing a newer reload`, async ({
+      page,
+      request,
+    }) => {
+      await page.clock.install();
+      const documentPath = `${DOCS}/pending-reload/one`;
+      await api(request, "PATCH", documentPath, {
+        fields: { value: { stringValue: "before" } },
+      });
+      await gotoApp(page, "/firestore/pending-reload/one");
+      await expect(page.getByTestId("live-badge")).toHaveText("Live");
+      await page.getByTestId("document-edit").click();
+      await page.getByLabel("Value").fill("draft");
+      const first = (await api(request, "PATCH", documentPath, {
+        fields: { value: { stringValue: "A" } },
+      })) as { updateTime: string };
+      await expect(page.getByText(first.updateTime, { exact: true })).toBeVisible();
+      await page.getByTestId("document-save").click();
+      const reloadDraft = page.getByTestId("document-reload-draft");
+      await expect(reloadDraft).toBeVisible();
 
-    const gates = Array.from({ length: 3 }, () => {
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
+      const gates = Array.from({ length: 3 }, () => {
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let fetched!: () => void;
+        const ready = new Promise<void>((resolve) => {
+          fetched = resolve;
+        });
+        let finished!: () => void;
+        const done = new Promise<void>((resolve) => {
+          finished = resolve;
+        });
+        return { release, gate, fetched, ready, finished, done };
       });
-      let fetched!: () => void;
-      const ready = new Promise<void>((resolve) => {
-        fetched = resolve;
+      let reads = 0;
+      const documentPattern = `**/${documentPath}`;
+      await page.route(documentPattern, async (route) => {
+        const index = reads++;
+        if (index >= gates.length) {
+          await route.continue();
+          return;
+        }
+        const gate = gates[index]!;
+        const response = await route.fetch();
+        if (index === 0) {
+          expect(((await response.json()) as { fields: unknown }).fields).toEqual({
+            value: { stringValue: "older live" },
+          });
+        }
+        gate.fetched();
+        await gate.gate;
+        await route.fulfill({ response });
+        gate.finished();
       });
-      let finished!: () => void;
-      const done = new Promise<void>((resolve) => {
-        finished = resolve;
-      });
-      return { release, gate, fetched, ready, finished, done };
-    });
-    let reads = 0;
-    const documentPattern = `**/${documentPath}`;
-    await page.route(documentPattern, async (route) => {
-      const index = reads++;
-      if (index >= gates.length) {
-        await route.continue();
-        return;
+      const olderRequest = page.waitForRequest(documentPattern);
+      const older = (await api(request, "PATCH", documentPath, {
+        fields: { value: { stringValue: "older live" } },
+      })) as { updateTime: string };
+      await gates[0]!.ready;
+      // Freeze the watch debounce after the old live read starts. The next commit still
+      // reaches the real daemon; its timer cannot accidentally supersede that pending read.
+      await page.clock.pauseAt(new Date(Date.now() + 1_000));
+      const second = (await api(request, "PATCH", documentPath, {
+        fields: { value: { stringValue: "B" } },
+      })) as { updateTime: string };
+      await reloadDraft.click();
+      await gates[1]!.ready;
+      if (olderFinishesFirst) {
+        gates[0]!.release();
+        await expect(page.getByText(older.updateTime, { exact: true })).toBeVisible();
       }
-      const gate = gates[index]!;
-      const response = await route.fetch();
-      if (index === 0) {
-        expect(((await response.json()) as { updateTime: string }).updateTime).toBe(
-          first.updateTime,
-        );
-      }
-      gate.fetched();
-      await gate.gate;
-      await route.fulfill({ response });
-      gate.finished();
-    });
-    const olderRequest = page.waitForRequest(documentPattern);
-    await api(request, "PATCH", `${DOCS}/pending-reload/other`, {
-      fields: { value: { stringValue: "invalidate" } },
-    });
-    await gates[0]!.ready;
-    // Freeze the watch debounce after the old live read starts. The next commit still
-    // reaches the real daemon; its timer cannot accidentally supersede that pending read.
-    await page.clock.pauseAt(new Date(Date.now() + 1_000));
-    const second = (await api(request, "PATCH", documentPath, {
-      fields: { value: { stringValue: "B" } },
-    })) as { updateTime: string };
-    gates[1]!.release();
-    await reloadDraft.click();
-    await expect(reloadDraft).not.toBeVisible();
-    await expect.poll(() => reads).toBe(3);
-    await gates[2]!.ready;
-    await expect(page.getByText(second.updateTime, { exact: true })).toBeVisible();
+      gates[1]!.release();
+      await expect(reloadDraft).not.toBeVisible();
+      await expect.poll(() => reads).toBe(3);
+      await gates[2]!.ready;
+      await expect(page.getByText(second.updateTime, { exact: true })).toBeVisible();
 
-    gates[0]!.release();
-    const olderResponse = await (await olderRequest).response();
-    expect(olderResponse).not.toBeNull();
-    await olderResponse!.finished();
-    await expect(page.getByText(second.updateTime, { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "REST JSON", exact: true }).click();
-    await expect(page.getByTestId("document-view").locator("pre")).toHaveText(
-      JSON.stringify({ value: { stringValue: "B" } }, null, 2),
-    );
-    await expect(page.getByLabel("Value")).toHaveValue("draft");
-    gates[2]!.release();
-    await Promise.all(gates.map((gate) => gate.done));
-    await page.unroute(documentPattern);
-    await page.clock.resume();
-  });
+      gates[0]!.release();
+      const olderResponse = await (await olderRequest).response();
+      expect(olderResponse).not.toBeNull();
+      await olderResponse!.finished();
+      await expect(page.getByText(second.updateTime, { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "REST JSON", exact: true }).click();
+      await expect(page.getByTestId("document-view").locator("pre")).toHaveText(
+        JSON.stringify({ value: { stringValue: "B" } }, null, 2),
+      );
+      await expect(page.getByLabel("Value")).toHaveValue("draft");
+      gates[2]!.release();
+      await Promise.all(gates.map((gate) => gate.done));
+      await page.unroute(documentPattern);
+      await page.clock.resume();
+      const savedRequest = page.waitForRequest(`**/${documentPath}?*`);
+      await page.getByTestId("document-save").click();
+      const outgoing = await savedRequest;
+      expect(new URL(outgoing.url()).searchParams.get("currentDocument.updateTime")).toBe(
+        second.updateTime,
+      );
+      const savedResponse = await outgoing.response();
+      expect(savedResponse).not.toBeNull();
+      expect(savedResponse!.ok(), await savedResponse!.text()).toBe(true);
+    });
+  }
 
   test("keeps the draft and reports an authorization failure when reloading a conflict", async ({
     page,

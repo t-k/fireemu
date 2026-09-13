@@ -72,8 +72,11 @@ test("bounded real HTTP separates non-JSON, empty, overflow, timeout and interru
       /owned origin/,
     );
   } finally {
+    const closed = new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
     server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
+    await closed;
     await rm(dir, { recursive: true, force: true });
   }
 });

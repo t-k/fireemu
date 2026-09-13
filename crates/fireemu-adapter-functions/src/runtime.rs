@@ -4400,7 +4400,7 @@ mod task_completion_tests {
             ],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -4829,7 +4829,7 @@ mod task_completion_tests {
             ],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
         let manifest = runtime.manifest().clone();

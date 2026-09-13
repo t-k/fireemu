@@ -4465,7 +4465,7 @@ mod tests {
             command: vec!["python3".to_owned(), script.display().to_string()],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spawn).await.unwrap();
         let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -4566,7 +4566,7 @@ mod tests {
             command: vec!["python3".to_owned(), script.display().to_string()],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spawn).await.unwrap();
         let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();

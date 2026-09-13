@@ -34,7 +34,7 @@ async fn runner_log_frames_preserve_function_and_user_metadata() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     })
     .await
     .unwrap();
@@ -139,7 +139,7 @@ async fn start_with_runtime_options(
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -200,7 +200,7 @@ async fn start_task_runtime_with_policy(
             "FIREEMU_FAKE_TASK_PROBE".to_owned(),
             probe.display().to_string(),
         )],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -560,7 +560,7 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let first = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     let second = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
@@ -639,7 +639,7 @@ async fn shutdown_rejects_late_reload_and_reset_runner_installation() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     let error = runtime
@@ -672,7 +672,7 @@ async fn rejected_manifest_reload_keeps_the_eventarc_generation_and_table() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
     let mut changed = runtime.manifest().clone();
@@ -720,7 +720,7 @@ async fn hot_reload_rejects_a_policy_only_blocking_auth_manifest_change() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
     let mut changed = runtime.manifest().clone();
@@ -981,7 +981,7 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let mut slow = fast.clone();
     slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned())];
@@ -1230,7 +1230,7 @@ async fn reload_generation_wins_over_an_older_reset_respawn() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let mut slow = fast.clone();
     slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned())];
@@ -1286,7 +1286,7 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();

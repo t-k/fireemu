@@ -79,12 +79,13 @@ def test_current_json_normalizer_is_exact_legacy_source():
 
 
 def test_actual_bounded_http_fixture():
-    subprocess.run(
+    result = subprocess.run(
         ["node", "--test", str(ROOT / "tools/compat-broad/record-http.test.mjs")],
-        check=True,
         capture_output=True,
+        text=True,
         timeout=20,
     )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_received_nonjson_cannot_satisfy_json_state_readback():

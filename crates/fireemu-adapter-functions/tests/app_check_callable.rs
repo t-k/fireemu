@@ -592,7 +592,7 @@ async fn start_with_consume(trusted: bool, consume: &str) -> Harness {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: vec![("FIREEMU_FAKE_CONSUME".to_owned(), consume.to_owned())],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec)
         .await

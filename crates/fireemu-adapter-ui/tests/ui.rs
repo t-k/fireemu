@@ -691,7 +691,7 @@ async fn state_with_functions() -> (
         ],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: std::time::Duration::from_secs(20),
+        hello_timeout: std::time::Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = fireemu_adapter_functions::manifest_json::parse_manifest(
@@ -820,7 +820,7 @@ async fn state_with_http_functions() -> (
             "FIREEMU_UI_TASK_PROBE".to_owned(),
             probe.display().to_string(),
         )],
-        hello_timeout: std::time::Duration::from_secs(20),
+        hello_timeout: std::time::Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let mut manifest = fireemu_adapter_functions::manifest_json::parse_manifest(

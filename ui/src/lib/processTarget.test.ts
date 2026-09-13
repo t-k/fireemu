@@ -155,6 +155,31 @@ describe("owned daemon lifecycle", () => {
     );
   });
 
+  it("kills a retained live child before reporting missing supervisor readiness", async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    await once(child, "spawn");
+    const never = new Promise<void>(() => undefined);
+    const unready: OwnedProcess = {
+      child,
+      supervised: true,
+      supervisorReady: () => false,
+      supervisorReadyOrClosed: never,
+      cleanupAcknowledged: () => false,
+      cleanupChannelClosed: never,
+    };
+    try {
+      await expect(stopOwnedProcess(unready)).rejects.toThrow(
+        "did not establish cleanup ownership",
+      );
+      expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+        await once(child, "exit");
+      }
+    }
+  });
+
   it("rejects a cleanup marker when the supervisor did not finish by group SIGKILL", async () => {
     const child = spawn(process.execPath, ["-e", "process.exit(0)"]);
     await once(child, "exit");

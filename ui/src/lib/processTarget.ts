@@ -113,6 +113,13 @@ export const stopOwnedProcess = async (owned: OwnedProcess): Promise<void> => {
   if (owned.supervised && childAlive()) {
     await waitAtMost(owned.supervisorReadyOrClosed, 1_000);
     if (!owned.supervisorReady()) {
+      if (childAlive() && child.pid !== undefined) {
+        child.kill("SIGKILL");
+        await waitForExit(child);
+      }
+      if (childAlive()) {
+        throw new Error("unready daemon supervisor survived cleanup");
+      }
       throw new Error("daemon supervisor did not establish cleanup ownership");
     }
   }

@@ -96,10 +96,6 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { cwd: repo },
   );
   const { child } = owned;
-  writeFileSync(
-    STATE_FILE,
-    JSON.stringify({ pid: child.pid, state: "starting", supervisor: owned.supervised }),
-  );
   let banner = "";
   const status: ChildStatus = {};
   child.stdout?.on("data", (d: Buffer) => {
@@ -115,6 +111,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     status.exit = { code, signal };
   });
   try {
+    writeFileSync(
+      STATE_FILE,
+      JSON.stringify({ pid: child.pid, state: "starting", supervisor: owned.supervised }),
+    );
     // A release daemon normally starts immediately. Keep the CI readiness budget bounded while
     // allowing a cold, contended hosted runner enough time to schedule the process.
     await waitFor(`http://127.0.0.1:${PORTS.http}/health/live`, 240, status, () => banner);

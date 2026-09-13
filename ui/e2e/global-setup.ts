@@ -1,12 +1,12 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ownedProcessTarget } from "../src/lib/processTarget";
+import { stopOwnedProcess } from "../src/lib/processTarget";
 
 // Starts a real daemon (release binary when built, debug otherwise) with the smoke
-// functions project and a pinned clock, and records its PID for the teardown.
+// functions project and a pinned clock, and retains its child handle for teardown.
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
 const candidates = [
@@ -65,65 +65,7 @@ const waitFor = async (
   throw new Error(`daemon did not answer at ${url}\n${output()}`);
 };
 
-const stop = async (child: ChildProcess, status: ChildStatus): Promise<void> => {
-  const pid = child.pid;
-  if (pid === undefined) return;
-
-  if (process.platform === "win32") {
-    const childAlive = () =>
-      status.exit === undefined && child.exitCode === null && child.signalCode === null;
-    const signalChild = (value: NodeJS.Signals) => {
-      if (childAlive()) child.kill(value);
-    };
-    signalChild("SIGINT");
-    for (let i = 0; i < 40 && childAlive(); i += 1) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    if (childAlive()) {
-      signalChild("SIGKILL");
-      for (let i = 0; i < 40 && childAlive(); i += 1) {
-        await new Promise((r) => setTimeout(r, 250));
-      }
-    }
-    if (childAlive()) throw new Error(`daemon process ${pid} survived cleanup`);
-    return;
-  }
-
-  const target = ownedProcessTarget(pid, process.platform);
-  const groupAlive = () => {
-    try {
-      process.kill(target, 0);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
-      throw error;
-    }
-  };
-  const signalGroup = (value: NodeJS.Signals) => {
-    try {
-      process.kill(target, value);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    }
-  };
-  signalGroup("SIGINT");
-  for (let i = 0; i < 40 && groupAlive(); i += 1) {
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  if (groupAlive()) {
-    signalGroup("SIGKILL");
-    for (let i = 0; i < 40 && groupAlive(); i += 1) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-  }
-  if (groupAlive()) {
-    throw new Error(
-      `daemon process group ${pid} survived cleanup (leader=${JSON.stringify(status.exit)})`,
-    );
-  }
-};
-
-export default async function globalSetup(): Promise<void> {
+export default async function globalSetup(): Promise<() => Promise<void>> {
   const bin = candidates.find((p) => existsSync(p));
   if (!bin) {
     throw new Error("no fireemu binary: cargo build -p fireemu first");
@@ -176,9 +118,13 @@ export default async function globalSetup(): Promise<void> {
       : "";
     if (!token) throw new Error(`the served UI page carries no control token\n${banner}`);
     writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner, token }));
-    child.unref();
+    // Playwright retains this closure until global teardown, including the actual child handle.
+    return async () => {
+      await stopOwnedProcess(child);
+      rmSync(STATE_FILE, { force: true });
+    };
   } catch (error) {
-    await stop(child, status);
+    await stopOwnedProcess(child);
     throw error;
   }
 }

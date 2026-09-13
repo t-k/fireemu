@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { stopOwnedProcess } from "../src/lib/processTarget";
+import { retainOwnedProcess, stopOwnedProcess } from "../src/lib/processTarget";
 
 // Starts a real daemon (release binary when built, debug otherwise) with the smoke
 // functions project and a pinned clock, and retains its child handle for teardown.
@@ -90,6 +90,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   mkdirSync(dirname(STATE_FILE), { recursive: true });
   rmSync(STATE_FILE, { force: true });
   const child = spawn(bin, args, { cwd: repo, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const owned = retainOwnedProcess(child);
   let banner = "";
   const status: ChildStatus = {};
   child.stdout?.on("data", (d: Buffer) => {
@@ -118,13 +119,13 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       : "";
     if (!token) throw new Error(`the served UI page carries no control token\n${banner}`);
     writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner, token }));
-    // Playwright retains this closure until global teardown, including the actual child handle.
+    // Playwright retains this closure until global teardown, including the captured process group.
     return async () => {
-      await stopOwnedProcess(child);
+      await stopOwnedProcess(owned);
       rmSync(STATE_FILE, { force: true });
     };
   } catch (error) {
-    await stopOwnedProcess(child);
+    await stopOwnedProcess(owned);
     throw error;
   }
 }

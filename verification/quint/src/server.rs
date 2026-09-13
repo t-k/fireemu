@@ -280,16 +280,23 @@ fn validated_listener(endpoints: &BTreeSet<SocketAddr>) -> Result<Option<SocketA
     let Some(address) = endpoints.iter().next().copied() else {
         return Ok(None);
     };
-    let ipv4_loopback = match address {
-        SocketAddr::V4(address) => *address.ip() == Ipv4Addr::LOCALHOST,
-        SocketAddr::V6(address) => address.ip().to_ipv4_mapped() == Some(Ipv4Addr::LOCALHOST),
+    let client_address = match address {
+        SocketAddr::V4(address) if *address.ip() == Ipv4Addr::LOCALHOST => address.into(),
+        SocketAddr::V6(address) if address.ip().to_ipv4_mapped() == Some(Ipv4Addr::LOCALHOST) => {
+            SocketAddr::from((Ipv4Addr::LOCALHOST, address.port()))
+        }
+        _ => {
+            return Err(format!(
+                "owned Apalache process is not IPv4 loopback-bound: {address}"
+            ));
+        }
     };
-    if !ipv4_loopback || address.port() == 0 {
+    if client_address.port() == 0 {
         return Err(format!(
             "owned Apalache process is not IPv4 loopback-bound: {address}"
         ));
     }
-    Ok(Some(address))
+    Ok(Some(client_address))
 }
 
 impl Drop for RunningApalacheServer {
@@ -520,7 +527,8 @@ mod tests {
         let mapped_loopback = "[::ffff:127.0.0.1]:43123".parse::<SocketAddr>().unwrap();
         assert_eq!(
             validated_listener(&BTreeSet::from([mapped_loopback])).unwrap(),
-            Some(mapped_loopback)
+            Some(loopback),
+            "the verified endpoint must use the hostname:port form accepted by the pinned Quint CLI"
         );
 
         for rejected in [

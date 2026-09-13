@@ -3693,10 +3693,9 @@ mod tests {
                 "5000".to_owned(),
             )],
             // Runner startup is setup for this blocking-timeout scenario, rather than the
-            // behavior under test. Use the same bounded handshake allowance as the other
-            // real-runner fixtures so a cold macOS Python launch cannot consume the test's
-            // unrelated timeout budget.
-            hello_timeout: Duration::from_secs(20),
+            // behavior under test. Match the production handshake allowance so a cold macOS
+            // Python launch cannot consume the test's unrelated timeout budget.
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();

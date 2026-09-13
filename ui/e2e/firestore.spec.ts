@@ -222,7 +222,9 @@ test.describe("Firestore data browser", () => {
     await expect(page.getByRole("alert")).toContainText("changed after editing began");
     await expect(await valueFor("local")).toHaveValue("draft");
 
-    await page.getByTestId("document-reload-draft").click();
+    const reloadDraft = page.getByTestId("document-reload-draft");
+    await reloadDraft.click();
+    await expect(reloadDraft).not.toBeVisible();
     const rebasedSave = page.waitForResponse(savePattern);
     await page.getByTestId("document-save").click();
     expect((await rebasedSave).ok()).toBe(true);

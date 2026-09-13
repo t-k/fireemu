@@ -72,7 +72,7 @@
     "verification/quint/src/model.rs": "74a5503f62e2b182c16e38d394d19bf8933b49beb69acc20542beeca89eef255",
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
-    "verification/quint/src/server.rs": "90e7ee8ccb93ed2dac75f35ccff4a24c2564f5a41d6dbfe2c0840175f09c68f9",
+    "verification/quint/src/server.rs": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a",
     "verification/quint/tests/atomic_export_publication_connect.rs": "2fae3af804f2fceb5e3dce23e6cb80b87dec2232dc01ba2224e1a944c5099613"
   },
   "invariants": [

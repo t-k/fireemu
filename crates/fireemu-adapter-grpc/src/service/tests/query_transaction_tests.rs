@@ -210,6 +210,7 @@ async fn run_query_multipage_read_write_commits_after_complete_delivery() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn failed_commit_keeps_transaction_usable_and_locked_until_rollback() {
     let backend = test_backend();
     let service = GatewayService::local(test_gateway(), backend.clone());

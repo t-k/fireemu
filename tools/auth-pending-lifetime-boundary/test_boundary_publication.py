@@ -145,6 +145,10 @@ def local_report(tmp_path, monkeypatch):
         runtimeSourceCommit=COMMIT,
         connection="owned-artifact",
     )
+    report["probeInputs"] = {
+        path: comparison.git_blob_sha256(COMMIT, path)
+        for path in comparison.RECORDER_FILES
+    }
     config = {"schemaVersion": 1, "profile": "strict"}
     artifact = "1" * 64
     report["configuration"] = {

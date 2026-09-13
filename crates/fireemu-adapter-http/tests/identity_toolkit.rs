@@ -3489,6 +3489,164 @@ fn custom_token_from_payload(payload: &Value) -> String {
     format!("{header}.{payload}.")
 }
 
+fn assert_custom_token_claims(body: &Value, tenant: &str, uid: &str) {
+    use fireemu_core_types::json::JsonValue as CoreJsonValue;
+
+    let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    assert_eq!(
+        claims.get("role").and_then(CoreJsonValue::as_str),
+        Some("session")
+    );
+    assert_eq!(
+        claims.get("tokenOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims.get("persistedOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims.get("sessionOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims
+            .get("firebase")
+            .and_then(|v| v.get("tenant"))
+            .and_then(CoreJsonValue::as_str),
+        Some(tenant)
+    );
+    assert_eq!(claims.get("sub").and_then(CoreJsonValue::as_str), Some(uid));
+    assert_eq!(
+        claims.get("user_id").and_then(CoreJsonValue::as_str),
+        Some(uid)
+    );
+    assert_eq!(
+        claims.get("aud").and_then(CoreJsonValue::as_str),
+        Some("worker-alpha")
+    );
+    assert_eq!(
+        claims.get("iss").and_then(CoreJsonValue::as_str),
+        Some("https://securetoken.google.com/worker-alpha")
+    );
+    assert_eq!(
+        claims
+            .get("firebase")
+            .and_then(|v| v.get("sign_in_provider"))
+            .and_then(CoreJsonValue::as_str),
+        Some("custom")
+    );
+}
+
+fn sign_in_custom_token(state: &AuthState, tenant: &str, uid: &str) -> Value {
+    let token = custom_token(
+        uid,
+        &json!({"role": "token", "tokenOnly": true}),
+        1_788_008_460,
+    );
+    let (status, body) = post(
+        state,
+        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key"),
+        &json!({"tenantId": tenant, "token": token, "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_custom_token_claims(&body, tenant, uid);
+    body
+}
+
+fn assert_refreshed_claims(body: &Value, tenant: &str, uid: &str) {
+    use fireemu_core_types::json::JsonValue as CoreJsonValue;
+
+    let claims = fireemu_core_auth::jwt::decode_unsigned(body["id_token"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    assert_eq!(
+        claims.get("role").and_then(CoreJsonValue::as_str),
+        Some("session")
+    );
+    assert_eq!(
+        claims.get("persistedOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims.get("sessionOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims
+            .get("firebase")
+            .and_then(|v| v.get("tenant"))
+            .and_then(CoreJsonValue::as_str),
+        Some(tenant)
+    );
+    assert_eq!(
+        claims.get("tokenOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(claims.get("sub").and_then(CoreJsonValue::as_str), Some(uid));
+    assert_eq!(
+        claims.get("user_id").and_then(CoreJsonValue::as_str),
+        Some(uid)
+    );
+    assert_eq!(
+        claims.get("aud").and_then(CoreJsonValue::as_str),
+        Some("worker-alpha")
+    );
+    assert_eq!(
+        claims.get("iss").and_then(CoreJsonValue::as_str),
+        Some("https://securetoken.google.com/worker-alpha")
+    );
+    assert_eq!(
+        claims
+            .get("firebase")
+            .and_then(|v| v.get("sign_in_provider"))
+            .and_then(CoreJsonValue::as_str),
+        Some("custom")
+    );
+}
+
+fn refresh_custom_token(state: &AuthState, body: &Value, tenant: &str) -> Value {
+    let (status, refreshed) = post(
+        state,
+        "/securetoken.googleapis.com/v1/token?key=worker-key",
+        &json!({"grant_type": "refresh_token", "refresh_token": body["refreshToken"], "tenantId": tenant}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    assert_refreshed_claims(&refreshed, tenant, body["localId"].as_str().unwrap());
+    refreshed
+}
+
+fn assert_tenant_stores_after_sign_in(
+    registry: &std::sync::Arc<fireemu_core_auth::store::AuthRegistry>,
+) {
+    let stored_a = registry
+        .tenant_store("worker-alpha", "customer-a")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_id("custom-a")
+        .unwrap()
+        .custom_claims
+        .clone();
+    assert!(stored_a.entries().contains_key("role"));
+    assert!(stored_a.entries().contains_key("persistedOnly"));
+    assert!(!stored_a.entries().contains_key("tokenOnly"));
+    assert!(!stored_a.entries().contains_key("sessionOnly"));
+    for tenant in ["customer-a", "customer-b"] {
+        assert_eq!(
+            registry
+                .tenant_store("worker-alpha", tenant)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .user_count(),
+            1
+        );
+    }
+}
+
 #[test]
 fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
     let s = state();
@@ -3603,149 +3761,12 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
     s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
     s.blocking = Some(Arc::new(OverlappingClaimHook));
 
-    let sign_in = |tenant: &str, uid: &str| {
-        let token = custom_token(
-            uid,
-            &json!({"role": "token", "tokenOnly": true}),
-            1_788_008_460,
-        );
-        let (status, body) = post(
-            &s,
-            &format!("{V1}/accounts:signInWithCustomToken?key=worker-key"),
-            &json!({"tenantId": tenant, "token": token, "returnSecureToken": true}),
-        );
-        assert_eq!(status, 200, "{body}");
-        let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
-            .unwrap()
-            .payload;
-        assert_eq!(claims.get("role").and_then(|v| v.as_str()), Some("session"));
-        assert_eq!(
-            claims.get("tokenOnly").and_then(|v| v.as_bool()),
-            Some(true)
-        );
-        assert_eq!(
-            claims.get("persistedOnly").and_then(|v| v.as_bool()),
-            Some(true)
-        );
-        assert_eq!(
-            claims.get("sessionOnly").and_then(|v| v.as_bool()),
-            Some(true)
-        );
-        assert_eq!(
-            claims
-                .get("firebase")
-                .and_then(|v| v.get("tenant"))
-                .and_then(|v| v.as_str()),
-            Some(tenant)
-        );
-        assert_eq!(claims.get("sub").and_then(|v| v.as_str()), Some(uid));
-        assert_eq!(claims.get("user_id").and_then(|v| v.as_str()), Some(uid));
-        assert_eq!(
-            claims.get("aud").and_then(|v| v.as_str()),
-            Some("worker-alpha")
-        );
-        assert_eq!(
-            claims.get("iss").and_then(|v| v.as_str()),
-            Some("https://securetoken.google.com/worker-alpha")
-        );
-        assert_eq!(
-            claims
-                .get("firebase")
-                .and_then(|v| v.get("sign_in_provider"))
-                .and_then(|v| v.as_str()),
-            Some("custom")
-        );
-        body
-    };
-    let a = sign_in("customer-a", "custom-a");
-    let b = sign_in("customer-b", "custom-b");
-    let stored_a = registry
-        .tenant_store("worker-alpha", "customer-a")
-        .unwrap()
-        .lock()
-        .unwrap()
-        .user_by_id("custom-a")
-        .unwrap()
-        .custom_claims
-        .clone();
-    assert!(stored_a.entries().contains_key("role"));
-    assert!(stored_a.entries().contains_key("persistedOnly"));
-    assert!(!stored_a.entries().contains_key("tokenOnly"));
-    assert!(!stored_a.entries().contains_key("sessionOnly"));
-    assert_eq!(
-        registry
-            .tenant_store("worker-alpha", "customer-a")
-            .unwrap()
-            .lock()
-            .unwrap()
-            .user_count(),
-        1
-    );
-    assert_eq!(
-        registry
-            .tenant_store("worker-alpha", "customer-b")
-            .unwrap()
-            .lock()
-            .unwrap()
-            .user_count(),
-        1
-    );
+    let a = sign_in_custom_token(&s, "customer-a", "custom-a");
+    let b = sign_in_custom_token(&s, "customer-b", "custom-b");
+    assert_tenant_stores_after_sign_in(&registry);
 
-    for (body, tenant) in [(&a, "customer-a"), (&b, "customer-b")] {
-        let (status, refreshed) = post(
-            &s,
-            "/securetoken.googleapis.com/v1/token?key=worker-key",
-            &json!({"grant_type": "refresh_token", "refresh_token": body["refreshToken"], "tenantId": tenant}),
-        );
-        assert_eq!(status, 200, "{refreshed}");
-        let claims =
-            fireemu_core_auth::jwt::decode_unsigned(refreshed["id_token"].as_str().unwrap())
-                .unwrap()
-                .payload;
-        assert_eq!(claims.get("role").and_then(|v| v.as_str()), Some("session"));
-        assert_eq!(
-            claims.get("persistedOnly").and_then(|v| v.as_bool()),
-            Some(true)
-        );
-        assert_eq!(
-            claims.get("sessionOnly").and_then(|v| v.as_bool()),
-            Some(true)
-        );
-        assert_eq!(
-            claims
-                .get("firebase")
-                .and_then(|v| v.get("tenant"))
-                .and_then(|v| v.as_str()),
-            Some(tenant)
-        );
-        assert_eq!(
-            claims.get("tokenOnly").and_then(|v| v.as_bool()),
-            Some(true)
-        );
-        assert_eq!(
-            claims.get("sub").and_then(|v| v.as_str()),
-            Some(body["localId"].as_str().unwrap())
-        );
-        assert_eq!(
-            claims.get("user_id").and_then(|v| v.as_str()),
-            Some(body["localId"].as_str().unwrap())
-        );
-        assert_eq!(
-            claims.get("aud").and_then(|v| v.as_str()),
-            Some("worker-alpha")
-        );
-        assert_eq!(
-            claims.get("iss").and_then(|v| v.as_str()),
-            Some("https://securetoken.google.com/worker-alpha")
-        );
-        assert_eq!(
-            claims
-                .get("firebase")
-                .and_then(|v| v.get("sign_in_provider"))
-                .and_then(|v| v.as_str()),
-            Some("custom")
-        );
-    }
+    refresh_custom_token(&s, &a, "customer-a");
+    refresh_custom_token(&s, &b, "customer-b");
 
     let before_a = registry
         .tenant_store("worker-alpha", "customer-a")

@@ -3764,10 +3764,60 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
 
 // A verified client may update normal profile fields, but email verification remains
 // server-controlled. OOB and Admin planning do not use this projection.
+// Second45 observed client scalar decoding. Keep session error precedence and the
+// Admin/OOB routes separate; no mutation is planned before this check succeeds.
+fn validate_client_update_shapes(body: &Value) -> Result<(), JsonResponse> {
+    for (field, proto) in [
+        ("localId", "local_id"),
+        ("displayName", "display_name"),
+        ("emailVerified", "email_verified"),
+        ("customAttributes", "custom_attributes"),
+    ] {
+        let Some(value) = body.get(field) else {
+            continue;
+        };
+        let (description, field_path) = if value.is_object() {
+            (
+                format!("Invalid value ({proto}), Starting an object on a scalar field"),
+                false,
+            )
+        } else if value.is_array() {
+            (format!("Invalid JSON payload received. Unknown name \"{field}\": Proto field is not repeating, cannot start list."), false)
+        } else if field == "displayName" && value.is_boolean() {
+            (
+                format!("Invalid value at '{proto}' (TYPE_STRING), {value}"),
+                true,
+            )
+        } else {
+            continue;
+        };
+        let mut violation = json!({"description": description});
+        if field_path {
+            violation["field"] = json!(proto);
+        }
+        return Err(JsonResponse {
+            status: 400,
+            body: json!({"error": {
+                "code": 400, "message": description,
+                "errors": [{"message": description, "reason": "invalid"}],
+                "status": "INVALID_ARGUMENT",
+                "details": [{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [violation]}]
+            }}),
+        });
+    }
+    Ok(())
+}
+
 fn parse_client_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     let mut client = body.clone();
     if let Some(fields) = client.as_object_mut() {
         fields.remove("emailVerified");
+        if fields.get("customAttributes").is_some_and(Value::is_null) {
+            fields.remove("customAttributes");
+        }
+        if let Some(Value::Number(number)) = fields.get("displayName") {
+            fields.insert("displayName".to_owned(), Value::String(number.to_string()));
+        }
     }
     parse_update(&client)
 }
@@ -3809,11 +3859,14 @@ fn update(
     } else {
         None
     };
-    // The saved production input is displayName-only; do not change shared token errors.
+    // The observed missing/null token profile family does not change shared token errors.
     if self_service
-        && body
-            .as_object()
-            .is_some_and(|o| o.len() == 1 && o.contains_key("displayName"))
+        && body.as_object().is_some_and(|o| {
+            o.contains_key("displayName")
+                && o.keys()
+                    .all(|k| matches!(k.as_str(), "displayName" | "localId" | "idToken"))
+                && o.get("idToken").is_none_or(Value::is_null)
+        })
     {
         return error(400, "INVALID_REQ_TYPE");
     }
@@ -3830,8 +3883,16 @@ fn update(
         // never a client selector, and does not change self-service invalidation rules.
         match verify_session(store, body, at) {
             Ok(session) => {
+                if self_service {
+                    if let Err(response) = validate_client_update_shapes(body) {
+                        return response;
+                    }
+                    if body.get("customAttributes").is_some_and(|v| !v.is_null()) {
+                        return error(400, "INSUFFICIENT_PERMISSION");
+                    }
+                }
                 if has_admin_field
-                    && ["customAttributes", "mfa", "linkProviderUserInfo"]
+                    && ["mfa", "linkProviderUserInfo"]
                         .iter()
                         .any(|key| body.get(*key).is_some())
                 {

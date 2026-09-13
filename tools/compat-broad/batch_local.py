@@ -26,7 +26,12 @@ from owned_runner import (
 )
 
 
-def child(output, nonce):
+def child(output, nonce, *, shared=False):
+    if shared:
+        from shared_cases import manifest
+        from shared_gate import create
+
+        create(output / "gate", manifest(nonce))
     origins = {
         "auth": local_origin("http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"]),
         "firestore": local_origin("http://" + os.environ["FIRESTORE_EMULATOR_HOST"]),
@@ -54,13 +59,19 @@ def child(output, nonce):
             "origins": [*origins.values(), control],
         },
     )
+    if shared:
+        from shared_cases import execute
+
+        if not execute(output, origins):
+            raise ValueError("shared scenarios incomplete")
+        return
     adapter = Adapter(candidate(), nonce, output / "batch", local_origins=origins)
     result = adapter.execute()
     if not result["completed"]:
         raise ValueError("local batch incomplete; see private report")
 
 
-def run(output):
+def run(output, *, shared=False):
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise ValueError("freeze checkout before local batch")
     before = source_inputs()
@@ -111,6 +122,8 @@ def run(output):
         "--nonce",
         nonce,
     ]
+    if shared:
+        command.append("--shared")
     report = {
         "productionExecuted": False,
         "executionCommit": subprocess.check_output(
@@ -120,6 +133,7 @@ def run(output):
         "executionInputs": before,
         "build": build,
     }
+    save(output / "manifest.json", report)
     with (output / "stderr.log").open("w") as errors:
         process = subprocess.Popen(
             command,
@@ -167,10 +181,11 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path)
     parser.add_argument("--child", type=Path)
     parser.add_argument("--nonce")
+    parser.add_argument("--shared", action="store_true")
     args = parser.parse_args()
     if args.child:
-        child(args.child, args.nonce)
+        child(args.child, args.nonce, shared=args.shared)
     elif args.output:
-        sys.exit(run(args.output.resolve()))
+        sys.exit(run(args.output.resolve(), shared=args.shared))
     else:
         parser.error("--output required")

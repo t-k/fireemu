@@ -235,6 +235,23 @@ class Adapter:
     def request(
         self, service, path, body=None, *, method="POST", privileged=False, form=False
     ):
+        gate = getattr(self, "shared_gate", None)
+        if gate is not None and not getattr(self, "_shared_dispatch", False):
+            operation = {
+                "service": service,
+                "path": path,
+                "body": body,
+                "method": method,
+                "privileged": privileged,
+                "form": form,
+            }
+            return gate.adapter_request(
+                self,
+                operation,
+                lambda: self.request(
+                    service, path, body, method=method, privileged=privileged, form=form
+                ),
+            )
         if service != "metadata" and not self.ready:
             raise ValueError("metadata preflight required")
         if self.budget.recovery and not privileged:

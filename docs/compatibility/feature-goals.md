@@ -30,11 +30,11 @@ The owned runtime processes/listeners and temporary Goal/mutation worktrees were
 
 ## Next finite cards
 
-These are queued children, not completed observations. A new owner must confirm the existing test coverage before selecting a nonduplicate condition; local behavior alone is not a production expectation.
+These finite children continue independently. Local behavior alone is not a production expectation; completed conditions do not close the parent feature group.
 
 | Goal | User-visible target and finite scope | Evidence / existing entry | Ownership, budget and dependency | Status |
 | --- | --- | --- | --- | --- |
-| G2-REST-next | Exercise REST transaction Commit failure, explicit rollback and subsequent write with document post-state; distinguish active-transaction policy from atomicity | Existing `src/rest` and `tests/local.rs` transaction assets; reuse G2 gRPC operation sequence; targeted grpc nextest and stored references if equivalent | Next available Luna owner, grpc REST/tests only, one heavy build lease, no Cloud; first confirm which REST conditions are missing | queued; no new production expectation or result |
+| G2-REST-next | Exercise REST transaction Commit failure, explicit rollback and subsequent write with document post-state; distinguish active-transaction policy from atomicity | Existing `src/rest` and `tests/local.rs` transaction assets; reuse G2 gRPC operation sequence; targeted grpc nextest and stored references if equivalent | gpt-5.6-luna owner; coordinator independent review; grpc REST/tests only, no Cloud | done-local at 0fe92867; [80 passed / 1 existing skipped](../../spec/compatibility/broad-runs/0fe92867-g2-rest-local.json); handler-level evidence, transaction policy remains production-unobserved |
 | G3-reconnect-next | One bounded real SDK reconnect condition after refused write, with cache/server/listener observations separated | Existing `tools/sdk-smoke/g3-sdk.mjs` and owned `fireemu exec`; retain the external process timeout | Next available owner, SDK smoke only; no Rules production changes, no browser claim | queued; select a genuinely missing local condition before coding |
 | G4-scale-next | Assess whether collection result materialization can be reduced without changing stream contents or silently truncating results | Existing guarded latest-query path, query paging assets and the new multi-response controls | Escalated design question; grpc/core query paths, separate worktree/output, one build lease; no new stage or oracle needed for resource invariants | queued; full-result vector remains a known limitation |
 

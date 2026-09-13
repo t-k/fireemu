@@ -229,14 +229,25 @@ async fn start_task_runtime_with_policy(
     max_running: usize,
     configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
 ) -> Arc<FunctionsRuntime> {
+    start_task_runtime_with_policy_and_env(probe, max_running, configure, Vec::new()).await
+}
+
+async fn start_task_runtime_with_policy_and_env(
+    probe: &Path,
+    max_running: usize,
+    configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
+    extra_env: Vec<(String, String)>,
+) -> Arc<FunctionsRuntime> {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let mut env = vec![(
+        "FIREEMU_FAKE_TASK_PROBE".to_owned(),
+        probe.display().to_string(),
+    )];
+    env.extend(extra_env);
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
-        env: vec![(
-            "FIREEMU_FAKE_TASK_PROBE".to_owned(),
-            probe.display().to_string(),
-        )],
+        env,
         hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
@@ -352,10 +363,23 @@ async fn reset_task_completion_cannot_release_a_new_generation_task() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let probe = dir.join("entries");
-    let runtime = start_task_runtime(&probe, |_| TaskRateLimits {
-        max_concurrent_dispatches: 1,
-        max_dispatches_per_second: 500.0,
-    })
+    let runtime = start_task_runtime_with_policy_and_env(
+        &probe,
+        4,
+        |_| {
+            (
+                TaskRetryConfig {
+                    max_attempts: 1,
+                    ..TaskRetryConfig::default()
+                },
+                TaskRateLimits {
+                    max_concurrent_dispatches: 1,
+                    max_dispatches_per_second: 500.0,
+                },
+            )
+        },
+        vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "3000".to_owned())],
+    )
     .await;
 
     let body = task_body("same");
@@ -369,9 +393,28 @@ async fn reset_task_completion_cannot_release_a_new_generation_task() {
     runtime
         .enqueue_task("demo-app", "us-central1", "taskA", &body)
         .unwrap();
-    let _ = wait_for_task_entries(&probe, 2).await;
+    let restart_deadline =
+        tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
+    while !runtime.runner_alive() {
+        assert_eq!(
+            runtime.task_queue_stats()["queue:demo-app-us-central1-taskA"]["numberOfTasks"],
+            1,
+            "a task accepted during reset stays pending without spending a delivery attempt"
+        );
+        assert!(
+            tokio::time::Instant::now() < restart_deadline,
+            "the runner did not restart within its hello timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let entries = wait_for_task_entries(&probe, 2).await;
+    assert_eq!(entries.iter().filter(|entry| *entry == "taskA").count(), 2);
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(runtime.status()["tasksInFlight"], 1);
+    assert_eq!(
+        runtime.task_queue_stats()["queue:demo-app-us-central1-taskA"]["failedTasks"],
+        0.0
+    );
 
     std::fs::write(format!("{}.taskA.release", probe.display()), b"").unwrap();
     tokio::time::timeout(Duration::from_secs(4), async {

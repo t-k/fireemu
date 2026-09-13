@@ -367,7 +367,7 @@ FAMILY_SPECS = [
         "REST/gRPC",
         "user/admin",
         "not-selected",
-        "Next: map existing Enterprise capability stubs; separate edition oracle required",
+        "Existing stage/edition validation only; expression semantics and execution are separate local implementation units; Enterprise oracle remains unobserved",
     ),
     (
         "fs-mongodb",
@@ -412,6 +412,26 @@ def family_for(service, program_id):
     )
 
 
+# Recorded scope is distinct from currentStatus: receipts never mark a new build run.
+RECORDED_UPDATE_SCOPE = {
+    "basis": "saved-production-candidate-and-runtime-recomparison",
+    "original": "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json",
+    "repaired": "spec/compatibility/broad-runs/37e4c396-second45-runtime-recomparison.json",
+    "conditions": [
+        "Email/password A/B accounts: self/other localId, missing/null/number/object/array selectors",
+        "displayName missing/null/zero/false/array/object, with both account readbacks",
+        "emailVerified true/false/null/string/object mixed with ordinary profile change",
+        "customAttributes string/empty/null/object mixed with ordinary profile change",
+        "Missing/null/numeric/invalid client token, Admin verification controls, disableUser true/null",
+    ],
+    "remaining": [
+        "Other values and multi-error precedence are not established by these inputs",
+        "Cross-project/tenant behavior and custom token claims need separate evidence",
+        "Initially verified, anonymous, MFA/OOB/provider paths are not covered by this production scope",
+    ],
+}
+
+
 def catalog():
     families = [
         {
@@ -429,6 +449,32 @@ def catalog():
         }
         for key, edition, feature, transport, principal, availability, reason in FAMILY_SPECS
     ]
+    for family in families:
+        if family["id"] in {"auth-accounts", "auth-authorization"}:
+            family["recordedCoverage"] = RECORDED_UPDATE_SCOPE
+        if family["id"] == "fs-enterprise":
+            family["implementationUnits"] = [
+                {
+                    "unit": "edition/wire/stage validation",
+                    "status": "implemented-validation-only",
+                    "entry": "crates/fireemu-adapter-grpc/tests/local.rs",
+                },
+                {
+                    "unit": "function options preservation and expression signatures",
+                    "status": "not-implemented",
+                    "next": "Preserve options in AST; validate documented signatures with nearby valid cases",
+                },
+                {
+                    "unit": "read-only Pipeline execution",
+                    "status": "not-implemented",
+                    "next": "Bound collection/filter/order/limit evaluation separately from validation; no inferred production errors",
+                },
+                {
+                    "unit": "full-text/vector/write Pipeline and MongoDB",
+                    "status": "not-observed",
+                    "next": "Separate capability and edition scope; do not inherit Standard evidence",
+                },
+            ]
     surfaces = []
     discovery_path = "spec/compatibility/upstream/2026-09-09-retry/discovery.json"
     discovery = json.loads((ROOT / discovery_path).read_bytes())

@@ -379,3 +379,16 @@ def test_expanded_selection_keeps_legacy_and_current_transforms_separate():
     assert contract.digest(by_id[original["id"]]) != contract.digest(original)
     assert len(original["steps"]) == 18
     assert contract.family_for("firestore", "queries/aggregations") == "fs-aggregations"
+
+
+def test_recorded_update_scope_does_not_claim_current_or_enterprise_execution():
+    families = {f["id"]: f for f in catalog()["families"]}
+    scope = families["auth-accounts"]["recordedCoverage"]
+    assert scope["original"] != scope["repaired"]
+    assert scope["remaining"]
+    assert families["auth-accounts"]["currentStatus"] == "not-run"
+    enterprise = families["fs-enterprise"]["implementationUnits"]
+    assert any(
+        u["unit"] == "read-only Pipeline execution" and u["status"] == "not-implemented"
+        for u in enterprise
+    )

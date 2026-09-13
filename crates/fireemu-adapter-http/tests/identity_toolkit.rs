@@ -1,7 +1,7 @@
 //! Identity Toolkit flows through the pure handlers, plus one socket-level smoke test.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
     handle, AuthBlockingHook, AuthQueryLimits, AuthState, BlockingFunctionCode,
@@ -14,6 +14,7 @@ use fireemu_core_auth::store::AuthStore;
 use fireemu_core_auth::totp::{totp_at, TotpParams};
 use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::tenancy::Tenancy;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
@@ -35,6 +36,31 @@ struct BeforeSignInTimeoutHook;
 struct FixtureFailureHook(BlockingFunctionFailure);
 
 struct ClearingClaimsHook;
+
+struct OverlappingClaimHook;
+
+impl AuthBlockingHook for OverlappingClaimHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(match event {
+            BlockingAuthEvent::BeforeCreate => json!({
+                "userRecord": {
+                    "updateMask": "customClaims",
+                    "customClaims": {"role": "persistent", "persistedOnly": true}
+                }
+            }),
+            BlockingAuthEvent::BeforeSignIn => json!({
+                "userRecord": {
+                    "updateMask": "sessionClaims",
+                    "sessionClaims": {"role": "session", "sessionOnly": true}
+                }
+            }),
+        })
+    }
+}
 
 struct MalformedBeforeSignInHook;
 
@@ -1626,8 +1652,6 @@ fn a_poisoned_tenant_operation_gate_fails_closed_before_authentication() {
 #[test]
 fn blocking_auth_dispatch_carries_the_selected_project_and_tenant_namespace() {
     use fireemu_core_auth::store::AuthRegistry;
-    use fireemu_core_session::tenancy::Tenancy;
-    use std::sync::RwLock;
 
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut state = state();
@@ -3555,6 +3579,153 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         looked.get("users").map(|u| u.as_array().map(Vec::len)),
         None,
         "rejected tokens create nobody"
+    );
+}
+
+#[test]
+fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_namespace() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    assert!(registry.register(
+        "worker-alpha",
+        AuthStore::new("worker-alpha", SplitMix64::new(7), TotpPolicy::default()),
+    ));
+    for tenant in ["customer-a", "customer-b"] {
+        registry.ensure_tenant("worker-alpha", tenant).unwrap();
+    }
+    s.registry = Some(registry.clone());
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("worker-alpha", &[], &["worker-key".to_owned()])
+        .unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    s.blocking = Some(Arc::new(OverlappingClaimHook));
+
+    let sign_in = |tenant: &str, uid: &str| {
+        let token = custom_token(
+            uid,
+            &json!({"role": "token", "tokenOnly": true}),
+            1_788_008_460,
+        );
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken?key=worker-key"),
+            &json!({"tenantId": tenant, "token": token, "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
+            .unwrap()
+            .payload;
+        assert_eq!(claims.get("role").and_then(|v| v.as_str()), Some("session"));
+        assert_eq!(
+            claims.get("tokenOnly").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            claims.get("persistedOnly").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            claims.get("sessionOnly").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            claims
+                .get("firebase")
+                .and_then(|v| v.get("tenant"))
+                .and_then(|v| v.as_str()),
+            Some(tenant)
+        );
+        body
+    };
+    let a = sign_in("customer-a", "custom-a");
+    let b = sign_in("customer-b", "custom-b");
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        1
+    );
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        1
+    );
+
+    for (body, tenant) in [(&a, "customer-a"), (&b, "customer-b")] {
+        let (status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token?key=worker-key",
+            &json!({"grant_type": "refresh_token", "refresh_token": body["refreshToken"], "tenantId": tenant}),
+        );
+        assert_eq!(status, 200, "{refreshed}");
+        let claims =
+            fireemu_core_auth::jwt::decode_unsigned(refreshed["id_token"].as_str().unwrap())
+                .unwrap()
+                .payload;
+        assert_eq!(claims.get("role").and_then(|v| v.as_str()), Some("session"));
+        assert_eq!(
+            claims.get("persistedOnly").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            claims.get("sessionOnly").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            claims
+                .get("firebase")
+                .and_then(|v| v.get("tenant"))
+                .and_then(|v| v.as_str()),
+            Some(tenant)
+        );
+    }
+
+    let before_a = registry
+        .tenant_store("worker-alpha", "customer-a")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_count();
+    let before_b = registry
+        .tenant_store("worker-alpha", "customer-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_count();
+    let (status, refused) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token?key=worker-key",
+        &json!({"grant_type": "refresh_token", "refresh_token": a["refreshToken"], "tenantId": "customer-b"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_REFRESH_TOKEN");
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_a
+    );
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_b
     );
 }
 

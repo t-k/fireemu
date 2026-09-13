@@ -18,13 +18,15 @@ def wire_server():
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
             payload = (
                 b'{"ok":true}'
-                if self.mode == "json"
+                if self.mode in ("json", "denied")
                 else (b"" if self.mode == "empty" else b"partial")
             )
-            self.send_response(200 if self.mode == "json" else 404)
+            self.send_response(
+                403 if self.mode == "denied" else (200 if self.mode == "json" else 404)
+            )
             self.send_header(
                 "Content-Type",
-                "application/json" if self.mode == "json" else "text/plain",
+                "application/json" if self.mode in ("json", "denied") else "text/plain",
             )
             self.send_header(
                 "Content-Length",
@@ -78,3 +80,46 @@ def test_current_wire_distinguishes_received_body_and_interruption(
     assert received["bodyKind"] == ("unavailable" if mode == "partial" else mode)
     assert (adapter.output / "wire/0/body-1.bin").is_file()
     assert (adapter.output / "transport-trace.json").is_file()
+
+
+def test_rejected_owner_is_latched_before_recovery_transport(tmp_path, wire_server):
+    origin, handler = wire_server
+    handler.mode = "denied"
+    adapter = LocalAdapter(
+        {"auth": origin, "firestore": origin}, "a" * 32, tmp_path / "owner"
+    )
+    adapter.phase, adapter.case_index = "diagnostic", 26
+    adapter.users = {
+        r: {"uid": r, "token": r + "-token", "email": r + "@example.invalid"}
+        for r in ("a", "b")
+    }
+    with pytest.raises(ValueError, match="credential rejected"):
+        adapter.send(auth_recipe(26, adapter.users))
+    adapter.budget.recovery = True
+    with pytest.raises(ValueError, match="previously rejected"):
+        adapter.send(auth_recipe(26, adapter.users))
+    assert adapter.owner_rejected
+    assert adapter.budget.counts["total"] == 1
+    assert len(adapter.trace) == 1
+
+
+def test_incomplete_direct_execution_does_not_start_mapped(tmp_path, wire_server):
+    from second_mapped import run_pair
+
+    origin, handler = wire_server
+    # A received JSON object without the required signup identity fails setup.
+    handler.mode = "json"
+    result = run_pair(
+        {"auth": origin, "firestore": origin},
+        tmp_path / "pair",
+        {
+            "artifactSha256": "a" * 64,
+            "executionCommit": "b" * 40,
+            "configurationDigest": "c" * 64,
+        },
+    )
+    assert result["mapping"] == "invalid"
+    assert not result["recordingComplete"]
+    assert result["safety"] is None
+    assert not (tmp_path / "pair/mapped").exists()
+    assert (tmp_path / "pair/direct/result.json").is_file()

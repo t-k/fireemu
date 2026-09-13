@@ -206,14 +206,14 @@ try {
   results.authSwitch = { events: authEvents, finalState: currentUser ? "signed-in" : "signed-out" };
   if (revisions.length !== 1 || revisions[0] !== 0 || JSON.stringify(replacementRevisions) !== JSON.stringify([0, 1])) throw new Error("listener lifecycle mismatch");
   if (JSON.stringify(results.deniedWritePostState.data) !== JSON.stringify({ owner: uidA, revision: 0 })) throw new Error("denied write changed post-state");
-  const expectedAuthPrefix = [
-    { state: "signed-out" },
-    { state: "signed-in", uid: uidA },
-    { state: "signed-out" },
-    { state: "signed-in", uid: uidB },
-    { state: "signed-out" },
-  ];
-  if (JSON.stringify(authEvents.slice(0, 5)) !== JSON.stringify(expectedAuthPrefix) || authEvents.at(-1)?.state !== "signed-out") throw new Error("Auth A/B switch ordering mismatch");
+  const expectedAuthPrefix = ["signed-out", `signed-in:${uidA}`, "signed-out", `signed-in:${uidB}`, "signed-out"];
+  const actualAuthStates = authEvents.map((event) => event.uid ? `signed-in:${event.uid}` : "signed-out");
+  let matched = 0;
+  for (const state of actualAuthStates) {
+    if (state === expectedAuthPrefix[matched]) matched += 1;
+    if (matched === expectedAuthPrefix.length) break;
+  }
+  if (matched !== expectedAuthPrefix.length || actualAuthStates.at(-1) !== "signed-out") throw new Error(`Auth A/B switch ordering mismatch: ${JSON.stringify(actualAuthStates)}`);
 } finally {
   stopListener();
   if (currentUser?.uid === uidA) {

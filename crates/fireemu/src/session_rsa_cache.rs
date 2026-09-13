@@ -77,7 +77,7 @@ fn absolute_path(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
 fn cache_base_for(
     home: Option<std::ffi::OsString>,
     xdg_cache_home: Option<std::ffi::OsString>,
-    local_app_data: Option<std::ffi::OsString>,
+    local_app_data: Option<&std::ffi::OsString>,
 ) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -93,17 +93,18 @@ fn cache_base_for(
     #[cfg(windows)]
     {
         let _ = (home, xdg_cache_home);
-        return absolute_path(local_app_data);
+        return absolute_path(local_app_data.cloned());
     }
     #[allow(unreachable_code)]
     None
 }
 
 fn default_cache_base() -> Option<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA");
     cache_base_for(
         std::env::var_os("HOME"),
         std::env::var_os("XDG_CACHE_HOME"),
-        std::env::var_os("LOCALAPPDATA"),
+        local_app_data.as_ref(),
     )
 }
 
@@ -450,7 +451,7 @@ mod tests {
         {
             let _ = absolute_home;
             for local in [None, Some("".into()), Some("relative".into())] {
-                assert_eq!(cache_base_for(None, None, local), None);
+                assert_eq!(cache_base_for(None, None, local.as_ref()), None);
             }
         }
     }

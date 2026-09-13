@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,8 +32,26 @@ export const PORTS = {
 };
 export const STATE_FILE = resolve(here, "../test-results/daemon.json");
 
-const waitFor = async (url: string, attempts: number): Promise<void> => {
+type ChildStatus = {
+  error?: Error;
+  exit?: { code: number | null; signal: NodeJS.Signals | null };
+};
+
+const waitFor = async (
+  url: string,
+  attempts: number,
+  status: ChildStatus,
+  output: () => string,
+): Promise<void> => {
   for (let i = 0; i < attempts; i += 1) {
+    if (status.error) {
+      throw new Error(`daemon failed to start: ${status.error.message}\n${output()}`);
+    }
+    if (status.exit) {
+      throw new Error(
+        `daemon exited before answering at ${url} (code=${status.exit.code}, signal=${status.exit.signal})\n${output()}`,
+      );
+    }
     try {
       const r = await fetch(url);
       if (r.ok) return;
@@ -42,7 +60,32 @@ const waitFor = async (url: string, attempts: number): Promise<void> => {
     }
     await new Promise((r) => setTimeout(r, 250));
   }
-  throw new Error(`daemon did not answer at ${url}`);
+  throw new Error(`daemon did not answer at ${url}\n${output()}`);
+};
+
+const stop = async (pid: number | undefined, status: ChildStatus): Promise<void> => {
+  if (pid === undefined || status.exit) return;
+  const signal = (value: NodeJS.Signals) => {
+    try {
+      process.kill(-pid, value);
+    } catch {
+      try {
+        process.kill(pid, value);
+      } catch {
+        // already gone
+      }
+    }
+  };
+  signal("SIGINT");
+  for (let i = 0; i < 40 && !status.exit; i += 1) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (!status.exit) {
+    signal("SIGKILL");
+    for (let i = 0; i < 40 && !status.exit; i += 1) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
 };
 
 export default async function globalSetup(): Promise<void> {
@@ -68,22 +111,37 @@ export default async function globalSetup(): Promise<void> {
     String(PORTS.ui),
   ];
   mkdirSync(dirname(STATE_FILE), { recursive: true });
+  rmSync(STATE_FILE, { force: true });
   const child = spawn(bin, args, { cwd: repo, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   let banner = "";
+  const status: ChildStatus = {};
   child.stdout?.on("data", (d: Buffer) => {
     banner += d.toString();
   });
   child.stderr?.on("data", (d: Buffer) => {
     banner += d.toString();
   });
-  await waitFor(`http://127.0.0.1:${PORTS.http}/health/live`, 120);
-  await waitFor(`http://127.0.0.1:${PORTS.ui}/ui/`, 40);
-  const html = await (await fetch(`http://127.0.0.1:${PORTS.ui}/ui/`)).text();
-  const config = /window\.__FIREEMU__ = (\{.*?\});<\/script>/.exec(html)?.[1];
-  const token = config
-    ? ((JSON.parse(config) as { controlToken?: string }).controlToken ?? "")
-    : "";
-  if (!token) throw new Error("the served UI page carries no control token");
-  writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner, token }));
-  child.unref();
+  child.once("error", (error) => {
+    status.error = error;
+  });
+  child.once("exit", (code, signal) => {
+    status.exit = { code, signal };
+  });
+  try {
+    // A release daemon normally starts immediately. Keep the CI readiness budget bounded while
+    // allowing a cold, contended hosted runner enough time to schedule the process.
+    await waitFor(`http://127.0.0.1:${PORTS.http}/health/live`, 240, status, () => banner);
+    await waitFor(`http://127.0.0.1:${PORTS.ui}/ui/`, 40, status, () => banner);
+    const html = await (await fetch(`http://127.0.0.1:${PORTS.ui}/ui/`)).text();
+    const config = /window\.__FIREEMU__ = (\{.*?\});<\/script>/.exec(html)?.[1];
+    const token = config
+      ? ((JSON.parse(config) as { controlToken?: string }).controlToken ?? "")
+      : "";
+    if (!token) throw new Error(`the served UI page carries no control token\n${banner}`);
+    writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner, token }));
+    child.unref();
+  } catch (error) {
+    await stop(child.pid, status);
+    throw error;
+  }
 }

@@ -35,6 +35,10 @@ fail-fast = true
 slow-timeout = { period = "10s" }
 leak-timeout = { period = "30s", result = "fail" }
 
+[[profile.pr.overrides]]
+filter = 'test(/(nested_run_fails_when_a_child_keeps_captured_stdout|the_census_sees_a_child_that_redirected_its_output|a_timed_out_blocking_handler_releases_admission_and_recycles_its_runner|pubsub_bridge_capacity_refusal_keeps_the_broker_batch_invisible)$/)'
+test-group = "process-contention"
+
 [profile.ci]
 retries = 0
 fail-fast = false
@@ -61,3 +65,6 @@ fail-fast = false
 retries = 0
 fail-fast = false
 leak-timeout = { period = "200ms", result = "fail" }
+
+[test-groups.process-contention]
+max-threads = 1

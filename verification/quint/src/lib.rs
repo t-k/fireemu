@@ -8,15 +8,19 @@ pub mod await_idle;
 pub mod cargo_authority;
 pub mod compatibility_selection;
 pub mod event_delivery;
+#[cfg(unix)]
 pub mod evidence;
 pub mod firestore_listen_refresh;
 pub mod model;
+#[cfg(unix)]
 pub mod process;
+#[cfg(unix)]
 pub mod publication;
 pub mod regex_authorization;
 pub mod regex_evaluation_cache;
 pub mod regex_linear_repeat;
 pub mod ruleset_activation;
+#[cfg(unix)]
 mod server;
 pub mod session_epoch;
 pub mod storage_generation;

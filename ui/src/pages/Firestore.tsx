@@ -16,6 +16,7 @@ import { appState } from "../state";
 import { AsyncButton, ConfirmButton, ErrorBanner, FetchState, Notice } from "../components/common";
 import { decodeSplat, firestoreHref } from "../lib/hrefs";
 import { createPagedList } from "../lib/pagedList";
+import { selectReloadDocument } from "../lib/reloadedDocument";
 import { createLeaveGuard, LeavePrompt } from "../lib/unsaved";
 import { settle, subscribe } from "../api/client";
 import {
@@ -562,6 +563,7 @@ const DocumentView: Component<{
     if (parsedDraft.isErr()) return;
     const draftChanges = diffFields(session.fields, parsedDraft.value);
     const operation = ++editOperation;
+    const viewAtStart = doc();
     setEditBusy(true);
     const reloaded = await getDocument(session.root, session.path);
     if (
@@ -580,16 +582,25 @@ const DocumentView: Component<{
       );
       return;
     }
-    const latest = reloaded.value;
-    if (!latest.updateTime) {
+    const observed = doc();
+    if (observed !== viewAtStart && observed?.isErr() && observed.error.status === 404) {
+      setError(t("firestore.editConflictDeleted"));
+      return;
+    }
+    const selected = selectReloadDocument(reloaded.value, current());
+    if (selected.isErr()) {
       setError(t("firestore.editConflict"));
       return;
     }
-    mutate(reloaded);
+    const latest = selected.value;
+    mutate(reloaded.map(() => latest));
+    // Supersede older pending view reads, then converge to the current server state.
+    // Ordering is local to this reload so a later snapshot restore can still move time back.
+    void refetch();
     setEditSession({
       ...session,
       fields: latest.fields ?? {},
-      updateTime: latest.updateTime,
+      updateTime: latest.updateTime!,
     });
     setFields(toEditable(applyFieldDiff(latest.fields ?? {}, draftChanges)));
     setConflict(false);

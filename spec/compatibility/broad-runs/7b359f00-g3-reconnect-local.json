@@ -196,10 +196,6 @@
     "processStopped": true,
     "listeners": [
       {
-        "port": 0,
-        "listenerClosed": true
-      },
-      {
         "port": 56303,
         "listenerClosed": true
       },

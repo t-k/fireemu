@@ -4155,3 +4155,38 @@ fn second45_missing_or_null_token_update_classifies_observed_input() {
         assert_eq!(response["error"]["message"], "INVALID_REQ_TYPE");
     }
 }
+
+/// Local safety contract: decoder errors do not bypass session authentication.
+#[test]
+fn second45_invalid_token_precedes_new_shape_validation_without_mutation() {
+    for s in [state(), strict_state()] {
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email":"precedence@example.com","password":"password1","returnSecureToken":true}),
+        );
+        let lookup = || {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId":[signed["localId"]]}),
+            )
+            .1
+        };
+        let before = lookup();
+        for (field, value) in [
+            ("localId", json!({})),
+            ("displayName", json!(false)),
+            ("emailVerified", json!({})),
+            ("customAttributes", json!({})),
+        ] {
+            let mut request = json!({"idToken":"invalid","displayName":"must-not-apply"});
+            request[field] = value;
+            let (status, response) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400);
+            assert_eq!(response["error"]["message"], "INVALID_ID_TOKEN", "{field}");
+            assert_eq!(lookup(), before, "{field}");
+        }
+    }
+}

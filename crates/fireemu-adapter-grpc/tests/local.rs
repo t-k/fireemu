@@ -5543,3 +5543,240 @@ fn assert_selection_then_pages(stats: &QueryExecutionStats, context: &str) {
     assert_eq!(stats.pages.matched, 35, "{context}");
     assert!(stats.pages.cloned_field_bytes > 0, "{context}");
 }
+
+#[tokio::test]
+async fn batch_write_continues_after_decode_and_execution_failures() {
+    let (mut client, _clock, handle) = start().await;
+    for decode_failure in [false, true] {
+        for failure_index in [0, 1] {
+            let collection = format!("batch-continuation-{decode_failure}-{failure_index}");
+            let mut writes = (0..3)
+                .map(|index| update_write(&format!("{collection}/{index}"), &[("v", i(index))]))
+                .collect::<Vec<_>>();
+            writes[failure_index] = if decode_failure {
+                pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: "bad name".to_owned(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }
+            } else {
+                pb::Write {
+                    operation: Some(pb::write::Operation::Delete(format!(
+                        "{DOCS}/{collection}/{failure_index}"
+                    ))),
+                    current_document: Some(pb::Precondition {
+                        condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+                    }),
+                    ..Default::default()
+                }
+            };
+            let response = client
+                .batch_write(pb::BatchWriteRequest {
+                    database: DB.to_owned(),
+                    writes,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(response.status.len(), 3);
+            assert_eq!(response.write_results.len(), 3);
+            for index in 0..3 {
+                let document = client
+                    .get_document(pb::GetDocumentRequest {
+                        name: format!("{DOCS}/{collection}/{index}"),
+                        ..Default::default()
+                    })
+                    .await;
+                if index == failure_index {
+                    assert_ne!(response.status[index].code, 0);
+                    assert_eq!(response.write_results[index], pb::WriteResult::default());
+                    assert_eq!(document.unwrap_err().code(), tonic::Code::NotFound);
+                } else {
+                    assert_eq!(response.status[index].code, 0);
+                    let document = document.unwrap().into_inner();
+                    assert_eq!(
+                        document.fields,
+                        [("v".to_owned(), i(i64::try_from(index).unwrap()))].into()
+                    );
+                    assert_eq!(
+                        document.update_time,
+                        response.write_results[index].update_time
+                    );
+                    assert!(document.update_time.is_some());
+                }
+            }
+        }
+    }
+    handle.abort();
+}
+
+#[tokio::test]
+async fn transaction_commit_late_precondition_failure_preserves_documents_and_versions() {
+    let (mut client, clock, handle) = start().await;
+    for verify in [false, true] {
+        let collection = format!("late-precondition-{verify}");
+        let original_path = format!("{collection}/original");
+        let created_path = format!("{collection}/created");
+        let guard_path = format!("{DOCS}/{collection}/guard");
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write(&original_path, &[("v", i(7)), ("label", s("preserved"))]),
+                    update_write(&format!("{collection}/guard"), &[("v", i(9))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let get = |path: &str| pb::GetDocumentRequest {
+            name: format!("{DOCS}/{path}"),
+            ..Default::default()
+        };
+        let original = client
+            .get_document(get(&original_path))
+            .await
+            .unwrap()
+            .into_inner();
+        let guard = client
+            .get_document(get(&format!("{collection}/guard")))
+            .await
+            .unwrap()
+            .into_inner();
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let mut read = get(&original_path);
+        read.consistency_selector = Some(
+            pb::get_document_request::ConsistencySelector::Transaction(transaction.clone()),
+        );
+        assert_eq!(
+            client.get_document(read).await.unwrap().into_inner(),
+            original
+        );
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+        let writes = |exists| {
+            vec![
+                pb::Write {
+                    operation: Some(pb::write::Operation::Delete(format!(
+                        "{DOCS}/{original_path}"
+                    ))),
+                    ..Default::default()
+                },
+                update_write(&created_path, &[("v", i(11))]),
+                pb::Write {
+                    operation: Some(if verify {
+                        pb::write::Operation::Verify(guard_path.clone())
+                    } else {
+                        pb::write::Operation::Delete(guard_path.clone())
+                    }),
+                    current_document: Some(pb::Precondition {
+                        condition_type: Some(pb::precondition::ConditionType::Exists(exists)),
+                    }),
+                    ..Default::default()
+                },
+            ]
+        };
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: writes(false),
+                transaction: transaction.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect_err("a late failing precondition rejects the entire transaction");
+        assert_eq!(
+            client
+                .get_document(get(&original_path))
+                .await
+                .unwrap()
+                .into_inner(),
+            original
+        );
+        assert_eq!(
+            client
+                .get_document(get(&format!("{collection}/guard")))
+                .await
+                .unwrap()
+                .into_inner(),
+            guard
+        );
+        assert_eq!(
+            client
+                .get_document(get(&created_path))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        client
+            .rollback(pb::RollbackRequest {
+                database: DB.to_owned(),
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        // The same write sequence succeeds with the guard's actual existence condition.
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let response = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: writes(true),
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.write_results.len(), 3);
+        assert_eq!(
+            client
+                .get_document(get(&original_path))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        let created = client
+            .get_document(get(&created_path))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(created.fields, [("v".to_owned(), i(11))].into());
+        assert_eq!(created.update_time, response.write_results[1].update_time);
+        assert_ne!(created.update_time, original.update_time);
+        let after_guard = client
+            .get_document(get(&format!("{collection}/guard")))
+            .await;
+        if verify {
+            assert_eq!(after_guard.unwrap().into_inner(), guard);
+        } else {
+            assert_eq!(after_guard.unwrap_err().code(), tonic::Code::NotFound);
+        }
+    }
+    handle.abort();
+}

@@ -49,7 +49,7 @@
     "verification/quint/tests/storage_generation_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "f57129e5c4c3da4f5034b7a098cdf81a3341a32cb827e0a52eac0e833c3d9d12",
+    ".github/workflows/quint.yml": "9c3db4470d31c7c8eae99064751e1a4e313633c62ce078da33cf30524bee899d",
     "crates/fireemu-core-storage/src/store.rs": "650e421319b045efac3d43ee608a899bba6c50ac50181f40e8e3c96dad36f6d8",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",

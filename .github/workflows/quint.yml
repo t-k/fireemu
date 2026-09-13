@@ -17,14 +17,43 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: protect the verification JDK from runner writes
+      - name: install protected verification JDK
         shell: bash
         run: |
+          set -euo pipefail
           java_path="$(readlink -f "$(command -v java)")"
-          jdk_root="$(dirname "$(dirname "$java_path")")"
-          test "$jdk_root" != / && test -x "$jdk_root/bin/javac" && test -x "$jdk_root/bin/jar"
-          sudo chown -R root:root "$jdk_root"
-          sudo chmod -R go-w "$jdk_root"
+          source_jdk="$(dirname "$(dirname "$java_path")")"
+          test "$source_jdk" != / && test -x "$source_jdk/bin/java"
+          test -x "$source_jdk/bin/javac" && test -x "$source_jdk/bin/jar"
+
+          protected_jdk="$(sudo mktemp -d /opt/fireemu-quint-jdk.XXXXXX)"
+          sudo cp -a "$source_jdk"/. "$protected_jdk"/
+          sudo chown -R root:root "$protected_jdk"
+          sudo chmod -R go-w "$protected_jdk"
+
+          for executable in java javac jar; do
+            path="$protected_jdk/bin/$executable"
+            test -x "$path"
+            resolved="$(readlink -f "$path")"
+            test "$resolved" = "$path"
+          done
+
+          # trusted_path() rejects any non-root-owned or caller-writable ancestor.
+          # Check the copied tree and its /opt parent before exposing it to later steps.
+          test "$(stat -c '%u' /opt)" = 0
+          test -z "$(find /opt -maxdepth 1 -mindepth 1 -path "$protected_jdk" -prune -perm /022 -print)"
+          test "$(find "$protected_jdk" -xdev \( ! -user root -o -perm /022 \) -print -quit)" = ""
+          for executable in java javac jar; do
+            path="$protected_jdk/bin/$executable"
+            parent="$path"
+            while [ "$parent" != / ]; do
+              test "$(stat -c '%u' "$parent")" = 0
+              parent="$(dirname "$parent")"
+            done
+          done
+
+          echo "JAVA_HOME=$protected_jdk" >> "$GITHUB_ENV"
+          echo "$protected_jdk/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

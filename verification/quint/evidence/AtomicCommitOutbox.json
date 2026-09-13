@@ -53,7 +53,7 @@
     "verification/quint/tests/atomic_commit_outbox_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "f57129e5c4c3da4f5034b7a098cdf81a3341a32cb827e0a52eac0e833c3d9d12",
+    ".github/workflows/quint.yml": "9c3db4470d31c7c8eae99064751e1a4e313633c62ce078da33cf30524bee899d",
     "crates/fireemu-adapter-functions/src/runtime.rs": "7d87d4613f68aec3ff527525932b040c1d3609a5964bb7d7a81afc962c99f86e",
     "crates/fireemu-adapter-grpc/src/local.rs": "aea4396d1848f91b48413acf091df0c311f538c39ecc19205b32971a75caf540",
     "crates/fireemu-core-firestore/src/store.rs": "0b32fd8e68fe8d9e8acf3082762048cd650e44dea2bfaa5ba2ab2866d1f329cf",

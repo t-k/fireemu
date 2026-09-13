@@ -623,6 +623,145 @@ service cloud.firestore {
 }
 
 #[tokio::test]
+async fn a_denied_target_stays_removed_until_explicitly_readded_after_rules_recovery() {
+    const DEPENDENT_RULES: &str = r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /gate/{id} { allow read, write: if true; }
+    match /protected/{id} {
+      allow read: if get(/databases/$(database)/documents/gate/access).data.enabled == 'yes';
+      allow write: if true;
+    }
+  }
+}
+";
+    let (mut client, handle) = start_with_rules_source(Some(DEPENDENT_RULES)).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                set_write("gate/access", &[("enabled", s("yes"))]),
+                set_write("protected/a", &[("v", s("1"))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_query_target(1, "protected")).await.unwrap();
+    let (initial, token) = trace_and_token(&mut responses, "NO_CHANGE[]").await;
+    assert!(!token.is_empty());
+    assert_eq!(
+        initial,
+        vec![
+            "ADD[1]",
+            "CHANGE a",
+            "CURRENT[1]",
+            "NO_CHANGE[1]",
+            "NO_CHANGE[]"
+        ]
+    );
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("gate/access", &[("enabled", s("no"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        next_until(&mut responses, "REMOVE[1] cause=7").await,
+        vec!["REMOVE[1] cause=7"]
+    );
+    // Local safety regression: a previously valid resume token cannot bypass current rules.
+    let (reconnect_tx, reconnect_rx) = mpsc::channel(8);
+    let mut reconnect = client
+        .listen(ReceiverStream::new(reconnect_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut resumed = add_query_target(3, "protected");
+    if let Some(pb::listen_request::TargetChange::AddTarget(target)) = &mut resumed.target_change {
+        target.resume_type = Some(pb::target::ResumeType::ResumeToken(token));
+    }
+    reconnect_tx.send(resumed).await.unwrap();
+    assert_eq!(
+        next_until(&mut reconnect, "REMOVE[3] cause=7").await,
+        vec!["ADD[3]", "REMOVE[3] cause=7"]
+    );
+    drop(reconnect_tx);
+    drop(reconnect);
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                set_write("gate/access", &[("enabled", s("yes"))]),
+                set_write("protected/a", &[("v", s("2"))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // A successful target snapshot is a positive barrier, avoiding a silence timeout.
+    tx.send(add_documents_target(2, &["gate/access"]))
+        .await
+        .unwrap();
+    let barrier = next_until(&mut responses, "CURRENT[2]").await;
+    assert!(barrier.iter().any(|event| event == "CHANGE access"));
+    assert!(barrier.iter().all(|event| matches!(
+        event.as_str(),
+        "NO_CHANGE[]" | "ADD[2]" | "CHANGE access" | "CURRENT[2]"
+    )));
+    assert_eq!(
+        next_until(&mut responses, "NO_CHANGE[]").await,
+        vec!["NO_CHANGE[2]", "NO_CHANGE[]"]
+    );
+
+    tx.send(add_query_target(1, "protected")).await.unwrap();
+    let mut revision = None;
+    loop {
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        match response.response_type.unwrap() {
+            pb::listen_response::ResponseType::DocumentChange(change) => {
+                assert_eq!(change.target_ids, vec![1]);
+                let document = change.document.unwrap();
+                assert_eq!(document.name, format!("{DOCS}/protected/a"));
+                assert!(revision.replace(document.fields["v"].clone()).is_none());
+            }
+            pb::listen_response::ResponseType::TargetChange(change) => {
+                assert_ne!(
+                    change.target_change_type,
+                    pb::target_change::TargetChangeType::Remove as i32
+                );
+                if change.target_change_type == pb::target_change::TargetChangeType::Current as i32
+                {
+                    assert_eq!(change.target_ids, vec![1]);
+                    break;
+                }
+            }
+            other => panic!("unexpected readd response: {other:?}"),
+        }
+    }
+    assert_eq!(revision, Some(s("2")));
+    drop(tx);
+    drop(responses);
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
 async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_removed() {
     let (mut client, handle) = start(false).await;
     let (tx, rx) = mpsc::channel(8);

@@ -1790,6 +1790,64 @@ fn client_tenant_id_selects_the_namespace_and_must_match_the_id_token() {
 }
 
 #[test]
+fn cross_tenant_update_credentials_leave_both_namespaces_unchanged() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    for tenant in ["customer-a", "customer-b"] {
+        registry.ensure_tenant("demo-app", tenant).unwrap();
+    }
+    s.registry = Some(registry);
+    let mut tokens = Vec::new();
+    for tenant in ["customer-a", "customer-b"] {
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"tenantId": tenant, "email": "same@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{created}");
+        tokens.push(created["idToken"].as_str().unwrap().to_owned());
+    }
+    let snapshot = |tenant: &str| {
+        let response = handle_with(
+            &s,
+            "GET",
+            &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts:batchGet?maxResults=1000"),
+            &owner(),
+            &json!({}),
+        );
+        assert_eq!(response.status, 200, "{}", response.body);
+        assert_eq!(response.body["users"].as_array().unwrap().len(), 1);
+        response.body
+    };
+    let before_a = snapshot("customer-a");
+    let before_b = snapshot("customer-b");
+    // Local namespace safety; this does not establish production error precedence.
+    for (token, destination) in [(&tokens[0], "customer-b"), (&tokens[1], "customer-a")] {
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"tenantId": destination, "idToken": token,
+                "displayName": "crossed", "password": "changed-password"}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(snapshot("customer-a"), before_a);
+        assert_eq!(snapshot("customer-b"), before_b);
+    }
+    for (token, tenant) in tokens.iter().zip(["customer-a", "customer-b"]) {
+        let (status, account) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"tenantId": tenant, "idToken": token}),
+        );
+        assert_eq!(status, 200, "{account}");
+        assert_eq!(account["users"][0]["email"], "same@example.com");
+        assert_eq!(account["users"][0]["tenantId"], tenant);
+    }
+}
+
+#[test]
 fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     use fireemu_core_auth::store::AuthRegistry;
 

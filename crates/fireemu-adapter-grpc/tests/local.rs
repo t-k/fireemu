@@ -5371,7 +5371,7 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         let expected = baseline
             .iter()
             .skip(usize::try_from(offset).unwrap())
-            .take(limit_value.map_or(usize::MAX, |value| value as usize))
+            .take(limit_value.map_or(usize::MAX, |value| usize::try_from(value).unwrap()))
             .cloned()
             .collect::<Vec<_>>();
         let messages = expected.len().max(1);

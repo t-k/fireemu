@@ -5615,6 +5615,160 @@ async fn batch_write_continues_after_decode_and_execution_failures() {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
+async fn batch_write_reports_lock_contention_per_item_and_preserves_suffix() {
+    let (mut client, _clock, handle) = start().await;
+    for contended_index in [0, 1] {
+        let collection = format!("batch-contention-{contended_index}");
+        let locked = format!("{collection}/locked");
+        let prefix = format!("{collection}/prefix");
+        let suffix = format!("{collection}/suffix");
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(&locked, &[("v", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let mut reads = client
+            .batch_get_documents(pb::BatchGetDocumentsRequest {
+                database: DB.to_owned(),
+                documents: vec![format!("{DOCS}/{locked}")],
+                consistency_selector: Some(
+                    pb::batch_get_documents_request::ConsistencySelector::Transaction(
+                        transaction.clone(),
+                    ),
+                ),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let read = reads.next().await.unwrap().unwrap();
+        assert!(matches!(
+            read.result,
+            Some(pb::batch_get_documents_response::Result::Found(_))
+        ));
+
+        let (writes, ordered_paths, ordered_values) = if contended_index == 0 {
+            (
+                vec![
+                    update_write(&locked, &[("v", i(3))]),
+                    update_write(&prefix, &[("v", i(2))]),
+                    update_write(&suffix, &[("v", i(4))]),
+                ],
+                [&locked, &prefix, &suffix],
+                [3, 2, 4],
+            )
+        } else {
+            (
+                vec![
+                    update_write(&prefix, &[("v", i(2))]),
+                    update_write(&locked, &[("v", i(3))]),
+                    update_write(&suffix, &[("v", i(4))]),
+                ],
+                [&prefix, &locked, &suffix],
+                [2, 3, 4],
+            )
+        };
+        let response = client
+            .batch_write(pb::BatchWriteRequest {
+                database: DB.to_owned(),
+                writes,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.status.len(), 3);
+        assert_eq!(response.write_results.len(), 3);
+        // BatchWrite contention is a per-item local result; it is not retried or promoted to a
+        // whole-request error. The exact wording is the core's local contention contract.
+        assert_eq!(
+            response.status[contended_index].code,
+            i32::from(tonic::Code::Aborted)
+        );
+        assert_eq!(
+            response.status[contended_index].message,
+            "Too much contention on these documents. Please try again."
+        );
+        assert_eq!(
+            response.write_results[contended_index],
+            pb::WriteResult::default()
+        );
+        for index in 0..3 {
+            if index == contended_index {
+                continue;
+            }
+            assert_eq!(response.status[index].code, 0);
+            assert!(response.write_results[index].update_time.is_some());
+        }
+
+        let get = |path: &str| pb::GetDocumentRequest {
+            name: format!("{DOCS}/{path}"),
+            ..Default::default()
+        };
+        let locked_after_batch = client
+            .get_document(get(&locked))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(locked_after_batch.fields, [("v".to_owned(), i(1))].into());
+        for (index, (path, value)) in ordered_paths.iter().zip(ordered_values).enumerate() {
+            if index == contended_index {
+                continue;
+            }
+            let document = client.get_document(get(path)).await.unwrap().into_inner();
+            assert_eq!(document.fields, [("v".to_owned(), i(value))].into());
+            assert_eq!(
+                document.update_time,
+                response.write_results[index].update_time
+            );
+        }
+
+        // The refused BatchWrite item leaves its holder active. Its own commit can finish and
+        // release the lock, after which an out-of-band write to the same path succeeds.
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(&locked, &[("v", i(5))])],
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(&locked, &[("v", i(6))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_document(get(&locked))
+                .await
+                .unwrap()
+                .into_inner()
+                .fields,
+            [("v".to_owned(), i(6))].into()
+        );
+    }
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn transaction_commit_late_precondition_failure_preserves_documents_and_versions() {
     let (mut client, clock, handle) = start().await;
     for verify in [false, true] {

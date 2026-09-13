@@ -245,6 +245,9 @@ try {
   connectAuthEmulator(reconnectAuth, authUrl.origin, { disableWarnings: true });
   connectFirestoreEmulator(reconnectDb, firestoreUrl.hostname, Number(firestoreUrl.port));
   let reconnectStop = () => {};
+  let reconnectCreated = true;
+  let reconnectScenarioError;
+  results.reconnectAfterRejectedWrite = { originalClient: {} };
   try {
     await sdk(signInWithEmailAndPassword(reconnectAuth, emailB, password), "sign in reconnect client");
     const reconnectDoc = doc(reconnectDb, "g3-profiles", uidB);
@@ -263,6 +266,8 @@ try {
     await bounded(reconnectInitial, "reconnect listener initial callback");
     const ownerToken = await sdk(credentialA.user.getIdToken(), "get owner ID token");
     const serverBefore = await sdk(readServerDocument("g3-denied/reconnect", ownerToken), "server state before reconnect refusal");
+    const projectState = (body) => ({ name: body.name, owner: body.fields?.owner?.stringValue, revision: Number(body.fields?.revision?.integerValue) });
+    if (projectState(serverBefore).name !== `projects/${project}/databases/(default)/documents/g3-denied/reconnect` || projectState(serverBefore).owner !== uidA || projectState(serverBefore).revision !== 0) throw new Error(`unexpected serverBefore: ${JSON.stringify(projectState(serverBefore))}`);
     let rejected;
     try {
       await sdk(setDoc(doc(reconnectDb, "g3-denied", "reconnect"), { owner: uidB, revision: 1 }), "rejected reconnect write");
@@ -271,11 +276,15 @@ try {
     }
     if (rejected?.code !== "permission-denied") throw new Error(`expected permission-denied reconnect write, got ${JSON.stringify(rejected)}`);
     const serverAfterRejected = await sdk(readServerDocument("g3-denied/reconnect", ownerToken), "server state after reconnect refusal");
+    if (JSON.stringify(projectState(serverAfterRejected)) !== JSON.stringify(projectState(serverBefore))) throw new Error(`rejected write changed server state: before=${JSON.stringify(projectState(serverBefore))} after=${JSON.stringify(projectState(serverAfterRejected))}`);
     await sdk(disableNetwork(reconnectDb), "disable network after rejected write");
     await sdk(enableNetwork(reconnectDb), "enable network after rejected write");
     const accepted = await sdk(setDoc(reconnectDoc, { owner: uidB, revision: 2 }), "accepted write after reconnect").then(() => true).catch((error) => ({ code: error?.code, message: error?.message }));
     const pending = await sdk(waitForPendingWrites(reconnectDb), "pending writes after reconnect").then(() => true).catch((error) => ({ code: error?.code, message: error?.message }));
     const serverAfterAccepted = await sdk(readServerDocument("g3-denied/reconnect", ownerToken), "server state after reconnect write");
+    results.reconnectAfterRejectedWrite.originalClient = { rejected, serverBefore, serverAfterRejected, serverAfterAccepted, accepted, pending };
+    if (accepted !== true || pending !== true) throw new Error(`accepted/pending outcome mismatch: ${JSON.stringify({ accepted, pending })}`);
+    if (JSON.stringify(projectState(serverAfterAccepted)) !== JSON.stringify(projectState(serverBefore))) throw new Error(`unexpected protected server state after accepted profile write: ${JSON.stringify(projectState(serverAfterAccepted))}`);
     let listenerAcknowledged = false;
     try {
       await bounded(new Promise((resolve, reject) => {
@@ -304,17 +313,23 @@ try {
       const freshRead = await sdk(getDocFromServer(freshDoc), "fresh client server read");
       await sdk(setDoc(freshDoc, { owner: uidB, revision: 3 }), "fresh client accepted write");
       await sdk(waitForPendingWrites(freshDb), "fresh client pending writes");
-      results.reconnectAfterRejectedWrite = {
-        originalClient: { rejected, serverBefore, serverAfterRejected, serverAfterAccepted, accepted, pending, listenerAcknowledged, listenerSnapshots: reconnectSnapshots },
-        freshClientPositiveControl: { initialRevision: freshRead.data()?.revision ?? null, acceptedRevision: 3, pendingWritesResolved: true },
-      };
+      const freshInitialRevision = freshRead.data()?.revision ?? null;
+      const freshAfter = await sdk(getDocFromServer(freshDoc), "fresh client server read after write");
+      const freshAfterRevision = freshAfter.data()?.revision ?? null;
+      if (freshInitialRevision !== 2 || freshAfterRevision !== 3) throw new Error(`fresh client state mismatch: initial=${freshInitialRevision} after=${freshAfterRevision}`);
+      results.reconnectAfterRejectedWrite.freshClientPositiveControl = { initialRevision: freshInitialRevision, acceptedRevision: freshAfterRevision, pendingWritesResolved: true };
     } finally {
       await signOut(freshAuth).catch(() => {});
       await deleteApp(freshApp).catch(() => {});
     }
-    await deleteServerDocument("g3-denied/reconnect", ownerToken);
+    results.reconnectAfterRejectedWrite.originalClient.listenerAcknowledged = listenerAcknowledged;
+    results.reconnectAfterRejectedWrite.originalClient.listenerSnapshots = reconnectSnapshots;
+  } catch (error) {
+    reconnectScenarioError = { code: error?.code, message: error?.message };
+    results.reconnectAfterRejectedWrite.error = reconnectScenarioError;
   } finally {
     reconnectStop();
+    if (reconnectCreated) await deleteServerDocument("g3-denied/reconnect", await credentialA.user.getIdToken()).catch(() => {});
     await signOut(reconnectAuth).catch(() => {});
     await deleteApp(reconnectApp).catch(() => {});
   }
@@ -333,6 +348,12 @@ try {
 
 if (results.authSwitch?.finalState !== "signed-out") throw new Error("Auth did not finish signed-out");
 
-const reconnectPassed = results.reconnectAfterRejectedWrite?.originalClient?.listenerAcknowledged === true;
+const reconnectPassed = !results.reconnectAfterRejectedWrite?.error
+  && results.reconnectAfterRejectedWrite?.originalClient?.rejected?.code === "permission-denied"
+  && results.reconnectAfterRejectedWrite?.originalClient?.accepted === true
+  && results.reconnectAfterRejectedWrite?.originalClient?.pending === true
+  && results.reconnectAfterRejectedWrite?.originalClient?.listenerAcknowledged === true
+  && results.reconnectAfterRejectedWrite?.freshClientPositiveControl?.initialRevision === 2
+  && results.reconnectAfterRejectedWrite?.freshClientPositiveControl?.acceptedRevision === 3;
 console.log(JSON.stringify({ passed: reconnectPassed, transport: "firebase-client-node-grpc", ...results }, null, 2));
 if (!reconnectPassed) process.exitCode = 1;

@@ -3495,6 +3495,8 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         &json!({"localId": ["custom-1"]}),
     );
     assert_eq!(status, 200, "{account}");
+    assert_eq!(account["users"].as_array().unwrap().len(), 1);
+    assert_eq!(account["users"][0]["localId"], "custom-1");
     assert!(
         account["users"][0]["customAttributes"].is_null(),
         "custom-token claims must not become Admin customAttributes"

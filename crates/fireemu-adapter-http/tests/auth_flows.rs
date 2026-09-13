@@ -1854,15 +1854,20 @@ fn cross_tenant_refresh_credentials_are_refused_without_namespace_mutation() {
 
     let mut s = state();
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    assert!(registry.register(
+        "worker-alpha",
+        AuthStore::new("worker-alpha", SplitMix64::new(7), TotpPolicy::default()),
+    ));
     for tenant in ["customer-a", "customer-b"] {
         registry.ensure_tenant("worker-alpha", tenant).unwrap();
     }
     s.registry = Some(registry);
     let mut tenancy = Tenancy::new("demo-app");
-    tenancy.register("worker-alpha", &[], &["worker-key"]).unwrap();
+    tenancy.register("worker-alpha", &[], &["worker-key".to_owned()]).unwrap();
     s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
 
     let mut credentials = Vec::new();
+    let mut identities = std::collections::BTreeMap::new();
     for tenant in ["customer-a", "customer-b"] {
         let (status, created) = post(
             &s,
@@ -1870,6 +1875,7 @@ fn cross_tenant_refresh_credentials_are_refused_without_namespace_mutation() {
             &json!({"tenantId": tenant, "email": format!("{tenant}@example.com"), "password": "hunter22"}),
         );
         assert_eq!(status, 200, "{created}");
+        identities.insert(tenant, created["localId"].as_str().unwrap().to_owned());
         credentials.push(created["refreshToken"].as_str().unwrap().to_owned());
     }
     let snapshot = |tenant: &str| {
@@ -1881,6 +1887,8 @@ fn cross_tenant_refresh_credentials_are_refused_without_namespace_mutation() {
             &json!({}),
         );
         assert_eq!(response.status, 200, "{}", response.body);
+        assert_eq!(response.body["users"].as_array().unwrap().len(), 1);
+        assert_eq!(response.body["users"][0]["localId"], identities[tenant]);
         response.body
     };
     let before_a = snapshot("customer-a");

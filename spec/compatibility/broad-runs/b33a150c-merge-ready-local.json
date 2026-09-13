@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "merge-readiness-local-candidate",
   "status": "technical-validation-complete-owner-decision-pending",
-  "sourceCommit": "2f0de271f474d83d8521dc5d6c80f6cc12fa2009",
+  "sourceCommit": "b33a150cc3603fd87e6991981c1be9d4ac5f094d",
   "baseCommit": "d987d5ddcc1374cee425f08d6d81915795fc2ab5",
   "capturedAt": "2026-09-13T12:40:34Z",
   "productionExecuted": false,
@@ -14,7 +14,7 @@
   "validation": {
     "workspace": {
       "command": "cargo nextest run --workspace --profile pr --no-fail-fast",
-      "runId": "29ff266c-5fa9-4a72-8896-3f5e5fbfd655",
+      "runId": "28b0ccc9-07cd-44a9-a245-f5cf75929959",
       "passed": 2081,
       "failed": 0,
       "skipped": 81

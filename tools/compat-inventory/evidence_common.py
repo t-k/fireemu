@@ -3,11 +3,31 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# This is the frozen source closure for the published aggregation-v1 receipts.
+# Keep additions to the tool directory out of historical evidence identities unless
+# they are part of this execution path and a new evidence class is reviewed.
+AGGREGATION_PROBE_FILES_V1 = (
+    "aggregation_corpus.py",
+    "aggregation_evidence.py",
+    "aggregation_index.py",
+    "aggregation_package.py",
+    "aggregation_probe.py",
+    "aggregation_response.py",
+    "auth_probe.py",
+    "capture.py",
+    "evidence_common.py",
+    "owned_runner.py",
+    "probe.py",
+    "protobuf_inventory.py",
+    "publish.py",
+)
 
 
 def sha(data: bytes) -> str:
@@ -91,10 +111,106 @@ def runtime_inputs(root: Path) -> dict:
     return result
 
 
-def probe_inputs() -> dict:
-    directory = Path(__file__).parent
-    return {
-        p.name: sha(p.read_bytes())
-        for p in sorted(directory.glob("*.py"))
-        if not p.name.startswith("test_")
-    }
+def runtime_inputs_at_commit(commit: str, root: Path = ROOT) -> dict:
+    require(
+        re.fullmatch(r"[0-9a-f]{40}", commit) is not None,
+        "invalid runtime source commit",
+    )
+    try:
+        names = (
+            subprocess.check_output(
+                [
+                    "git",
+                    "ls-tree",
+                    "-r",
+                    "-z",
+                    "--name-only",
+                    commit,
+                    "--",
+                    "Cargo.toml",
+                    "Cargo.lock",
+                    "rust-toolchain.toml",
+                    ".cargo",
+                    "crates",
+                ],
+                cwd=root,
+            )
+            .decode()
+            .split("\0")
+        )
+    except subprocess.CalledProcessError as error:
+        raise ValueError("runtime source commit is unavailable") from error
+    names = [name for name in names if name]
+    require(bool(names), "runtime source commit is empty")
+    result = {}
+    for name in sorted(names):
+        try:
+            content = subprocess.check_output(
+                ["git", "show", f"{commit}:{name}"],
+                cwd=root,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError as error:
+            raise ValueError("runtime source commit is incomplete") from error
+        result[name] = sha(content)
+    return result
+
+
+def _current_commit(root: Path) -> str:
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+
+
+def runtime_inputs_for_receipt(commit: str, root: Path = ROOT) -> dict:
+    if commit == _current_commit(root):
+        return runtime_inputs(root)
+    return runtime_inputs_at_commit(commit, root)
+
+
+def _probe_paths(evidence_class: str | None, directory: Path) -> list[Path]:
+    if evidence_class is None:
+        paths = sorted(directory.glob("*.py"))
+        return [path for path in paths if not path.name.startswith("test_")]
+    if evidence_class == "aggregation-v1":
+        return [directory / name for name in AGGREGATION_PROBE_FILES_V1]
+    raise ValueError(f"unknown evidence class: {evidence_class}")
+
+
+def probe_inputs(
+    evidence_class: str | None = None, directory: Path | None = None
+) -> dict:
+    directory = Path(__file__).parent if directory is None else directory
+    paths = _probe_paths(evidence_class, directory)
+    require(all(path.is_file() for path in paths), "probe source file is missing")
+    return {path.name: sha(path.read_bytes()) for path in paths}
+
+
+def probe_inputs_at_commit(evidence_class: str, commit: str, root: Path = ROOT) -> dict:
+    require(
+        re.fullmatch(r"[0-9a-f]{40}", commit) is not None,
+        "invalid probe source commit",
+    )
+    names = [path.name for path in _probe_paths(evidence_class, Path(__file__).parent)]
+    result = {}
+    for name in names:
+        try:
+            content = subprocess.check_output(
+                ["git", "show", f"{commit}:tools/compat-inventory/{name}"],
+                cwd=root,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError as error:
+            raise ValueError(
+                "probe source commit does not contain its closure"
+            ) from error
+        result[name] = sha(content)
+    return result
+
+
+def probe_inputs_for_receipt(
+    evidence_class: str, commit: str, root: Path = ROOT
+) -> dict:
+    if commit == _current_commit(root):
+        return probe_inputs(evidence_class)
+    return probe_inputs_at_commit(evidence_class, commit, root)

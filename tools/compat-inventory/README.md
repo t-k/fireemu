@@ -6,6 +6,7 @@ These explicit tools enumerate official sources and record bounded, candidate-on
 
 ```sh
 uv run --project tools/compat-inventory --locked -m pytest tools/compat-inventory -q
+uv run --project tools/compat-inventory --locked tools/compat-inventory/aggregation_evidence.py --check
 uv run --project tools/compat-inventory --locked tools/compat-inventory/publish.py --check
 ```
 
@@ -44,7 +45,7 @@ The production corpus additionally owns one composite index in its fresh UUID co
 
 Approval is repository-reviewed metadata, not a signature. A reviewer must inspect the exact subject and explicitly approve case IDs. The offline publisher rechecks all bound source/tool/runtime inputs, raw cases and identities before generating labels. Editing an input invalidates the bundle and any approval; refresh candidates deliberately rather than rewriting historical receipts. Broad schema1 feature labels remain unverified. Run the real-process integration test with `FIREEMU_EVIDENCE_BINARY=/absolute/fireemu`; without that opt-in, offline CI reports it as skipped.
 
-The source `commit` fields record checkout HEAD at measurement time; the per-file manifests are the measured identities and can include not-yet-committed additions. Do not infer the complete measured tree from HEAD alone. The validator compares those complete manifests with the current inputs, and the build receipt binds runtime inputs to the copied artifact separately from probe sources.
+The source `commit` fields record checkout HEAD at measurement time; the per-file manifests are the measured identities and can include not-yet-committed additions. Do not infer the complete measured tree from HEAD alone. The validator replays both the explicit aggregation-v1 probe closure and the runtime closure from each receipt's recorded immutable commit; when that commit is the current checkout, it also accepts the measured working-tree bytes needed for a dirty acquisition. Later unrelated files or source changes do not rewrite historical receipts. The build receipt binds those runtime inputs to the copied artifact separately from probe sources.
 
 A complete, structurally valid query mismatch may be published as a mismatch, not a success. The validator checks every response element, expected alias and typed aggregate Value before comparing values, then recomputes the case and summary verdicts. Only the intersection of cases matching on both targets can be approved. Malformed responses, incomplete execution, failed ownership/state controls or failed cleanup reject the entire bundle. Keep unexpected values and original expectations unchanged while investigating divergence.
 

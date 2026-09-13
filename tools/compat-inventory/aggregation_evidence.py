@@ -1,5 +1,6 @@
 """Offline, fail-closed validation and projection of one bounded evidence bundle."""
 
+import argparse
 import gzip
 import io
 import json
@@ -17,9 +18,10 @@ from evidence_common import (
     ROOT,
     fingerprint,
     probe_inputs,
+    probe_inputs_for_receipt,
     read,
     require,
-    runtime_inputs,
+    runtime_inputs_for_receipt,
     sha,
 )
 from owned_runner import local_addresses, validate_build
@@ -180,7 +182,8 @@ def validate_receipt(value: dict, target: str) -> set[str]:
         "receipt contains failure",
     )
     require(
-        value["probeSource"]["files"] == probe_inputs()
+        value["probeSource"]["files"]
+        == probe_inputs_for_receipt("aggregation-v1", value["probeSource"]["commit"])
         and value["corpusSha256"] == fingerprint(corpus()),
         "stale probe/corpus",
     )
@@ -386,7 +389,8 @@ def validate_owned(value: dict) -> None:
         "launch configuration mismatch",
     )
     require(
-        value["runtimeSource"]["files"] == runtime_inputs(ROOT)
+        value["runtimeSource"]["files"]
+        == runtime_inputs_for_receipt(value["runtimeSource"]["commit"])
         and value["runtimeSource"]["relationship"] == "built-by-recorder",
         "unbound runtime source",
     )
@@ -427,7 +431,7 @@ def validate_bundle(directory=DIRECTORY) -> tuple[dict, set[str], str]:
         and review["rawSha256"] == sha(raw_source)
         and review["bodySha256"] == sha(extracted["text"].encode())
         and review["extractor"] == extracted["extractor"]
-        and review["extractorSha256"] == probe_inputs()["capture.py"],
+        and review["extractorSha256"] == probe_inputs("aggregation-v1")["capture.py"],
         "source/extractor binding changed",
     )
     require(
@@ -535,3 +539,12 @@ def check_or_write(write: bool) -> None:
         require(
             PAGE.read_text() == generated, "generated aggregation evidence page drift"
         )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check", action="store_true")
+    mode.add_argument("--write", action="store_true")
+    arguments = parser.parse_args()
+    check_or_write(write=arguments.write)

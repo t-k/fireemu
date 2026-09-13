@@ -48,7 +48,7 @@ def observe(
             "commit": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
             ).strip(),
-            "files": probe_inputs(),
+            "files": probe_inputs("aggregation-v1"),
         },
         "corpusSha256": fingerprint(template),
         "project": PROJECT,

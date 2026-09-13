@@ -41,7 +41,7 @@ def stage(source: Path, local: Path, production: Path, directory: Path) -> None:
             "rawSha256": sha(raw),
             "bodySha256": sha(extracted["text"].encode()),
             "extractor": extracted["extractor"],
-            "extractorSha256": probe_inputs()["capture.py"],
+            "extractorSha256": probe_inputs("aggregation-v1")["capture.py"],
             "fetchedAt": "2026-09-09T14:21:24.817821+00:00",
             "reviewedAt": datetime.now(UTC).date().isoformat(),
             "reviewer": "Codex (agent-authored interpretation, not execution approval)",

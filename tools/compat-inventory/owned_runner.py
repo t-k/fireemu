@@ -344,7 +344,7 @@ def run_owned(binary: Path, output: Path, build: dict | None = None) -> dict:
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     inputs = runtime_inputs(ROOT)
-    tools_before = probe_inputs()
+    tools_before = probe_inputs("aggregation-v1")
     nonce = uuid.uuid4().hex
     result = {
         "schemaVersion": 2,
@@ -444,7 +444,8 @@ def run_owned(binary: Path, output: Path, build: dict | None = None) -> dict:
                 "launch input changed during measurement",
             )
             require(
-                inputs == runtime_inputs(ROOT) and tools_before == probe_inputs(),
+                inputs == runtime_inputs(ROOT)
+                and tools_before == probe_inputs("aggregation-v1"),
                 "source changed during measurement",
             )
             closed = all(

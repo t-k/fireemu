@@ -57,3 +57,9 @@ After a separately granted permission, the prepared production entry is `second_
 The next local queue item is nearby mask/precondition/transform or listener coverage, outside this closed manifest. Production 45 remains pending the single explicit decision and input conditions above. Do not resume MFA/TTL or rebuild the evidence framework as a prerequisite.
 
 The comparison CLI was also executed on four private fixture inputs: matching `--check` exited0, complete mismatch without `--check` exited0, mismatch with `--check` exited1, and incomplete cleanup exited1. These fixtures are not published as production observations.
+
+## Separate local listener follow-up
+
+After preparing this closed batch, the existing `tools/sdk-smoke/listener-replacement.mjs` ran with the byte-verified first46 artifact from `b0c1f3ef`, without changing the45 manifest. It confirmed that the detached first listener retained only `[[0]]` while its replacement observed `[[0],[1]]`. The Node SDK process exited0 and the owned runtime and listeners stopped. This is a separate local check; the requested long-polling option does not prove browser/WebChannel or production transport compatibility. The `demo-app` configuration has an explicitly empty Auth project-number mapping because this case does not test Auth refresh or a Cloud project.
+
+Two earlier setup attempts remain private incomplete records: the old helper referenced an already-removed temporary artifact, then required an optional hub environment variable absent in this zero-port configuration. The former launched no process; the latter stopped its parent before any SDK test began. The helper was corrected, and the subsequent execution above passed. Neither setup issue is classified as a runtime gap, and no missing historical artifact hash was replaced.

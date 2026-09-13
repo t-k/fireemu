@@ -156,5 +156,55 @@
     "Non-JSON production body content is retained as digest/count, not inspectable raw text.",
     "No new current Cloud setting or tariff confirmation.",
     "Previous mapping/history/SDK/Rules/Listen/lifetime evidence remains unchanged."
-  ]
+  ],
+  "separateLocalListenerCheck": {
+    "executionSourceCommit": "7fe3637c951d158e7c74026b503ce54594c3edcf",
+    "runtimeArtifactSourceCommit": "b0c1f3ef9646cdee400d25a5a61ec818e32daa1f",
+    "artifactSha256": "c82c03a20571cf7103558f4b0ef109c2134c6f2123e4e6eb0443396b8f17e282",
+    "runtimeInputsVerifiedEqual": true,
+    "sourceSha256": "a74e0138dc8f778be872f056c359ef7ba4c485632a70aebefc84ae679655548f",
+    "configuration": {
+      "schemaVersion": 1,
+      "profile": "strict",
+      "daemon": {
+        "authProjectNumbers": {}
+      },
+      "firestore": {
+        "edition": "standard",
+        "apiMode": "native"
+      },
+      "rules": {
+        "source": "tools/sdk-smoke/listener-replacement.rules"
+      }
+    },
+    "result": {
+      "passed": true,
+      "transport": "force-long-polling",
+      "firstValues": [
+        [
+          0
+        ]
+      ],
+      "replacementValues": [
+        [
+          0
+        ],
+        [
+          1
+        ]
+      ]
+    },
+    "exitCode": 0,
+    "ownedProcess": {
+      "stopped": true,
+      "listenersClosed": true
+    },
+    "productionExecuted": false,
+    "scope": "Existing Node SDK listener replacement smoke; not browser/WebChannel/production coverage",
+    "privateManifestSha256": "d1e024991d6f07fff380d44e70a7d65525f5bd2a6fcc894bcbaa07094cb9298b",
+    "earlierAttempts": [
+      "Copied-runtime lookup failed before launch; no runtime result.",
+      "Legacy private helper required an absent optional hub environment variable; parent stopped, no SDK test started. Retained as incomplete, not a runtime gap."
+    ]
+  }
 }

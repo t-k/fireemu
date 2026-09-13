@@ -113,6 +113,10 @@ const readServerDocument = async (path, idToken) => {
   if (!response.ok) throw new Error(`server read failed: ${response.status} ${JSON.stringify(body)}`);
   return body;
 };
+const deleteServerDocument = async (path, idToken) => {
+  const response = await fetch(`http://${firestoreUrl.host}/v1/projects/${project}/databases/(default)/documents/${path}`, { method: "DELETE", headers: { authorization: `Bearer ${idToken}` }, signal: AbortSignal.timeout(5_000) });
+  if (!response.ok && response.status !== 404) throw new Error(`server delete failed: ${response.status}`);
+};
 
 const app = initializeApp({ projectId: project, apiKey: "fake-api-key" });
 const auth = getAuth(app);
@@ -146,6 +150,7 @@ try {
   uidA = credentialA.user.uid;
   await sdk(setDoc(doc(db, "g3-profiles", uidA), { owner: uidA, revision: 0 }), "create A profile");
   await sdk(setDoc(doc(db, "g3-denied", "state"), { owner: uidA, revision: 0 }), "create protected state");
+  await sdk(setDoc(doc(db, "g3-denied", "reconnect"), { owner: uidA, revision: 0 }), "create reconnect protected state");
   await sdk(waitForPendingWrites(db), "flush A writes");
   await sdk(signOut(auth), "switch sign-out A");
   const credentialB = await sdk(createUserWithEmailAndPassword(auth, emailB, password), "create user B");
@@ -256,20 +261,36 @@ try {
       );
     });
     await bounded(reconnectInitial, "reconnect listener initial callback");
-    const reconnectToken = await sdk(reconnectAuth.currentUser.getIdToken(), "get reconnect ID token");
-    const serverBefore = await sdk(readServerDocument(`g3-profiles/${uidB}`, reconnectToken), "server state before reconnect refusal");
+    const ownerToken = await sdk(credentialA.user.getIdToken(), "get owner ID token");
+    const serverBefore = await sdk(readServerDocument("g3-denied/reconnect", ownerToken), "server state before reconnect refusal");
     let rejected;
     try {
-      await sdk(setDoc(doc(reconnectDb, "g3-denied", "state"), { owner: uidB, revision: 1 }), "rejected reconnect write");
+      await sdk(setDoc(doc(reconnectDb, "g3-denied", "reconnect"), { owner: uidB, revision: 1 }), "rejected reconnect write");
     } catch (error) {
       rejected = { code: error?.code, message: error?.message };
     }
-    const serverAfterRejected = await sdk(readServerDocument(`g3-profiles/${uidB}`, reconnectToken), "server state after reconnect refusal");
+    if (rejected?.code !== "permission-denied") throw new Error(`expected permission-denied reconnect write, got ${JSON.stringify(rejected)}`);
+    const serverAfterRejected = await sdk(readServerDocument("g3-denied/reconnect", ownerToken), "server state after reconnect refusal");
     await sdk(disableNetwork(reconnectDb), "disable network after rejected write");
     await sdk(enableNetwork(reconnectDb), "enable network after rejected write");
     const accepted = await sdk(setDoc(reconnectDoc, { owner: uidB, revision: 2 }), "accepted write after reconnect").then(() => true).catch((error) => ({ code: error?.code, message: error?.message }));
     const pending = await sdk(waitForPendingWrites(reconnectDb), "pending writes after reconnect").then(() => true).catch((error) => ({ code: error?.code, message: error?.message }));
-    const serverAfterAccepted = await sdk(readServerDocument(`g3-profiles/${uidB}`, reconnectToken), "server state after reconnect write");
+    const serverAfterAccepted = await sdk(readServerDocument("g3-denied/reconnect", ownerToken), "server state after reconnect write");
+    let listenerAcknowledged = false;
+    try {
+      await bounded(new Promise((resolve, reject) => {
+        const deadline = Date.now() + 5_000;
+        const check = () => {
+          if (reconnectSnapshots.some((snapshot) => snapshot.revision === 2 && snapshot.fromCache === false && snapshot.hasPendingWrites === false)) return resolve();
+          if (Date.now() >= deadline) return reject(new Error("listener acknowledgement timed out"));
+          setTimeout(check, 25);
+        };
+        check();
+      }), "listener acknowledgement after reconnect", 6_000);
+      listenerAcknowledged = true;
+    } catch (error) {
+      listenerAcknowledged = { code: error?.code, message: error?.message };
+    }
     reconnectStop();
 
     const freshApp = initializeApp({ projectId: project, apiKey: "fake-api-key" }, `g3-reconnect-positive-${suffix}`);
@@ -284,13 +305,14 @@ try {
       await sdk(setDoc(freshDoc, { owner: uidB, revision: 3 }), "fresh client accepted write");
       await sdk(waitForPendingWrites(freshDb), "fresh client pending writes");
       results.reconnectAfterRejectedWrite = {
-        originalClient: { rejected, serverBefore, serverAfterRejected, serverAfterAccepted, accepted, pending, listenerSnapshots: reconnectSnapshots },
+        originalClient: { rejected, serverBefore, serverAfterRejected, serverAfterAccepted, accepted, pending, listenerAcknowledged, listenerSnapshots: reconnectSnapshots },
         freshClientPositiveControl: { initialRevision: freshRead.data()?.revision ?? null, acceptedRevision: 3, pendingWritesResolved: true },
       };
     } finally {
       await signOut(freshAuth).catch(() => {});
       await deleteApp(freshApp).catch(() => {});
     }
+    await deleteServerDocument("g3-denied/reconnect", ownerToken);
   } finally {
     reconnectStop();
     await signOut(reconnectAuth).catch(() => {});
@@ -311,4 +333,6 @@ try {
 
 if (results.authSwitch?.finalState !== "signed-out") throw new Error("Auth did not finish signed-out");
 
-console.log(JSON.stringify({ passed: true, transport: "firebase-client-node-grpc", ...results }, null, 2));
+const reconnectPassed = results.reconnectAfterRejectedWrite?.originalClient?.listenerAcknowledged === true;
+console.log(JSON.stringify({ passed: reconnectPassed, transport: "firebase-client-node-grpc", ...results }, null, 2));
+if (!reconnectPassed) process.exitCode = 1;

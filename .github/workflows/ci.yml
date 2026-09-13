@@ -211,6 +211,8 @@ jobs:
           cache-dependency-path: ui/pnpm-lock.yaml
       - name: install UI dependencies
         run: pnpm -C ui install --frozen-lockfile
+      - name: install Functions fixture dependencies
+        run: npm ci --prefix tools/sdk-smoke --ignore-scripts
       - name: lint
         run: pnpm -C ui lint
       - name: format

@@ -630,14 +630,14 @@ impl Firestore for GatewayService {
                     if let Ok(value) = ast.canonical_text().parse() {
                         error.metadata_mut().insert("fireemu-pipeline", value);
                     }
+                    if error.code() == tonic::Code::Unimplemented {
+                        if let Ok(value) = "FS_PIPE_UNSUPPORTED_STAGE".parse() {
+                            error.metadata_mut().insert("fireemu-code", value);
+                        }
+                    }
                     error
                 },
             )?;
-            if compiled.limit == Some(0) {
-                return Ok(Response::new(Box::pin(tokio_stream::iter([Ok(
-                    pb::ExecutePipelineResponse::default(),
-                )]))));
-            }
             let mut query = compiled.query;
             if compiled.limit.is_some_and(|limit| limit > i32::MAX as u32) {
                 if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
@@ -647,15 +647,32 @@ impl Firestore for GatewayService {
                 }
             }
             let response = self.run_query_with_caller(caller, query).await?;
+            if compiled.limit == Some(0) {
+                drop(response);
+                return Ok(Response::new(Box::pin(tokio_stream::iter([Ok(
+                    pb::ExecutePipelineResponse::default(),
+                )]))));
+            }
             let projection = compiled.projection;
-            let stream = response.into_inner().filter_map(move |item| match item {
-                Ok(item) => item.document.map(|document| {
-                    Ok(pb::ExecutePipelineResponse {
-                        results: vec![crate::pipeline::project_document(document, &projection)],
-                        ..Default::default()
-                    })
-                }),
-                Err(error) => Some(Err(error)),
+            let limit = compiled.limit.map(u64::from);
+            let delivered = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let stream = response.into_inner().filter_map(move |item| {
+                let delivered = Arc::clone(&delivered);
+                match item {
+                    Ok(item) => item.document.and_then(|document| {
+                        if limit.is_some_and(|limit| {
+                            delivered.load(std::sync::atomic::Ordering::Acquire) >= limit
+                        }) {
+                            return None;
+                        }
+                        delivered.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                        Some(Ok(pb::ExecutePipelineResponse {
+                            results: vec![crate::pipeline::project_document(document, &projection)],
+                            ..Default::default()
+                        }))
+                    }),
+                    Err(error) => Some(Err(error)),
+                }
             });
             return Ok(Response::new(Box::pin(stream)));
         }

@@ -312,6 +312,103 @@ async fn execute_pipeline_snapshot_remains_stable_across_page_boundary() {
     assert!(!names.iter().any(|fields| fields.is_empty()));
 }
 
+fn pipeline_request() -> pb::ExecutePipelineRequest {
+    pb::ExecutePipelineRequest {
+        database: "projects/demo-app/databases/(default)".to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline {
+                        stages: vec![pb::pipeline::Stage {
+                            name: "collection".to_owned(),
+                            args: vec![pb::Value {
+                                value_type: Some(pb::value::ValueType::StringValue(
+                                    "/items".to_owned(),
+                                )),
+                            }],
+                            ..Default::default()
+                        }],
+                    }),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_pipeline_drop_before_first_delivery_releases_snapshot() {
+    let backend = test_backend();
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let mut service = GatewayService::local(gateway, backend.clone());
+    let request = seeded_query(&backend, 33, false);
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let ready_tx = Mutex::new(Some(ready_tx));
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    service.first_query_page_ready = Some(Arc::new(move || {
+        ready_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+        release_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+    }));
+    let task = tokio::spawn(async move {
+        Firestore::execute_pipeline(&service, Request::new(pipeline_request())).await
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(transaction_stats_for(&backend, &request.parent).active, 1);
+    task.abort();
+    release_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while transaction_stats_for(&backend, &request.parent).active != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_pipeline_drop_after_first_delivery_releases_selection() {
+    let backend = test_backend();
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let mut service = GatewayService::local(gateway, backend.clone());
+    seeded_query(&backend, 65, true);
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let ready_tx = Mutex::new(Some(ready_tx));
+    service.first_query_page_ready = Some(Arc::new(move || {
+        ready_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+    }));
+    let task = tokio::spawn(async move {
+        Firestore::execute_pipeline(&service, Request::new(pipeline_request())).await
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut stream = task.await.unwrap().unwrap().into_inner();
+    let _ = stream.next().await.unwrap().unwrap();
+    drop(stream);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while transaction_stats_for(&backend, "projects/demo-app/databases/(default)/documents")
+            .active
+            != 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn failed_commit_keeps_transaction_usable_and_locked_until_rollback() {

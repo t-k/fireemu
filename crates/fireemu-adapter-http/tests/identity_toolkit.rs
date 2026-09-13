@@ -3638,10 +3638,40 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
                 .and_then(|v| v.as_str()),
             Some(tenant)
         );
+        assert_eq!(claims.get("sub").and_then(|v| v.as_str()), Some(uid));
+        assert_eq!(claims.get("user_id").and_then(|v| v.as_str()), Some(uid));
+        assert_eq!(
+            claims.get("aud").and_then(|v| v.as_str()),
+            Some("worker-alpha")
+        );
+        assert_eq!(
+            claims.get("iss").and_then(|v| v.as_str()),
+            Some("https://securetoken.google.com/worker-alpha")
+        );
+        assert_eq!(
+            claims
+                .get("firebase")
+                .and_then(|v| v.get("sign_in_provider"))
+                .and_then(|v| v.as_str()),
+            Some("custom")
+        );
         body
     };
     let a = sign_in("customer-a", "custom-a");
     let b = sign_in("customer-b", "custom-b");
+    let stored_a = registry
+        .tenant_store("worker-alpha", "customer-a")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_id("custom-a")
+        .unwrap()
+        .custom_claims
+        .clone();
+    assert!(stored_a.entries().contains_key("role"));
+    assert!(stored_a.entries().contains_key("persistedOnly"));
+    assert!(!stored_a.entries().contains_key("tokenOnly"));
+    assert!(!stored_a.entries().contains_key("sessionOnly"));
     assert_eq!(
         registry
             .tenant_store("worker-alpha", "customer-a")
@@ -3688,6 +3718,33 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
                 .and_then(|v| v.as_str()),
             Some(tenant)
         );
+        assert_eq!(
+            claims.get("tokenOnly").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            claims.get("sub").and_then(|v| v.as_str()),
+            Some(body["localId"].as_str().unwrap())
+        );
+        assert_eq!(
+            claims.get("user_id").and_then(|v| v.as_str()),
+            Some(body["localId"].as_str().unwrap())
+        );
+        assert_eq!(
+            claims.get("aud").and_then(|v| v.as_str()),
+            Some("worker-alpha")
+        );
+        assert_eq!(
+            claims.get("iss").and_then(|v| v.as_str()),
+            Some("https://securetoken.google.com/worker-alpha")
+        );
+        assert_eq!(
+            claims
+                .get("firebase")
+                .and_then(|v| v.get("sign_in_provider"))
+                .and_then(|v| v.as_str()),
+            Some("custom")
+        );
     }
 
     let before_a = registry
@@ -3702,6 +3759,22 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
         .lock()
         .unwrap()
         .user_count();
+    let before_user_a = registry
+        .tenant_store("worker-alpha", "customer-a")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_id("custom-a")
+        .unwrap()
+        .clone();
+    let before_user_b = registry
+        .tenant_store("worker-alpha", "customer-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_id("custom-b")
+        .unwrap()
+        .clone();
     let (status, refused) = post(
         &s,
         "/securetoken.googleapis.com/v1/token?key=worker-key",
@@ -3720,12 +3793,32 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
     );
     assert_eq!(
         registry
+            .tenant_store("worker-alpha", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_by_id("custom-a")
+            .unwrap(),
+        &before_user_a
+    );
+    assert_eq!(
+        registry
             .tenant_store("worker-alpha", "customer-b")
             .unwrap()
             .lock()
             .unwrap()
             .user_count(),
         before_b
+    );
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_by_id("custom-b")
+            .unwrap(),
+        &before_user_b
     );
 }
 

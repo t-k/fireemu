@@ -155,40 +155,43 @@ describe("owned daemon lifecycle", () => {
     );
   });
 
-  it("lets an unready retained supervisor reap its descendant before reporting failure", async () => {
-    const script = [
-      "const { spawn } = require('node:child_process');",
-      "const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-      "process.on('SIGINT', () => { descendant.kill('SIGKILL'); descendant.once('exit', () => process.exit(0)); });",
-      "process.stdout.write(String(descendant.pid));",
-      "setInterval(() => {}, 1000);",
-    ].join(" ");
-    const child = spawn(process.execPath, ["-e", script]);
-    const [descendantOutput] = await once(child.stdout!, "data");
-    const descendantPid = Number(descendantOutput.toString());
-    expect(Number.isSafeInteger(descendantPid) && descendantPid > 1).toBe(true);
-    const never = new Promise<void>(() => undefined);
-    const unready: OwnedProcess = {
-      child,
-      supervised: true,
-      supervisorReady: () => false,
-      supervisorReadyOrClosed: never,
-      cleanupAcknowledged: () => false,
-      cleanupChannelClosed: never,
-    };
-    try {
-      await expect(stopOwnedProcess(unready)).rejects.toThrow(
-        "did not establish cleanup ownership",
-      );
-      expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
-      expect(await waitForProcessAbsence(descendantPid)).toBe(true);
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-        await once(child, "exit");
+  it.skipIf(process.platform === "win32")(
+    "lets an unready retained supervisor reap its descendant before reporting failure",
+    async () => {
+      const script = [
+        "const { spawn } = require('node:child_process');",
+        "const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+        "process.on('SIGINT', () => { descendant.kill('SIGKILL'); descendant.once('exit', () => process.exit(0)); });",
+        "process.stdout.write(String(descendant.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join(" ");
+      const child = spawn(process.execPath, ["-e", script]);
+      const [descendantOutput] = await once(child.stdout!, "data");
+      const descendantPid = Number(descendantOutput.toString());
+      expect(Number.isSafeInteger(descendantPid) && descendantPid > 1).toBe(true);
+      const never = new Promise<void>(() => undefined);
+      const unready: OwnedProcess = {
+        child,
+        supervised: true,
+        supervisorReady: () => false,
+        supervisorReadyOrClosed: never,
+        cleanupAcknowledged: () => false,
+        cleanupChannelClosed: never,
+      };
+      try {
+        await expect(stopOwnedProcess(unready)).rejects.toThrow(
+          "did not establish cleanup ownership",
+        );
+        expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+        expect(await waitForProcessAbsence(descendantPid)).toBe(true);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+          await once(child, "exit");
+        }
       }
-    }
-  });
+    },
+  );
 
   it("rejects a cleanup marker when the supervisor did not finish by group SIGKILL", async () => {
     const child = spawn(process.execPath, ["-e", "process.exit(0)"]);

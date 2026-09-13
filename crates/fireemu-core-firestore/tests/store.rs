@@ -1133,6 +1133,114 @@ fn a_query_in_a_transaction_locks_its_range() {
 }
 
 #[test]
+fn failed_multiwrite_commit_does_not_publish_any_document() {
+    let mut state = FirestoreState::new();
+    let invalid = Value::String("x".repeat(1_048_488));
+
+    let result = state.commit(
+        &[
+            set("atomic/valid", &[("value", Value::Integer(1))]),
+            set("atomic/invalid", &[("value", invalid)]),
+        ],
+        None,
+        t(0),
+    );
+
+    assert!(matches!(result, Err(FirestoreError::InvalidArgument(_))));
+    assert!(state.get(&path("atomic/valid")).is_none());
+    assert!(state.get(&path("atomic/invalid")).is_none());
+    assert_eq!(state.current_version(), CommitVersion::default());
+}
+
+#[test]
+fn failed_transaction_commit_keeps_lock_until_explicit_rollback() {
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[set("locked/doc", &[("value", Value::Integer(1))])],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("locked/doc"))
+        .unwrap();
+
+    let invalid = Value::String("x".repeat(1_048_488));
+    let result = state.commit(
+        &[
+            set("atomic/valid", &[("value", Value::Integer(1))]),
+            set("atomic/invalid", &[("value", invalid)]),
+        ],
+        Some(&transaction),
+        t(2),
+    );
+    assert!(matches!(result, Err(FirestoreError::InvalidArgument(_))));
+    assert!(state.transaction_is_active(&transaction));
+    assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+    assert!(matches!(
+        state.commit(&[set("locked/doc", &[("value", Value::Integer(2))])], None, t(3)),
+        Err(FirestoreError::Aborted(message)) if message == TOO_MUCH_CONTENTION
+    ));
+
+    state.rollback(&transaction).unwrap();
+    assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    state
+        .commit(
+            &[set("locked/doc", &[("value", Value::Integer(2))])],
+            None,
+            t(4),
+        )
+        .unwrap();
+    assert_eq!(
+        state
+            .get(&path("locked/doc"))
+            .unwrap()
+            .fields
+            .get("value"),
+        Some(&Value::Integer(2))
+    );
+}
+
+#[test]
+fn valid_multiwrite_and_transaction_commit_are_near_success_controls() {
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[
+                set("control/one", &[("value", Value::Integer(1))]),
+                set("control/two", &[("value", Value::Integer(2))]),
+            ],
+            None,
+            t(0),
+        )
+        .unwrap();
+    assert!(state.get(&path("control/one")).is_some());
+    assert!(state.get(&path("control/two")).is_some());
+
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("control/one"))
+        .unwrap();
+    state
+        .commit(
+            &[set("control/one", &[("value", Value::Integer(3))])],
+            Some(&transaction),
+            t(2),
+        )
+        .unwrap();
+    assert!(!state.transaction_is_active(&transaction));
+    state
+        .commit(
+            &[set("control/one", &[("value", Value::Integer(4))])],
+            None,
+            t(3),
+        )
+        .unwrap();
+}
+
+#[test]
 fn transaction_query_records_are_execution_scoped_and_overflow_is_retryable() {
     use fireemu_core_firestore::query::{Query, QueryScope};
     use fireemu_core_types::ids::CollectionId;

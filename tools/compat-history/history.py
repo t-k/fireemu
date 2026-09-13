@@ -33,46 +33,42 @@ CHECKERS = (
     "tools/auth-password-approval.py",
     "tools/publish-auth-session-token.py",
 )
-FROZEN = (
-    TEST_DIRS
-    + CHECKERS[1:]
-    + (
-        "spec/compatibility/acquisition.json",
-        "spec/compatibility/upstream",
-        "spec/compatibility/observations",
+HISTORICAL_ASSETS = (
+    "spec/compatibility/acquisition.json",
+    "spec/compatibility/upstream",
+    "spec/compatibility/observations",
+) + tuple(
+    "spec/compatibility/evidence/" + name
+    for name in (
+        "aggregation",
+        "history",
+        "auth-basic",
+        "auth-basic-v2",
+        "auth-profile",
+        "auth-display-name",
+        "auth-password",
+        "auth-session-token",
     )
-    + tuple(
-        "spec/compatibility/evidence/" + name
-        for name in (
-            "aggregation",
-            "history",
-            "auth-basic",
-            "auth-basic-v2",
-            "auth-profile",
-            "auth-display-name",
-            "auth-password",
-            "auth-session-token",
-        )
-    )
-    + tuple(
-        "docs/compatibility/" + name + ".md"
-        for name in (
-            "acquisition",
-            "aggregation-evidence",
-            "auth-basic-evidence",
-            "auth-basic-source-review",
-            "auth-basic-v2",
-            "auth-basic-v2-approval",
-            "auth-profile",
-            "auth-profile-approval",
-            "auth-display-name",
-            "auth-display-name-approval",
-            "auth-password",
-            "auth-password-approval",
-            "auth-session-token",
-        )
+) + tuple(
+    "docs/compatibility/" + name + ".md"
+    for name in (
+        "acquisition",
+        "aggregation-evidence",
+        "auth-basic-evidence",
+        "auth-basic-source-review",
+        "auth-basic-v2",
+        "auth-basic-v2-approval",
+        "auth-profile",
+        "auth-profile-approval",
+        "auth-display-name",
+        "auth-display-name-approval",
+        "auth-password",
+        "auth-password-approval",
+        "auth-session-token",
     )
 )
+FROZEN = TEST_DIRS + CHECKERS[1:] + HISTORICAL_ASSETS
+CURRENT_FROZEN = TEST_DIRS[1:] + CHECKERS + HISTORICAL_ASSETS
 
 
 def require(condition, message):
@@ -167,9 +163,10 @@ def verify_frozen(root, anchor, prefixes):
 
 
 @contextmanager
-def snapshot(root, anchor, prefixes):
+def snapshot(root, anchor, prefixes, *, current_prefixes=None):
     root = root.resolve()
-    verify_frozen(root, anchor, prefixes)
+    current_prefixes = prefixes if current_prefixes is None else current_prefixes
+    verify_frozen(root, anchor, current_prefixes)
     with tempfile.TemporaryDirectory(prefix="fireemu-history-") as temporary:
         archived = Path(temporary) / "source"
         subprocess.run(
@@ -181,8 +178,8 @@ def snapshot(root, anchor, prefixes):
                 "init.templateDir=",
                 "clone",
                 "--quiet",
-                "--shared",
                 "--local",
+                "--no-hardlinks",
                 "--no-checkout",
                 str(root),
                 str(archived),
@@ -195,37 +192,46 @@ def snapshot(root, anchor, prefixes):
             "Wrong snapshot revision",
         )
         verify_frozen(archived, anchor, prefixes)
-        yield archived
-        verify_frozen(root, anchor, prefixes)
+        try:
+            yield archived
+        finally:
+            verify_frozen(root, anchor, current_prefixes)
 
 
 def offline_environment(source):
     return {
-        key: value
-        for key, value in source.items()
-        if not key.endswith("LIVE_LOCAL")
-        and not key.startswith(("PYTHON", "PYTEST", "GIT_"))
-        and key not in {"FIREEMU_EVIDENCE_BINARY", "VIRTUAL_ENV"}
+        "PATH": source.get("PATH", os.defpath),
+        "PYTHONNOUSERSITE": "1",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
     }
 
 
 def check(root=ROOT):
     env = offline_environment(os.environ)
-    with snapshot(root, ANCHOR, FROZEN) as archived:
-        uv = [
-            "uv",
-            "run",
-            "--project",
-            "tools/compat-inventory",
-            "--locked",
-            "--python",
-            "3.12",
-        ]
-        subprocess.run(
-            [*uv, "-m", "pytest", *TEST_DIRS, "-q"], cwd=archived, env=env, check=True
-        )
-        for checker in CHECKERS:
-            subprocess.run([*uv, checker, "--check"], cwd=archived, env=env, check=True)
+    with tempfile.TemporaryDirectory(prefix="fireemu-history-uv-") as environment:
+        env["UV_PROJECT_ENVIRONMENT"] = str(Path(environment) / "venv")
+        with snapshot(
+            root, ANCHOR, FROZEN, current_prefixes=CURRENT_FROZEN
+        ) as archived:
+            check_archived(archived, env)
+
+
+def check_archived(archived, env):
+    uv = [
+        "uv",
+        "--no-config",
+        "run",
+        "--project",
+        "tools/compat-inventory",
+        "--locked",
+        "--python",
+        "3.12",
+    ]
+    subprocess.run(
+        [*uv, "-m", "pytest", *TEST_DIRS, "-q"], cwd=archived, env=env, check=True
+    )
+    for checker in CHECKERS:
+        subprocess.run([*uv, checker, "--check"], cwd=archived, env=env, check=True)
     print("Historical evidence unchanged and verified at " + ANCHOR)
 
 

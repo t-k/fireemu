@@ -55,6 +55,60 @@ def test_historical_snapshot_keeps_source_while_current_runtime_changes(reposito
     assert (root / "runtime.rs").read_text() == "patched runtime"
 
 
+def test_snapshot_separates_current_immutable_inputs_from_anchor_execution_inputs(
+    repository,
+):
+    h = module()
+    root, anchor = repository
+    (root / "mutable").mkdir()
+    (root / "mutable/runner.py").write_text("anchor runner")
+    git(root, "add", ".")
+    git(
+        root,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "execution inputs",
+    )
+    anchor = git(root, "rev-parse", "HEAD")
+    (root / "mutable/runner.py").write_text("current runner")
+    (root / "mutable/new-helper.py").write_text("current helper")
+
+    with h.snapshot(
+        root,
+        anchor,
+        ("frozen", "mutable"),
+        current_prefixes=("frozen",),
+    ) as archived:
+        assert (archived / "mutable/runner.py").read_text() == "anchor runner"
+        assert not (archived / "mutable/new-helper.py").exists()
+
+    (root / "frozen/receipt.json").write_text("tampered")
+    with pytest.raises(ValueError), h.snapshot(
+        root,
+        anchor,
+        ("frozen", "mutable"),
+        current_prefixes=("frozen",),
+    ):
+        pytest.fail("Changed immutable input accepted")
+
+
+def test_snapshot_rechecks_current_inputs_after_body_failure(repository):
+    h = module()
+    root, anchor = repository
+    receipt = root / "frozen/receipt.json"
+
+    with (
+        pytest.raises(ValueError, match="Frozen bytes changed"),
+        h.snapshot(root, anchor, ("frozen",)),
+    ):
+        receipt.write_text("tampered")
+        raise RuntimeError("archived checker failed")
+
+
 @pytest.mark.parametrize(
     "change", ["edited", "removed", "added", "ignored", "symlink", "parent-symlink"]
 )
@@ -106,5 +160,14 @@ def test_offline_environment_removes_live_optins_and_import_injection():
             "VIRTUAL_ENV": "/current/venv",
             "PYTHONPATH": "/untrusted",
             "PYTEST_ADDOPTS": "--override-ini=x",
+            "PYTEST_PLUGINS": "sentinel",
+            "UV_PROJECT_ENVIRONMENT": "/untrusted/venv",
+            "UV_NO_SYNC": "1",
+            "UV_CONFIG_FILE": "/untrusted/uv.toml",
+            "HOME": "/untrusted/home",
         }
-    ) == {"PATH": "/bin"}
+    ) == {
+        "PATH": "/bin",
+        "PYTHONNOUSERSITE": "1",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+    }

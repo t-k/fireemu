@@ -864,44 +864,43 @@ impl Firestore for GatewayService {
             return Err(status);
         }
         let ast = crate::pipeline::validate_pipeline(request.get_ref())?;
-        if let Some(local) = self.local_backend() {
+        if self.local_backend().is_some() {
             let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
-            let local = local.clone();
-            let rules = self.rules.clone();
-            let request = request.into_inner();
-            let results = match blocking_read(local, rules, caller, move |local, guard| {
-                crate::pipeline::execute_supported(&request, &parent, local, guard)
-            })
-            .await
-            {
-                Ok(results) => results,
-                Err(mut error) => {
+            let compiled = crate::pipeline::compile_supported(request.get_ref(), &parent).map_err(
+                |mut error| {
                     if let Ok(value) = ast.canonical_text().parse() {
                         error.metadata_mut().insert("fireemu-pipeline", value);
                     }
-                    if error.code() == tonic::Code::Unimplemented {
-                        if let Ok(value) = "FS_PIPE_UNSUPPORTED_STAGE".parse() {
-                            error.metadata_mut().insert("fireemu-code", value);
-                        }
-                    }
-                    return Err(error);
+                    error
+                },
+            )?;
+            if compiled.limit == Some(0) {
+                return Ok(Response::new(Box::pin(tokio_stream::iter([Ok(
+                    pb::ExecutePipelineResponse::default(),
+                )]))));
+            }
+            let mut query = compiled.query;
+            if compiled.limit.is_some_and(|limit| limit > i32::MAX as u32) {
+                if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+                    query.query_type.as_mut()
+                {
+                    query.limit = None;
                 }
-            };
-            let responses = if results.is_empty() {
-                vec![Ok(pb::ExecutePipelineResponse::default())]
-            } else {
-                results
-                    .into_iter()
-                    .map(|document| {
-                        Ok(pb::ExecutePipelineResponse {
-                            results: vec![document],
-                            ..Default::default()
-                        })
+            }
+            let response = self.run_query_with_caller(caller, query).await?;
+            let projection = compiled.projection;
+            use tokio_stream::StreamExt;
+            let stream = response.into_inner().filter_map(move |item| match item {
+                Ok(item) => item.document.map(|document| {
+                    Ok(pb::ExecutePipelineResponse {
+                        results: vec![crate::pipeline::project_document(document, &projection)],
+                        ..Default::default()
                     })
-                    .collect()
-            };
-            return Ok(Response::new(Box::pin(tokio_stream::iter(responses))));
+                }),
+                Err(error) => Some(Err(error)),
+            });
+            return Ok(Response::new(Box::pin(stream)));
         }
         let mut status = Status::unimplemented(format!(
             "FS-PIPE-RPC-1 strict-validation-only: the pipeline is valid ({}) but pipelines are not executed locally",
@@ -1205,6 +1204,259 @@ impl Drop for QueryTransactionGuard {
                 ..Default::default()
             });
         }
+    }
+}
+
+impl GatewayService {
+    async fn run_query_with_caller(
+        &self,
+        caller: Caller,
+        req: pb::RunQueryRequest,
+    ) -> Result<Response<BoxStream<pb::RunQueryResponse>>, Status> {
+        if let Some(local) = self.local_backend() {
+            let local = Arc::clone(local);
+            let name_order_continuation = match req.query_type.as_ref() {
+                Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
+                    let parent = parse_parent(&req.parent)
+                        .map_err(|error| Rejection::Decode(error).to_status())?;
+                    let accepted = local.accepted_query(&parent, query)?;
+                    is_name_ordered_query(&accepted.query)
+                }
+                None => false,
+            };
+            let original_limit = req.query_type.as_ref().and_then(|query| match query {
+                pb::run_query_request::QueryType::StructuredQuery(query) => query.limit,
+            });
+            let original_offset = req.query_type.as_ref().map_or(0, |query| match query {
+                pb::run_query_request::QueryType::StructuredQuery(query) => query.offset,
+            });
+            let internal_transaction = req.consistency_selector.is_none();
+            let mut first_request = req.clone();
+            set_run_query_page(&mut first_request, original_offset, original_limit);
+            if internal_transaction {
+                first_request.consistency_selector =
+                    Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+                        pb::TransactionOptions {
+                            mode: Some(pb::transaction_options::Mode::ReadOnly(
+                                pb::transaction_options::ReadOnly::default(),
+                            )),
+                        },
+                    ));
+            }
+            let first_authorization = req.clone();
+            let query_execution_id = local.next_query_execution_id();
+            let guard_database = database_name_from_query_parent(&req.parent);
+            // Newly minted transactions remain owned by the worker result until delivery.
+            // Dropping an unreceived spawn_blocking result must release its snapshot.
+            let creates_transaction = matches!(
+                first_request.consistency_selector,
+                Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+                    _
+                ))
+            );
+            let guard_local = Arc::clone(&local);
+            #[cfg(test)]
+            let first_query_page_ready = self.first_query_page_ready.clone();
+            let (mut first, warnings, selection, mut rollback) = blocking_read(
+                local.clone(),
+                self.rules.clone(),
+                caller.clone(),
+                move |local, guard| {
+                    let (first, warnings, selection) = local
+                        .run_query_authorized_as_for_execution(
+                            &first_request,
+                            &first_authorization,
+                            guard,
+                            query_execution_id,
+                        )?;
+                    let rollback = creates_transaction.then(|| QueryTransactionGuard {
+                        local: guard_local,
+                        database: guard_database,
+                        transaction: announced_transaction(&first).unwrap_or_default(),
+                    });
+                    #[cfg(test)]
+                    if let Some(ready) = first_query_page_ready {
+                        ready();
+                    }
+                    Ok((first, warnings, selection, rollback))
+                },
+            )
+            .await?;
+            let transaction =
+                announced_transaction(&first).or_else(|| match &req.consistency_selector {
+                    Some(pb::run_query_request::ConsistencySelector::Transaction(transaction)) => {
+                        Some(transaction.clone())
+                    }
+                    _ => None,
+                });
+            if internal_transaction {
+                // Hide only the dedicated transaction announcement, preserving offset metadata.
+                first.retain(|response| response.transaction.is_empty());
+            }
+            let first_documents = first
+                .iter()
+                .filter(|response| response.document.is_some())
+                .count();
+            let first_after_document = if name_order_continuation {
+                last_query_document_path(&first)?
+            } else {
+                None
+            };
+            let (sender, receiver) = tokio::sync::mpsc::channel(RUN_QUERY_CHANNEL_CAPACITY);
+            let rules = self.rules.clone();
+            let announcement_guard = if internal_transaction {
+                None
+            } else {
+                rollback.take()
+            };
+            #[cfg(test)]
+            let continuation_query_page_ready = self.continuation_query_page_ready.clone();
+            tokio::spawn(async move {
+                let rollback = rollback;
+                // Keep one response until exhaustion and execution finalization are known.
+                // Page-local completion must never terminate the public query stream.
+                let mut pending = None;
+                for mut response in first {
+                    response.continuation_selector = None;
+                    if let Some(previous) = pending.replace(response) {
+                        if sender.send(Ok(previous)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                let mut delivered = i32::try_from(first_documents).unwrap_or(i32::MAX);
+                let mut batch_documents = delivered;
+                let mut after_document = first_after_document;
+                while batch_documents == RUN_QUERY_BATCH_SIZE
+                    && original_limit.is_none_or(|limit| delivered < limit)
+                {
+                    let mut page = req.clone();
+                    if let Some(transaction) = transaction.clone() {
+                        page.consistency_selector = Some(
+                            pb::run_query_request::ConsistencySelector::Transaction(transaction),
+                        );
+                    } else if !matches!(
+                        page.consistency_selector,
+                        Some(pb::run_query_request::ConsistencySelector::ReadTime(_))
+                    ) {
+                        let _ = sender
+                            .send(Err(Status::internal(
+                                "RunQuery snapshot transaction was not returned",
+                            )))
+                            .await;
+                        return;
+                    }
+                    let continuation = after_document.clone();
+                    if name_order_continuation {
+                        set_run_query_page(
+                            &mut page,
+                            0,
+                            original_limit.map(|limit| limit.saturating_sub(delivered)),
+                        );
+                    } else {
+                        set_run_query_page(
+                            &mut page,
+                            original_offset.saturating_add(delivered),
+                            original_limit.map(|limit| limit.saturating_sub(delivered)),
+                        );
+                    }
+                    let authorization = req.clone();
+                    let selection = selection.clone();
+                    #[cfg(test)]
+                    let continuation_query_page_ready = continuation_query_page_ready.clone();
+                    let batch = blocking_read(
+                        local.clone(),
+                        rules.clone(),
+                        caller.clone(),
+                        move |local, guard| {
+                            let result = local.run_query_authorized_as_after_for_execution(
+                                &page,
+                                &authorization,
+                                guard,
+                                continuation.as_ref(),
+                                query_execution_id,
+                                selection,
+                            );
+                            #[cfg(test)]
+                            if let Some(ready) = continuation_query_page_ready {
+                                ready();
+                            }
+                            result
+                        },
+                    )
+                    .await;
+                    let (mut responses, _) = match batch {
+                        Ok(batch) => batch,
+                        Err(error) => {
+                            let _ = sender.send(Err(error)).await;
+                            return;
+                        }
+                    };
+                    for response in &mut responses {
+                        response.skipped_results = 0;
+                    }
+                    batch_documents = i32::try_from(
+                        responses
+                            .iter()
+                            .filter(|response| response.document.is_some())
+                            .count(),
+                    )
+                    .unwrap_or(i32::MAX);
+                    if name_order_continuation && batch_documents > 0 {
+                        after_document = match last_query_document_path(&responses) {
+                            Ok(Some(path)) => Some(path),
+                            Ok(None) => {
+                                let _ = sender
+                                    .send(Err(Status::internal(
+                                        "RunQuery page returned documents without names",
+                                    )))
+                                    .await;
+                                return;
+                            }
+                            Err(error) => {
+                                let _ = sender.send(Err(error)).await;
+                                return;
+                            }
+                        };
+                    }
+                    for mut response in responses {
+                        response.continuation_selector = None;
+                        if let Some(previous) = pending.replace(response) {
+                            if sender.send(Ok(previous)).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    delivered = delivered.saturating_add(batch_documents);
+                }
+                if let Some(transaction) = transaction.as_deref() {
+                    if let Err(error) = local.finish_query_execution(
+                        &database_name_from_query_parent(&req.parent),
+                        transaction,
+                        query_execution_id,
+                    ) {
+                        let _ = sender.send(Err(error)).await;
+                        return;
+                    }
+                }
+                drop(rollback);
+                if let Some(mut response) = pending {
+                    response.continuation_selector =
+                        Some(pb::run_query_response::ContinuationSelector::Done(true));
+                    let _ = sender.send(Ok(response)).await;
+                }
+            });
+            let boxed: BoxStream<pb::RunQueryResponse> = Box::pin(QueryResponseStream {
+                receiver,
+                announcement_guard,
+            });
+            return Ok(with_warnings(Response::new(boxed), &warnings));
+        }
+        let warnings = self.validate_run_query(&req)?;
+        let mut client = self.client()?;
+        let response = client.run_query(req).await?;
+        let response = with_warnings(response, &warnings);
+        Ok(Response::new(Box::pin(response.into_inner())))
     }
 }
 

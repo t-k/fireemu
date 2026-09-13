@@ -9,14 +9,15 @@
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
-use fireemu_core_firestore::query::{Query, QueryScope};
-use fireemu_core_firestore::store::Document;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
 use crate::decode::Parent;
+#[cfg(test)]
 use crate::encode::encode_document;
+#[cfg(test)]
 use crate::local::LocalBackend;
+#[cfg(test)]
 use crate::rules::ReadGuard;
 
 /// Option keys a `StructuredPipeline` may carry.
@@ -137,15 +138,47 @@ pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst
     })
 }
 
-/// Executes the finite local Enterprise subset: collection, field-reference select aliases and
+/// The compiled finite local Enterprise subset. The query is deliberately represented as the
+/// ordinary RunQuery wire request so execution can reuse its snapshot and paging machinery.
+#[derive(Debug, Clone)]
+pub struct CompiledPipeline {
+    /// The equivalent RunQuery request used by the streaming executor.
+    pub query: pb::RunQueryRequest,
+    /// Optional aliases applied to each streamed document.
+    pub projection: Option<Vec<(String, FieldPath)>>,
+    /// The original unsigned pipeline limit.
+    pub limit: Option<u32>,
+}
+
+/// Applies the pipeline's per-document projection to a RunQuery response document.
+pub fn project_document(
+    mut document: pb::Document,
+    projection: &Option<Vec<(String, FieldPath)>>,
+) -> pb::Document {
+    if let Some(aliases) = projection {
+        let mut fields = std::collections::HashMap::new();
+        for (alias, source) in aliases {
+            if source.segments().len() == 1 {
+                if let Some(value) = document.fields.get(&source.segments()[0]) {
+                    fields.insert(alias.clone(), value.clone());
+                }
+            }
+        }
+        document.fields = fields;
+    }
+    document.name.clear();
+    document.create_time = None;
+    document.update_time = None;
+    document
+}
+
+/// Compiles the finite local Enterprise subset: collection, field-reference select aliases and
 /// limit. Every other stage or option is refused explicitly by the caller.
 #[allow(clippy::too_many_lines)]
-pub fn execute_supported(
+pub fn compile_supported(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,
-    backend: &LocalBackend,
-    guard: ReadGuard<'_>,
-) -> Result<Vec<pb::Document>, Status> {
+) -> Result<CompiledPipeline, Status> {
     if req.consistency_selector.is_some() || req.auto_commit_transaction {
         return Err(Status::unimplemented(
             "pipeline consistency and auto-commit are unsupported locally",
@@ -188,8 +221,8 @@ pub fn execute_supported(
                 .map_err(|e| Status::invalid_argument(e.to_string()))?,
         )
     };
-    let mut query = Query::new(QueryScope::collection(parent_doc, collection_id));
     let mut projection: Option<Vec<(String, FieldPath)>> = None;
+    let mut limit = None;
     let mut last_rank = 0u8;
     let mut seen_select = false;
     let mut seen_limit = false;
@@ -218,10 +251,9 @@ pub fn execute_supported(
                 else {
                     return Err(Status::invalid_argument("limit must be an integer"));
                 };
-                query.limit = Some(
-                    u32::try_from(*n)
-                        .map_err(|_| Status::invalid_argument("limit is out of range"))?,
-                );
+                let value = u32::try_from(*n)
+                    .map_err(|_| Status::invalid_argument("limit is out of range"))?;
+                limit = Some(value);
             }
             "select" => {
                 if seen_select {
@@ -274,32 +306,63 @@ pub fn execute_supported(
             }
         }
     }
-    let docs = backend.run_query_latest_guarded(parent, &query, guard)?;
-    Ok(docs
-        .into_iter()
-        .map(|mut doc: Document| {
-            if let Some(aliases) = &projection {
-                let mut fields = std::collections::BTreeMap::new();
-                for (alias, source) in aliases {
-                    let projected = fireemu_core_firestore::store::project(
-                        &doc.fields,
-                        std::slice::from_ref(source),
-                    );
-                    if source.segments().len() == 1 {
-                        if let Some(value) = projected.get(&source.segments()[0]) {
-                            fields.insert(alias.clone(), value.clone());
-                        }
-                    }
-                }
-                doc.fields = fields;
-            }
-            let mut encoded = encode_document(&doc);
-            encoded.name.clear();
-            encoded.create_time = None;
-            encoded.update_time = None;
-            encoded
-        })
-        .collect())
+    let query_parent = parent_doc.as_ref().map_or_else(
+        || {
+            format!(
+                "projects/{}/databases/{}/documents",
+                parent.project, parent.database
+            )
+        },
+        |doc| doc.resource_name(),
+    );
+    let limit_i32 = limit.and_then(|value| i32::try_from(value).ok());
+    let structured = pb::StructuredQuery {
+        select: None,
+        from: vec![pb::structured_query::CollectionSelector {
+            collection_id: collection_id.to_string(),
+            all_descendants: false,
+        }],
+        r#where: None,
+        order_by: Vec::new(),
+        start_at: None,
+        end_at: None,
+        offset: 0,
+        limit: limit_i32,
+        find_nearest: None,
+    };
+    Ok(CompiledPipeline {
+        query: pb::RunQueryRequest {
+            parent: query_parent,
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                structured,
+            )),
+            consistency_selector: None,
+            request_options: None,
+            explain_options: None,
+        },
+        projection,
+        limit,
+    })
+}
+
+/// Compatibility helper retained for focused unit tests of the old local compiler contract.
+#[cfg(test)]
+pub fn execute_supported(
+    req: &pb::ExecutePipelineRequest,
+    parent: &Parent,
+    backend: &LocalBackend,
+    guard: ReadGuard<'_>,
+) -> Result<Vec<pb::Document>, Status> {
+    let compiled = compile_supported(req, parent)?;
+    let structured = match compiled.query.query_type.as_ref() {
+        Some(pb::run_query_request::QueryType::StructuredQuery(query)) => query,
+        None => return Err(Status::internal("compiled pipeline query is missing")),
+    };
+    let query = crate::decode::decode_structured_query(parent, structured)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    backend
+        .run_query_latest_guarded(parent, &query, guard)
+        .map(|docs| docs.into_iter().map(|doc| encode_document(&doc)).collect())
 }
 
 /// A wire value as a validation argument. A nested pipeline is typed but its stages are

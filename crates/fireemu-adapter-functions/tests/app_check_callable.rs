@@ -212,6 +212,49 @@ fn response_reader_rejects_reset_after_an_incomplete_chunked_response() {
 }
 
 #[test]
+fn response_reader_rejects_reset_after_incomplete_chunked_framing_despite_content_length() {
+    let error = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\ntransfer-encoding: chunked\r\n\r\n0\r\n",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("chunked framing takes precedence over content length");
+    assert_eq!(error, "response is not self-delimiting");
+}
+
+#[test]
+fn response_reader_accepts_properly_terminated_chunked_response_after_reset() {
+    let response = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\ntransfer-encoding: chunked\r\n\r\n3\r\nno!\r\n0\r\n\r\n",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect("properly terminated chunked framing is complete");
+    assert_eq!(response.body, b"no!");
+}
+
+#[test]
+fn response_reader_accepts_bodyless_response_after_reset() {
+    let response = response_after_read(
+        b"HTTP/1.1 204 No Content\r\n\r\n",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect("bodyless responses are self-delimiting");
+    assert_eq!(response.status, 204);
+    assert!(response.body.is_empty());
+}
+
+#[test]
 fn response_reader_rejects_other_read_errors() {
     let error = response_after_read(
         b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nno!",
@@ -273,11 +316,6 @@ fn ensure_self_delimiting(raw: &[u8], method: &str, status: u16) -> Result<(), S
     }
 
     let body = &raw[header_end + 4..];
-    if let Some(length) = content_length {
-        return (body.len() >= length)
-            .then_some(())
-            .ok_or_else(|| "response is not self-delimiting".to_owned());
-    }
     if transfer_encoding_chunked {
         let mut rest = body;
         loop {
@@ -306,6 +344,11 @@ fn ensure_self_delimiting(raw: &[u8], method: &str, status: u16) -> Result<(), S
             }
             rest = &rest[size + 2..];
         }
+    }
+    if let Some(length) = content_length {
+        return (body.len() >= length)
+            .then_some(())
+            .ok_or_else(|| "response is not self-delimiting".to_owned());
     }
     Err("response is not self-delimiting".to_owned())
 }

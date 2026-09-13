@@ -260,12 +260,13 @@ try {
         { includeMetadataChanges: true },
         (snapshot) => {
           reconnectSnapshots.push({ revision: snapshot.data()?.revision ?? null, fromCache: snapshot.metadata.fromCache, hasPendingWrites: snapshot.metadata.hasPendingWrites });
-          if (reconnectSnapshots.length === 1) resolve();
+          if (!snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) resolve();
         },
         reject,
       );
     });
     await bounded(reconnectInitial, "reconnect listener initial callback");
+    assert.deepEqual(reconnectSnapshots.at(-1), { revision: 1, fromCache: false, hasPendingWrites: false });
     const ownerToken = await sdk(credentialA.user.getIdToken(), "get owner ID token");
     const serverBefore = await sdk(readServerDocument("g3-denied/reconnect", ownerToken), "server state before reconnect refusal");
     reconnectResult.serverBefore = serverBefore;
@@ -285,7 +286,13 @@ try {
     await sdk(disableNetwork(reconnectDb), "disable network after rejected write");
     await sdk(enableNetwork(reconnectDb), "enable network after rejected write");
     const accepted = await sdk(setDoc(reconnectDoc, { owner: uidB, revision: 2 }), "accepted write after reconnect").then(() => true).catch((error) => ({ code: error?.code, message: error?.message }));
+    reconnectResult.accepted = accepted;
     const pending = await sdk(waitForPendingWrites(reconnectDb), "pending writes after reconnect").then(() => true).catch((error) => ({ code: error?.code, message: error?.message }));
+    reconnectResult.pending = pending;
+    const profileAfterAccepted = await sdk(readServerDocument(`g3-profiles/${uidB}`, await sdk(reconnectAuth.currentUser.getIdToken(), "profile readback token")), "accepted profile server readback");
+    reconnectResult.profileAfterAccepted = profileAfterAccepted;
+    assert.equal(profileAfterAccepted.name, `projects/${project}/databases/(default)/documents/g3-profiles/${uidB}`);
+    assert.deepEqual(profileAfterAccepted.fields, { owner: { stringValue: uidB }, revision: { integerValue: "2" } });
     const serverAfterAccepted = await sdk(readServerDocument("g3-denied/reconnect", ownerToken), "server state after reconnect write");
     Object.assign(reconnectResult, { serverAfterAccepted, accepted, pending });
     if (accepted !== true || pending !== true) throw new Error(`accepted/pending outcome mismatch: ${JSON.stringify({ accepted, pending })}`);

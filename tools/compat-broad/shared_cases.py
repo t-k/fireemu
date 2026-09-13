@@ -115,6 +115,11 @@ def worker(output, key, origins):
     gate.claim()
     adapter = Adapter(candidate(), plan["nonce"], output / key, local_origins=origins)
     adapter.shared_gate = gate
+    run_scenario(adapter, plan, key)
+
+
+def run_scenario(adapter, plan, key, before_cleanup=None):
+    gate = adapter.shared_gate
     rows, cleanup = [], []
     failure = None
     try:
@@ -143,7 +148,16 @@ def worker(output, key, origins):
         gate.stop()
     finally:
         adapter.budget.recovery = True
+        cleanup_allowed = True
+        if before_cleanup is not None:
+            try:
+                before_cleanup()
+            except Exception as error:
+                cleanup_allowed = False
+                failure = failure or type(error).__name__
         for index, declared in enumerate(plan["jobs"][key]["recovery"]):
+            if not cleanup_allowed:
+                break
             operation = dict(declared)
             source = operation.pop("versionFrom", None)
             if source is not None:
@@ -180,20 +194,21 @@ def worker(output, key, origins):
             row["status"] == 200 and row["body"].get("fields") == field(value)
             for row, value in zip(states, expected, strict=True)
         )
-        save(
-            adapter.output / "result.json",
-            {
-                "recordingComplete": failure is None
-                and len(rows) == len(plan["jobs"][key]["observation"]),
-                "cleanupComplete": complete,
-                "safety": safety,
-                "compatibility": "not-observed",
-                "failure": failure,
-                "rows": rows,
-                "cleanup": cleanup,
-                "adapterCounts": adapter.budget.counts,
-            },
-        )
+        result = {
+            "recordingComplete": failure is None
+            and len(rows) == len(plan["jobs"][key]["observation"]),
+            "cleanupComplete": complete,
+            "safety": safety,
+            "compatibility": "not-observed",
+            "failure": failure,
+            "rows": rows,
+            "cleanup": cleanup,
+            "adapterCounts": adapter.budget.counts,
+            "stateVerified": len(rows) == len(plan["jobs"][key]["observation"])
+            and all(row["status"] in (200, 404) for row in states),
+        }
+        save(adapter.output / "result.json", result)
+    return result
 
 
 def execute(output, origins):

@@ -42,6 +42,11 @@ def create(path, plan):
     jobs = plan["jobs"]
     resources = [r for job in jobs.values() for r in job["resources"]]
     recovery = sum(len(job["recovery"]) for job in jobs.values())
+    management_recovery = plan.get("management", {}).get("recovery", [])
+    recovery_time = recovery * (REQUEST_SECONDS + plan["intervalSeconds"]) + sum(
+        item["timeout"] + plan["intervalSeconds"] for item in management_recovery
+    )
+    recovery += len(management_recovery)
     overhead = plan.get("coordinatorRequests", 0)
     fixed_cost = plan.get("fixedCostMicrousd", 0)
     if (
@@ -50,7 +55,7 @@ def create(path, plan):
         or len(resources) != len(set(resources))
         or not resources
         or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= 1200
-        or plan["recoverySeconds"] < recovery * (REQUEST_SECONDS + plan["intervalSeconds"])
+        or plan["recoverySeconds"] < recovery_time
         or not math.isfinite(plan["intervalSeconds"])
         or plan["intervalSeconds"] < 0.25
         or type(plan["costMicrousd"]) is not int
@@ -81,6 +86,8 @@ def create(path, plan):
         "stopped": False,
         "coordinatorPid": os.getpid(),
         "coordinatorDone": 0,
+        "managementUsed": [],
+        "managementEvents": [],
         "coordinatorInflight": False,
         "events": [],
         "jobs": {},
@@ -224,7 +231,7 @@ class Gate:
                     expected["path"] += "?currentDocument.updateTime=" + quote(
                         version, safe=""
                     )
-            if operation != expected:
+            if digest(operation) != digest(expected):
                 raise ValueError("request outside closed scenario")
             resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
             if recovery and resource not in job["owned"]:

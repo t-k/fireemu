@@ -401,3 +401,77 @@ def test_recovery_time_is_reserved_before_any_worker_claim(tmp_path):
     p.update(wallSeconds=60, recoverySeconds=20)
     with pytest.raises(ValueError):
         create(tmp_path / "gate", p)
+
+
+@pytest.mark.parametrize("entry", ["dispatch", "adapter_request"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "unchanged",
+        "false-int",
+        "false-float",
+        "principal-int",
+        "missing",
+        "extra",
+        "target",
+    ],
+)
+def test_typed_json_admission_before_callback_or_debit(tmp_path, entry, change):
+    import copy
+
+    from batch_adapter import Adapter, observer_digest
+    from batch_contract import candidate
+
+    p = plan()
+    p.update(
+        localOrigins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+        nonce="a" * 32,
+        observerSha256=observer_digest(),
+    )
+    expected = p["jobs"]["a"]["observation"][0]
+    expected.update(
+        method="POST", body={"writes": [{"currentDocument": {"exists": False}}]}
+    )
+    path = tmp_path / "gate"
+    create(path, p)
+    gate = Gate(path, "a")
+    gate.claim()
+    adapter = Adapter(
+        candidate(), p["nonce"], tmp_path / "adapter", local_origins=p["localOrigins"]
+    )
+    actual = copy.deepcopy(expected)
+    if change in ("false-int", "false-float"):
+        actual["body"]["writes"][0]["currentDocument"]["exists"] = (
+            0 if change == "false-int" else 0.0
+        )
+    elif change == "principal-int":
+        actual["privileged"] = 1
+    elif change == "missing":
+        del actual["body"]["writes"][0]["currentDocument"]["exists"]
+    elif change == "extra":
+        actual["body"]["extra"] = None
+    elif change == "target":
+        actual["path"] = "/v1/other-project/other-document"
+    calls = []
+
+    def send():
+        calls.append(True)
+        return 200, {}
+
+    def invoke():
+        return (
+            gate.dispatch(actual, False, send)
+            if entry == "dispatch"
+            else gate.adapter_request(adapter, actual, send)
+        )
+
+    if change == "unchanged":
+        assert invoke() == (200, {})
+    else:
+        with pytest.raises(ValueError):
+            invoke()
+    assert len(calls) == (1 if change == "unchanged" else 0)
+    assert gate.snapshot()["total"] == len(calls)

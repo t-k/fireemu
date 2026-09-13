@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -26,16 +27,73 @@ function relativeFiles(root, directory = root) {
   });
 }
 
-test("public RSA test fixtures are referenced only by the signing integration test", () => {
+test("public RSA test fixtures are referenced only by signing or hashed compatibility provenance", () => {
+  const trackedFiles = execFileSync("git", ["ls-files", "-z"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  }).split("\0").filter(Boolean);
+
   for (const suffix of ["A.der.hex", "B.der.hex"]) {
     const fixtureName = ["INSECURE", "TEST", "ONLY", "RSA", suffix].join("_");
-    const references = execFileSync("git", ["grep", "-l", "--", fixtureName], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    })
-      .trim()
-      .split("\n");
-    assert.deepEqual(references, ["crates/fireemu-adapter-http/tests/signing.rs"]);
+    const fixturePath = `crates/fireemu-adapter-http/tests/fixtures/${fixtureName}`;
+    const fixtureBytes = readFileSync(join(repoRoot, fixturePath));
+    const fixtureDigest = createHash("sha256").update(fixtureBytes).digest("hex");
+    const violations = [];
+
+    for (const path of trackedFiles) {
+      if (path === fixturePath) continue;
+
+      const contents = readFileSync(join(repoRoot, path));
+      if (contents.includes(fixtureBytes)) {
+        violations.push(`${path}: contains the fixture bytes`);
+        continue;
+      }
+
+      const text = contents.toString("utf8");
+      const isCompatibilityJson =
+        path.startsWith("spec/compatibility/") && path.endsWith(".json");
+      if (!isCompatibilityJson) {
+        if (
+          path !== "crates/fireemu-adapter-http/tests/signing.rs" &&
+          text.includes(fixtureName)
+        ) {
+          violations.push(`${path}: mentions the fixture name`);
+        }
+        continue;
+      }
+
+      let document;
+      try {
+        document = JSON.parse(contents);
+      } catch {
+        if (text.includes(fixtureName)) {
+          violations.push(`${path}: fixture name is not in a JSON object key`);
+        }
+        continue;
+      }
+
+      const inspect = (value) => {
+        if (Array.isArray(value)) {
+          value.forEach((entry) => inspect(entry));
+        } else if (value && typeof value === "object") {
+          Object.entries(value).forEach(([key, entry]) => {
+            if (key === fixturePath) {
+              if (entry !== fixtureDigest) {
+                violations.push(`${path}: fixture key has the wrong SHA256`);
+              }
+              return;
+            }
+            inspect(key);
+            inspect(entry);
+          });
+        } else if (typeof value === "string" && value.includes(fixtureName)) {
+          violations.push(`${path}: fixture name is a value or free text`);
+        }
+      };
+      inspect(document);
+    }
+
+    assert.deepEqual(violations, [], `${fixtureName} has unauthorized references`);
   }
 });
 

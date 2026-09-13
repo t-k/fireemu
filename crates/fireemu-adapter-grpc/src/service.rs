@@ -867,28 +867,41 @@ impl Firestore for GatewayService {
         if let Some(local) = self.local_backend() {
             let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
-            let results =
-                match crate::pipeline::execute_supported(request.get_ref(), &parent, local) {
-                    Ok(results) => results,
-                    Err(mut error) => {
-                        if let Ok(value) = ast.canonical_text().parse() {
-                            error.metadata_mut().insert("fireemu-pipeline", value);
-                        }
-                        if error.code() == tonic::Code::Unimplemented {
-                            if let Ok(value) = "FS_PIPE_UNSUPPORTED_STAGE".parse() {
-                                error.metadata_mut().insert("fireemu-code", value);
-                            }
-                        }
-                        return Err(error);
+            let local = local.clone();
+            let rules = self.rules.clone();
+            let request = request.into_inner();
+            let results = match blocking_read(local, rules, caller, move |local, guard| {
+                crate::pipeline::execute_supported(&request, &parent, local, guard)
+            })
+            .await
+            {
+                Ok(results) => results,
+                Err(mut error) => {
+                    if let Ok(value) = ast.canonical_text().parse() {
+                        error.metadata_mut().insert("fireemu-pipeline", value);
                     }
-                };
-            let response = pb::ExecutePipelineResponse {
-                results,
-                ..Default::default()
+                    if error.code() == tonic::Code::Unimplemented {
+                        if let Ok(value) = "FS_PIPE_UNSUPPORTED_STAGE".parse() {
+                            error.metadata_mut().insert("fireemu-code", value);
+                        }
+                    }
+                    return Err(error);
+                }
             };
-            return Ok(Response::new(Box::pin(tokio_stream::iter(vec![Ok(
-                response,
-            )]))));
+            let responses = if results.is_empty() {
+                vec![Ok(pb::ExecutePipelineResponse::default())]
+            } else {
+                results
+                    .into_iter()
+                    .map(|document| {
+                        Ok(pb::ExecutePipelineResponse {
+                            results: vec![document],
+                            ..Default::default()
+                        })
+                    })
+                    .collect()
+            };
+            return Ok(Response::new(Box::pin(tokio_stream::iter(responses))));
         }
         let mut status = Status::unimplemented(format!(
             "FS-PIPE-RPC-1 strict-validation-only: the pipeline is valid ({}) but pipelines are not executed locally",

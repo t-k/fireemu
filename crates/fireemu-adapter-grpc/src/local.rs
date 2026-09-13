@@ -2235,6 +2235,19 @@ impl LocalBackend {
         })
     }
 
+    /// Latest query with captured Rules/epoch admission.
+    pub fn run_query_latest_guarded(
+        &self,
+        parent: &Parent,
+        query: &Query,
+        guard: ReadGuard<'_>,
+    ) -> Result<Vec<Document>, Status> {
+        self.read_db(parent, |db| {
+            guard(db, None, ReadCheck::Query { parent, query })?;
+            db.run_query(query, None).map_err(|e| status_from_error(&e))
+        })
+    }
+
     /// `PartitionQuery`: cursor points that split a collection-group query (ordered by
     /// `__name__`, without filters, other orderings, limits or cursors) into up to
     /// `partition_count + 1` ranges of similar size, paged by `page_size` / `page_token`.

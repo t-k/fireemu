@@ -16,6 +16,7 @@ use tonic::Status;
 use crate::decode::Parent;
 use crate::encode::encode_document;
 use crate::local::LocalBackend;
+use crate::rules::ReadGuard;
 
 /// Option keys a `StructuredPipeline` may carry.
 const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
@@ -141,6 +142,7 @@ pub fn execute_supported(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,
     backend: &LocalBackend,
+    guard: ReadGuard<'_>,
 ) -> Result<Vec<pb::Document>, Status> {
     if req.consistency_selector.is_some() || req.auto_commit_transaction {
         return Err(Status::unimplemented(
@@ -270,7 +272,7 @@ pub fn execute_supported(
             }
         }
     }
-    let docs = backend.run_query_latest(parent, &query)?;
+    let docs = backend.run_query_latest_guarded(parent, &query, guard)?;
     Ok(docs
         .into_iter()
         .map(|mut doc: Document| {

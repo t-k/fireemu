@@ -536,6 +536,71 @@ test.describe("Firestore data browser", () => {
     expect(saved!.ok(), await saved!.text()).toBe(true);
   });
 
+  test("keeps the rebased document and draft visible when the convergence read fails", async ({
+    page,
+    request,
+  }) => {
+    const documentPath = `${DOCS}/convergence-error/one`;
+    await api(request, "PATCH", documentPath, {
+      fields: { value: { stringValue: "before" } },
+    });
+    await gotoApp(page, "/firestore/convergence-error/one");
+    await expect(page.getByTestId("live-badge")).toHaveText("Live");
+    await page.getByTestId("document-edit").click();
+    const editor = page.getByTestId("document-view");
+    await editor.getByLabel("Value").fill("draft");
+    const updated = (await api(request, "PATCH", documentPath, {
+      fields: { value: { stringValue: "external" } },
+    })) as { updateTime: string };
+    await expect(editor.getByText(updated.updateTime, { exact: true })).toBeVisible();
+    await page.getByTestId("document-save").click();
+    const reloadDraft = page.getByTestId("document-reload-draft");
+    await expect(reloadDraft).toBeVisible();
+
+    let reads = 0;
+    const documentPattern = `**/${documentPath}`;
+    await page.route(documentPattern, async (route) => {
+      reads += 1;
+      // The operation-owned reload succeeds; only the subsequent convergence GET fails.
+      await route.continue(
+        reads === 2
+          ? {
+              headers: {
+                ...route.request().headers(),
+                authorization: "Bearer invalid-convergence-token",
+              },
+            }
+          : {},
+      );
+    });
+    const failedRead = page.waitForResponse(
+      (response) => response.url().endsWith(`/ui/api/${documentPath}`) && response.status() === 403,
+    );
+    await reloadDraft.click();
+    const failed = await failedRead;
+    const body = (await failed.json()) as { error: { message: string } };
+    await expect(editor.getByLabel("Value")).toHaveValue("draft");
+    await expect(editor.getByLabel("Value")).toBeEnabled();
+    await expect(reloadDraft).not.toBeVisible();
+    await expect(editor.getByText(updated.updateTime, { exact: true })).toBeVisible();
+    await editor.getByRole("button", { name: "REST JSON", exact: true }).click();
+    await expect(editor.locator("pre")).toHaveText(
+      JSON.stringify({ value: { stringValue: "external" } }, null, 2),
+    );
+    const stale = page.getByTestId("fetch-stale");
+    await expect(stale).toContainText(body.error.message);
+
+    await page.unroute(documentPattern);
+    await stale.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(stale).not.toBeVisible();
+    await expect(editor.getByLabel("Value")).toHaveValue("draft");
+    const savedRequest = page.waitForRequest(`**/${documentPath}?*`);
+    await page.getByTestId("document-save").click();
+    const response = await (await savedRequest).response();
+    expect(response).not.toBeNull();
+    expect(response!.ok(), await response!.text()).toBe(true);
+  });
+
   test("discards a stale conflict reload after navigation", async ({ page, request }) => {
     await api(request, "PATCH", `${DOCS}/scope/a`, {
       fields: { local: { stringValue: "before" } },

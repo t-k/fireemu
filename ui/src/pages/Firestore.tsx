@@ -458,7 +458,22 @@ const DocumentView: Component<{
   const [notice, setNotice] = createSignal<string | null>(null);
   const [showJson, setShowJson] = createSignal(false);
   const [newCollection, setNewCollection] = createSignal(false);
-  const current = createMemo<FsDocument | null>(() => doc()?.unwrapOr(null) ?? null);
+  const current = createMemo<FsDocument | null>((previous) => {
+    const result = doc();
+    const name = `${props.root}/${props.path}`;
+    if (result?.isOk()) return result.value.name === name ? result.value : null;
+    const session = editSession();
+    // A failed refresh must not remove an active editor or its last successful document.
+    // Actual deletion and scope changes still clear the displayed document.
+    return result?.isErr() &&
+      result.error.status !== 404 &&
+      editing() &&
+      session?.root === props.root &&
+      session.path === props.path &&
+      previous?.name === name
+      ? previous
+      : null;
+  }, null);
   const loadError = () =>
     doc()?.match(
       () => null,
@@ -645,7 +660,8 @@ const DocumentView: Component<{
       <Notice message={notice()} />
       <FetchState
         loading={doc.loading && !current()}
-        error={loadError()}
+        error={current() ? null : loadError()}
+        stale={current() ? loadError() : null}
         onRetry={async () => {
           await refetch();
         }}

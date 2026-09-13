@@ -3705,7 +3705,7 @@ mod tests {
     }
     #[test]
     fn auth_project_numbers_are_explicit_validated_namespace_mappings() {
-        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion":1,"daemon":{"authProjectNumbers":{"demo-one":"111111111111","demo-two":"222222222222"}}})).unwrap();
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion":1,"daemon":{"authProjectNumbers":{"demo-one":"111111111111","demo-two":"222222222222","demo-max":"18446744073709551615"}}})).unwrap();
         assert_eq!(
             cfg.auth_project_numbers.get("demo-one"),
             Some(&111_111_111_111)
@@ -3714,6 +3714,7 @@ mod tests {
             cfg.auth_project_numbers.get("demo-two"),
             Some(&222_222_222_222)
         );
+        assert_eq!(cfg.auth_project_numbers.get("demo-max"), Some(&u64::MAX));
         assert_eq!(cfg.auth_project_numbers.get("demo-unset"), None);
         for invalid in [
             json!(0),

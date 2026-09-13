@@ -18,3 +18,11 @@ This table fixes the scope of the `feat/compatibility-inventory` pull request. I
 | C | Final acceptance and merge | A human reviews and accepts the final base/head, unresolved limitations and G0 disposition, then decides whether to merge. This branch does not enable auto-merge, push `main`, tag or release. |
 
 New feature stages and adjacent cases do not enter class A unless they close a regression, security defect, review blocker or missing verification required by an item above.
+
+## Fixed merge candidate
+
+The [local merge-readiness result](../../spec/compatibility/broad-runs/2f0de271-merge-ready-local.json) binds the technical candidate `2f0de271f474d83d8521dc5d6c80f6cc12fa2009` to base `d987d5ddcc1374cee425f08d6d81915795fc2ab5`. It records the workspace, formal, compatibility, SDK, UI and distribution checks without treating local execution as production evidence.
+
+The immutable first46 reference still compares as46 matches. The last correctly bound second45 saved-reference comparison remains45 matches at `37e4c396`; a fresh local second45 run completed and cleaned up, but pairing it with the older production record is indeterminate because their observer digests differ. The comparator rejected that pair, and the older32/13 production result and repaired45/45 result remain unchanged.
+
+Technical merge preparation is complete with the final test-harness adjustment independently approved; hosted CI remains to be recorded on the publication head. G0 remains a separate owner decision at fixed `a35f85b4`; no new production operation occurred during merge preparation.

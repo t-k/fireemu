@@ -68,6 +68,8 @@ def local_fixture():
         jobs[key] = {
             "recordingComplete": True,
             "cleanupComplete": True,
+            "safety": True,
+            "stateVerified": True,
             "rows": rows,
             "cleanup": cleanup,
         }
@@ -376,16 +378,12 @@ def _g0_local_runtime_fixture(production, local):
         local_job = result["jobs"][key]
         production_resources = production["gate"]["plan"]["jobs"][key]["resources"]
         local_resources = result["gate"]["plan"]["jobs"][key]["resources"]
+        sources = tuple(production_resources)
+        targets = tuple(local_resources)
 
-        def remap(
-            value,
-            production_resources=production_resources,
-            local_resources=local_resources,
-        ):
+        def remap(value, *, sources=sources, targets=targets):
             if isinstance(value, str):
-                for source, target in zip(
-                    production_resources, local_resources, strict=True
-                ):
+                for source, target in zip(sources, targets, strict=True):
                     value = value.replace(source, target)
                 return value
             if isinstance(value, list):
@@ -445,6 +443,26 @@ def test_g0_runtime_recompare_rejects_missing_production_safety_or_cleanup(field
     production = json.loads(source.read_bytes())
     local = _g0_local_runtime_fixture(production, local_fixture())
     production["jobs"]["partial"][field] = False
+    result = _compare(production, local, g0_recompare=True)
+    assert result["compatibility"] == "indeterminate"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("safety", False),
+        ("safety", None),
+        ("stateVerified", False),
+        ("stateVerified", None),
+    ],
+)
+def test_g0_runtime_recompare_rejects_local_safety_or_state_without_true_value(
+    field, value
+):
+    source = _g0_production_source()
+    production = json.loads(source.read_bytes())
+    local = _g0_local_runtime_fixture(production, local_fixture())
+    local["jobs"]["partial"][field] = value
     result = _compare(production, local, g0_recompare=True)
     assert result["compatibility"] == "indeterminate"
 

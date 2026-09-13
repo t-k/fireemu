@@ -122,6 +122,13 @@ def validate_record(record, *, local=False, historical_observer=False):
         if (
             job.get("recordingComplete") is not True
             or job.get("cleanupComplete") is not True
+            or (
+                local
+                and (
+                    job.get("safety") is not True
+                    or job.get("stateVerified") is not True
+                )
+            )
         ):
             raise ValueError("incomplete scenario")
     if batch.get("completed") is not True:

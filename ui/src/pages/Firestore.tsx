@@ -438,7 +438,7 @@ const DocumentView: Component<{
   onDeleted: () => void;
 }> = (props) => {
   const navigate = useNavigate();
-  const [doc, { refetch }] = createResource(
+  const [doc, { refetch, mutate }] = createResource(
     () => [props.root, props.path, props.version] as const,
     ([root, path]) => settle(getDocument(root, path)),
   );
@@ -574,11 +574,18 @@ const DocumentView: Component<{
     setEditBusy(false);
     // A live refresh can supersede the view resource while this read is pending.
     // Rebase from this operation's response, not the resource's previously rendered value.
-    const latest = reloaded.unwrapOr(null);
-    if (!latest?.updateTime) {
-      setError(t("firestore.editConflictDeleted"));
+    if (reloaded.isErr()) {
+      setError(
+        reloaded.error.status === 404 ? t("firestore.editConflictDeleted") : reloaded.error.message,
+      );
       return;
     }
+    const latest = reloaded.value;
+    if (!latest.updateTime) {
+      setError(t("firestore.editConflict"));
+      return;
+    }
+    mutate(reloaded);
     setEditSession({
       ...session,
       fields: latest.fields ?? {},

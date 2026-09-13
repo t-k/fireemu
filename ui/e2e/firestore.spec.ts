@@ -264,6 +264,18 @@ test.describe("Firestore data browser", () => {
     await reads[1]!.finished;
     await expect(reloadDraft).not.toBeVisible();
     await expect(await valueFor("remote")).toHaveValue("external");
+    await expect(editor.getByText(reads[1]!.updateTime!, { exact: true })).toBeVisible();
+    await editor.getByRole("button", { name: "REST JSON", exact: true }).click();
+    await expect(editor.locator("pre")).toHaveText(
+      JSON.stringify(
+        {
+          local: { stringValue: "before" },
+          remote: { stringValue: "external" },
+        },
+        null,
+        2,
+      ),
+    );
     for (const read of reads) read.release();
     await Promise.all(reads.map((read) => read.finished));
     await page.unroute(`**/${DOCS}/conflicts/one`);
@@ -296,6 +308,55 @@ test.describe("Firestore data browser", () => {
       headers: { authorization: `Bearer ${controlToken()}` },
     });
     expect(absent.status()).toBe(404);
+    await page.getByTestId("document-reload-draft").click();
+    await expect(page.getByRole("alert")).toContainText("document was deleted");
+    await expect(await valueFor("local")).toHaveValue("deleted-draft");
+  });
+
+  test("keeps the draft and reports an authorization failure when reloading a conflict", async ({
+    page,
+    request,
+  }) => {
+    await api(request, "PATCH", `${DOCS}/reload-errors/one`, {
+      fields: { value: { stringValue: "before" } },
+    });
+    await gotoApp(page, "/firestore/reload-errors/one");
+    await expect(page.getByTestId("live-badge")).toHaveText("Live");
+    await page.getByTestId("document-edit").click();
+    await page.getByLabel("Value").fill("draft");
+    const updated = (await api(request, "PATCH", `${DOCS}/reload-errors/one`, {
+      fields: { value: { stringValue: "external" } },
+    })) as { updateTime: string };
+    await expect(page.getByText(updated.updateTime, { exact: true })).toBeVisible();
+    await page.getByTestId("document-save").click();
+    const reloadDraft = page.getByTestId("document-reload-draft");
+    await expect(reloadDraft).toBeVisible();
+
+    const documentPattern = `**/${DOCS}/reload-errors/one`;
+    await page.route(documentPattern, async (route) => {
+      await route.continue({
+        headers: { ...route.request().headers(), authorization: "Bearer invalid-reload-token" },
+      });
+    });
+    const reloadRequest = page.waitForRequest(documentPattern);
+    await reloadDraft.click();
+    const response = await (await reloadRequest).response();
+    expect(response).not.toBeNull();
+    expect(response!.status()).toBe(403);
+    const body = (await response!.json()) as { error: { message: string } };
+    await expect(page.getByRole("alert")).toHaveText(body.error.message);
+    await expect(page.getByLabel("Value")).toHaveValue("draft");
+    await expect(reloadDraft).toBeEnabled();
+
+    await page.unroute(documentPattern);
+    await reloadDraft.click();
+    await expect(reloadDraft).not.toBeVisible();
+    await expect(page.getByLabel("Value")).toHaveValue("draft");
+    const saveRequest = page.waitForRequest(`**/${DOCS}/reload-errors/one?*`);
+    await page.getByTestId("document-save").click();
+    const saved = await (await saveRequest).response();
+    expect(saved).not.toBeNull();
+    expect(saved!.ok(), await saved!.text()).toBe(true);
   });
 
   test("discards a stale conflict reload after navigation", async ({ page, request }) => {

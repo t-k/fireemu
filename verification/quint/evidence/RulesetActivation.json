@@ -50,7 +50,7 @@
     "verification/quint/tests/ruleset_activation_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "9c3db4470d31c7c8eae99064751e1a4e313633c62ce078da33cf30524bee899d",
+    ".github/workflows/quint.yml": "0831d1b3b7e48c573c218dc89df62e7a3657d43026eab338ce72a35cb1774a72",
     "crates/fireemu-adapter-grpc/tests/rules.rs": "c5b23f1dc84175afd95ede9e0b4a3ee3894209627d944029de7200b8e9523132",
     "crates/fireemu-core-rules/src/runtime.rs": "4d577ea9a2b51a62288f1d3592e3fb424bed6669c83321d4e1a99b18a277a61c",
     "crates/fireemu-core-rules/tests/activation.rs": "5209b04e5c911cd326cdc2a76d2c43fe60cabe0475959bb3acff863d552ec202",

@@ -26,10 +26,13 @@ jobs:
           test "$source_jdk" != / && test -x "$source_jdk/bin/java"
           test -x "$source_jdk/bin/javac" && test -x "$source_jdk/bin/jar"
 
-          protected_jdk="$(sudo mktemp -d /opt/fireemu-quint-jdk.XXXXXX)"
-          sudo cp -a "$source_jdk"/. "$protected_jdk"/
+          protected_jdk="$(sudo mktemp -d /usr/lib/fireemu-quint-jdk.XXXXXX)"
+          # Dereference internal JDK symlinks so every executable remains inside the protected
+          # copy and no permissive symlink mode is mistaken for an executable permission.
+          sudo cp -aL "$source_jdk"/. "$protected_jdk"/
           sudo chown -R root:root "$protected_jdk"
           sudo chmod -R go-w "$protected_jdk"
+          sudo chmod 0755 "$protected_jdk"
 
           for executable in java javac jar; do
             path="$protected_jdk/bin/$executable"
@@ -39,15 +42,15 @@ jobs:
           done
 
           # trusted_path() rejects any non-root-owned or caller-writable ancestor.
-          # Check the copied tree and its /opt parent before exposing it to later steps.
-          test "$(stat -c '%u' /opt)" = 0
-          test -z "$(find /opt -maxdepth 1 -mindepth 1 -path "$protected_jdk" -prune -perm /022 -print)"
           test "$(find "$protected_jdk" -xdev \( ! -user root -o -perm /022 \) -print -quit)" = ""
           for executable in java javac jar; do
             path="$protected_jdk/bin/$executable"
             parent="$path"
-            while [ "$parent" != / ]; do
+            while true; do
               test "$(stat -c '%u' "$parent")" = 0
+              mode="$(stat -c '%a' "$parent")"
+              test "$((8#$mode & 022))" = 0
+              test "$parent" != / || break
               parent="$(dirname "$parent")"
             done
           done

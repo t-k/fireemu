@@ -41,6 +41,8 @@ jobs:
         run: |
           echo "QUINT_REAL_BIN=$GITHUB_WORKSPACE/verification/quint/node_modules/.bin/quint" >> "$GITHUB_ENV"
           echo "$GITHUB_WORKSPACE/verification/quint/bin" >> "$GITHUB_PATH"
+      - name: fetch locked workspace dependencies for offline authority checks
+        run: cargo fetch --locked
       - name: normal Quint crate tests
         run: cargo test -p fireemu-verification-quint
       - name: complete Quint authority pass without retry

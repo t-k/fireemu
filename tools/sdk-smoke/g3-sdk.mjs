@@ -167,24 +167,29 @@ try {
     initial.reject,
   );
   await bounded(initialReady, "listener initial callback");
+  let replacementResolve;
+  let replacementReject;
   const replacementReady = new Promise((resolve, reject) => {
-    initial = { resolve, reject };
+    replacementResolve = resolve;
+    replacementReject = reject;
   });
+  let replacementUpdateResolve;
+  let replacementUpdateReject;
   const replacementUpdate = new Promise((resolve, reject) => {
-    replacementReady.resolveUpdate = resolve;
-    replacementReady.rejectUpdate = reject;
+    replacementUpdateResolve = resolve;
+    replacementUpdateReject = reject;
   });
   stopListener = onSnapshot(
     watched,
     (snapshot) => {
       const revision = snapshot.data()?.revision ?? null;
       replacementRevisions.push(revision);
-      if (replacementRevisions.length === 1) replacementReady.resolve();
-      if (revision === 1) replacementReady.resolveUpdate();
+      if (replacementRevisions.length === 1) replacementResolve();
+      if (revision === 1) replacementUpdateResolve();
     },
     (error) => {
-      replacementReady.reject(error);
-      replacementReady.rejectUpdate(error);
+      replacementReject(error);
+      replacementUpdateReject(error);
     },
   );
   await bounded(replacementReady, "replacement listener initial callback");

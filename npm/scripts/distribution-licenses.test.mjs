@@ -27,7 +27,7 @@ function relativeFiles(root, directory = root) {
   });
 }
 
-function hasDuplicateJsonObjectKey(text, fixtureName) {
+function hasDuplicateJsonObjectKey(text) {
   let index = 0;
 
   const skipWhitespace = () => {
@@ -75,7 +75,6 @@ function hasDuplicateJsonObjectKey(text, fixtureName) {
     }
   };
   const scanObject = () => {
-    const objectStart = index;
     const keys = new Set();
     let duplicateKey = false;
     index += 1;
@@ -96,7 +95,7 @@ function hasDuplicateJsonObjectKey(text, fixtureName) {
       skipWhitespace();
       if (text[index] === "}") {
         index += 1;
-        return duplicateKey && text.slice(objectStart, index).includes(fixtureName);
+        return duplicateKey;
       }
       index += 1;
     }
@@ -141,8 +140,8 @@ function fixtureReferenceViolations({ fixtureName, fixtureBytes, files }) {
       }
       continue;
     }
-    if (hasDuplicateJsonObjectKey(text, fixtureName)) {
-      violations.push(`${path}: fixture key occurs more than once`);
+    if (hasDuplicateJsonObjectKey(text)) {
+      violations.push(`${path}: duplicate JSON key occurs more than once`);
     }
 
     const inspect = (value) => {
@@ -159,8 +158,13 @@ function fixtureReferenceViolations({ fixtureName, fixtureBytes, files }) {
           inspect(key);
           inspect(entry);
         });
-      } else if (typeof value === "string" && value.includes(fixtureName)) {
-        violations.push(`${path}: fixture name is a value or free text`);
+      } else if (typeof value === "string") {
+        if (value.includes(fixtureName)) {
+          violations.push(`${path}: fixture name is a value or free text`);
+        }
+        if (value.includes(canonicalFixtureBytes.toString("utf8"))) {
+          violations.push(`${path}: contains the fixture bytes`);
+        }
       }
     };
     inspect(document);
@@ -216,7 +220,7 @@ test("fixture reference checks reject duplicate compatibility JSON keys", () => 
     files: [{ path: "spec/compatibility/duplicate.json", contents: Buffer.from(document) }],
   });
 
-  assert.deepEqual(violations, ["spec/compatibility/duplicate.json: fixture key occurs more than once"]);
+  assert.deepEqual(violations, ["spec/compatibility/duplicate.json: duplicate JSON key occurs more than once"]);
 });
 
 test("fixture reference checks reject overwritten fixture names in duplicate JSON keys", () => {
@@ -231,8 +235,62 @@ test("fixture reference checks reject overwritten fixture names in duplicate JSO
 
   assert.deepEqual(
     violations,
-    ["spec/compatibility/overwritten.json: fixture key occurs more than once"],
+    ["spec/compatibility/overwritten.json: duplicate JSON key occurs more than once"],
   );
+});
+
+test("fixture reference checks reject escaped duplicate fixture-path keys", () => {
+  const fixtureName = ["INSECURE", "TEST", "ONLY", "RSA", "A.der.hex"].join("_");
+  const fixtureBytes = Buffer.from("deadbeef\n");
+  const fixturePath = `crates/fireemu-adapter-http/tests/fixtures/${fixtureName}`;
+  const escapedPath = `\\u${fixturePath.codePointAt(0).toString(16).padStart(4, "0")}${fixturePath.slice(1)}`;
+  const digest = createHash("sha256").update(fixtureBytes).digest("hex");
+  const document = `{"${fixturePath}":"wrong","${escapedPath}":"${digest}"}`;
+  const violations = fixtureReferenceViolations({
+    fixtureName,
+    fixtureBytes,
+    files: [{ path: "spec/compatibility/escaped-key.json", contents: Buffer.from(document) }],
+  });
+
+  assert.deepEqual(
+    violations,
+    ["spec/compatibility/escaped-key.json: duplicate JSON key occurs more than once"],
+  );
+});
+
+test("fixture reference checks reject escaped overwritten fixture names", () => {
+  const fixtureName = ["INSECURE", "TEST", "ONLY", "RSA", "A.der.hex"].join("_");
+  const fixtureBytes = Buffer.from("deadbeef\n");
+  const escapedName = [...fixtureName]
+    .map((character) => `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`)
+    .join("");
+  const document = `{"value":"${escapedName}","value":"ok"}`;
+  const violations = fixtureReferenceViolations({
+    fixtureName,
+    fixtureBytes,
+    files: [{ path: "spec/compatibility/escaped-value.json", contents: Buffer.from(document) }],
+  });
+
+  assert.deepEqual(
+    violations,
+    ["spec/compatibility/escaped-value.json: duplicate JSON key occurs more than once"],
+  );
+});
+
+test("fixture reference checks reject JSON escaped fixture payloads", () => {
+  const fixtureName = ["INSECURE", "TEST", "ONLY", "RSA", "A.der.hex"].join("_");
+  const fixtureBytes = Buffer.from("deadbeef\n");
+  const escapedPayload = [...fixtureBytes.toString("utf8").trimEnd()]
+    .map((character) => `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`)
+    .join("");
+  const document = `{"payload":"${escapedPayload}"}`;
+  const violations = fixtureReferenceViolations({
+    fixtureName,
+    fixtureBytes,
+    files: [{ path: "spec/compatibility/escaped-payload.json", contents: Buffer.from(document) }],
+  });
+
+  assert.deepEqual(violations, ["spec/compatibility/escaped-payload.json: contains the fixture bytes"]);
 });
 
 test("the copied Firebase CLI widget retains its MIT attribution", () => {

@@ -1863,7 +1863,9 @@ fn cross_tenant_refresh_credentials_are_refused_without_namespace_mutation() {
     }
     s.registry = Some(registry);
     let mut tenancy = Tenancy::new("demo-app");
-    tenancy.register("worker-alpha", &[], &["worker-key".to_owned()]).unwrap();
+    tenancy
+        .register("worker-alpha", &[], &["worker-key".to_owned()])
+        .unwrap();
     s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
 
     let mut credentials = Vec::new();
@@ -1894,7 +1896,10 @@ fn cross_tenant_refresh_credentials_are_refused_without_namespace_mutation() {
     let before_a = snapshot("customer-a");
     let before_b = snapshot("customer-b");
 
-    for (refresh, destination) in [(&credentials[0], "customer-b"), (&credentials[1], "customer-a")] {
+    for (refresh, destination) in [
+        (&credentials[0], "customer-b"),
+        (&credentials[1], "customer-a"),
+    ] {
         let (status, refused) = post(
             &s,
             "/securetoken.googleapis.com/v1/token?key=worker-key",
@@ -1913,7 +1918,10 @@ fn cross_tenant_refresh_credentials_are_refused_without_namespace_mutation() {
             &json!({"grant_type": "refresh_token", "refresh_token": refresh, "tenantId": tenant}),
         );
         assert_eq!(status, 200, "{renewed}");
-        assert_eq!(claims(renewed["id_token"].as_str().unwrap())["firebase"]["tenant"], tenant);
+        assert_eq!(
+            claims(renewed["id_token"].as_str().unwrap())["firebase"]["tenant"],
+            tenant
+        );
     }
 }
 

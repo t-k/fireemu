@@ -1194,11 +1194,7 @@ fn failed_transaction_commit_keeps_lock_until_explicit_rollback() {
         )
         .unwrap();
     assert_eq!(
-        state
-            .get(&path("locked/doc"))
-            .unwrap()
-            .fields
-            .get("value"),
+        state.get(&path("locked/doc")).unwrap().fields.get("value"),
         Some(&Value::Integer(2))
     );
 }

@@ -5334,6 +5334,20 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         .await
         .unwrap();
 
+    let mut source_before = Vec::new();
+    for index in 0..67 {
+        source_before.push(
+            client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/{collection}/{index:03}"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner(),
+        );
+    }
+
     let collection_stage = || pipeline_stage("collection", s(collection));
     let limit = |value| pipeline_stage("limit", i(value));
     let execute = |stages| pipeline_request(stages);
@@ -5548,6 +5562,20 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
     )
     .await;
     assert_eq!(after, baseline);
+    let mut source_after = Vec::new();
+    for index in 0..67 {
+        source_after.push(
+            client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/{collection}/{index:03}"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner(),
+        );
+    }
+    assert_eq!(source_after, source_before);
     handle.abort();
     assert!(handle.await.unwrap_err().is_cancelled());
 }

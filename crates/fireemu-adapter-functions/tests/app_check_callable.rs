@@ -335,9 +335,10 @@ fn ensure_self_delimiting(raw: &[u8], method: &str, status: u16) -> Result<(), S
             .map_err(|_| "response is not self-delimiting".to_owned())?;
             rest = &rest[line_end + 2..];
             if size == 0 {
-                return (rest.starts_with(b"\r\n") || rest.windows(4).any(|window| window == b"\r\n\r\n"))
-                    .then_some(())
-                    .ok_or_else(|| "response is not self-delimiting".to_owned());
+                return (rest.starts_with(b"\r\n")
+                    || rest.windows(4).any(|window| window == b"\r\n\r\n"))
+                .then_some(())
+                .ok_or_else(|| "response is not self-delimiting".to_owned());
             }
             if rest.len() < size + 2 || &rest[size..size + 2] != b"\r\n" {
                 return Err("response is not self-delimiting".to_owned());

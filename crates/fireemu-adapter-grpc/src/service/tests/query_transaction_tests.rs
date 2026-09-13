@@ -228,28 +228,7 @@ async fn execute_pipeline_snapshot_remains_stable_across_page_boundary() {
             .recv_timeout(Duration::from_secs(5))
             .unwrap();
     }));
-    let request = pb::ExecutePipelineRequest {
-        database: "projects/demo-app/databases/(default)".to_owned(),
-        pipeline_type: Some(
-            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
-                pb::StructuredPipeline {
-                    pipeline: Some(pb::Pipeline {
-                        stages: vec![pb::pipeline::Stage {
-                            name: "collection".to_owned(),
-                            args: vec![pb::Value {
-                                value_type: Some(pb::value::ValueType::StringValue(
-                                    "/items".to_owned(),
-                                )),
-                            }],
-                            ..Default::default()
-                        }],
-                    }),
-                    ..Default::default()
-                },
-            ),
-        ),
-        ..Default::default()
-    };
+    let request = pipeline_request();
     let task = tokio::spawn(async move {
         Firestore::execute_pipeline(&service, Request::new(request))
             .await
@@ -266,7 +245,7 @@ async fn execute_pipeline_snapshot_remains_stable_across_page_boundary() {
             writes: vec![
                 pb::Write {
                     operation: Some(pb::write::Operation::Update(pb::Document {
-                        name: format!("{}/items/000", query.parent),
+                        name: format!("{}/items/040", query.parent),
                         fields: [(
                             "rank".to_owned(),
                             pb::Value {
@@ -281,7 +260,7 @@ async fn execute_pipeline_snapshot_remains_stable_across_page_boundary() {
                 },
                 pb::Write {
                     operation: Some(pb::write::Operation::Delete(format!(
-                        "{}/items/001",
+                        "{}/items/041",
                         query.parent
                     ))),
                     ..Default::default()
@@ -304,12 +283,22 @@ async fn execute_pipeline_snapshot_remains_stable_across_page_boundary() {
         let response = response.unwrap();
         names.extend(response.results.into_iter().map(|document| document.fields));
     }
-    assert_eq!(names.len(), 65);
-    assert!(names.iter().any(|fields| fields.get("rank")
-        == Some(&pb::Value {
-            value_type: Some(pb::value::ValueType::IntegerValue(64)),
-        })));
-    assert!(!names.iter().any(std::collections::HashMap::is_empty));
+    let expected: Vec<_> = (0..65)
+        .map(|index| {
+            [(
+                "rank".to_owned(),
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::IntegerValue(65 - index)),
+                },
+            )]
+            .into_iter()
+            .collect()
+        })
+        .collect();
+    assert_eq!(
+        names, expected,
+        "every original row, type, order and multiplicity must survive later-page mutations"
+    );
 }
 
 fn pipeline_request() -> pb::ExecutePipelineRequest {
@@ -344,15 +333,42 @@ async fn execute_pipeline_records_deterministic_small_and_large_page_stats() {
         let mut gateway = test_gateway();
         gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
         let service = GatewayService::local(gateway, backend.clone());
-        seeded_query(&backend, count, false);
+        let req = seeded_query(&backend, count, false);
+        let parent = parse_parent(&req.parent).unwrap();
+        let Some(pb::run_query_request::QueryType::StructuredQuery(structured)) = req.query_type
+        else {
+            unreachable!()
+        };
+        let decoded = decode_structured_query(&parent, &structured).unwrap();
+        let (legacy, legacy_stats) = backend
+            .database_handle(&parent)
+            .unwrap()
+            .with(|state| {
+                state
+                    .run_query_with_stats(&decoded, None)
+                    .map_err(|error| Status::internal(error.to_string()))
+            })
+            .unwrap();
+        assert_eq!(legacy.len(), usize::try_from(count).unwrap());
+        let expected: Vec<_> = legacy
+            .iter()
+            .map(|doc| crate::encode::encode_document(doc).fields)
+            .collect();
+        let legacy_retained_documents = legacy.len();
+        drop(legacy);
         let mut stream = Firestore::execute_pipeline(&service, Request::new(pipeline_request()))
             .await
             .unwrap()
             .into_inner();
         let mut returned = 0;
+        let mut actual = Vec::new();
         while let Some(response) = stream.next().await {
-            returned += response.unwrap().results.len();
+            for document in response.unwrap().results {
+                returned += 1;
+                actual.push(document.fields);
+            }
         }
+        assert_eq!(actual, expected);
         let (_, stats) = backend.latest_query_execution_stats().unwrap();
         println!(
             "pipeline_stats count={count} returned={returned} pages={} cloned={} field_bytes={} selection_paths={} selection_bytes={}",
@@ -361,6 +377,13 @@ async fn execute_pipeline_records_deterministic_small_and_large_page_stats() {
             stats.pages.cloned_field_bytes,
             stats.selection_paths,
             stats.selection_bytes,
+        );
+        println!("pipeline_peak count={count} legacy_retained={legacy_retained_documents} legacy_candidates={} page_candidates={} legacy_clones={} legacy_bytes={}", legacy_stats.peak_candidates, stats.pages.peak_candidates, legacy_stats.cloned_documents, legacy_stats.cloned_field_bytes);
+        assert!(stats.pages.peak_candidates <= 32);
+        assert_eq!(legacy_stats.cloned_documents, stats.pages.cloned_documents);
+        assert_eq!(
+            legacy_stats.cloned_field_bytes,
+            stats.pages.cloned_field_bytes
         );
         assert_eq!(returned, usize::try_from(count).unwrap());
         assert_eq!(stats.pages.cloned_documents, u64::try_from(count).unwrap());
@@ -409,37 +432,59 @@ async fn execute_pipeline_drop_before_first_delivery_releases_snapshot() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn execute_pipeline_drop_after_first_delivery_releases_selection() {
+async fn execute_pipeline_drop_during_continuation_releases_snapshot_and_stops_pages() {
     let backend = test_backend();
     let mut gateway = test_gateway();
     gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
     let mut service = GatewayService::local(gateway, backend.clone());
-    seeded_query(&backend, 65, true);
-    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    seeded_query(&backend, 65, false);
+    let (ready_tx, mut ready_rx) = tokio::sync::oneshot::channel();
     let ready_tx = Mutex::new(Some(ready_tx));
-    service.first_query_page_ready = Some(Arc::new(move || {
-        ready_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    service.continuation_query_page_ready = Some(Arc::new(move || {
+        if let Some(ready) = ready_tx.lock().unwrap().take() {
+            ready.send(()).unwrap();
+            release_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+        }
     }));
-    let task = tokio::spawn(async move {
-        Firestore::execute_pipeline(&service, Request::new(pipeline_request())).await
-    });
-    tokio::time::timeout(Duration::from_secs(5), ready_rx)
+    let mut stream = Firestore::execute_pipeline(&service, Request::new(pipeline_request()))
         .await
         .unwrap()
-        .unwrap();
-    let mut stream = task.await.unwrap().unwrap().into_inner();
-    let _ = stream.next().await.unwrap().unwrap();
-    drop(stream);
+        .into_inner();
+    let mut documents = 0;
     tokio::time::timeout(Duration::from_secs(5), async {
-        while transaction_stats_for(&backend, "projects/demo-app/databases/(default)/documents")
-            .active
-            != 0
-        {
+        loop {
+            tokio::select! {
+                ready = &mut ready_rx => { ready.unwrap(); break; }
+                response = stream.next() => { documents += response.unwrap().unwrap().results.len(); }
+            }
+        }
+    }).await.unwrap();
+    assert!(documents > 0 && documents < 32);
+    assert_eq!(
+        backend.latest_query_execution_stats().unwrap().1.page_count,
+        2
+    );
+    assert_eq!(transaction_stats(&backend).active, 1);
+    drop(stream);
+    release_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while Arc::strong_count(&backend) != 2 || transaction_stats(&backend).active != 0 {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .unwrap();
+    .expect("pipeline cancellation releases producer and snapshot");
+    assert_eq!(selection_bytes(&backend), 0);
+    assert_eq!(
+        backend.latest_query_execution_stats().unwrap().1.page_count,
+        2
+    );
 }
 
 #[tokio::test]
@@ -683,4 +728,51 @@ async fn failed_commit_keeps_transaction_usable_and_locked_until_rollback() {
         after_rollback.into_inner().fields["value"].value_type,
         Some(pb::value::ValueType::IntegerValue(2))
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_pipeline_preserves_canonical_context_on_continuation_error() {
+    let backend = test_backend();
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let mut service = GatewayService::local(gateway, backend.clone());
+    seeded_query(&backend, 65, false);
+    let barrier = backend.barrier();
+    service.first_query_page_ready = Some(Arc::new(move || {
+        drop(barrier.exclusive());
+    }));
+    let request = pipeline_request();
+    let canonical = crate::pipeline::validate_pipeline(&request)
+        .unwrap()
+        .canonical_text();
+    let mut stream = Firestore::execute_pipeline(&service, Request::new(request))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut count = 0;
+    let error = loop {
+        match stream.next().await.expect("stale continuation must fail") {
+            Ok(response) => count += response.results.len(),
+            Err(error) => break error,
+        }
+    };
+    assert!(count > 0 && count <= 32);
+    assert_eq!(error.code(), tonic::Code::Unavailable);
+    assert_eq!(
+        error
+            .metadata()
+            .get("fireemu-pipeline")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        canonical
+    );
+    assert!(stream.next().await.is_none());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while Arc::strong_count(&backend) != 2 || transaction_stats(&backend).active != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 }

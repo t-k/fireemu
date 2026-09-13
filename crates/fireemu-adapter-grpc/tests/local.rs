@@ -4784,8 +4784,12 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
     )
     .await;
     assert_eq!(docs.len(), 65);
-    assert_eq!(docs.first().unwrap().fields.get("out"), Some(&i(0)));
-    assert_eq!(docs.last().unwrap().fields.get("out"), Some(&i(64)));
+    assert_eq!(
+        docs.iter()
+            .map(|doc| doc.fields["out"].clone())
+            .collect::<Vec<_>>(),
+        (0..65).map(i).collect::<Vec<_>>()
+    );
     assert!(docs.iter().all(|doc| doc.fields.len() == 1));
     let docs = drain_pipeline(
         client
@@ -4796,7 +4800,12 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
         33,
     )
     .await;
-    assert_eq!(docs.len(), 33);
+    assert_eq!(
+        docs.iter()
+            .map(|doc| doc.fields["out"].clone())
+            .collect::<Vec<_>>(),
+        (0..33).map(i).collect::<Vec<_>>()
+    );
     let docs = drain_pipeline(
         client
             .execute_pipeline(request(i64::from(i32::MAX) + 1))
@@ -4817,6 +4826,19 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
     )
     .await;
     assert!(docs.is_empty());
+    let mut empty = request(65);
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &mut empty.pipeline_type
+    else {
+        unreachable!()
+    };
+    structured.pipeline.as_mut().unwrap().stages[0].args[0] = s("/empty-scale");
+    let mut stream = client.execute_pipeline(empty).await.unwrap().into_inner();
+    assert_eq!(
+        stream.message().await.unwrap(),
+        Some(pb::ExecutePipelineResponse::default())
+    );
+    assert!(stream.message().await.unwrap().is_none());
     handle.abort();
 }
 

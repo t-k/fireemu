@@ -1,7 +1,7 @@
 //! Email actions (oob codes), email link and phone sign-in, fixture identity providers,
 //! phone second factors and the emulator inspection routes.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
     handle, handle_with, AuthBlockingContext, AuthBlockingHook, AuthState, BlockingFunctionFailure,
@@ -1844,6 +1844,68 @@ fn cross_tenant_update_credentials_leave_both_namespaces_unchanged() {
         assert_eq!(status, 200, "{account}");
         assert_eq!(account["users"][0]["email"], "same@example.com");
         assert_eq!(account["users"][0]["tenantId"], tenant);
+    }
+}
+
+#[test]
+fn cross_tenant_refresh_credentials_are_refused_without_namespace_mutation() {
+    use fireemu_core_auth::store::AuthRegistry;
+    use fireemu_core_session::tenancy::Tenancy;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    for tenant in ["customer-a", "customer-b"] {
+        registry.ensure_tenant("worker-alpha", tenant).unwrap();
+    }
+    s.registry = Some(registry);
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy.register("worker-alpha", &[], &["worker-key"]).unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+
+    let mut credentials = Vec::new();
+    for tenant in ["customer-a", "customer-b"] {
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp?key=worker-key"),
+            &json!({"tenantId": tenant, "email": format!("{tenant}@example.com"), "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{created}");
+        credentials.push(created["refreshToken"].as_str().unwrap().to_owned());
+    }
+    let snapshot = |tenant: &str| {
+        let response = handle_with(
+            &s,
+            "GET",
+            &format!("/identitytoolkit.googleapis.com/v1/projects/worker-alpha/tenants/{tenant}/accounts:batchGet?maxResults=1000"),
+            &owner(),
+            &json!({}),
+        );
+        assert_eq!(response.status, 200, "{}", response.body);
+        response.body
+    };
+    let before_a = snapshot("customer-a");
+    let before_b = snapshot("customer-b");
+
+    for (refresh, destination) in [(&credentials[0], "customer-b"), (&credentials[1], "customer-a")] {
+        let (status, refused) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token?key=worker-key",
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh, "tenantId": destination}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_REFRESH_TOKEN");
+        assert_eq!(snapshot("customer-a"), before_a);
+        assert_eq!(snapshot("customer-b"), before_b);
+    }
+
+    for (refresh, tenant) in credentials.iter().zip(["customer-a", "customer-b"]) {
+        let (status, renewed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token?key=worker-key",
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh, "tenantId": tenant}),
+        );
+        assert_eq!(status, 200, "{renewed}");
+        assert_eq!(claims(renewed["id_token"].as_str().unwrap())["firebase"]["tenant"], tenant);
     }
 }
 

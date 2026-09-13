@@ -3488,6 +3488,17 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         decoded.payload.get("sub").and_then(|v| v.as_str()),
         Some("custom-1")
     );
+    let (status, account) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["custom-1"]}),
+    );
+    assert_eq!(status, 200, "{account}");
+    assert!(
+        account["users"][0]["customAttributes"].is_null(),
+        "custom-token claims must not become Admin customAttributes"
+    );
     // Second sign-in: same user, not new; claims are per token, not stored.
     let again = custom_token("custom-1", &json!({}), now_secs + 3600);
     let (status, body) = post(

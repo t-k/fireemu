@@ -320,6 +320,7 @@ def execution_inputs():
         "pricingLocation": None,
         "pricingCheckedAt": None,
         "tariffsConfirmedBelowPlanningCeilings": None,
+        "costAssumptions": None,
         "productionExecuted": False,
     }
 

@@ -45,6 +45,13 @@ def fixture_permission():
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
         "pricingLocation": "us-central1",
         "pricingCheckedAt": "fixture-only",
+        "costAssumptions": {
+            "retentionHours": 24,
+            "indexStorageUpperUSD": 0.01,
+            "networkUpperUSD": 0.05,
+            "computedUpperUSD": 0.10,
+            "ownerConfirmed": True,
+        },
         "frozenCommit": "c" * 40,
     }
 
@@ -113,6 +120,10 @@ class CommunicationFixture:
             response["httpStatus"] = response["http"]["status"] = 403
         if self.variant == "readback" and entry["phase"] == "before":
             response["body"] = {}
+        if self.variant == "partial" and entry["phase"] == "diagnostic":
+            response["http"].update(
+                complete=False, failure="body-interrupted", digestScope="prefix"
+            )
         if self.variant == "non-json" and entry["phase"] == "diagnostic":
             response["body"] = None
             response["http"]["bodyKind"] = "non-json"
@@ -164,7 +175,7 @@ def test_complete_45_uses_real_bound_key_and_keeps_client_principal(boundary, tm
 
 @pytest.mark.parametrize(
     "variant",
-    ["drift", "auth-denied", "readback", "timeout", "unrecovered"],
+    ["drift", "auth-denied", "readback", "timeout", "partial", "unrecovered"],
 )
 def test_failures_preserve_early_inputs_and_partial_observations(
     boundary, tmp_path, variant
@@ -395,3 +406,27 @@ def test_verified_key_cannot_change_before_actual_wire(boundary, tmp_path):
             {"ordinal": 0, "sent": {"privileged": False}},
         )
     assert len(fixture.requests) == before
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("retentionHours", 25),
+        ("indexStorageUpperUSD", None),
+        ("networkUpperUSD", -1),
+        ("computedUpperUSD", 1.01),
+        ("computedUpperUSD", 0),
+        ("ownerConfirmed", False),
+    ],
+)
+def test_cost_assumptions_cannot_be_inferred_or_exceed_envelope(boundary, field, value):
+    permission, _fixture = boundary
+    permission["costAssumptions"][field] = value
+    with pytest.raises(ValueError):
+        approve(
+            manifest(),
+            permission,
+            permission["nonce"],
+            permission["observerSha256"],
+            1000,
+        )

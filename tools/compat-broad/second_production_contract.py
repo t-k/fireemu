@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from pathlib import Path
 
@@ -17,6 +18,25 @@ def manifest():
     value["transport"] = "second45-bounded-production-http-v1"
     value["mode"] = "mapped"
     value["localAdmissionDigest"] = digest(local_manifest())
+    value["resources"] = {
+        "ownedAccounts": 2,
+        "concurrentDocuments": 1,
+        "seedDocuments": 3,
+        "requestBytes": 16384,
+        "responseBytes": 65536,
+    }
+    value["cost"] = {
+        "maximumUSD": 1,
+        "currency": "USD",
+        "planningUnitCeilings": {
+            "documentReadUSD": 0.00001,
+            "documentWriteUSD": 0.00002,
+            "documentDeleteUSD": 0.00001,
+            "authMauUSD": 0.01,
+        },
+        "maximumRetentionHours": 24,
+        "ownerMustConfirmStorageAndNetwork": True,
+    }
     return value
 
 
@@ -49,6 +69,27 @@ def approve(value, permission, nonce, observer, now):
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
     }
     validate_owner_baseline(permission, required, now)
+    costs = permission.get("costAssumptions")
+    if not isinstance(costs, dict):
+        raise ValueError("explicit cost assumptions required")  # noqa: TRY004 -- Admission uses one refusal category.
+    for key in (
+        "retentionHours",
+        "indexStorageUpperUSD",
+        "networkUpperUSD",
+        "computedUpperUSD",
+    ):
+        number = costs.get(key)
+        if type(number) not in (int, float) or not math.isfinite(number) or number < 0:
+            raise ValueError("finite nonnegative cost assumptions required")
+    base = 100 * (0.00001 + 0.00002 + 0.00001) + 2 * 0.01
+    if (
+        not 0 < costs["retentionHours"] <= 24
+        or costs["computedUpperUSD"]
+        < base + costs["indexStorageUpperUSD"] + costs["networkUpperUSD"]
+        or costs["computedUpperUSD"] > 1
+        or costs.get("ownerConfirmed") is not True
+    ):
+        raise ValueError("cost or retention envelope not confirmed")
 
 
 def observer_digest():

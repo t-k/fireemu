@@ -1,7 +1,9 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { ownedProcessTarget } from "../src/lib/processTarget";
 
 // Starts a real daemon (release binary when built, debug otherwise) with the smoke
 // functions project and a pinned clock, and records its PID for the teardown.
@@ -63,11 +65,34 @@ const waitFor = async (
   throw new Error(`daemon did not answer at ${url}\n${output()}`);
 };
 
-const stop = async (pid: number | undefined, status: ChildStatus): Promise<void> => {
+const stop = async (child: ChildProcess, status: ChildStatus): Promise<void> => {
+  const pid = child.pid;
   if (pid === undefined) return;
+
+  if (process.platform === "win32") {
+    const childAlive = () =>
+      status.exit === undefined && child.exitCode === null && child.signalCode === null;
+    const signalChild = (value: NodeJS.Signals) => {
+      if (childAlive()) child.kill(value);
+    };
+    signalChild("SIGINT");
+    for (let i = 0; i < 40 && childAlive(); i += 1) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (childAlive()) {
+      signalChild("SIGKILL");
+      for (let i = 0; i < 40 && childAlive(); i += 1) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+    if (childAlive()) throw new Error(`daemon process ${pid} survived cleanup`);
+    return;
+  }
+
+  const target = ownedProcessTarget(pid, process.platform);
   const groupAlive = () => {
     try {
-      process.kill(-pid, 0);
+      process.kill(target, 0);
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
@@ -76,7 +101,7 @@ const stop = async (pid: number | undefined, status: ChildStatus): Promise<void>
   };
   const signalGroup = (value: NodeJS.Signals) => {
     try {
-      process.kill(-pid, value);
+      process.kill(target, value);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     }
@@ -153,7 +178,7 @@ export default async function globalSetup(): Promise<void> {
     writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner, token }));
     child.unref();
   } catch (error) {
-    await stop(child.pid, status);
+    await stop(child, status);
     throw error;
   }
 }

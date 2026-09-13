@@ -17,6 +17,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+      - name: protect the verification JDK from runner writes
+        shell: bash
+        run: |
+          java_path="$(readlink -f "$(command -v java)")"
+          jdk_root="$(dirname "$(dirname "$java_path")")"
+          test "$jdk_root" != / && test -x "$jdk_root/bin/javac" && test -x "$jdk_root/bin/jar"
+          sudo chown -R root:root "$jdk_root"
+          sudo chmod -R go-w "$jdk_root"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

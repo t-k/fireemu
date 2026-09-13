@@ -224,6 +224,7 @@ test.describe("Firestore data browser", () => {
 
     await page.getByTestId("document-reload-draft").click();
     await page.getByTestId("document-save").click();
+    await expect(page.getByTestId("document-edit")).toBeVisible();
     const rebased = (await api(request, "GET", `${DOCS}/conflicts/one`)) as {
       fields: Record<string, unknown>;
     };

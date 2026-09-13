@@ -36,8 +36,15 @@ slow-timeout = { period = "10s" }
 leak-timeout = { period = "30s", result = "fail" }
 
 [[profile.pr.overrides]]
-filter = 'test(/(nested_run_fails_when_a_child_keeps_captured_stdout|the_census_sees_a_child_that_redirected_its_output|a_timed_out_blocking_handler_releases_admission_and_recycles_its_runner|pubsub_bridge_capacity_refusal_keeps_the_broker_batch_invisible)$/)'
+filter = 'test(/(nested_run_fails_when_a_child_keeps_captured_stdout|the_census_sees_a_child_that_redirected_its_output|a_timed_out_blocking_handler_releases_admission_and_recycles_its_runner|pubsub_bridge_capacity_refusal_keeps_the_broker_batch_invisible|pubsub_dead_letter_retry_is_woken_by_functions_capacity_recovery)$/)'
 test-group = "process-contention"
+
+# This lifecycle scenario must be able to start its real Python runner and receive its hello
+# while the workspace is otherwise saturated. Reserve the run's execution slots instead of
+# extending its protocol timeout.
+[[profile.pr.overrides]]
+filter = 'test(pubsub_dead_letter_retry_is_woken_by_functions_capacity_recovery)'
+threads-required = "num-cpus"
 
 [profile.ci]
 retries = 0

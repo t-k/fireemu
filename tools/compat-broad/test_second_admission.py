@@ -133,3 +133,66 @@ def test_symmetric_missing_rows_not_mapping_success():
         "safety": True,
     }
     assert compare_second(result, copy.deepcopy(result))["mapping"] == "invalid"
+
+
+@pytest.mark.parametrize("phase", ["diagnostic", "seed", "absence", "normal"])
+def test_adapter_rejects_caller_supplied_foreign_operation_before_transport(
+    tmp_path, phase
+):
+    from second_mapped import LocalAdapter
+
+    a = LocalAdapter(
+        {"auth": "http://127.0.0.1:12345", "firestore": "http://127.0.0.1:12346"},
+        "a" * 32,
+        tmp_path / phase,
+    )
+    a.program_index = 0
+    a.phase = phase
+    step = "diagnostic" if phase in ("diagnostic", "seed", "absence") else phase
+    op, _ = fs_recipe(FS_IDS[0], step, BASE + "/foreign/c", {})
+    with pytest.raises(ValueError):
+        a.send(op)
+    assert a.trace == []
+    assert a.budget.counts["total"] == 0
+
+
+def test_adapter_auth_uses_internal_recipe_and_baseline_owner(tmp_path):
+    from second_mapped import ADMIN, LocalAdapter
+
+    a = LocalAdapter(
+        {"auth": "http://127.0.0.1:12345", "firestore": "http://127.0.0.1:12346"},
+        "a" * 32,
+        tmp_path / "auth",
+    )
+    a.users = USERS
+    a.case_index = 0
+    a.phase = "diagnostic"
+    bad = auth_recipe(0, USERS)
+    bad["privileged"] = True
+    with pytest.raises(ValueError):
+        a.send(bad)
+    a.phase = "baseline"
+    a.baseline = {"localId": "foreign", "displayName": "x", "emailVerified": True}
+    with pytest.raises(ValueError):
+        a.request("auth", ADMIN + "update", a.baseline, privileged=True)
+    assert a.trace == []
+
+
+def test_failure_before_received_state_is_not_safe(tmp_path):
+    # Exhaustion happens before any HTTP request. This is an input fixture for budget failure,
+    # not an oracle response or a claim about the runtime.
+    from second_mapped import LocalAdapter
+
+    a = LocalAdapter(
+        {"auth": "http://127.0.0.1:12345", "firestore": "http://127.0.0.1:12346"},
+        "a" * 32,
+        tmp_path / "budget",
+    )
+    a.phase, a.case_index, a.users = "diagnostic", 0, USERS
+    a.budget.counts["auth"] = 388
+    a.last_observation = {"httpStatus": 200, "body": {"stale": True}}
+    with pytest.raises(ValueError):
+        a.send(auth_recipe(0, USERS))
+    assert a.trace[-1]["observation"] is None
+    assert a.trace[-1]["collection"] == "transport-incomplete"
+    assert a.last_observation is None

@@ -144,10 +144,11 @@ def compare_second(direct, mapped):
         for r in (direct, mapped)
     )
     errors = []
+    observed_safety = []
     for label, result in (("direct", direct), ("mapped", mapped)):
         try:
             validate_rows(result)
-            validate_trace(result)
+            observed_safety.append(validate_trace(result))
         except (ValueError, KeyError, TypeError, StopIteration) as error:
             errors.append({"side": label, "reason": str(error)})
     if (
@@ -184,7 +185,10 @@ def compare_second(direct, mapped):
         "kind": "second45-mapping-comparison-v1",
         "manifestDigest": direct.get("manifestDigest"),
         "recordingComplete": complete,
-        "safety": all(r.get("safety") is True for r in (direct, mapped)),
+        "safety": False
+        if False in observed_safety
+        or any(r.get("safety") is False for r in (direct, mapped))
+        else (True if len(observed_safety) == 2 and all(observed_safety) else None),
         "mapping": "invalid"
         if errors or not complete
         else ("match" if all(r["mapping"] == "match" for r in rows) else "mismatch"),
@@ -201,6 +205,9 @@ def validate_trace(result):
 
     from second_admission import PROJECT, operation
 
+    from second_cases import auth_cases, auth_invariants
+
+    safe = True
     entries = iter(result["trace"])
     users = result["bindings"]
     admin = f"identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:"
@@ -284,6 +291,17 @@ def validate_trace(result):
         expected = auth_recipe(index, users)
         observation = take(expected)
         after = {role: state(role) for role in ("a", "b")}
+        safe = safe and all(
+            auth_invariants(
+                auth_cases()[index], observation["httpStatus"], before, after
+            ).values()
+        )
+        if any(
+            before[r].get("displayName") != r + "-before-" + row["id"]
+            or before[r].get("emailVerified") is not False
+            for r in users
+        ):
+            raise ValueError("baseline readback mismatch")
         if (
             not equal(row["observation"], observation)
             or not equal(row["before"], before)
@@ -334,6 +352,8 @@ def validate_trace(result):
         ):
             raise ValueError("seed failed")
         versions = {}
+        reads = {}
+        diagnostic_status = None
         for row in [
             r for r in result["rows"][32:] if r["id"].startswith(program + "/")
         ]:
@@ -350,12 +370,17 @@ def validate_trace(result):
                 ):
                     raise ValueError("document state unavailable")
                 versions[step] = body["updateTime"]
+                reads[step] = body
+            if step == "diagnostic":
+                diagnostic_status = observation["httpStatus"]
             if (
                 not equal(row["versions"], versions)
                 or not equal(row["relation"], relation)
                 or not equal(row["observation"], observation)
             ):
                 raise ValueError("original version or observation detached from trace")
+        if diagnostic_status is not None and diagnostic_status >= 400:
+            safe = safe and equal(reads["before"], reads["after"])
         body = take(get)["body"]
         if body.get("name") != name or not isinstance(body.get("updateTime"), str):
             raise ValueError("cleanup version unavailable")
@@ -372,3 +397,5 @@ def validate_trace(result):
             raise ValueError("document cleanup incomplete")
     if next(entries, None) is not None:
         raise ValueError("unexpected trailing operations")
+
+    return safe

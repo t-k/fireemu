@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import signal
@@ -106,9 +107,27 @@ class LocalAdapter(Adapter):
                     ),
                 )
             elif self.phase == "baseline" and self.baseline is not None:
+                role = next(
+                    (
+                        r
+                        for r, u in self.users.items()
+                        if u["uid"] == self.baseline.get("localId")
+                    ),
+                    None,
+                )
+                if role is None or self.case_index is None:
+                    raise ValueError("unowned baseline context")
+                expected_baseline = {
+                    "localId": self.users[role]["uid"],
+                    "displayName": role
+                    + f"-before-second/auth/{self.case_index + 1:02d}",
+                    "emailVerified": False,
+                }
                 require_operation(
                     actual,
-                    operation("auth", ADMIN + "update", self.baseline, privileged=True),
+                    operation(
+                        "auth", ADMIN + "update", expected_baseline, privileged=True
+                    ),
                 )
             elif self.budget.recovery and path == ADMIN + "delete" and privileged:
                 if (
@@ -166,6 +185,7 @@ class LocalAdapter(Adapter):
                 raise ValueError("request byte bound")
             token = self.access() if privileged else None
             self.reserve(service)
+            assert self.local is not None
             origin = self.local[service]
             payload = {
                 "url": origin + (path if service == "firestore" else "/" + path),
@@ -273,7 +293,7 @@ class LocalAdapter(Adapter):
         self.expected = expected
         path = actual["path"]
         if actual["query"]:
-            path += "?" + urlencode(actual["query"])
+            path += "?" + urlencode([tuple(pair) for pair in actual["query"]])
         return self.request(
             actual["service"],
             path,
@@ -367,7 +387,17 @@ def execute_side(local_origins, output, mode, nonce, runtime_identity):
         "runtimeIdentity": runtime_identity,
         "nonce": nonce,
         "manifestDigest": digest(manifest()),
-        "observerDigest": observer_digest(),
+        "observerDigest": digest(
+            {
+                "python": observer_digest(),
+                "wire": {
+                    name: hashlib.sha256(
+                        Path(__file__).with_name(name).read_bytes()
+                    ).hexdigest()
+                    for name in ("second_wire.mjs", "record-http.mjs")
+                },
+            }
+        ),
         "bindings": users,
         "documents": documents,
         "rows": rows,
@@ -577,6 +607,19 @@ def run_pair(local_origins, output, runtime_identity):
     direct = execute_side(
         local_origins, output / "direct", "direct", uuid.uuid4().hex, runtime_identity
     )
+    if direct["safety"] is False or not direct["cleanupComplete"]:
+        mapped = {
+            "mode": "mapped",
+            "nonce": None,
+            "rows": [],
+            "recordingComplete": False,
+            "cleanupComplete": True,
+            "safety": None,
+            "skipReason": "direct safety violation or unconfirmed cleanup",
+        }
+        comparison = compare_second(direct, mapped)
+        save(output / "comparison.json", comparison)
+        return comparison
     mapped = execute_side(
         local_origins, output / "mapped", "mapped", uuid.uuid4().hex, runtime_identity
     )
@@ -682,6 +725,8 @@ def main():
         child_script=Path(__file__).resolve(),
         project=PROJECT,
         configuration={"daemon": {"authProjectNumbers": {PROJECT: NUMBER}}},
+        execution_timeout=2430,
+        recovery_grace=300,
     )
     print(
         json.dumps(

@@ -24,6 +24,7 @@ RESERVED = {"auth": 12, "firestore": 12, "metadata": 36}
 def manifest():
     return {
         "kind": KIND,
+        "seed": 20260913,
         "project": PROJECT,
         "projectNumber": "592603257417",
         "authCases": auth_cases(),

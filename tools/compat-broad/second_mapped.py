@@ -8,18 +8,20 @@ import copy
 import json
 import os
 import signal
+import subprocess
 import sys
 import uuid
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-from batch_adapter import Adapter, observer_digest
+from batch_adapter import Adapter, observer_digest, request_headers
 from batch_contract import NUMBER, PROJECT, candidate
 from broad import run, save
 from broad_contract import digest
 from owned_runner import control_get, local_addresses
 from second_admission import (
     BASE,
+    FS_IDS,
     SecondBudget,
     auth_recipe,
     equal,
@@ -39,7 +41,7 @@ CLIENT = "identitytoolkit.googleapis.com/v1/accounts:"
 class LocalAdapter(Adapter):
     """First transport/ownership only; never invokes its production execution path."""
 
-    def __init__(self, local_origins, nonce, output):
+    def __init__(self, local_origins, nonce, output, mode="mapped"):
         super().__init__(
             candidate(), nonce, output, local_origins=origins(local_origins)
         )
@@ -50,6 +52,13 @@ class LocalAdapter(Adapter):
         self.trace = []
         self.cleanup_version = {}
         self.second_nonce = nonce
+        if mode not in {"direct", "mapped"}:
+            raise ValueError("unknown mode")
+        self.mode = mode
+        self.users = {}
+        self.case_index = None
+        self.program_index = None
+        self.versions = {}
 
     def request(
         self, service, path, body=None, *, method="POST", privileged=False, form=False
@@ -153,9 +162,47 @@ class LocalAdapter(Adapter):
         self.last_observation = None
         self.persist_trace()
         try:
-            status, result = super().request(
-                service, path, body, method=method, privileged=privileged
+            if len(json.dumps(body).encode()) > 16384:
+                raise ValueError("request byte bound")
+            token = self.access() if privileged else None
+            self.reserve(service)
+            origin = self.local[service]
+            payload = {
+                "url": origin + (path if service == "firestore" else "/" + path),
+                "origin": origin,
+                "method": method,
+                "body": body,
+                "headers": request_headers(token, local=True, form=False),
+                "privateDirectory": str(self.output / "wire" / str(entry["ordinal"])),
+            }
+            process = subprocess.run(
+                ["node", str(Path(__file__).with_name("second_wire.mjs"))],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                timeout=12,
+                check=True,
+                env={
+                    k: os.environ[k]
+                    for k in ("PATH", "LANG", "SYSTEMROOT")
+                    if k in os.environ
+                },
             )
+            received = json.loads(process.stdout)
+            http = received["http"]
+            status, result = http["status"], received.get("body")
+            self.last_observation = {
+                "httpStatus": status,
+                "mediaType": http["contentType"].split(";", 1)[0].strip().lower(),
+                "body": result,
+                "http": http,
+            }
+            if not http["complete"]:
+                raise ValueError("HTTP " + str(http["failure"]))
+            if http["bodyKind"] != "json" or not isinstance(result, dict):
+                raise ValueError("received non-JSON or unexpected JSON shape")
+            if status >= 500 or status == 429 or (privileged and status in (401, 403)):
+                raise ValueError("unexpected response")
             entry["observation"] = copy.deepcopy(self.last_observation)
             if (
                 self.budget.recovery
@@ -181,13 +228,47 @@ class LocalAdapter(Adapter):
         save(
             self.output / "transport-trace.json",
             {
-                "contract": "second45-python-wire-v1",
+                "contract": "bounded-http-v1",
                 "trace": self.trace,
                 "counts": self.budget.counts,
             },
         )
 
-    def send(self, actual, expected):
+    def send(self, actual):
+        if actual["service"] == "auth":
+            if self.phase != "diagnostic" or self.case_index is None:
+                raise ValueError("Auth diagnostic context required")
+            expected = auth_recipe(self.case_index, self.users)
+        else:
+            if self.program_index not in (0, 1, 2):
+                raise ValueError("Firestore program context required")
+            name = BASE + (
+                "/cur/c"
+                if self.mode == "direct"
+                else f"/_fireemuBroad/{self.second_nonce}-{self.program_index}/cur/c"
+            )
+            if self.phase == "absence":
+                expected = operation(
+                    "firestore", "/v1/" + name, method="GET", privileged=True
+                )
+            elif self.phase == "seed":
+                expected = operation(
+                    "firestore",
+                    "/v1/" + name + "?currentDocument.exists=false",
+                    {
+                        "fields": {
+                            "n": {"integerValue": "2"},
+                            "g": {"stringValue": "q"},
+                            "a": {"mapValue": {"fields": {"b": {"integerValue": "7"}}}},
+                        }
+                    },
+                    "PATCH",
+                    True,
+                )
+            else:
+                expected, _ = fs_recipe(
+                    FS_IDS[self.program_index], self.phase, name, self.versions
+                )
         require_operation(actual, expected)
         self.expected = expected
         path = actual["path"]
@@ -274,14 +355,16 @@ def render_fs(step, name, versions):
     )
 
 
-def execute_side(local_origins, output, mode, nonce):
+def execute_side(local_origins, output, mode, nonce, runtime_identity):
     if mode not in {"direct", "mapped"}:
         raise ValueError("unknown mode")
-    a = LocalAdapter(local_origins, nonce, output)
+    a = LocalAdapter(local_origins, nonce, output, mode)
     users, rows, documents = {}, [], {}
+    a.users = users
     result = {
         "kind": "second45-local-run-v1",
         "mode": mode,
+        "runtimeIdentity": runtime_identity,
         "nonce": nonce,
         "manifestDigest": digest(manifest()),
         "observerDigest": observer_digest(),
@@ -329,7 +412,9 @@ def execute_side(local_origins, output, mode, nonce):
                 "token": body["idToken"],
                 "email": email,
             }
+        initial = None
         for index, case in enumerate(auth_cases()):
+            a.case_index = index
             a.phase = "baseline"
             for role in ("a", "b"):
                 a.baseline = {
@@ -348,11 +433,23 @@ def execute_side(local_origins, output, mode, nonce):
                 for r in users
             ):
                 raise ValueError("baseline readback mismatch")
+            protected = {
+                r: {
+                    k: v
+                    for k, v in before[r].items()
+                    if k in ("disabled", "customAttributes", "mfaInfo")
+                }
+                for r in users
+            }
+            if initial is None:
+                initial = copy.deepcopy(protected)
+            elif not equal(initial, protected):
+                raise ValueError("protected baseline drift; stop without repair")
             actual = render_auth(case, users)
             if case["actor"] == "admin":
                 a.owner(users["b"]["uid"])
             a.phase = "diagnostic"
-            status, _ = a.send(actual, auth_recipe(index, users))
+            status, _ = a.send(actual)
             observation = copy.deepcopy(a.last_observation)
             a.phase = "after"
             after = snapshot()
@@ -380,9 +477,10 @@ def execute_side(local_origins, output, mode, nonce):
                 else f"/_fireemuBroad/{nonce}-{index}/cur/c"
             )
             documents[program["id"]] = name
+            a.program_index = index
             a.phase = "absence"
             op = operation("firestore", "/v1/" + name, method="GET", privileged=True)
-            status, _ = a.send(op, op)
+            status, _ = a.send(op)
             if status != 404:
                 raise ValueError("seed target not absent")
             a.record({"kind": "document-attempt", "name": name})
@@ -405,17 +503,18 @@ def execute_side(local_origins, output, mode, nonce):
                 "PATCH",
                 True,
             )
-            status, _ = a.send(op, op)
+            status, _ = a.send(op)
             if status != 200:
                 raise ValueError("seed failed")
             versions, reads = {}, {}
+            a.versions = versions
             for step in program["steps"]:
                 a.phase = step["id"]
                 actual = render_fs(step, name, versions)
-                expected, relation = fs_recipe(
+                _expected, relation = fs_recipe(
                     program["id"], step["id"], name, versions
                 )
-                status, body = a.send(actual, expected)
+                status, body = a.send(actual)
                 observation = copy.deepcopy(a.last_observation)
                 if step["id"] in ("original", "before", "after"):
                     if (
@@ -463,6 +562,8 @@ def execute_side(local_origins, output, mode, nonce):
                 a.recover()
         except Exception as error:
             result["cleanupFailure"] = type(error).__name__
+        if not result["recordingComplete"] and result["safety"] is not False:
+            result["safety"] = None
         result["cleanupComplete"] = (
             not a.accounts and not a.documents and not a.unrecovered
         )
@@ -470,11 +571,15 @@ def execute_side(local_origins, output, mode, nonce):
     return result
 
 
-def run_pair(local_origins, output):
+def run_pair(local_origins, output, runtime_identity):
     origins(local_origins)
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
-    direct = execute_side(local_origins, output / "direct", "direct", uuid.uuid4().hex)
-    mapped = execute_side(local_origins, output / "mapped", "mapped", uuid.uuid4().hex)
+    direct = execute_side(
+        local_origins, output / "direct", "direct", uuid.uuid4().hex, runtime_identity
+    )
+    mapped = execute_side(
+        local_origins, output / "mapped", "mapped", uuid.uuid4().hex, runtime_identity
+    )
     comparison = compare_second(direct, mapped)
     save(output / "comparison.json", comparison)
     return comparison
@@ -509,7 +614,12 @@ def child(output, nonce):
             "wrongTokenStatus": wrong,
         },
     )
-    comparison = run_pair(local, output / "pair")
+    initial = json.loads((output / "manifest.json").read_bytes())
+    runtime_identity = {
+        k: initial[k]
+        for k in ("artifactSha256", "executionCommit", "configurationDigest")
+    }
+    comparison = run_pair(local, output / "pair", runtime_identity)
     cases = [
         {
             "id": r["id"],

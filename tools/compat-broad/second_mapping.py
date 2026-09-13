@@ -113,7 +113,8 @@ def comparable(row, bindings):
     if row.get("relation"):
         sent["query"] = [["currentDocument.updateTime", row["relation"]]]
     observation = {
-        **row["observation"],
+        "httpStatus": row["observation"]["httpStatus"],
+        "mediaType": row["observation"]["mediaType"],
         "body": normalize(
             row["observation"]["body"],
             names(bindings, document),
@@ -146,7 +147,8 @@ def compare_second(direct, mapped):
     for label, result in (("direct", direct), ("mapped", mapped)):
         try:
             validate_rows(result)
-        except (ValueError, KeyError, TypeError) as error:
+            validate_trace(result)
+        except (ValueError, KeyError, TypeError, StopIteration) as error:
             errors.append({"side": label, "reason": str(error)})
     if (
         direct.get("nonce") == mapped.get("nonce")
@@ -154,6 +156,16 @@ def compare_second(direct, mapped):
         or mapped.get("mode") != "mapped"
     ):
         errors.append({"reason": "distinct direct/mapped bindings required"})
+    identity = direct.get("runtimeIdentity")
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != {"artifactSha256", "executionCommit", "configurationDigest"}
+        or not all(isinstance(v, str) and v for v in identity.values())
+        or not equal(identity, mapped.get("runtimeIdentity"))
+        or not direct.get("observerDigest")
+        or direct.get("observerDigest") != mapped.get("observerDigest")
+    ):
+        errors.append({"reason": "runtime or observer not identically bound"})
     rows = []
     if not errors:
         for left, right in zip(direct["rows"], mapped["rows"], strict=True):
@@ -181,3 +193,182 @@ def compare_second(direct, mapped):
         "productionCompatibility": "unobserved",
         "inputDigests": [digest(v) for v in (direct, mapped)],
     }
+
+
+def validate_trace(result):
+    """Bind independent recipes and version provenance to actual transport entries."""
+    from urllib.parse import urlencode
+
+    from second_admission import PROJECT, operation
+
+    entries = iter(result["trace"])
+    users = result["bindings"]
+    admin = f"identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:"
+
+    def take(expected):
+        entry = next(entries)
+        require_operation(entry["sent"], expected)
+        observation = entry.get("observation")
+        if (
+            entry.get("failure")
+            or not isinstance(observation, dict)
+            or type(observation.get("httpStatus")) is not int
+            or not isinstance(observation.get("body"), dict)
+        ):
+            raise ValueError("incomplete trace response")
+        return observation
+
+    def lookup(role):
+        return take(
+            operation(
+                "auth",
+                admin + "lookup",
+                {"email": [users[role]["email"]]},
+                privileged=True,
+            )
+        )
+
+    def state(role):
+        observation = lookup(role)
+        records = observation["body"].get("users")
+        if (
+            observation["httpStatus"] != 200
+            or not isinstance(records, list)
+            or len(records) != 1
+            or records[0].get("localId") != users[role]["uid"]
+            or records[0].get("email") != users[role]["email"]
+        ):
+            raise ValueError("trace ownership readback unavailable")
+        return records[0]
+
+    for role in ("a", "b"):
+        if lookup(role)["body"].get("users", []):
+            raise ValueError("setup target already present")
+        response = take(
+            operation(
+                "auth",
+                "identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake",
+                {
+                    "email": users[role]["email"],
+                    "password": "abc123",
+                    "returnSecureToken": True,
+                },
+            )
+        )
+        if (
+            response["httpStatus"] != 200
+            or response["body"].get("localId") != users[role]["uid"]
+            or response["body"].get("idToken") != users[role]["token"]
+        ):
+            raise ValueError("runtime account binding differs from setup response")
+    for index, row in enumerate(result["rows"][:32]):
+        for role in ("a", "b"):
+            state(role)
+            response = take(
+                operation(
+                    "auth",
+                    admin + "update",
+                    {
+                        "localId": users[role]["uid"],
+                        "displayName": role + "-before-" + row["id"],
+                        "emailVerified": False,
+                    },
+                    privileged=True,
+                )
+            )
+            if response["httpStatus"] != 200:
+                raise ValueError("baseline failed")
+        before = {role: state(role) for role in ("a", "b")}
+        if index in (26, 27):
+            state("b")
+        expected = auth_recipe(index, users)
+        observation = take(expected)
+        after = {role: state(role) for role in ("a", "b")}
+        if (
+            not equal(row["observation"], observation)
+            or not equal(row["before"], before)
+            or not equal(row["after"], after)
+        ):
+            raise ValueError("row differs from wire/readback trace")
+    for role in ("a", "b"):
+        state(role)
+        state(role)
+        response = take(
+            operation(
+                "auth",
+                admin + "delete",
+                {"localId": users[role]["uid"]},
+                privileged=True,
+            )
+        )
+        absent = lookup(role)
+        if (
+            response["httpStatus"] != 200
+            or absent["httpStatus"] != 200
+            or absent["body"].get("users", [])
+        ):
+            raise ValueError("account cleanup unconfirmed")
+    for program in FS_IDS:
+        name = result["documents"][program]
+        get = operation("firestore", "/v1/" + name, method="GET", privileged=True)
+        if take(get)["httpStatus"] != 404:
+            raise ValueError("document absence unconfirmed")
+        seed = {
+            "fields": {
+                "n": {"integerValue": "2"},
+                "g": {"stringValue": "q"},
+                "a": {"mapValue": {"fields": {"b": {"integerValue": "7"}}}},
+            }
+        }
+        if (
+            take(
+                operation(
+                    "firestore",
+                    "/v1/" + name + "?currentDocument.exists=false",
+                    seed,
+                    "PATCH",
+                    True,
+                )
+            )["httpStatus"]
+            != 200
+        ):
+            raise ValueError("seed failed")
+        versions = {}
+        for row in [
+            r for r in result["rows"][32:] if r["id"].startswith(program + "/")
+        ]:
+            step = row["id"].rsplit("/", 1)[1]
+            expected, relation = fs_recipe(program, step, name, versions)
+            observation = take(expected)
+            if step in ("original", "before", "after"):
+                body = observation["body"]
+                if (
+                    observation["httpStatus"] != 200
+                    or body.get("name") != name
+                    or not isinstance(body.get("fields"), dict)
+                    or not isinstance(body.get("updateTime"), str)
+                ):
+                    raise ValueError("document state unavailable")
+                versions[step] = body["updateTime"]
+            if (
+                not equal(row["versions"], versions)
+                or not equal(row["relation"], relation)
+                or not equal(row["observation"], observation)
+            ):
+                raise ValueError("original version or observation detached from trace")
+        body = take(get)["body"]
+        if body.get("name") != name or not isinstance(body.get("updateTime"), str):
+            raise ValueError("cleanup version unavailable")
+        delete = operation(
+            "firestore",
+            "/v1/"
+            + name
+            + "?"
+            + urlencode({"currentDocument.updateTime": body["updateTime"]}),
+            method="DELETE",
+            privileged=True,
+        )
+        if take(delete)["httpStatus"] != 200 or take(get)["httpStatus"] != 404:
+            raise ValueError("document cleanup incomplete")
+    if next(entries, None) is not None:
+        raise ValueError("unexpected trailing operations")

@@ -27,7 +27,7 @@ function relativeFiles(root, directory = root) {
   });
 }
 
-function hasDuplicateJsonObjectKey(text, targetKey) {
+function hasDuplicateJsonObjectKey(text, fixtureName) {
   let index = 0;
 
   const skipWhitespace = () => {
@@ -75,7 +75,9 @@ function hasDuplicateJsonObjectKey(text, targetKey) {
     }
   };
   const scanObject = () => {
+    const objectStart = index;
     const keys = new Set();
+    let duplicateKey = false;
     index += 1;
     skipWhitespace();
     if (text[index] === "}") {
@@ -87,14 +89,14 @@ function hasDuplicateJsonObjectKey(text, targetKey) {
       const key = skipString();
       skipWhitespace();
       index += 1;
-      const duplicate = keys.has(key) && key === targetKey;
+      duplicateKey ||= keys.has(key);
       keys.add(key);
-      scanValue();
-      if (duplicate) return true;
+      const nestedDuplicate = scanValue();
+      duplicateKey ||= nestedDuplicate;
       skipWhitespace();
       if (text[index] === "}") {
         index += 1;
-        return false;
+        return duplicateKey && text.slice(objectStart, index).includes(fixtureName);
       }
       index += 1;
     }
@@ -139,7 +141,7 @@ function fixtureReferenceViolations({ fixtureName, fixtureBytes, files }) {
       }
       continue;
     }
-    if (hasDuplicateJsonObjectKey(text, fixturePath)) {
+    if (hasDuplicateJsonObjectKey(text, fixtureName)) {
       violations.push(`${path}: fixture key occurs more than once`);
     }
 
@@ -215,6 +217,22 @@ test("fixture reference checks reject duplicate compatibility JSON keys", () => 
   });
 
   assert.deepEqual(violations, ["spec/compatibility/duplicate.json: fixture key occurs more than once"]);
+});
+
+test("fixture reference checks reject overwritten fixture names in duplicate JSON keys", () => {
+  const fixtureName = ["INSECURE", "TEST", "ONLY", "RSA", "A.der.hex"].join("_");
+  const fixtureBytes = Buffer.from("deadbeef\n");
+  const document = `{"value":"${fixtureName}","value":"ok"}`;
+  const violations = fixtureReferenceViolations({
+    fixtureName,
+    fixtureBytes,
+    files: [{ path: "spec/compatibility/overwritten.json", contents: Buffer.from(document) }],
+  });
+
+  assert.deepEqual(
+    violations,
+    ["spec/compatibility/overwritten.json: fixture key occurs more than once"],
+  );
 });
 
 test("the copied Firebase CLI widget retains its MIT attribution", () => {

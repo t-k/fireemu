@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 from broad_contract import digest
@@ -14,6 +15,14 @@ from second_mapping import comparable, validate_rows, validate_trace
 def observed_value(row, bindings):
     value = comparable(row, bindings)
     http = row["observation"]["http"]
+    # Scope equivalence to JSON and its conventional UTF-8 spelling only.
+    # Unknown parameters and other media types keep their full header value.
+    if re.fullmatch(
+        r'[ \t]*application/json[ \t]*(?:;[ \t]*charset[ \t]*=[ \t]*(?:utf-8|"utf-8")[ \t]*)?',
+        http["contentType"],
+        flags=re.IGNORECASE | re.ASCII,
+    ):
+        value["observation"]["wire"]["contentType"] = "application/json"
     if http["bodyKind"] != "json":
         value["observation"]["rawBody"] = {
             k: http[k] for k in ("bodySha256", "receivedBytes")
@@ -71,7 +80,7 @@ def compare(production, local):
                 }
             )
     return {
-        "kind": "second45-production-local-comparison-v1",
+        "kind": "second45-production-local-comparison-v2",
         "comparisonContractDigest": digest(binding()),
         "inputDigests": [digest(r) for r in (production, local)],
         "recordingComplete": complete,

@@ -42,10 +42,11 @@ def manifest():
 
 def binding():
     return {
-        "kind": "second45-production-local-comparison-v1",
+        "kind": "second45-production-local-comparison-v2",
         "manifestDigest": digest(manifest()),
         "localAdmissionDigest": digest(local_manifest()),
-        "normalization": "second45-scoped-values-original-version-v1",
+        "normalization": "second45-scoped-values-original-version-json-media-v2",
+        "contentTypeEquivalence": "application/json with optional single UTF-8 charset; ASCII case, SP/HTAB and quoted charset; all other values exact",
         "independentRecipes": "second45-local-admission-v1",
         "receipt": "bounded-http-v1",
     }

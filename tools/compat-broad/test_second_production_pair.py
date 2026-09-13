@@ -202,3 +202,110 @@ def test_successful_remote_delete_is_complete_but_different(
         FS_IDS[1] + "/diagnostic",
         FS_IDS[1] + "/after",
     ]
+
+
+def test_json_content_type_equivalence_through_production_compare(
+    production_inputs, tmp_path
+):
+    from second_mapped import execute_45
+    from second_mapping import comparable
+    from second_production import Production45Adapter
+    from second_production_contract import manifest as production_manifest
+    from second_production_pair import compare
+
+    permission, backend = production_inputs
+    adapter = Production45Adapter(
+        production_manifest(), permission, permission["nonce"], tmp_path / "headers"
+    )
+    remote = execute_45(adapter, adapter.output, {"executionCommit": "c" * 40})
+    local = current_local(backend.source)
+    original = copy.deepcopy(local)
+    for header in [
+        "application/json; charset=utf-8",
+        "Application/JSON",
+        ' APPLICATION/JSON ; CHARSET = "UTF-8" \t',
+        "application/json ; charset=UtF-8",
+    ]:
+        altered = copy.deepcopy(remote)
+        row = altered["rows"][0]
+        row["observation"]["http"]["contentType"] = header
+        row["observation"]["mediaType"] = header.split(";", 1)[0].strip().lower()
+        next(t for t in altered["trace"] if t["phase"] == "diagnostic")[
+            "observation"
+        ] = copy.deepcopy(row["observation"])
+        snapshot = copy.deepcopy(altered)
+        result = compare(altered, local)
+        assert result["compatibility"] == "match", (header, result["errors"])
+        assert altered == snapshot and local == original
+        assert row["observation"]["http"]["contentType"] == header
+        assert comparable(row, altered["bindings"]) != comparable(
+            local["rows"][0], local["bindings"]
+        )
+
+
+def test_material_response_differences_remain_through_production_compare(
+    production_inputs, tmp_path
+):
+    from second_mapped import execute_45
+    from second_production import Production45Adapter
+    from second_production_contract import manifest as production_manifest
+    from second_production_pair import compare
+
+    permission, backend = production_inputs
+    adapter = Production45Adapter(
+        production_manifest(), permission, permission["nonce"], tmp_path / "differences"
+    )
+    remote = execute_45(adapter, adapter.output, {"executionCommit": "c" * 40})
+    local = current_local(backend.source)
+    cases = [
+        ("body", {"error": {"code": 401}}),
+        ("body", {"error": {"code": "400"}}),
+        ("body", {"error": {}}),
+        ("body", {"error": {"code": 400, "extra": None}}),
+    ]
+    cases += [
+        ("header", v)
+        for v in [
+            "text/plain",
+            "",
+            "application/json;",
+            "application/json; charset=iso-8859-1",
+            "application/json; profile=one",
+        ]
+    ]
+    for kind, value in cases:
+        altered = copy.deepcopy(remote)
+        row = altered["rows"][0]
+        if kind == "body":
+            row["observation"]["body"] = value
+        else:
+            row["observation"]["http"]["contentType"] = value
+            row["observation"]["mediaType"] = value.split(";", 1)[0].strip().lower()
+        next(t for t in altered["trace"] if t["phase"] == "diagnostic")[
+            "observation"
+        ] = copy.deepcopy(row["observation"])
+        result = compare(altered, local)
+        assert result["compatibility"] == "mismatch", (kind, value, result)
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ("text/plain; charset=utf-8", "text/plain; charset=iso-8859-1"),
+        ("application/json; profile=one", "application/json; profile=two"),
+        ("application/json; charset=utf-8; charset=utf-8", "application/json"),
+        ("application/json\r\n", "application/json"),
+        ("", "not-a-media-type"),
+    ],
+)
+def test_other_parameters_and_invalid_headers_are_not_erased(left, right):
+    from second_production_pair import observed_value
+
+    source = receipt("mapped")
+    a, b = [copy.deepcopy(source["rows"][0]) for _ in range(2)]
+    for row, header in ((a, left), (b, right)):
+        row["observation"]["http"]["contentType"] = header
+        row["observation"]["mediaType"] = header.split(";", 1)[0].strip().lower()
+    assert observed_value(a, source["bindings"]) != observed_value(
+        b, source["bindings"]
+    )

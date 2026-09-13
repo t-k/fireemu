@@ -4504,7 +4504,7 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
                 },
                 "where" => pb::Value {
                     value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
-                        name: "eq".to_owned(),
+                        name: "equal".to_owned(),
                         args: vec![
                             pb::Value {
                                 value_type: Some(pb::value::ValueType::FieldReferenceValue(
@@ -4548,23 +4548,16 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
     handle.abort();
     // Enterprise: supported reads execute; other shapes retain explicit refusals.
     let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
-    let valid = client
+    let mut valid = client
         .execute_pipeline(request(vec![
             stage("collection", 1),
             stage("where", 1),
             stage("limit", 1),
         ]))
         .await
-        .unwrap_err();
-    assert_eq!(valid.code(), tonic::Code::Unimplemented);
-    assert_eq!(
-        valid.metadata().get("fireemu-pipeline").unwrap(),
-        "collection(1) | where(1) | limit(1)"
-    );
-    assert_eq!(
-        valid.metadata().get("fireemu-code").unwrap(),
-        "FS_PIPE_UNSUPPORTED_STAGE"
-    );
+        .unwrap()
+        .into_inner();
+    assert_eq!(valid.message().await.unwrap().unwrap().results.len(), 0);
     let unknown = client
         .execute_pipeline(request(vec![stage("collection", 1), stage("explode", 1)]))
         .await
@@ -4701,6 +4694,476 @@ async fn drain_pipeline(
     }
     assert_eq!(received, messages);
     documents
+}
+
+fn pipeline_stage(name: &str, value: pb::Value) -> pb::pipeline::Stage {
+    pb::pipeline::Stage {
+        name: name.to_owned(),
+        args: vec![value],
+        ..Default::default()
+    }
+}
+
+fn pipeline_request(stages: Vec<pb::pipeline::Stage>) -> pb::ExecutePipelineRequest {
+    pb::ExecutePipelineRequest {
+        database: DB.to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline { stages }),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    }
+}
+
+fn pipeline_field(field: &str) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::FieldReferenceValue(field.to_owned())),
+    }
+}
+
+fn pipeline_function(name: &str, args: Vec<pb::Value>) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+            name: name.to_owned(),
+            args,
+            ..Default::default()
+        })),
+    }
+}
+
+fn pipeline_equal(field: &str, value: pb::Value) -> pb::pipeline::Stage {
+    pipeline_stage(
+        "where",
+        pipeline_function("equal", vec![pipeline_field(field), value]),
+    )
+}
+
+fn pipeline_select(field: &str) -> pb::pipeline::Stage {
+    pipeline_stage(
+        "select",
+        pb::Value {
+            value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                fields: [("label".to_owned(), pipeline_field(field))]
+                    .into_iter()
+                    .collect(),
+            })),
+        },
+    )
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing_fields() {
+    use pb::value::ValueType as V;
+    let value = |v| pb::Value {
+        value_type: Some(v),
+    };
+    let cases = [
+        (
+            "bool",
+            V::BooleanValue(true),
+            V::BooleanValue(true),
+            V::BooleanValue(false),
+        ),
+        (
+            "integer",
+            V::IntegerValue(7),
+            V::IntegerValue(7),
+            V::IntegerValue(8),
+        ),
+        (
+            "integer-double",
+            V::IntegerValue(7),
+            V::DoubleValue(7.0),
+            V::DoubleValue(8.0),
+        ),
+        (
+            "double-integer",
+            V::DoubleValue(7.0),
+            V::IntegerValue(7),
+            V::DoubleValue(8.0),
+        ),
+        (
+            "timestamp",
+            V::TimestampValue(prost_types::Timestamp {
+                seconds: 123,
+                nanos: 456_000,
+            }),
+            V::TimestampValue(prost_types::Timestamp {
+                seconds: 123,
+                nanos: 456_000,
+            }),
+            V::TimestampValue(prost_types::Timestamp {
+                seconds: 123,
+                nanos: 457_000,
+            }),
+        ),
+        (
+            "string",
+            V::StringValue("keep".into()),
+            V::StringValue("keep".into()),
+            V::StringValue("drop".into()),
+        ),
+        (
+            "bytes",
+            V::BytesValue(vec![0, 255]),
+            V::BytesValue(vec![0, 255]),
+            V::BytesValue(vec![0, 254]),
+        ),
+        (
+            "reference",
+            V::ReferenceValue(format!("{DOCS}/refs/one")),
+            V::ReferenceValue(format!("{DOCS}/refs/one")),
+            V::ReferenceValue(format!("{DOCS}/refs/two")),
+        ),
+        (
+            "geo",
+            V::GeoPointValue(fireemu_proto_firestore::google::r#type::LatLng {
+                latitude: 1.0,
+                longitude: 2.0,
+            }),
+            V::GeoPointValue(fireemu_proto_firestore::google::r#type::LatLng {
+                latitude: 1.0,
+                longitude: 2.0,
+            }),
+            V::GeoPointValue(fireemu_proto_firestore::google::r#type::LatLng {
+                latitude: 1.0,
+                longitude: 3.0,
+            }),
+        ),
+        (
+            "infinity",
+            V::DoubleValue(f64::INFINITY),
+            V::DoubleValue(f64::INFINITY),
+            V::DoubleValue(f64::NEG_INFINITY),
+        ),
+        (
+            "null",
+            V::NullValue(0),
+            V::NullValue(0),
+            V::BooleanValue(false),
+        ),
+        (
+            "nan",
+            V::DoubleValue(f64::NAN),
+            V::DoubleValue(f64::NAN),
+            V::DoubleValue(0.0),
+        ),
+    ];
+    let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    for (label, stored, literal, nonmatch) in cases {
+        let collection = format!("scalar-{label}");
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write(
+                        &format!("{collection}/a"),
+                        &[("score", value(nonmatch)), ("name", s("drop"))],
+                    ),
+                    update_write(
+                        &format!("{collection}/b"),
+                        &[("score", value(stored)), ("name", s("keep"))],
+                    ),
+                    update_write(&format!("{collection}/c"), &[("name", s("missing"))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // No limit or projection: every result must be the matching document, including null/NaN.
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(pipeline_request(vec![
+                    pipeline_stage("collection", s(&collection)),
+                    pipeline_equal("score", value(literal)),
+                ]))
+                .await
+                .unwrap()
+                .into_inner(),
+            1,
+        )
+        .await;
+        assert_eq!(docs.len(), 1, "{label}");
+        assert_eq!(docs[0].fields.get("name"), Some(&s("keep")), "{label}");
+        assert_eq!(docs[0].fields.len(), 2, "{label}");
+    }
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_documents() {
+    use pb::value::ValueType as V;
+    let collection = || pipeline_stage("collection", s("where-refusals"));
+    let predicate = || pipeline_equal("score", i(7));
+    let unsupported = tonic::Code::Unimplemented;
+    let invalid = tonic::Code::InvalidArgument;
+    let expression = |name: &str, args| pipeline_stage("where", pipeline_function(name, args));
+    let mut options = pipeline_function("equal", vec![pipeline_field("score"), i(7)]);
+    let Some(V::FunctionValue(function)) = options.value_type.as_mut() else {
+        unreachable!()
+    };
+    function.options.insert("unexpected".into(), i(1));
+    let cases = [
+        (
+            "duplicate where",
+            vec![predicate(), predicate()],
+            unsupported,
+        ),
+        (
+            "where after select",
+            vec![pipeline_select("score"), predicate()],
+            unsupported,
+        ),
+        (
+            "where after limit",
+            vec![pipeline_stage("limit", i(1)), predicate()],
+            unsupported,
+        ),
+        (
+            "other function",
+            vec![expression("less_than", vec![pipeline_field("score"), i(7)])],
+            unsupported,
+        ),
+        (
+            "eq alias",
+            vec![expression("eq", vec![pipeline_field("score"), i(7)])],
+            unsupported,
+        ),
+        (
+            "reversed operands",
+            vec![expression("equal", vec![i(7), pipeline_field("score")])],
+            unsupported,
+        ),
+        (
+            "expression left",
+            vec![expression(
+                "equal",
+                vec![
+                    pipeline_function("abs", vec![pipeline_field("score")]),
+                    i(7),
+                ],
+            )],
+            unsupported,
+        ),
+        (
+            "nested field",
+            vec![pipeline_equal("profile.score", i(7))],
+            unsupported,
+        ),
+        (
+            "document name",
+            vec![pipeline_equal("__name__", s("x"))],
+            unsupported,
+        ),
+        (
+            "array literal",
+            vec![pipeline_equal(
+                "score",
+                pb::Value {
+                    value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![i(7)] })),
+                },
+            )],
+            unsupported,
+        ),
+        (
+            "map literal",
+            vec![pipeline_equal(
+                "score",
+                pb::Value {
+                    value_type: Some(V::MapValue(pb::MapValue {
+                        fields: [("n".into(), i(7))].into_iter().collect(),
+                    })),
+                },
+            )],
+            unsupported,
+        ),
+        (
+            "expression right",
+            vec![pipeline_equal(
+                "score",
+                pipeline_function("abs", vec![i(7)]),
+            )],
+            unsupported,
+        ),
+        (
+            "field right",
+            vec![pipeline_equal("score", pipeline_field("other"))],
+            unsupported,
+        ),
+        ("zero arity", vec![expression("equal", vec![])], invalid),
+        (
+            "one argument",
+            vec![expression("equal", vec![pipeline_field("score")])],
+            invalid,
+        ),
+        (
+            "three arguments",
+            vec![expression(
+                "equal",
+                vec![pipeline_field("score"), i(7), i(8)],
+            )],
+            invalid,
+        ),
+        (
+            "function options",
+            vec![pipeline_stage("where", options)],
+            invalid,
+        ),
+        ("empty field", vec![pipeline_equal("", i(7))], invalid),
+        ("invalid field", vec![pipeline_equal("a..b", i(7))], invalid),
+        (
+            "missing literal",
+            vec![pipeline_equal("score", pb::Value::default())],
+            invalid,
+        ),
+        (
+            "missing left operand",
+            vec![expression("equal", vec![pb::Value::default(), i(7)])],
+            invalid,
+        ),
+    ];
+    let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write(
+                "where-refusals/a",
+                &[("score", i(7)), ("name", s("original"))],
+            )],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let get = pb::GetDocumentRequest {
+        name: format!("{DOCS}/where-refusals/a"),
+        ..Default::default()
+    };
+    let before = client.get_document(get.clone()).await.unwrap().into_inner();
+    for (label, tail, code) in cases {
+        let stages = std::iter::once(collection())
+            .chain(tail)
+            .collect::<Vec<_>>();
+        let canonical = stages
+            .iter()
+            .map(|stage| format!("{}({})", stage.name, stage.args.len()))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let err = client
+            .execute_pipeline(pipeline_request(stages))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), code, "{label}: {err}");
+        assert_eq!(
+            err.metadata()
+                .get("fireemu-code")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            if code == unsupported {
+                "FS_PIPE_UNSUPPORTED_STAGE"
+            } else {
+                "FS_PIPE_INVALID"
+            },
+            "{label}"
+        );
+        assert_eq!(
+            err.metadata()
+                .get("fireemu-pipeline")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            canonical,
+            "{label}"
+        );
+        assert_eq!(
+            client.get_document(get.clone()).await.unwrap().into_inner(),
+            before,
+            "{label}"
+        );
+    }
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn execute_pipeline_where_equal_pushes_filter_before_limit() {
+    let (mut client, _clock, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: [
+                update_write("where-equal/a", &[("kind", s("drop")), ("name", s("drop"))]),
+                update_write("where-equal/b", &[("kind", s("keep")), ("name", s("keep"))]),
+                update_write("where-equal/c", &[("kind", s("keep")), ("name", s("keep"))]),
+                update_write("where-equal/d", &[("name", s("missing"))]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let function = pb::Value {
+        value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+            name: "equal".to_owned(),
+            args: vec![
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::FieldReferenceValue("kind".to_owned())),
+                },
+                s("keep"),
+            ],
+            options: std::collections::HashMap::default(),
+        })),
+    };
+    let request = pb::ExecutePipelineRequest {
+        database: DB.to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline {
+                        stages: vec![
+                            pb::pipeline::Stage {
+                                name: "collection".to_owned(),
+                                args: vec![s("/where-equal")],
+                                ..Default::default()
+                            },
+                            pb::pipeline::Stage {
+                                name: "where".to_owned(),
+                                args: vec![function],
+                                ..Default::default()
+                            },
+                            pipeline_select("name"),
+                            pb::pipeline::Stage {
+                                name: "limit".to_owned(),
+                                args: vec![i(1)],
+                                ..Default::default()
+                            },
+                        ],
+                    }),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    let documents = drain_pipeline(
+        client.execute_pipeline(request).await.unwrap().into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(documents.len(), 1);
+    assert_eq!(
+        documents[0].fields,
+        [("label".to_owned(), s("keep"))].into_iter().collect()
+    );
+    handle.abort();
 }
 
 #[tokio::test]

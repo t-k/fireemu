@@ -942,6 +942,12 @@ fn pipeline_status(mut error: Status, canonical: &str) -> Status {
         if let Ok(value) = "FS_PIPE_UNSUPPORTED_STAGE".parse() {
             error.metadata_mut().insert("fireemu-code", value);
         }
+    } else if error.code() == tonic::Code::InvalidArgument
+        && !error.metadata().contains_key("fireemu-code")
+    {
+        if let Ok(value) = "FS_PIPE_INVALID".parse() {
+            error.metadata_mut().insert("fireemu-code", value);
+        }
     }
     error
 }

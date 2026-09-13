@@ -1,7 +1,7 @@
 //! `ExecutePipeline` decoding for the strict validator (`FS-PIPE-RPC-1`): the request's
 //! database, consistency selector and options are checked, the wire stages become
 //! [`StageSpec`]s with typed arguments that the core canonicalizes. The finite latest-read
-//! collection/select/limit subset executes locally; other semantics are refused.
+//! collection/where(equal)/select/limit subset executes locally; other semantics are refused.
 
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
@@ -216,13 +216,14 @@ pub fn compile_supported(
         )
     };
     let mut projection: Option<Vec<(String, FieldPath)>> = None;
+    let mut where_filter = None;
     let mut limit = None;
     let mut last_rank = 0u8;
     let mut seen_select = false;
     let mut seen_limit = false;
     for stage in pipeline.stages.iter().skip(1) {
         let rank = match stage.name.as_str() {
-            "select" => 1,
+            "where" | "select" => 1,
             "limit" => 2,
             _ => 3,
         };
@@ -233,6 +234,12 @@ pub fn compile_supported(
         }
         last_rank = rank;
         match stage.name.as_str() {
+            "where" => {
+                if where_filter.is_some() || seen_select || seen_limit {
+                    return Err(Status::unimplemented("duplicate or misplaced where stage"));
+                }
+                where_filter = Some(decode_equal_filter(stage)?);
+            }
             "limit" => {
                 if seen_limit {
                     return Err(Status::unimplemented(
@@ -316,7 +323,7 @@ pub fn compile_supported(
             collection_id: collection_id.to_string(),
             all_descendants: false,
         }],
-        r#where: None,
+        r#where: where_filter,
         order_by: Vec::new(),
         start_at: None,
         end_at: None,
@@ -336,6 +343,94 @@ pub fn compile_supported(
         },
         projection,
         limit,
+    })
+}
+
+fn decode_equal_filter(
+    stage: &pb::pipeline::Stage,
+) -> Result<pb::structured_query::Filter, Status> {
+    let Some(value) = stage.args.first() else {
+        return Err(Status::invalid_argument(
+            "where requires an equal expression",
+        ));
+    };
+    let Some(pb::value::ValueType::FunctionValue(function)) = value.value_type.as_ref() else {
+        return Err(Status::invalid_argument(
+            "where requires an equal expression",
+        ));
+    };
+    if function.name != "equal" {
+        return Err(Status::unimplemented(
+            "where expression is unsupported locally",
+        ));
+    }
+    if function.args.len() != 2 || !function.options.is_empty() {
+        return Err(Status::invalid_argument(
+            "equal requires exactly two arguments and no options",
+        ));
+    }
+    let Some(pb::value::ValueType::FieldReferenceValue(field)) =
+        function.args[0].value_type.as_ref()
+    else {
+        return Err(if function.args[0].value_type.is_none() {
+            Status::invalid_argument("equal first argument is missing")
+        } else {
+            Status::unimplemented("equal first argument is unsupported locally")
+        });
+    };
+    let parsed = FieldPath::parse(field).map_err(|e| Status::invalid_argument(e.to_string()))?;
+    if parsed.segments().len() != 1 || parsed.is_document_name() {
+        return Err(Status::unimplemented(
+            "nested and document-name where fields are unsupported locally",
+        ));
+    }
+    let Some(literal) = function.args[1].value_type.as_ref() else {
+        return Err(Status::invalid_argument("where literal is missing"));
+    };
+    let field_ref = pb::structured_query::FieldReference {
+        field_path: field.clone(),
+    };
+    let filter_type = match literal {
+        pb::value::ValueType::NullValue(_) => {
+            pb::structured_query::filter::FilterType::UnaryFilter(
+                pb::structured_query::UnaryFilter {
+                    op: pb::structured_query::unary_filter::Operator::IsNull as i32,
+                    operand_type: Some(pb::structured_query::unary_filter::OperandType::Field(
+                        field_ref,
+                    )),
+                },
+            )
+        }
+        pb::value::ValueType::DoubleValue(value) if value.is_nan() => {
+            pb::structured_query::filter::FilterType::UnaryFilter(
+                pb::structured_query::UnaryFilter {
+                    op: pb::structured_query::unary_filter::Operator::IsNan as i32,
+                    operand_type: Some(pb::structured_query::unary_filter::OperandType::Field(
+                        field_ref,
+                    )),
+                },
+            )
+        }
+        pb::value::ValueType::ArrayValue(_)
+        | pb::value::ValueType::MapValue(_)
+        | pb::value::ValueType::FieldReferenceValue(_)
+        | pb::value::ValueType::VariableReferenceValue(_)
+        | pb::value::ValueType::FunctionValue(_)
+        | pb::value::ValueType::PipelineValue(_) => {
+            return Err(Status::unimplemented(
+                "where literal is unsupported locally",
+            ));
+        }
+        _ => pb::structured_query::filter::FilterType::FieldFilter(
+            pb::structured_query::FieldFilter {
+                field: Some(field_ref),
+                op: pb::structured_query::field_filter::Operator::Equal as i32,
+                value: Some(function.args[1].clone()),
+            },
+        ),
+    };
+    Ok(pb::structured_query::Filter {
+        filter_type: Some(filter_type),
     })
 }
 
@@ -380,4 +475,98 @@ fn with_code(mut status: Status, code: &str) -> Status {
         status.metadata_mut().insert("fireemu-code", v);
     }
     status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(value: pb::Value) -> pb::ExecutePipelineRequest {
+        let function = pb::Value {
+            value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+                name: "equal".to_owned(),
+                args: vec![
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::FieldReferenceValue(
+                            "score".to_owned(),
+                        )),
+                    },
+                    value,
+                ],
+                ..Default::default()
+            })),
+        };
+        pb::ExecutePipelineRequest {
+            database: "projects/p/databases/(default)".to_owned(),
+            pipeline_type: Some(
+                pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                    pb::StructuredPipeline {
+                        pipeline: Some(pb::Pipeline {
+                            stages: vec![
+                                pb::pipeline::Stage {
+                                    name: "collection".to_owned(),
+                                    args: vec![pb::Value {
+                                        value_type: Some(pb::value::ValueType::StringValue(
+                                            "/items".to_owned(),
+                                        )),
+                                    }],
+                                    ..Default::default()
+                                },
+                                pb::pipeline::Stage {
+                                    name: "where".to_owned(),
+                                    args: vec![function],
+                                    ..Default::default()
+                                },
+                            ],
+                        }),
+                        ..Default::default()
+                    },
+                ),
+            ),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn compile_where_equal_uses_field_and_unary_wire_filters() {
+        let parent =
+            crate::decode::parse_parent("projects/p/databases/(default)/documents").unwrap();
+        let ordinary = compile_supported(
+            &request(pb::Value {
+                value_type: Some(pb::value::ValueType::StringValue("x".to_owned())),
+            }),
+            &parent,
+        )
+        .unwrap();
+        assert!(matches!(ordinary.query.query_type,
+            Some(pb::run_query_request::QueryType::StructuredQuery(pb::StructuredQuery {
+                r#where: Some(pb::structured_query::Filter { filter_type: Some(
+                    pb::structured_query::filter::FilterType::FieldFilter(pb::structured_query::FieldFilter { op, field: Some(field), value: Some(value) })
+                )}), ..
+            })) if op == pb::structured_query::field_filter::Operator::Equal as i32
+                && field.field_path == "score"
+                && value.value_type == Some(pb::value::ValueType::StringValue("x".to_owned()))));
+        for (value, op) in [
+            (
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::NullValue(0)),
+                },
+                pb::structured_query::unary_filter::Operator::IsNull,
+            ),
+            (
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::DoubleValue(f64::NAN)),
+                },
+                pb::structured_query::unary_filter::Operator::IsNan,
+            ),
+        ] {
+            let compiled = compile_supported(&request(value), &parent).unwrap();
+            assert!(matches!(compiled.query.query_type,
+                Some(pb::run_query_request::QueryType::StructuredQuery(pb::StructuredQuery {
+                    r#where: Some(pb::structured_query::Filter { filter_type: Some(
+                        pb::structured_query::filter::FilterType::UnaryFilter(pb::structured_query::UnaryFilter { op: actual, operand_type: Some(pb::structured_query::unary_filter::OperandType::Field(field)) })
+                    )}), ..
+                })) if actual == op as i32 && field.field_path == "score"));
+        }
+    }
 }

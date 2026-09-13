@@ -173,6 +173,11 @@ def approve(manifest, approval, nonce, observer_sha, now):
         "tariffsConfirmedBelowPlanningCeilings": True,
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
     }
+    validate_owner_baseline(approval, required, now)
+
+
+def validate_owner_baseline(approval, required, now):
+    """Validate a binding supplied by a closed admission, never CLI policy."""
     if any(
         type(approval.get(k)) is not type(v) or approval.get(k) != v
         for k, v in required.items()

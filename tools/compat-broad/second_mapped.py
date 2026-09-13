@@ -46,6 +46,9 @@ class LocalAdapter(Adapter):
         super().__init__(
             candidate(), nonce, output, local_origins=origins(local_origins)
         )
+        self.initialize_second(nonce, mode)
+
+    def initialize_second(self, nonce, mode):
         self.budget = SecondBudget()
         self.phase = "setup"
         self.expected = None
@@ -188,30 +191,7 @@ class LocalAdapter(Adapter):
                 raise ValueError("request byte bound")
             token = self.access() if privileged else None
             self.reserve(service)
-            assert self.local is not None
-            origin = self.local[service]
-            payload = {
-                "url": origin + (path if service == "firestore" else "/" + path),
-                "origin": origin,
-                "method": method,
-                "body": body,
-                "headers": request_headers(token, local=True, form=False),
-                "privateDirectory": str(self.output / "wire" / str(entry["ordinal"])),
-            }
-            process = subprocess.run(
-                ["node", str(Path(__file__).with_name("second_wire.mjs"))],
-                input=json.dumps(payload),
-                text=True,
-                capture_output=True,
-                timeout=12,
-                check=True,
-                env={
-                    k: os.environ[k]
-                    for k in ("PATH", "LANG", "SYSTEMROOT")
-                    if k in os.environ
-                },
-            )
-            received = json.loads(process.stdout)
+            received = self.collect(service, path, body, method, token, entry)
             http = received["http"]
             status, result = http["status"], received.get("body")
             self.last_observation = {
@@ -226,7 +206,13 @@ class LocalAdapter(Adapter):
                 raise ValueError("local owner credential rejected")
             if not http["complete"]:
                 raise ValueError("HTTP " + str(http["failure"]))
-            if http["bodyKind"] != "json" or not isinstance(result, dict):
+            response_only = self.permits_absent_after() and (
+                self.phase == "diagnostic"
+                or (service == "firestore" and method == "GET" and status == 404)
+            )
+            if not response_only and (
+                http["bodyKind"] != "json" or not isinstance(result, dict)
+            ):
                 raise ValueError("received non-JSON or unexpected JSON shape")
             if status >= 500 or status == 429 or (privileged and status in (401, 403)):
                 raise ValueError("unexpected response")
@@ -250,6 +236,42 @@ class LocalAdapter(Adapter):
             raise
         finally:
             self.persist_trace()
+
+    def collect(self, service, path, body, method, token, entry):
+        assert self.local is not None
+        origin = self.local[service]
+        payload = {
+            "url": origin + (path if service == "firestore" else "/" + path),
+            "origin": origin,
+            "method": method,
+            "body": body,
+            "headers": request_headers(token, local=True, form=False),
+            "privateDirectory": str(self.output / "wire" / str(entry["ordinal"])),
+        }
+        process = subprocess.run(
+            ["node", str(Path(__file__).with_name("second_wire.mjs"))],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            timeout=12,
+            check=True,
+            env={
+                k: os.environ[k]
+                for k in ("PATH", "LANG", "SYSTEMROOT")
+                if k in os.environ
+            },
+        )
+        received = json.loads(process.stdout)
+        return received
+
+    def result_fields(self):
+        return {}
+
+    def finish(self):
+        return
+
+    def permits_absent_after(self):
+        return False
 
     def persist_trace(self):
         save(
@@ -386,6 +408,11 @@ def execute_side(local_origins, output, mode, nonce, runtime_identity):
     if mode not in {"direct", "mapped"}:
         raise ValueError("unknown mode")
     a = LocalAdapter(local_origins, nonce, output, mode)
+    return execute_45(a, output, runtime_identity)
+
+
+def execute_45(a, output, runtime_identity):
+    mode, nonce = a.mode, a.second_nonce
     users, rows, documents = {}, [], {}
     a.users = users
     result = {
@@ -419,6 +446,7 @@ def execute_side(local_origins, output, mode, nonce, runtime_identity):
         result["counts"] = dict(a.budget.counts)
         result["trace"] = copy.deepcopy(a.trace)
         result["unrecovered"] = copy.deepcopy(a.unrecovered)
+        result.update(a.result_fields())
         save(output / "result.json", result)
 
     def snapshot():
@@ -436,6 +464,7 @@ def execute_side(local_origins, output, mode, nonce, runtime_identity):
 
     persist()
     try:
+        a.preflight()
         for role in ("a", "b"):
             email = f"broad-{nonce}-{role}@example.invalid"
             status, body = a.auth_call(
@@ -555,7 +584,12 @@ def execute_side(local_origins, output, mode, nonce, runtime_identity):
                 status, body = a.send(actual)
                 observation = copy.deepcopy(a.last_observation)
                 if step["id"] in ("original", "before", "after"):
-                    if (
+                    absent = (
+                        a.permits_absent_after()
+                        and step["id"] == "after"
+                        and status == 404
+                    )
+                    if not absent and (
                         status != 200
                         or not isinstance(body, dict)
                         or body.get("name") != name
@@ -565,8 +599,9 @@ def execute_side(local_origins, output, mode, nonce, runtime_identity):
                         raise ValueError(
                             "unusable document readback; state indeterminate"
                         )
-                    versions[step["id"]] = body["updateTime"]
-                    reads[step["id"]] = body
+                    if not absent:
+                        versions[step["id"]] = body["updateTime"]
+                    reads[step["id"]] = None if absent else body
                 rows.append(
                     {
                         "id": program["id"] + "/" + step["id"],
@@ -578,6 +613,12 @@ def execute_side(local_origins, output, mode, nonce, runtime_identity):
                     }
                 )
                 persist()
+                if (
+                    a.permits_absent_after()
+                    and step["id"] == "normal"
+                    and status != 200
+                ):
+                    raise ValueError("normal operation did not establish prerequisite")
             diagnostic = next(
                 r for r in rows if r["id"] == program["id"] + "/diagnostic"
             )
@@ -600,6 +641,11 @@ def execute_side(local_origins, output, mode, nonce, runtime_identity):
                 a.recover()
         except Exception as error:
             result["cleanupFailure"] = type(error).__name__
+        try:
+            a.finish()
+        except Exception as error:
+            result["postflightFailure"] = type(error).__name__
+            result["recordingComplete"] = False
         if not result["recordingComplete"] and result["safety"] is not False:
             result["safety"] = None
         result["cleanupComplete"] = (

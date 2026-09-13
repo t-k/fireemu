@@ -51,7 +51,7 @@ def request_headers(token, *, local, form):
     return headers
 
 
-def wire(url, method, body, headers, *, local=False, timeout=12):
+def wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
     parsed = urllib.parse.urlsplit(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     if local:
@@ -76,7 +76,13 @@ def wire(url, method, body, headers, *, local=False, timeout=12):
     if data is not None and len(data.encode()) > 16384:
         raise ValueError("request body bound exceeded")
     payload = json.dumps(
-        {"url": url, "method": method, "body": data, "headers": headers}
+        {
+            "url": url,
+            "method": method,
+            "body": data,
+            "headers": headers,
+            "receipt": receipt,
+        }
     )
     env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "LANG") if k in os.environ}
     try:
@@ -138,6 +144,10 @@ class Adapter:
                 local_origin(value)
             if set(self.local) != {"auth", "firestore"}:
                 raise ValueError("two owned local origins required")
+        self.initialize_state(output, nonce)
+
+    def initialize_state(self, output, nonce):
+        """Initialize inert bookkeeping only; admission belongs to each constructor."""
         self.output = output
         output.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.journal = output / "ownership.jsonl"
@@ -158,6 +168,9 @@ class Adapter:
         self.auth_evidence = []
         self.database_observations = []
         self.unrecovered = []
+
+    def auth_query_key(self):
+        return self.api_key
 
     def record(self, event):
         fd = os.open(self.journal, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
@@ -478,7 +491,7 @@ class Adapter:
                 )
                 self.accounts[email] = None
         if "?" in path:
-            key = self.api_key
+            key = self.auth_query_key()
             path = route + "?" + urllib.parse.urlencode({"key": key})
         role = next(
             (

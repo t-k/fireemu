@@ -71,7 +71,7 @@
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
     "verification/quint/specs/AtomicCommitOutbox.qnt": "0d9f3dfb9a57238d506d2f224de24e49576ad695f8e134f2451041be097c21b2",
-    "verification/quint/src/atomic_commit_outbox.rs": "b2bd441e85a460b5b983a6ad3e4cb76afc676629ac24cc5009014d226bdd3c61",
+    "verification/quint/src/atomic_commit_outbox.rs": "e0aabdb23ec43250d5cfb7a7ba39c8e78efd9571160f37d5400fc388f5165584",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
     "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",

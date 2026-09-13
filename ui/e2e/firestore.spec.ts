@@ -210,7 +210,8 @@ test.describe("Firestore data browser", () => {
     await page.route(savePattern, async (route) => {
       saveStarted();
       await saveGate;
-      await route.continue();
+      const response = await route.fetch();
+      await route.fulfill({ response });
       saveFinished();
     });
     await page.getByTestId("document-save").click();

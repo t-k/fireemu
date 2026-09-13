@@ -96,6 +96,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { cwd: repo },
   );
   const { child } = owned;
+  writeFileSync(
+    STATE_FILE,
+    JSON.stringify({ pid: child.pid, state: "starting", supervisor: owned.supervised }),
+  );
   let banner = "";
   const status: ChildStatus = {};
   child.stdout?.on("data", (d: Buffer) => {
@@ -123,7 +127,16 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       ? ((JSON.parse(config) as { controlToken?: string }).controlToken ?? "")
       : "";
     if (!token) throw new Error(`the served UI page carries no control token\n${banner}`);
-    writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner, token }));
+    writeFileSync(
+      STATE_FILE,
+      JSON.stringify({
+        pid: child.pid,
+        state: "ready",
+        supervisor: owned.supervised,
+        banner,
+        token,
+      }),
+    );
     // Playwright retains the supervisor handle and its private cleanup evidence until teardown.
     return async () => {
       await stopOwnedProcess(owned);

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { retainOwnedProcess, stopOwnedProcess } from "../src/lib/processTarget";
+import { ownedProcessCommand, stopOwnedProcess } from "../src/lib/processTarget";
 
 // Starts a real daemon (release binary when built, debug otherwise) with the smoke
 // functions project and a pinned clock, and retains its child handle for teardown.
@@ -89,8 +89,17 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   ];
   mkdirSync(dirname(STATE_FILE), { recursive: true });
   rmSync(STATE_FILE, { force: true });
-  const child = spawn(bin, args, { cwd: repo, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-  const owned = retainOwnedProcess(child);
+  const processCommand = ownedProcessCommand(
+    bin,
+    args,
+    process.platform,
+    resolve(repo, "verification/quint/bin/process-group"),
+  );
+  const child = spawn(processCommand.command, processCommand.args, {
+    cwd: repo,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   let banner = "";
   const status: ChildStatus = {};
   child.stdout?.on("data", (d: Buffer) => {
@@ -121,11 +130,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner, token }));
     // Playwright retains this closure until global teardown, including the captured process group.
     return async () => {
-      await stopOwnedProcess(owned);
+      await stopOwnedProcess(child);
       rmSync(STATE_FILE, { force: true });
     };
   } catch (error) {
-    await stopOwnedProcess(owned);
+    await stopOwnedProcess(child);
     throw error;
   }
 }

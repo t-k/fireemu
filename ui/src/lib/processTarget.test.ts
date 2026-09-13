@@ -1,30 +1,28 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ownedProcessTarget, retainOwnedProcess, stopOwnedProcess } from "./processTarget";
+import { ownedProcessCommand, stopOwnedProcess } from "./processTarget";
 
-describe("ownedProcessTarget", () => {
-  it("uses the owned child PID on Windows", () => {
-    expect(ownedProcessTarget(47, "win32")).toBe(47);
+describe("ownedProcessCommand", () => {
+  it("runs the command directly on Windows", () => {
+    expect(ownedProcessCommand("fireemu", ["up"], "win32", "process-group")).toEqual({
+      command: "fireemu",
+      args: ["up"],
+    });
   });
 
-  it("uses the owned process group on POSIX", () => {
-    expect(ownedProcessTarget(47, "linux")).toBe(-47);
-    expect(ownedProcessTarget(47, "darwin")).toBe(-47);
+  it("runs the command through the POSIX supervisor", () => {
+    expect(ownedProcessCommand("fireemu", ["up"], "darwin", "process-group")).toEqual({
+      command: "process-group",
+      args: ["fireemu", "up"],
+    });
   });
 });
 
 describe("owned daemon lifecycle", () => {
-  it.each([0, 1, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "rejects invalid PID %s before selecting a process target",
-    (pid) => {
-      expect(() => ownedProcessTarget(pid, "win32")).toThrow("invalid owned PID");
-      expect(() => ownedProcessTarget(pid, "linux")).toThrow("invalid owned PID");
-    },
-  );
-
   it("stops only its retained child and preserves an unrelated process", async () => {
     const args = ["-e", "console.log('ready'); setInterval(() => {}, 1000)"];
     const owned = spawn(process.execPath, args, {
@@ -85,23 +83,27 @@ describe("owned daemon lifecycle", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "stops descendants after the daemon leader exits on SIGINT",
+    "the POSIX supervisor reaps descendants when the daemon leader exits first",
     async () => {
-      const leader = spawn(
+      const supervisor = resolve(process.cwd(), "../verification/quint/bin/process-group");
+      const script = [
+        "const { spawn } = require('node:child_process');",
+        "const descendant = spawn(process.execPath, ['-e', `process.on('SIGINT', () => {}); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)`], { stdio: 'ignore' });",
+        "process.on('SIGINT', () => process.exit(0));",
+        "process.stdout.write(String(descendant.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join(" ");
+      const command = ownedProcessCommand(
         process.execPath,
-        [
-          "-e",
-          [
-            "const { spawn } = require('node:child_process');",
-            "const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-            "process.on('SIGINT', () => process.exit(0));",
-            "process.stdout.write(String(descendant.pid));",
-            "setInterval(() => {}, 1000);",
-          ].join(" "),
-        ],
-        { detached: true, stdio: ["ignore", "pipe", "ignore"] },
+        ["-e", script],
+        process.platform,
+        supervisor,
       );
-      const [descendantOutput] = await once(leader.stdout!, "data");
+      const child = spawn(command.command, command.args, {
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const [descendantOutput] = await once(child.stdout!, "data");
       const descendantPid = Number(descendantOutput.toString());
       if (!Number.isSafeInteger(descendantPid) || descendantPid <= 1) {
         throw new Error(`invalid descendant PID: ${descendantOutput.toString()}`);
@@ -112,62 +114,17 @@ describe("owned daemon lifecycle", () => {
       });
       await once(unrelated, "spawn");
       try {
-        await stopOwnedProcess(leader);
-        expect(leader.exitCode !== null || leader.signalCode !== null).toBe(true);
+        await stopOwnedProcess(child);
+        expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
         expect(() => process.kill(descendantPid, 0)).toThrow();
         expect(unrelated.exitCode).toBeNull();
         expect(unrelated.signalCode).toBeNull();
         expect(unrelated.kill(0)).toBe(true);
       } finally {
-        await stopOwnedProcess(leader);
+        await stopOwnedProcess(child);
         await stopOwnedProcess(unrelated);
       }
     },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "stops a retained process group when the leader exits before cleanup starts",
-    async () => {
-      const leader = spawn(
-        process.execPath,
-        [
-          "-e",
-          [
-            "const { spawn } = require('node:child_process');",
-            "const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-            "process.on('SIGINT', () => process.exit(0));",
-            "process.stdout.write(String(descendant.pid));",
-            "setInterval(() => {}, 1000);",
-          ].join(" "),
-        ],
-        { detached: true, stdio: ["ignore", "pipe", "ignore"] },
-      );
-      const owned = retainOwnedProcess(leader);
-      const [descendantOutput] = await once(leader.stdout!, "data");
-      const descendantPid = Number(descendantOutput.toString());
-      if (!Number.isSafeInteger(descendantPid) || descendantPid <= 1) {
-        throw new Error(`invalid descendant PID: ${descendantOutput.toString()}`);
-      }
-      leader.kill("SIGINT");
-      await once(leader, "exit");
-      const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-        detached: true,
-        stdio: "ignore",
-      });
-      await once(unrelated, "spawn");
-      try {
-        // The retained target must remain authoritative even if the child handle's
-        // mutable PID field is later changed to model PID reuse.
-        Object.defineProperty(leader, "pid", { value: unrelated.pid });
-        await stopOwnedProcess(owned);
-        expect(() => process.kill(descendantPid, 0)).toThrow();
-        expect(unrelated.exitCode).toBeNull();
-        expect(unrelated.signalCode).toBeNull();
-        expect(unrelated.kill(0)).toBe(true);
-      } finally {
-        await stopOwnedProcess(owned);
-        await stopOwnedProcess(unrelated);
-      }
-    },
+    10_000,
   );
 });

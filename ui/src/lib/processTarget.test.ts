@@ -83,4 +83,45 @@ describe("owned daemon lifecycle", () => {
       await stopOwnedProcess(unrelated);
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "stops descendants after the daemon leader exits on SIGINT",
+    async () => {
+      const leader = spawn(
+        process.execPath,
+        [
+          "-e",
+          [
+            "const { spawn } = require('node:child_process');",
+            "const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+            "process.on('SIGINT', () => process.exit(0));",
+            "process.stdout.write(String(descendant.pid));",
+            "setInterval(() => {}, 1000);",
+          ].join(" "),
+        ],
+        { detached: true, stdio: ["ignore", "pipe", "ignore"] },
+      );
+      const [descendantOutput] = await once(leader.stdout!, "data");
+      const descendantPid = Number(descendantOutput.toString());
+      if (!Number.isSafeInteger(descendantPid) || descendantPid <= 1) {
+        throw new Error(`invalid descendant PID: ${descendantOutput.toString()}`);
+      }
+      const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      await once(unrelated, "spawn");
+      try {
+        await stopOwnedProcess(leader);
+        expect(leader.exitCode !== null || leader.signalCode !== null).toBe(true);
+        expect(() => process.kill(descendantPid, 0)).toThrow();
+        expect(unrelated.exitCode).toBeNull();
+        expect(unrelated.signalCode).toBeNull();
+        expect(unrelated.kill(0)).toBe(true);
+      } finally {
+        await stopOwnedProcess(leader);
+        await stopOwnedProcess(unrelated);
+      }
+    },
+  );
 });

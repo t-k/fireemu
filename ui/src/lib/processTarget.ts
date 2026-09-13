@@ -13,42 +13,77 @@ export const stopOwnedProcess = async (child: ChildProcess): Promise<void> => {
   const target = ownedProcessTarget(pid, process.platform);
   const childAlive = () => child.exitCode === null && child.signalCode === null;
   if (!childAlive()) return;
-  const alive = () => {
-    if (process.platform === "win32") return childAlive();
+
+  // Once a POSIX group is observed while its retained leader is alive, keep that
+  // ownership proof until the group disappears. This prevents a later probe from
+  // treating a reused PID/group as the daemon we started.
+  let groupOwned = false;
+  let groupGone = false;
+  const groupAlive = () => {
+    if (process.platform === "win32" || groupGone) return false;
     try {
       process.kill(target, 0);
+      if (childAlive()) groupOwned = true;
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        groupGone = true;
+        return false;
+      }
+      // EPERM still proves that a process/group exists; keep verifying instead of
+      // treating an inaccessible target as safely gone.
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
       throw error;
     }
   };
   const signal = (value: NodeJS.Signals) => {
-    // A reaped leader's PID/group may have been reused. Do not signal it again.
-    if (!childAlive()) return;
     if (process.platform === "win32") {
+      if (!childAlive()) return;
       child.kill(value);
       return;
     }
+    // A reaped leader can leave descendants in the owned group. Signal that group
+    // only while the ownership proof is still valid.
+    if (!groupOwned || !groupAlive()) return;
     try {
       process.kill(target, value);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        groupGone = true;
+        return;
+      }
+      throw error;
     }
   };
-  const wait = async () => {
-    for (let i = 0; i < 40 && (alive() || childAlive()); i += 1) {
+  const waitForLeaderOrGroupExit = async () => {
+    for (
+      let i = 0;
+      i < 40 && childAlive() && (process.platform === "win32" || groupAlive());
+      i += 1
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   };
+  const waitForTermination = async () => {
+    for (
+      let i = 0;
+      i < 40 && (childAlive() || (process.platform !== "win32" && groupAlive()));
+      i += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  };
+
+  // Establish group ownership before SIGINT can reap the leader.
+  if (process.platform !== "win32") groupAlive();
   // Signal the retained child handle first, including failures before detached-group readiness.
   child.kill("SIGINT");
-  await wait();
-  if (alive() && childAlive()) {
+  await waitForLeaderOrGroupExit();
+  if (process.platform === "win32" ? childAlive() : groupAlive()) {
     signal("SIGKILL");
-    await wait();
+    await waitForTermination();
   }
-  if (alive() || childAlive()) {
+  if ((process.platform !== "win32" && groupAlive()) || childAlive()) {
     throw new Error(
       `daemon process target ${target} survived cleanup; ownership must be re-established before further signals`,
     );

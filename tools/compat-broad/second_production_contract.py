@@ -111,9 +111,13 @@ def validate_receipt_environment(result):
     """Recheck successful metadata evidence independently of the runner flags."""
     from batch_contract import database_evidence
 
+    if not isinstance(result, dict):
+        return False
     if result.get("target") == "local":
         return result.get("productionExecuted") is False
     permission = result.get("permission", {})
+    if not isinstance(permission, dict):
+        return False
     if (
         result.get("target") != "production"
         or result.get("productionExecuted") is not True
@@ -129,8 +133,13 @@ def validate_receipt_environment(result):
         )
     except (ValueError, TypeError, KeyError):
         return False
-    if result.get("runtimeIdentity", {}).get("executionCommit") != permission.get(
-        "frozenCommit"
+    identity = result.get("runtimeIdentity")
+    frozen = permission.get("frozenCommit")
+    if (
+        not isinstance(identity, dict)
+        or not isinstance(frozen, str)
+        or re.fullmatch(r"[0-9a-f]{40}", frozen) is None
+        or identity.get("executionCommit") != frozen
     ):
         return False
     if (

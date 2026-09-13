@@ -482,3 +482,29 @@ def test_environment_revalidates_original_permission_binding_not_current_wall_ti
     changed = copy.deepcopy(result)
     changed["productionExecuted"] = False
     assert not validate_receipt_environment(changed)
+
+
+def test_environment_requires_typed_fixed_execution_commit(boundary, tmp_path):
+    from second_production_contract import validate_receipt_environment
+
+    permission, _fixture = boundary
+    adapter = production.Production45Adapter(
+        manifest(), permission, permission["nonce"], tmp_path / "run"
+    )
+    result = execute_45(
+        adapter, adapter.output, {"executionCommit": permission["frozenCommit"]}
+    )
+    assert validate_receipt_environment(result)
+    for identity, frozen in [
+        (None, None),
+        ({}, None),
+        ([], permission["frozenCommit"]),
+        ({"executionCommit": "short"}, "short"),
+        ({"executionCommit": "z" * 40}, "z" * 40),
+    ]:
+        changed = copy.deepcopy(result)
+        changed["runtimeIdentity"] = identity
+        changed["permission"]["frozenCommit"] = frozen
+        changed["permissionDigest"] = digest(changed["permission"])
+        assert not validate_receipt_environment(changed)
+    assert not validate_receipt_environment(dict(result, permission=None))

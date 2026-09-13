@@ -204,7 +204,6 @@ def validate_trace(result):
     from urllib.parse import urlencode
 
     from second_admission import PROJECT, operation
-
     from second_cases import auth_cases, auth_invariants
 
     safe = True

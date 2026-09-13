@@ -55,10 +55,14 @@ def expected_ids():
     return result
 
 
-def validate_rows(result):
+def validate_rows(result, *, observed_outcomes=False):
     if [r["id"] for r in result["rows"]] != expected_ids():
         raise ValueError("missing, duplicate, or reordered rows")
-    if result.get("manifestDigest") != digest(manifest()):
+    if (
+        result.get("admissionDigest")
+        if observed_outcomes
+        else result.get("manifestDigest")
+    ) != digest(manifest()):
         raise ValueError("manifest not bound")
     if result.get("mode") not in {"direct", "mapped"}:
         raise ValueError("unknown mapping mode")
@@ -87,9 +91,10 @@ def validate_rows(result):
             + ["recovery"] * 3
         )
     trace = result.get("trace", [])
-    if [t.get("phase") for t in trace] != phases or [
-        t.get("ordinal") for t in trace
-    ] != list(range(len(phases))):
+    if not observed_outcomes and (
+        [t.get("phase") for t in trace] != phases
+        or [t.get("ordinal") for t in trace] != list(range(len(phases)))
+    ):
         raise ValueError("missing, duplicate, or reordered phase operations")
     for index, row in enumerate(result["rows"]):
         if index < 32:
@@ -204,7 +209,7 @@ def compare_second(direct, mapped):
     }
 
 
-def validate_trace(result):
+def validate_trace(result, *, observed_outcomes=False):
     """Bind independent recipes and version provenance to actual transport entries."""
     from urllib.parse import urlencode
 
@@ -217,22 +222,43 @@ def validate_trace(result):
     users = result["bindings"]
     admin = f"identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:"
 
+    phase = "setup"
+    ordinal = 0
+
     def take(expected):
+        nonlocal ordinal
         entry = next(entries)
+        if (
+            entry.get("ordinal") != ordinal
+            or entry.get("phase") != phase
+            or entry.get("recovery") is not (phase == "recovery")
+        ):
+            raise ValueError("missing, duplicate, or reordered phase operations")
+        ordinal += 1
         require_operation(entry["sent"], expected)
         observation = entry.get("observation")
+        flexible_body = observed_outcomes and (
+            phase == "diagnostic"
+            or (
+                expected["service"] == "firestore"
+                and expected["method"] == "GET"
+                and isinstance(observation, dict)
+                and observation.get("httpStatus") == 404
+                and phase in {"absence", "after", "recovery"}
+            )
+        )
         if (
             entry.get("failure")
             or not isinstance(observation, dict)
             or type(observation.get("httpStatus")) is not int
-            or not isinstance(observation.get("body"), dict)
+            or (not flexible_body and not isinstance(observation.get("body"), dict))
         ):
             raise ValueError("incomplete trace response")
         if (
             not received(
                 {"status": observation["httpStatus"], "http": observation.get("http")}
             )
-            or observation["http"]["bodyKind"] != "json"
+            or (not flexible_body and observation["http"]["bodyKind"] != "json")
             or observation.get("mediaType")
             != observation["http"]["contentType"].split(";", 1)[0].strip().lower()
         ):
@@ -283,6 +309,7 @@ def validate_trace(result):
         ):
             raise ValueError("runtime account binding differs from setup response")
     for index, row in enumerate(result["rows"][:32]):
+        phase = "baseline"
         for role in ("a", "b"):
             state(role)
             response = take(
@@ -299,11 +326,14 @@ def validate_trace(result):
             )
             if response["httpStatus"] != 200:
                 raise ValueError("baseline failed")
+        phase = "before"
         before = {role: state(role) for role in ("a", "b")}
         if index in (26, 27):
             state("b")
         expected = auth_recipe(index, users)
+        phase = "diagnostic"
         observation = take(expected)
+        phase = "after"
         after = {role: state(role) for role in ("a", "b")}
         safe = safe and all(
             auth_invariants(
@@ -322,6 +352,7 @@ def validate_trace(result):
             or not equal(row["after"], after)
         ):
             raise ValueError("row differs from wire/readback trace")
+    phase = "recovery"
     for role in ("a", "b"):
         state(role)
         state(role)
@@ -343,8 +374,10 @@ def validate_trace(result):
     for program in FS_IDS:
         name = result["documents"][program]
         get = operation("firestore", "/v1/" + name, method="GET", privileged=True)
+        phase = "absence"
         if take(get)["httpStatus"] != 404:
             raise ValueError("document absence unconfirmed")
+        phase = "seed"
         seed = {
             "fields": {
                 "n": {"integerValue": "2"},
@@ -373,18 +406,25 @@ def validate_trace(result):
         ]:
             step = row["id"].rsplit("/", 1)[1]
             expected, relation = fs_recipe(program, step, name, versions)
+            phase = step
             observation = take(expected)
             if step in ("original", "before", "after"):
                 body = observation["body"]
-                if (
+                absent = (
+                    observed_outcomes
+                    and step == "after"
+                    and observation["httpStatus"] == 404
+                )
+                if not absent and (
                     observation["httpStatus"] != 200
                     or body.get("name") != name
                     or not isinstance(body.get("fields"), dict)
                     or not isinstance(body.get("updateTime"), str)
                 ):
                     raise ValueError("document state unavailable")
-                versions[step] = body["updateTime"]
-                reads[step] = body
+                if not absent:
+                    versions[step] = body["updateTime"]
+                reads[step] = None if absent else body
             if step == "diagnostic":
                 diagnostic_status = observation["httpStatus"]
             if (
@@ -395,8 +435,18 @@ def validate_trace(result):
                 raise ValueError("original version or observation detached from trace")
         if diagnostic_status is not None and diagnostic_status >= 400:
             safe = safe and equal(reads["before"], reads["after"])
-        body = take(get)["body"]
-        if body.get("name") != name or not isinstance(body.get("updateTime"), str):
+        phase = "recovery"
+        cleanup_read = take(get)
+        if observed_outcomes and cleanup_read["httpStatus"] == 404:
+            if take(get)["httpStatus"] != 404:
+                raise ValueError("document cleanup incomplete")
+            continue
+        body = cleanup_read["body"]
+        if (
+            cleanup_read["httpStatus"] != 200
+            or body.get("name") != name
+            or not isinstance(body.get("updateTime"), str)
+        ):
             raise ValueError("cleanup version unavailable")
         delete = operation(
             "firestore",

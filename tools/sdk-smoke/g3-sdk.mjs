@@ -1,7 +1,7 @@
 // G3 local real client SDK smoke: Auth switching, rules refusal state, and listener teardown.
 // The Node Firebase client uses Firestore's gRPC transport here; this is not a WebChannel test.
 
-import { initializeApp } from "firebase/app";
+import { deleteApp, initializeApp } from "firebase/app";
 import {
   connectAuthEmulator,
   createUserWithEmailAndPassword,
@@ -13,8 +13,11 @@ import {
 import {
   connectFirestoreEmulator,
   deleteDoc,
+  disableNetwork,
   doc,
+  enableNetwork,
   getDoc,
+  getDocFromServer,
   getFirestore,
   onSnapshot,
   setDoc,
@@ -100,6 +103,16 @@ const expectDenied = async (operation) => {
   throw new Error("expected permission-denied");
 };
 const sdk = (promise, label) => bounded(promise, label, 10_000);
+
+const readServerDocument = async (path, idToken) => {
+  const response = await fetch(`http://${firestoreUrl.host}/v1/projects/${project}/databases/(default)/documents/${path}`, {
+    headers: { authorization: `Bearer ${idToken}` },
+    signal: AbortSignal.timeout(5_000),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(`server read failed: ${response.status} ${JSON.stringify(body)}`);
+  return body;
+};
 
 const app = initializeApp({ projectId: project, apiKey: "fake-api-key" });
 const auth = getAuth(app);
@@ -220,6 +233,69 @@ try {
     if (matched === expectedAuthPrefix.length) break;
   }
   if (matched !== expectedAuthPrefix.length) throw new Error(`Auth A/B switch ordering mismatch: ${JSON.stringify(actualAuthStates)}`);
+
+  const reconnectApp = initializeApp({ projectId: project, apiKey: "fake-api-key" }, `g3-reconnect-${suffix}`);
+  const reconnectAuth = getAuth(reconnectApp);
+  const reconnectDb = getFirestore(reconnectApp);
+  connectAuthEmulator(reconnectAuth, authUrl.origin, { disableWarnings: true });
+  connectFirestoreEmulator(reconnectDb, firestoreUrl.hostname, Number(firestoreUrl.port));
+  let reconnectStop = () => {};
+  try {
+    await sdk(signInWithEmailAndPassword(reconnectAuth, emailB, password), "sign in reconnect client");
+    const reconnectDoc = doc(reconnectDb, "g3-profiles", uidB);
+    const reconnectSnapshots = [];
+    const reconnectInitial = new Promise((resolve, reject) => {
+      reconnectStop = onSnapshot(
+        reconnectDoc,
+        { includeMetadataChanges: true },
+        (snapshot) => {
+          reconnectSnapshots.push({ revision: snapshot.data()?.revision ?? null, fromCache: snapshot.metadata.fromCache, hasPendingWrites: snapshot.metadata.hasPendingWrites });
+          if (reconnectSnapshots.length === 1) resolve();
+        },
+        reject,
+      );
+    });
+    await bounded(reconnectInitial, "reconnect listener initial callback");
+    const reconnectToken = await sdk(reconnectAuth.currentUser.getIdToken(), "get reconnect ID token");
+    const serverBefore = await sdk(readServerDocument(`g3-profiles/${uidB}`, reconnectToken), "server state before reconnect refusal");
+    let rejected;
+    try {
+      await sdk(setDoc(doc(reconnectDb, "g3-denied", "state"), { owner: uidB, revision: 1 }), "rejected reconnect write");
+    } catch (error) {
+      rejected = { code: error?.code, message: error?.message };
+    }
+    const serverAfterRejected = await sdk(readServerDocument(`g3-profiles/${uidB}`, reconnectToken), "server state after reconnect refusal");
+    await sdk(disableNetwork(reconnectDb), "disable network after rejected write");
+    await sdk(enableNetwork(reconnectDb), "enable network after rejected write");
+    const accepted = await sdk(setDoc(reconnectDoc, { owner: uidB, revision: 2 }), "accepted write after reconnect").then(() => true).catch((error) => ({ code: error?.code, message: error?.message }));
+    const pending = await sdk(waitForPendingWrites(reconnectDb), "pending writes after reconnect").then(() => true).catch((error) => ({ code: error?.code, message: error?.message }));
+    const serverAfterAccepted = await sdk(readServerDocument(`g3-profiles/${uidB}`, reconnectToken), "server state after reconnect write");
+    reconnectStop();
+
+    const freshApp = initializeApp({ projectId: project, apiKey: "fake-api-key" }, `g3-reconnect-positive-${suffix}`);
+    const freshAuth = getAuth(freshApp);
+    const freshDb = getFirestore(freshApp);
+    connectAuthEmulator(freshAuth, authUrl.origin, { disableWarnings: true });
+    connectFirestoreEmulator(freshDb, firestoreUrl.hostname, Number(firestoreUrl.port));
+    try {
+      await sdk(signInWithEmailAndPassword(freshAuth, emailB, password), "sign in fresh reconnect client");
+      const freshDoc = doc(freshDb, "g3-profiles", uidB);
+      const freshRead = await sdk(getDocFromServer(freshDoc), "fresh client server read");
+      await sdk(setDoc(freshDoc, { owner: uidB, revision: 3 }), "fresh client accepted write");
+      await sdk(waitForPendingWrites(freshDb), "fresh client pending writes");
+      results.reconnectAfterRejectedWrite = {
+        originalClient: { rejected, serverBefore, serverAfterRejected, serverAfterAccepted, accepted, pending, listenerSnapshots: reconnectSnapshots },
+        freshClientPositiveControl: { initialRevision: freshRead.data()?.revision ?? null, acceptedRevision: 3, pendingWritesResolved: true },
+      };
+    } finally {
+      await signOut(freshAuth).catch(() => {});
+      await deleteApp(freshApp).catch(() => {});
+    }
+  } finally {
+    reconnectStop();
+    await signOut(reconnectAuth).catch(() => {});
+    await deleteApp(reconnectApp).catch(() => {});
+  }
 } finally {
   stopListener();
   if (currentUser?.uid === uidA) {

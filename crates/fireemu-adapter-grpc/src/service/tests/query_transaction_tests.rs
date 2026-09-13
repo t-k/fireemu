@@ -309,7 +309,7 @@ async fn execute_pipeline_snapshot_remains_stable_across_page_boundary() {
         == Some(&pb::Value {
             value_type: Some(pb::value::ValueType::IntegerValue(64)),
         })));
-    assert!(!names.iter().any(|fields| fields.is_empty()));
+    assert!(!names.iter().any(std::collections::HashMap::is_empty));
 }
 
 fn pipeline_request() -> pb::ExecutePipelineRequest {
@@ -334,6 +334,39 @@ fn pipeline_request() -> pb::ExecutePipelineRequest {
             ),
         ),
         ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn execute_pipeline_records_deterministic_small_and_large_page_stats() {
+    for count in [17, 257] {
+        let backend = test_backend();
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        let service = GatewayService::local(gateway, backend.clone());
+        seeded_query(&backend, count, false);
+        let mut stream = Firestore::execute_pipeline(&service, Request::new(pipeline_request()))
+            .await
+            .unwrap()
+            .into_inner();
+        let mut returned = 0;
+        while let Some(response) = stream.next().await {
+            returned += response.unwrap().results.len();
+        }
+        let (_, stats) = backend.latest_query_execution_stats().unwrap();
+        println!(
+            "pipeline_stats count={count} returned={returned} pages={} cloned={} field_bytes={} selection_paths={} selection_bytes={}",
+            stats.page_count,
+            stats.pages.cloned_documents,
+            stats.pages.cloned_field_bytes,
+            stats.selection_paths,
+            stats.selection_bytes,
+        );
+        assert_eq!(returned, usize::try_from(count).unwrap());
+        assert_eq!(stats.pages.cloned_documents, u64::try_from(count).unwrap());
+        assert_eq!(stats.page_count, if count == 17 { 1 } else { 9 });
+        assert_eq!(stats.selection_paths, 0);
+        assert_eq!(stats.selection_bytes, 0);
     }
 }
 

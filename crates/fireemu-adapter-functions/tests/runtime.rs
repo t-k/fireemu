@@ -171,7 +171,7 @@ async fn start_with_runtime_options(
 }
 
 async fn wait_for_runner(runtime: &FunctionsRuntime) {
-    let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
     while !runtime.runner_alive() {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -954,7 +954,7 @@ async fn a_stuck_blocking_auth_invocation_recycles_its_runner() {
         .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
         .is_err());
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
     loop {
         let replacement = runtime.runner();
         if !Arc::ptr_eq(&retired, &replacement) && replacement.is_alive() {
@@ -967,9 +967,9 @@ async fn a_stuck_blocking_auth_invocation_recycles_its_runner() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the stuck runner was not replaced"
+            "the stuck runner was not replaced within its hello contract"
         );
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -2029,11 +2029,36 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
         .iter()
         .any(|r| r.function == "onUser" && r.outcome == "ok"));
     // Crash: the runner dies on the attempt, a fresh one takes over and the event succeeds.
+    let cursor = runtime.history_since(None).cursor;
     store.delete_user_by_id(uid.as_str()).unwrap();
     for e in store.take_user_events() {
         runtime.on_user_event(&e);
     }
-    assert!(runtime.await_idle(Duration::from_secs(20)).await.is_ok());
+    let deadline = tokio::time::Instant::now()
+        + RUNNER_HELLO_TIMEOUT
+        + Duration::from_secs(u64::from(DEFAULT_TIMEOUT_SECONDS) + 1);
+    loop {
+        let delta = runtime.history_since(Some(cursor));
+        assert!(!delta.resync, "the crash-retry cursor remains valid");
+        let outcomes: Vec<&str> = delta
+            .records
+            .iter()
+            .filter(|r| r.record.function == "onGone")
+            .map(|r| r.record.outcome.as_str())
+            .collect();
+        if outcomes.iter().any(|o| o.starts_with("runner gone"))
+            && outcomes.contains(&"ok")
+            && runtime.is_idle()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the crash retry did not complete within its spawn and invocation contracts: {outcomes:?}; {}",
+            runtime.status()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     let on_gone: Vec<String> = runtime
         .history()
         .iter()

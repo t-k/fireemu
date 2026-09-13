@@ -460,11 +460,11 @@
     "sharedTerms": [
       {
         "term": "ExecutePipeline",
-        "status": "implemented",
+        "status": "partial",
         "owners": [
           "FS-PIPE-RPC-1"
         ],
-        "qualifier": "validation-only: a well-formed pipeline is answered UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY"
+        "qualifier": "finite local latest-read collection / top-level field-reference select / limit execution; other execution semantics and production parity remain unsupported or unobserved"
       },
       {
         "term": "Storage triggers",
@@ -833,27 +833,29 @@
         },
         {
           "id": "FS-CLAIM-PIPELINE",
-          "statement": "ExecutePipeline is decoded, identified and validated against the documented stage registry; a well-formed pipeline is answered UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY rather than executed, and an unknown stage is refused rather than skipped.",
+          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: collection, optional top-level field-reference select aliases and limit. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored; production parity is unobserved.",
           "capabilities": [
             {
               "id": "FS-PIPE-RPC-1",
-              "status": "implemented"
+              "status": "partial"
             }
           ],
           "evidence": {
             "tests": [
-              "pipelines_are_identified_and_misplaced_or_unknown_stages_refused"
+              "pipelines_are_identified_and_misplaced_or_unknown_stages_refused",
+              "execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit"
             ],
             "integration": [
-              "crates/fireemu-core-firestore/tests/validation_only.rs"
+              "crates/fireemu-core-firestore/tests/validation_only.rs",
+              "crates/fireemu-adapter-grpc/tests/local.rs"
             ],
             "conformance": []
           },
           "officialLimitations": [],
           "fireemuOnly": [
             {
-              "behaviour": "strict decode-and-validate with a canonical form in the refusal",
-              "precision": "strict-validation-only"
+              "behaviour": "finite latest-read collection / top-level field-reference select / limit execution with explicit unsupported-operation refusal",
+              "precision": "finite-local-read-subset"
             }
           ],
           "productionOnly": [],

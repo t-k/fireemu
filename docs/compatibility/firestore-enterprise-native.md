@@ -8,14 +8,14 @@ Labels summarize only linked capability declarations. They do not establish that
 
 | Feature / applicability | Capability-derived label | Requirements: mapped / unfinished | Production | Official emulator | SDK | Known limitations |
 | --- | --- | --- | --- | --- | --- | --- |
-| FS-PIPELINE: Pipeline decoding and validation / Enterprise / Native; validation-only pipeline configuration and owner authorization as declared by the capability | Validation only | 0 / unknown | Not attested | Not attested | Not attested | Valid pipelines return an unimplemented execution response. Parser acceptance is not local query execution.; local execution (a valid pipeline is answered with UNIMPLEMENTED FS&#95;PIPE&#95;VALIDATION&#95;ONLY carrying its canonical form); function name and return type checking inside expressions (a where takes any function); text search functions against the text index catalog; proxy / record-only modes; Standard edition answers FAILED&#95;PRECONDITION FS&#95;PIPE&#95;EDITION; owner-only while rules are enforced |
+| FS-PIPELINE: Pipeline validation and finite local read execution / Enterprise / Native; owner-authorized local latest reads with collection, optional top-level field-reference select and limit | Partial, unverified | 0 / unknown | Not attested | Not attested | Not attested | Only the finite local collection / select / limit subset executes. Transaction/read-time execution, nested field extraction, metadata expressions, other stages and production parity remain unverified or unsupported. Parser acceptance is not execution support. The local query still materializes all results; per-document streaming is not a total-memory bound.; execution outside the finite collection / top-level field-reference select / limit latest-read subset; transaction and read&#95;time execution, nested field extraction and metadata expressions; function name and return type checking inside expressions (a where takes any function); text search functions against the text index catalog; proxy / record-only modes; Standard edition answers FAILED&#95;PRECONDITION FS&#95;PIPE&#95;EDITION; owner-only while rules are enforced; The finite local read subset is tested through tonic; Enterprise production execution parity remains unobserved. Unsupported consistency selectors, metadata expressions and execution stages are refused, never silently ignored. |
 | FS-TEXT: Text index definition validation / Enterprise / Native; local text-index definition/control configuration | Validation only | 0 / unknown | Not attested | Not attested | Not attested | Backfill, posting data, search scoring and local search execution are not established by definition validation.; backfill lifecycle (advanceBackfill, completeBackfill, failBuild, repair answer UNIMPLEMENTED without changing state; FS-TEXT-IDX-1); posting data and local search (Milestone G); Enterprise edition only |
 
 ## Traceability links
 
 All links below are mappings. Test names and corpus paths must be reviewed for their actual assertions before a feature-level execution claim can be made.
 
-### Pipeline decoding and validation
+### Pipeline validation and finite local read execution
 
 Sources: FS-EDITIONS; FS-PROTO. API surfaces: FS-PIPELINE.
 
@@ -23,7 +23,7 @@ Requirements: None mapped.
 
 Contract claims: FS-CLAIM-PIPELINE.
 
-- FS-PIPE-RPC-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
+- FS-PIPE-RPC-1: partial ([manifest](../../crates/fireemu/src/capabilities.json)).
 
 ### Text index definition validation
 

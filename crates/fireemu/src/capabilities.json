@@ -447,21 +447,23 @@
   },
   "FS-PIPE-RPC-1": {
     "implemented": [
-      "ExecutePipeline / StructuredPipeline decode",
+      "StructuredPipeline wire decoding",
       "database name, consistency selector (non-empty transaction; auto_commit_transaction only with new_transaction) and pipeline option (index_mode) checks",
       "stage identification against the documented registry (collection, collection_group, database, documents, select, add_fields, remove_fields, where, sort, limit, offset, distinct, aggregate, find_nearest, sample, union, unnest, replace_with)",
       "input stage placement, arity, argument shape (paths, integers, boolean expressions, ascending / descending orderings, alias maps, vectors and distance measures, modes) and per-stage option checks (find_nearest limit / distance_field, sample mode, unnest index_field)",
       "write stages (update, delete) refused as FS-PIPE-WRITE-0",
-      "unknown stages refused (FS_PIPE_UNSUPPORTED_STAGE), never skipped"
+      "unknown stages refused (FS_PIPE_UNSUPPORTED_STAGE), never skipped",
+      "local latest-read collection input (root or nested), optional top-level field-reference select aliases, then optional non-negative limit; no repeated stages"
     ],
     "notes": [
       "Standard edition answers FAILED_PRECONDITION FS_PIPE_EDITION",
-      "owner-only while rules are enforced"
+      "owner-only while rules are enforced",
+      "The finite local read subset is tested through tonic; Enterprise production execution parity remains unobserved. Unsupported consistency selectors, metadata expressions and execution stages are refused, never silently ignored."
     ],
-    "precision": "strict-validation-only",
-    "status": "implemented",
+    "precision": "finite-local-read-subset",
+    "status": "partial",
     "unimplemented": [
-      "local execution (a valid pipeline is answered with UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY carrying its canonical form)",
+      "execution outside the finite collection / top-level field-reference select / limit latest-read subset; transaction and read_time execution, nested field extraction and metadata expressions",
       "function name and return type checking inside expressions (a where takes any function)",
       "text search functions against the text index catalog",
       "proxy / record-only modes"
@@ -508,7 +510,7 @@
       "ListDocuments inside transactions"
     ],
     "notes": [
-      "ExecutePipeline is not served by this entry: FS-PIPE-RPC-1 owns it and decodes, identifies and validates a pipeline, then answers a well-formed one with UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY rather than executing it",
+      "ExecutePipeline is owned by FS-PIPE-RPC-1: registry validation plus a finite Enterprise local latest-read subset; other execution semantics remain explicitly unsupported",
       "history retention: a version is kept while any retention root can still reach it, namely the one-hour read_time window (READ_TIME_RETENTION_SECONDS), the read version of every transaction that is still inside its budget, and the newest version or tombstone of every path; everything older is compacted away at the end of the commit that makes it unreachable, and a read_time below the retained history is FAILED_PRECONDITION instead of an answer from another version. Named snapshots are independent copies: restoring one reproduces exactly what it captured, whatever the live database compacted since.",
       "conformance: the Firestore semantics matrix also gates preconditions, update masks, field transforms, batched writes and the transaction lifecycle; conformance/divergences.json pins every deliberate difference from the official emulator, each with the production observation (conformance/firestore-production-matrix.json) that justifies following production instead: no `done` marker and a leading readTime/skippedResults element over REST, production's validation codes, and the redacted marker fields production serves"
     ],

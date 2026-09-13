@@ -323,9 +323,9 @@
     },
     {
       "id": "FS-PIPELINE",
-      "title": "Pipeline decoding and validation",
+      "title": "Pipeline validation and finite local read execution",
       "goal": "FS-ENT-NATIVE",
-      "appliesTo": "Enterprise / Native; validation-only pipeline configuration and owner authorization as declared by the capability",
+      "appliesTo": "Enterprise / Native; owner-authorized local latest reads with collection, optional top-level field-reference select and limit",
       "sources": [
         "FS-EDITIONS",
         "FS-PROTO"
@@ -341,7 +341,7 @@
         "FS-CLAIM-PIPELINE"
       ],
       "limitations": [
-        "Valid pipelines return an unimplemented execution response. Parser acceptance is not local query execution."
+        "Only the finite local collection / select / limit subset executes. Transaction/read-time execution, nested field extraction, metadata expressions, other stages and production parity remain unverified or unsupported. Parser acceptance is not execution support. The local query still materializes all results; per-document streaming is not a total-memory bound."
       ]
     },
     {

@@ -65,26 +65,36 @@ const waitFor = async (
 
 const stop = async (pid: number | undefined, status: ChildStatus): Promise<void> => {
   if (pid === undefined) return;
-  const signal = (value: NodeJS.Signals) => {
+  const groupAlive = () => {
     try {
-      process.kill(-pid, value);
-    } catch {
-      try {
-        process.kill(pid, value);
-      } catch {
-        // already gone
-      }
+      process.kill(-pid, 0);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+      throw error;
     }
   };
-  signal("SIGINT");
-  for (let i = 0; i < 40 && !status.exit; i += 1) {
+  const signalGroup = (value: NodeJS.Signals) => {
+    try {
+      process.kill(-pid, value);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  };
+  signalGroup("SIGINT");
+  for (let i = 0; i < 40 && groupAlive(); i += 1) {
     await new Promise((r) => setTimeout(r, 250));
   }
-  if (!status.exit) {
-    signal("SIGKILL");
-    for (let i = 0; i < 40 && !status.exit; i += 1) {
+  if (groupAlive()) {
+    signalGroup("SIGKILL");
+    for (let i = 0; i < 40 && groupAlive(); i += 1) {
       await new Promise((r) => setTimeout(r, 250));
     }
+  }
+  if (groupAlive()) {
+    throw new Error(
+      `daemon process group ${pid} survived cleanup (leader=${JSON.stringify(status.exit)})`,
+    );
   }
 };
 

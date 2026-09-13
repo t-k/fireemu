@@ -464,7 +464,7 @@
         "owners": [
           "FS-PIPE-RPC-1"
         ],
-        "qualifier": "finite local latest-read collection / top-level field-reference select / limit execution; other execution semantics and production parity remain unsupported or unobserved"
+        "qualifier": "finite local latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional top-level field-reference select / optional limit execution; other execution semantics and production parity remain unsupported or unobserved"
       },
       {
         "term": "Storage triggers",
@@ -833,7 +833,7 @@
         },
         {
           "id": "FS-CLAIM-PIPELINE",
-          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: collection, optional top-level field-reference select aliases and limit. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored; production parity is unobserved.",
+          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: collection, optional single where(equal(top-level field reference, scalar literal)), optional top-level field-reference select aliases and limit, in that order. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored; production execution and exact production error parity are unobserved.",
           "capabilities": [
             {
               "id": "FS-PIPE-RPC-1",
@@ -843,7 +843,10 @@
           "evidence": {
             "tests": [
               "pipelines_are_identified_and_misplaced_or_unknown_stages_refused",
-              "execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit"
+              "execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit",
+              "execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing_fields",
+              "execute_pipeline_where_equal_pushes_filter_before_limit",
+              "execute_pipeline_where_equal_refusals_preserve_status_context_and_documents"
             ],
             "integration": [
               "crates/fireemu-core-firestore/tests/validation_only.rs",
@@ -854,7 +857,7 @@
           "officialLimitations": [],
           "fireemuOnly": [
             {
-              "behaviour": "finite latest-read collection / top-level field-reference select / limit execution with explicit unsupported-operation refusal",
+              "behaviour": "finite latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional top-level field-reference select / optional limit execution with explicit unsupported-operation refusal",
               "precision": "finite-local-read-subset"
             }
           ],

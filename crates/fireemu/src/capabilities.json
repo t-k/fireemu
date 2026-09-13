@@ -453,18 +453,20 @@
       "input stage placement, arity, argument shape (paths, integers, boolean expressions, ascending / descending orderings, alias maps, vectors and distance measures, modes) and per-stage option checks (find_nearest limit / distance_field, sample mode, unnest index_field)",
       "write stages (update, delete) refused as FS-PIPE-WRITE-0",
       "unknown stages refused (FS_PIPE_UNSUPPORTED_STAGE), never skipped",
-      "local latest-read collection input (root or nested), optional top-level field-reference select aliases, then optional non-negative limit; no repeated stages"
+      "local latest-read collection input (root or nested), optional single where(equal(top-level field reference, scalar literal)), optional top-level field-reference select aliases, then optional non-negative limit; no repeated or reordered stages",
+      "exact equal accepts boolean, integer/double numeric equality, timestamp, string, bytes, reference, geo point, infinity, null and NaN; missing fields do not match; filtering precedes projection and limit",
+      "malformed exact equal arity/options, field paths and missing values return INVALID_ARGUMENT FS_PIPE_INVALID; well-formed unsupported operand arrangements return UNIMPLEMENTED FS_PIPE_UNSUPPORTED_STAGE, with canonical pipeline context"
     ],
     "notes": [
       "Standard edition answers FAILED_PRECONDITION FS_PIPE_EDITION",
       "owner-only while rules are enforced",
-      "The finite local read subset is tested through tonic; Enterprise production execution parity remains unobserved. Unsupported consistency selectors, metadata expressions and execution stages are refused, never silently ignored."
+      "The finite local read subset is tested through tonic. Enterprise production execution and exact production error parity remain unobserved. Unsupported consistency selectors, metadata expressions and execution stages are refused, never silently ignored."
     ],
     "precision": "finite-local-read-subset",
     "status": "partial",
     "unimplemented": [
-      "execution outside the finite collection / top-level field-reference select / limit latest-read subset; transaction and read_time execution, nested field extraction and metadata expressions",
-      "function name and return type checking inside expressions (a where takes any function)",
+      "execution outside collection / optional single where(equal(top-level field, scalar literal)) / optional select / optional limit latest reads; transaction and read_time execution, nested field extraction and metadata expressions",
+      "all functions other than exact equal in the finite where shape (including eq), general expressions, reversed operands, array/map literals and all other execution stages",
       "text search functions against the text index catalog",
       "proxy / record-only modes"
     ]

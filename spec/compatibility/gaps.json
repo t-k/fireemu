@@ -58,15 +58,15 @@
       "id": "GAP-FS-001",
       "feature": "FS-PIPELINE",
       "kind": "unimplemented",
-      "scope": "Enterprise / Native pipeline execution: inputs are decoded and validated, a valid pipeline still returns UNIMPLEMENTED; expression function names and return types are partly unchecked.",
+      "scope": "Enterprise / Native general pipeline execution remains unsupported beyond the owner-authorized local latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional select / optional limit subset. The finite subset has tonic tests; production execution and exact production error parity remain unobserved.",
       "implementationStatus": "unimplemented",
-      "localTestStatus": "none",
+      "localTestStatus": "passing",
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
         "docs/compatibility/firestore-enterprise-native.md"
       ],
-      "nextAction": "Decompose the official pipeline stages and expressions; implement the evaluator, type and error checks and the executor stage by stage with an oracle corpus per stage.",
+      "nextAction": "Observe the finite subset against Enterprise production before claiming parity; decompose and implement remaining functions and stages separately with scoped oracle corpora.",
       "blockedReason": "",
       "requiresProductionChange": false
     },

@@ -207,9 +207,11 @@
       "locator": "google.firestore.v1.Firestore.ExecutePipeline",
       "kind": "method",
       "transport": "gRPC",
-      "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "Explicit unsupported-stage refusal invariant; FS-PIPE-RPC-1 implements a finite local collection / optional where(equal(top-level field, scalar literal)) / optional select / optional limit subset. This mapping does not establish full execution or production parity.",
+      "requirements": [
+        "INV-PIPE-001"
+      ]
     },
     {
       "id": "FS-DATABASES",

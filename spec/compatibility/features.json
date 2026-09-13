@@ -325,7 +325,7 @@
       "id": "FS-PIPELINE",
       "title": "Pipeline validation and finite local read execution",
       "goal": "FS-ENT-NATIVE",
-      "appliesTo": "Enterprise / Native; owner-authorized local latest reads with collection, optional top-level field-reference select and limit",
+      "appliesTo": "Enterprise / Native; owner-authorized local latest reads with collection, optional single where(equal(top-level field, scalar literal)), optional select and limit",
       "sources": [
         "FS-EDITIONS",
         "FS-PROTO"
@@ -333,7 +333,9 @@
       "surfaces": [
         "FS-PIPELINE"
       ],
-      "requirements": [],
+      "requirements": [
+        "INV-PIPE-001"
+      ],
       "capabilities": [
         "FS-PIPE-RPC-1"
       ],
@@ -341,7 +343,7 @@
         "FS-CLAIM-PIPELINE"
       ],
       "limitations": [
-        "Only the finite local collection / select / limit subset executes. Transaction/read-time execution, nested field extraction, metadata expressions, other stages and production parity remain unverified or unsupported. Parser acceptance is not execution support. The local query still materializes all results; per-document streaming is not a total-memory bound."
+        "Only collection / optional single where(equal(top-level field reference, scalar literal)) / optional top-level field-reference select / optional limit execute locally in that order. Null and NaN use unary predicates; missing fields do not match. All other functions/stages, reversed operands, nested/metadata fields, array/map/expression literals and consistency selectors remain unsupported. Production execution and exact production error parity remain unobserved; parser acceptance is not execution support."
       ]
     },
     {

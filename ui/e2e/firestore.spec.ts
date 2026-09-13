@@ -177,6 +177,7 @@ test.describe("Firestore data browser", () => {
       fields: { local: { stringValue: "before" }, remote: { stringValue: "before" } },
     });
     await gotoApp(page, "/firestore/conflicts/one");
+    await expect(page.getByTestId("live-badge")).toHaveText("Live");
     await page.getByTestId("document-edit").click();
     const editor = page.getByTestId("document-view");
     const valueFor = async (name: string) => {
@@ -191,9 +192,36 @@ test.describe("Firestore data browser", () => {
       return editor.getByLabel("Value").nth(index);
     };
     await (await valueFor("local")).fill("draft");
+    // Keep the rendered resource stale while an explicit reload is superseded by a live GET.
+    const reads: { release: () => void; finished: Promise<void>; updateTime?: string }[] = [];
+    let readArrived!: () => void;
+    const waitForRead = () =>
+      new Promise<void>((resolve) => {
+        readArrived = resolve;
+      });
+    const firstRead = waitForRead();
+    await page.route(`**/${DOCS}/conflicts/one`, async (route) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let finished!: () => void;
+      const done = new Promise<void>((resolve) => {
+        finished = resolve;
+      });
+      const read: (typeof reads)[number] = { release, finished: done };
+      reads.push(read);
+      const response = await route.fetch();
+      read.updateTime = ((await response.json()) as { updateTime: string }).updateTime;
+      readArrived();
+      await gate;
+      await route.fulfill({ response });
+      finished();
+    });
     await api(request, "PATCH", `${DOCS}/conflicts/one`, {
       fields: { local: { stringValue: "before" }, remote: { stringValue: "external" } },
     });
+    await firstRead;
     let releaseSave!: () => void;
     const saveGate = new Promise<void>((resolve) => {
       releaseSave = resolve;
@@ -202,33 +230,53 @@ test.describe("Firestore data browser", () => {
     const saveRequestStarted = new Promise<void>((resolve) => {
       saveStarted = resolve;
     });
-    let saveFinished!: () => void;
-    const saveRequestFinished = new Promise<void>((resolve) => {
-      saveFinished = resolve;
-    });
     const savePattern = `**/${DOCS}/conflicts/one?*`;
     await page.route(savePattern, async (route) => {
       saveStarted();
       await saveGate;
-      const response = await route.fetch();
-      await route.fulfill({ response });
-      saveFinished();
+      await route.continue();
     });
+    const staleSave = page.waitForRequest(savePattern);
     await page.getByTestId("document-save").click();
     await saveRequestStarted;
     await expect(await valueFor("local")).toBeDisabled();
     releaseSave();
-    await saveRequestFinished;
+    const staleResponse = await (await staleSave).response();
+    expect(staleResponse).not.toBeNull();
+    await staleResponse!.finished();
+    expect((await staleResponse!.json()).error.status).toBe("FAILED_PRECONDITION");
     await page.unroute(savePattern);
     await expect(page.getByRole("alert")).toContainText("changed after editing began");
     await expect(await valueFor("local")).toHaveValue("draft");
 
     const reloadDraft = page.getByTestId("document-reload-draft");
+    const reloadRead = waitForRead();
     await reloadDraft.click();
+    await reloadRead;
+    const supersedingRead = waitForRead();
+    // Changing another document invalidates the view without changing our rebase precondition.
+    await api(request, "PATCH", `${DOCS}/conflicts/other`, {
+      fields: { value: { stringValue: "live invalidation" } },
+    });
+    await supersedingRead;
+    expect(reads).toHaveLength(3);
+    reads[1]!.release();
+    await reads[1]!.finished;
     await expect(reloadDraft).not.toBeVisible();
-    const rebasedSave = page.waitForResponse(savePattern);
+    await expect(await valueFor("remote")).toHaveValue("external");
+    for (const read of reads) read.release();
+    await Promise.all(reads.map((read) => read.finished));
+    await page.unroute(`**/${DOCS}/conflicts/one`);
+    const rebasedSave = page.waitForRequest(savePattern);
     await page.getByTestId("document-save").click();
-    expect((await rebasedSave).ok()).toBe(true);
+    const rebasedRequest = await rebasedSave;
+    expect(rebasedRequest.method()).toBe("PATCH");
+    expect(new URL(rebasedRequest.url()).searchParams.get("currentDocument.updateTime")).toBe(
+      reads[1]!.updateTime,
+    );
+    const rebasedResponse = await rebasedRequest.response();
+    expect(rebasedResponse).not.toBeNull();
+    expect(rebasedResponse!.ok(), await rebasedResponse!.text()).toBe(true);
     await expect(page.getByTestId("document-edit")).toBeVisible();
     const rebased = (await api(request, "GET", `${DOCS}/conflicts/one`)) as {
       fields: Record<string, unknown>;

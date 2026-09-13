@@ -563,7 +563,7 @@ const DocumentView: Component<{
     const draftChanges = diffFields(session.fields, parsedDraft.value);
     const operation = ++editOperation;
     setEditBusy(true);
-    await refetch();
+    const reloaded = await getDocument(session.root, session.path);
     if (
       editSession()?.generation !== session.generation ||
       editOperation !== operation ||
@@ -572,7 +572,9 @@ const DocumentView: Component<{
     )
       return;
     setEditBusy(false);
-    const latest = current();
+    // A live refresh can supersede the view resource while this read is pending.
+    // Rebase from this operation's response, not the resource's previously rendered value.
+    const latest = reloaded.unwrapOr(null);
     if (!latest?.updateTime) {
       setError(t("firestore.editConflictDeleted"));
       return;

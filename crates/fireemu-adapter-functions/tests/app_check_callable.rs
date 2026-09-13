@@ -138,6 +138,79 @@ struct Harness {
     server: tokio::task::JoinHandle<std::io::Result<()>>,
 }
 
+#[test]
+fn response_reader_accepts_connection_reset_after_complete_response() {
+    let raw = b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nno!";
+    let response = response_after_read(
+        raw,
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect("a complete response remains usable after a reset");
+    assert_eq!(response.status, 404);
+    assert_eq!(response.body, b"no!");
+}
+
+#[test]
+fn response_reader_rejects_connection_reset_without_complete_response() {
+    let raw = b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nno";
+    let error = response_after_read(
+        raw,
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("a reset must not hide a truncated response");
+    assert_eq!(error, "truncated response body");
+}
+
+#[test]
+fn response_reader_rejects_connection_reset_without_http_response() {
+    let error = response_after_read(
+        b"",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("an empty response must not be treated as a refusal");
+    assert_eq!(error, "malformed response from the functions runner");
+}
+
+#[test]
+fn response_reader_rejects_other_read_errors() {
+    let error = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nno!",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "short read",
+        )),
+        "POST",
+    )
+    .expect_err("only connection reset may be tolerated");
+    assert_eq!(error, "reading response: short read");
+}
+
+fn response_after_read(
+    raw: &[u8],
+    read: std::io::Result<usize>,
+    method: &str,
+) -> Result<fireemu_adapter_functions::http::ProxiedResponse, String> {
+    match read {
+        Ok(_) => fireemu_adapter_functions::http::parse_response(raw, method),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {
+            fireemu_adapter_functions::http::parse_response(raw, method)
+        }
+        Err(error) => Err(format!("reading response: {error}")),
+    }
+}
+
 impl Harness {
     fn token(&self) -> String {
         token_for(&self.gate, PROJECT, APP_ID)
@@ -336,12 +409,8 @@ impl Harness {
             .expect("the request body is written");
         stream.flush().await.expect("flush");
         let mut raw = Vec::new();
-        stream
-            .read_to_end(&mut raw)
-            .await
-            .expect("the response is read");
-        fireemu_adapter_functions::http::parse_response(&raw, "POST")
-            .expect("a well-formed response")
+        let read = stream.read_to_end(&mut raw).await;
+        response_after_read(&raw, read, "POST").expect("a well-formed response")
     }
 }
 

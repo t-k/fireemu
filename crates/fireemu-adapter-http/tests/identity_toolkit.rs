@@ -2676,6 +2676,7 @@ fn end_user_update_cannot_select_an_account_by_local_id() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn end_user_update_rejects_admin_fields_atomically_by_presence() {
     for s in [state(), strict_state()] {
         let (_, signed) = post(
@@ -2730,7 +2731,6 @@ fn end_user_update_rejects_admin_fields_atomically_by_presence() {
                 json!({"providerId": "google.com", "rawId": "attacker"}),
             ),
             ("linkProviderUserInfo", json!({})),
-            ("customAttributes", Value::Null),
             ("mfa", Value::Null),
             ("linkProviderUserInfo", Value::Null),
         ];
@@ -2741,7 +2741,12 @@ fn end_user_update_rejects_admin_fields_atomically_by_presence() {
             let (status, rejected) = post(&s, &format!("{V1}/accounts:update"), &request);
             assert_eq!(status, 400, "{field}: {rejected}");
             assert_eq!(
-                rejected["error"]["message"], "OPERATION_NOT_ALLOWED",
+                rejected["error"]["message"],
+                if field == "customAttributes" {
+                    "INSUFFICIENT_PERMISSION"
+                } else {
+                    "OPERATION_NOT_ALLOWED"
+                },
                 "{field}"
             );
             let (_, after) = admin(
@@ -2755,6 +2760,28 @@ fn end_user_update_rejects_admin_fields_atomically_by_presence() {
                 "{field} rejection must preserve the entire lookup projection"
             );
         }
+        // Production second45 row21: null is absent, never a request to clear claims.
+        let (status, accepted) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": "null-allowed", "customAttributes": null}),
+        );
+        assert_eq!(status, 200, "{accepted}");
+        let (_, after_null) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        assert_eq!(
+            after_null["users"][0]["customAttributes"],
+            before["users"][0]["customAttributes"]
+        );
+        assert_eq!(after_null["users"][0]["emailVerified"], true);
+        assert_eq!(
+            after_null["users"][0]["mfaInfo"],
+            before["users"][0]["mfaInfo"]
+        );
         let (status, normal) = post(
             &s,
             &format!("{V1}/accounts:update"),
@@ -2771,7 +2798,8 @@ fn end_user_update_rejects_admin_fields_atomically_by_presence() {
 /// an administrator-only field with `INVALID_ID_TOKEN`, verifying the session before the
 /// field is judged (auth-refusal-precedence revision 1, approved 2026-09-12). The
 /// end-user route now authenticates first. A valid session with such a field is still
-/// refused `OPERATION_NOT_ALLOWED` (local policy, not observed for a valid token); the OOB
+/// refused by field authorization (second45 observes `INSUFFICIENT_PERMISSION` for
+/// customAttributes strings); the OOB
 /// route still rejects the field before consuming the code, and neither refusal mutates.
 /// AUTH-U03 / GAP-AUTH-003 invariant fence: the end-user accounts:update route
 /// authenticates before it authorizes for EVERY session-failure class, not only the
@@ -2969,7 +2997,12 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
                 let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
                 assert_eq!(status, 400, "{field}: {refused}");
                 assert_eq!(
-                    refused["error"]["message"], "OPERATION_NOT_ALLOWED",
+                    refused["error"]["message"],
+                    if *field == "customAttributes" {
+                        "INSUFFICIENT_PERMISSION"
+                    } else {
+                        "OPERATION_NOT_ALLOWED"
+                    },
                     "{field}"
                 );
                 assert_eq!(
@@ -3991,4 +4024,134 @@ fn mfa_enrollment_without_an_id_token_is_an_invalid_token() {
     let (status, body) = post(&s, &format!("{V1}/accounts:lookup"), &json!({}));
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["message"], "MISSING_ID_TOKEN", "{body}");
+}
+
+/// Saved second45 production candidate: malformed inputs never select another user.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn second45_observed_update_shapes_preserve_ownership_and_atomicity() {
+    for s in [state(), strict_state()] {
+        for (index, (field, value, expected_status, expected_name, machine)) in [
+            ("localId", json!({}), 400, "baseline-b", "INVALID_ARGUMENT"),
+            ("localId", json!([]), 400, "baseline-b", "INVALID_ARGUMENT"),
+            ("displayName", json!(0), 200, "0", ""),
+            (
+                "displayName",
+                json!(false),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "displayName",
+                json!([]),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "displayName",
+                json!({}),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "emailVerified",
+                json!({}),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "customAttributes",
+                json!("{\"admin\":true}"),
+                400,
+                "baseline-b",
+                "INSUFFICIENT_PERMISSION",
+            ),
+            (
+                "customAttributes",
+                json!(""),
+                400,
+                "baseline-b",
+                "INSUFFICIENT_PERMISSION",
+            ),
+            ("customAttributes", Value::Null, 200, "sentinel", ""),
+            (
+                "customAttributes",
+                json!({}),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (_, a) = post(
+                &s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email":format!("a-{index}@example.com"),"password":"password1","returnSecureToken":true}),
+            );
+            let (_, b) = post(
+                &s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email":format!("b-{index}@example.com"),"password":"password1","returnSecureToken":true}),
+            );
+            for (u, name) in [(&a, "baseline-a"), (&b, "baseline-b")] {
+                let (status, response) = admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:update"),
+                    &json!({"localId":u["localId"],"displayName":name,"emailVerified":false}),
+                );
+                assert_eq!(status, 200, "{response}");
+            }
+            let mut request = json!({"idToken":b["idToken"],"localId":a["localId"],"displayName":"sentinel","emailVerified":true});
+            request[field] = value;
+            let (status, response) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, expected_status, "{field}: {response}");
+            if machine == "INVALID_ARGUMENT" {
+                assert_eq!(response["error"]["status"], machine, "{response}");
+                assert_eq!(
+                    response["error"]["details"][0]["@type"],
+                    "type.googleapis.com/google.rpc.BadRequest"
+                );
+                assert!(
+                    response["error"]["details"][0]["fieldViolations"][0]["description"]
+                        .is_string()
+                );
+                assert!(response["error"]["errors"][0].get("domain").is_none());
+            } else if !machine.is_empty() {
+                assert_eq!(response["error"]["message"], machine);
+            }
+            for (u, name) in [(&a, "baseline-a"), (&b, expected_name)] {
+                let (status, after) = admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:lookup"),
+                    &json!({"localId":[u["localId"]]}),
+                );
+                assert_eq!(status, 200);
+                assert_eq!(after["users"][0]["displayName"], name, "{field}");
+                assert_eq!(after["users"][0]["emailVerified"], false);
+                assert!(after["users"][0].get("customAttributes").is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn second45_missing_or_null_token_update_classifies_observed_input() {
+    let s = state();
+    for token in [None, Some(Value::Null)] {
+        let mut request = json!({"displayName":"sentinel","localId":"unowned"});
+        if let Some(token) = token {
+            request["idToken"] = token;
+        }
+        let (status, response) = post(&s, &format!("{V1}/accounts:update"), &request);
+        assert_eq!(status, 400);
+        assert_eq!(response["error"]["message"], "INVALID_REQ_TYPE");
+    }
 }

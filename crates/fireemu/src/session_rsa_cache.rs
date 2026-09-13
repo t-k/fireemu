@@ -613,9 +613,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = scratch("fifo");
-        let _ = load_or_generate_at(&root, 12).unwrap();
+        let directory = open_cache_directory(&root).unwrap();
         let entry = cache_entry_path(&root, 12);
-        std::fs::remove_file(&entry).unwrap();
         let status = std::process::Command::new("mkfifo")
             .arg(&entry)
             .status()
@@ -623,7 +622,6 @@ mod tests {
         assert!(status.success());
         std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-        let directory = open_cache_directory(&root).unwrap();
         let started = std::time::Instant::now();
         assert!(matches!(
             load_entry(&directory, &entry_name(12), 12),

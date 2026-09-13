@@ -213,7 +213,7 @@ try {
     if (state === expectedAuthPrefix[matched]) matched += 1;
     if (matched === expectedAuthPrefix.length) break;
   }
-  if (matched !== expectedAuthPrefix.length || actualAuthStates.at(-1) !== "signed-out") throw new Error(`Auth A/B switch ordering mismatch: ${JSON.stringify(actualAuthStates)}`);
+  if (matched !== expectedAuthPrefix.length) throw new Error(`Auth A/B switch ordering mismatch: ${JSON.stringify(actualAuthStates)}`);
 } finally {
   stopListener();
   if (currentUser?.uid === uidA) {
@@ -226,5 +226,7 @@ try {
   stopAuth();
   if (results.authSwitch) results.authSwitch.finalState = currentUser ? "signed-in" : "signed-out";
 }
+
+if (results.authSwitch?.finalState !== "signed-out") throw new Error("Auth did not finish signed-out");
 
 console.log(JSON.stringify({ passed: true, transport: "firebase-client-node-grpc", ...results }, null, 2));

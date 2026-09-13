@@ -252,8 +252,11 @@ def child(output, nonce):
     return report
 
 
-def stop_registered(output, parent_pid, nonce):
+def stop_registered(output, parent_pid, nonce, *, recovery_grace=0.2):
     """Attempt each owned child independently; aggregate failures without unsafe signals."""
+    if not 0 <= recovery_grace <= 300:
+        raise ValueError("invalid recovery grace")
+    grace_deadline = time.monotonic() + recovery_grace
     registrations = sorted(output.rglob("*-process.json"))
     instance_path = output / "instance.json"
     if instance_path.exists():
@@ -309,17 +312,27 @@ def stop_registered(output, parent_pid, nonce):
                     os.kill(pid, sig)
                 except ProcessLookupError:
                     break
-                time.sleep(0.2)
+                if sig == signal.SIGTERM:
+                    while time.monotonic() < grace_deadline:
+                        state = subprocess.run(
+                            ["ps", "-p", str(pid), "-o", "stat="],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        ).stdout.strip()
+                        if not state or state.startswith("Z"):
+                            break
+                        time.sleep(min(0.05, max(0, grace_deadline - time.monotonic())))
         except Exception as error:
             failures.append(type(error).__name__)
     if failures:
         raise ValueError("one or more owned registrations could not be confirmed")
 
 
-def cleanup_run(process, output, nonce, report):
+def cleanup_run(process, output, nonce, report, *, recovery_grace=0.2):
     """Registration errors must never skip stopping the owned parent or recording failure."""
     try:
-        stop_registered(output, process.pid, nonce)
+        stop_registered(output, process.pid, nonce, recovery_grace=recovery_grace)
     except Exception as error:
         report.update(status="incomplete", cleanupFailure=type(error).__name__)
     finally:
@@ -339,7 +352,7 @@ def cleanup_run(process, output, nonce, report):
             save(output / "manifest.json", report)
 
 
-def supervise(command, output, nonce, report, *, timeout=240):
+def supervise(command, output, nonce, report, *, timeout=240, recovery_grace=0.2):
     """Persist immutable parent inputs before launch; retain partial results on every exit."""
     report.update(status="incomplete", recordingComplete=False, cases=[])
     save(output / "manifest.json", report)
@@ -371,7 +384,7 @@ def supervise(command, output, nonce, report, *, timeout=240):
     finally:
         if process is not None:
             # Stop owned processes even when the child result is absent or malformed.
-            cleanup_run(process, output, nonce, report)
+            cleanup_run(process, output, nonce, report, recovery_grace=recovery_grace)
         try:
             partial_path = output / "cases.json"
             if partial_path.exists():
@@ -512,7 +525,15 @@ def summarize(report):
     }
 
 
-def run(output, *, child_script=None, project=PROJECT, configuration=None):
+def run(
+    output,
+    *,
+    child_script=None,
+    project=PROJECT,
+    configuration=None,
+    execution_timeout=240,
+    recovery_grace=0.2,
+):
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise ValueError("freeze the checkout before artifact execution")
     base_config = {
@@ -603,7 +624,18 @@ def run(output, *, child_script=None, project=PROJECT, configuration=None):
             },
             build=build,
         )
-        supervise(command, output, nonce, report)
+        report["supervision"] = {
+            "timeoutSeconds": execution_timeout,
+            "recoveryGraceSeconds": recovery_grace,
+        }
+        supervise(
+            command,
+            output,
+            nonce,
+            report,
+            timeout=execution_timeout,
+            recovery_grace=recovery_grace,
+        )
         if source_inputs() != before or runtime_inputs(ROOT) != build["inputs"]:
             report.update(status="incomplete", stopReason="execution-inputs-changed")
             save(output / "manifest.json", report)

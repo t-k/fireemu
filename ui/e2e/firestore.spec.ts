@@ -223,7 +223,9 @@ test.describe("Firestore data browser", () => {
     await expect(await valueFor("local")).toHaveValue("draft");
 
     await page.getByTestId("document-reload-draft").click();
+    const rebasedSave = page.waitForResponse(savePattern);
     await page.getByTestId("document-save").click();
+    expect((await rebasedSave).ok()).toBe(true);
     await expect(page.getByTestId("document-edit")).toBeVisible();
     const rebased = (await api(request, "GET", `${DOCS}/conflicts/one`)) as {
       fields: Record<string, unknown>;

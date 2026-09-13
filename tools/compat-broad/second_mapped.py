@@ -52,6 +52,7 @@ class LocalAdapter(Adapter):
         self.baseline = None
         self.trace = []
         self.cleanup_version = {}
+        self.owner_rejected = False
         self.second_nonce = nonce
         if mode not in {"direct", "mapped"}:
             raise ValueError("unknown mode")
@@ -64,6 +65,8 @@ class LocalAdapter(Adapter):
     def request(
         self, service, path, body=None, *, method="POST", privileged=False, form=False
     ):
+        if privileged and self.owner_rejected:
+            raise ValueError("local owner credential previously rejected")
         actual = operation(service, path, body, method, privileged)
         if form or service not in {"auth", "firestore"}:
             raise ValueError("closed local transport only")
@@ -217,6 +220,10 @@ class LocalAdapter(Adapter):
                 "body": result,
                 "http": http,
             }
+            if privileged and status in (401, 403):
+                self.owner_rejected = True
+                self.credential.fail()
+                raise ValueError("local owner credential rejected")
             if not http["complete"]:
                 raise ValueError("HTTP " + str(http["failure"]))
             if http["bodyKind"] != "json" or not isinstance(result, dict):
@@ -474,6 +481,7 @@ def execute_side(local_origins, output, mode, nonce, runtime_identity):
             if initial is None:
                 initial = copy.deepcopy(protected)
             elif not equal(initial, protected):
+                result["safety"] = False
                 raise ValueError("protected baseline drift; stop without repair")
             actual = render_auth(case, users)
             if case["actor"] == "admin":
@@ -607,7 +615,11 @@ def run_pair(local_origins, output, runtime_identity):
     direct = execute_side(
         local_origins, output / "direct", "direct", uuid.uuid4().hex, runtime_identity
     )
-    if direct["safety"] is False or not direct["cleanupComplete"]:
+    if (
+        direct["safety"] is False
+        or not direct["cleanupComplete"]
+        or not direct["recordingComplete"]
+    ):
         mapped = {
             "mode": "mapped",
             "nonce": None,
@@ -615,7 +627,7 @@ def run_pair(local_origins, output, runtime_identity):
             "recordingComplete": False,
             "cleanupComplete": True,
             "safety": None,
-            "skipReason": "direct safety violation or unconfirmed cleanup",
+            "skipReason": "direct incomplete, safety violation, or unconfirmed cleanup",
         }
         comparison = compare_second(direct, mapped)
         save(output / "comparison.json", comparison)

@@ -115,6 +115,10 @@ def comparable(row, bindings):
     observation = {
         "httpStatus": row["observation"]["httpStatus"],
         "mediaType": row["observation"]["mediaType"],
+        "wire": {
+            key: row["observation"]["http"][key]
+            for key in ("bodyKind", "complete", "contentType")
+        },
         "body": normalize(
             row["observation"]["body"],
             names(bindings, document),
@@ -183,6 +187,7 @@ def compare_second(direct, mapped):
             )
     return {
         "kind": "second45-mapping-comparison-v1",
+        "semanticContract": "second45-received-json-semantics-v1",
         "manifestDigest": direct.get("manifestDigest"),
         "recordingComplete": complete,
         "safety": False
@@ -203,6 +208,7 @@ def validate_trace(result):
     """Bind independent recipes and version provenance to actual transport entries."""
     from urllib.parse import urlencode
 
+    from current_contract import received
     from second_admission import PROJECT, operation
     from second_cases import auth_cases, auth_invariants
 
@@ -222,6 +228,15 @@ def validate_trace(result):
             or not isinstance(observation.get("body"), dict)
         ):
             raise ValueError("incomplete trace response")
+        if (
+            not received(
+                {"status": observation["httpStatus"], "http": observation.get("http")}
+            )
+            or observation["http"]["bodyKind"] != "json"
+            or observation.get("mediaType")
+            != observation["http"]["contentType"].split(";", 1)[0].strip().lower()
+        ):
+            raise ValueError("incomplete or detached HTTP receipt")
         return observation
 
     def lookup(role):

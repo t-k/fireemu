@@ -1,6 +1,8 @@
 """Synthetic input receipts exercise mapping validity, never runtime compatibility."""
 
 import copy
+import hashlib
+import json
 
 import pytest
 from broad_contract import digest
@@ -51,6 +53,21 @@ def receipt(mode):
             "httpStatus": status,
             "mediaType": "application/json",
             "body": copy.deepcopy(body),
+        }
+        raw = json.dumps(body).encode()
+        observation["http"] = {
+            "contract": "bounded-http-v1",
+            "status": status,
+            "complete": True,
+            "failure": None,
+            "truncated": False,
+            "digestScope": "full",
+            "bodyKind": "json",
+            "contentType": "application/json",
+            "contentTypeTruncated": False,
+            "receivedBytes": len(raw),
+            "retainedBytes": len(raw),
+            "bodySha256": hashlib.sha256(raw).hexdigest(),
         }
         result["trace"].append(
             {
@@ -308,3 +325,29 @@ def test_cleanup_incomplete_is_not_recording_success():
     result = compare_second(direct, mapped)
     assert not result["recordingComplete"]
     assert result["mapping"] == "invalid"
+
+
+def test_dynamic_wire_digests_are_not_semantic_response_values():
+    left, right = receipt("direct"), receipt("mapped")
+    assert (
+        left["trace"][1]["observation"]["http"]["bodySha256"]
+        != right["trace"][1]["observation"]["http"]["bodySha256"]
+    )
+    assert compare_second(left, right)["mapping"] == "match"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"complete": False},
+        {"bodyKind": "non-json"},
+        {"bodySha256": None},
+        {"retainedBytes": -1},
+        {"failure": "body-interrupted"},
+    ],
+)
+def test_http_receipt_integrity_is_required_independently_of_json_body(patch):
+    left, right = receipt("direct"), receipt("mapped")
+    for side in (left, right):
+        side["trace"][1]["observation"]["http"].update(patch)
+    assert compare_second(left, right)["mapping"] == "invalid"

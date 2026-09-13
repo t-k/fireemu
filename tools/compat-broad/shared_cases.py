@@ -77,6 +77,7 @@ def manifest(nonce):
         }
     return {
         "contract": "shared-local-v1",
+        "nonce": nonce,
         "jobs": jobs,
         "wallSeconds": 180,
         "recoverySeconds": 60,
@@ -244,6 +245,10 @@ def execute(output, origins):
         output / "batch/result.json",
         {
             "completed": completed,
+            "failure": None if completed else "shared-scenarios-incomplete",
+            "unrecovered": [
+                key for key, result in results.items() if not result["cleanupComplete"]
+            ],
             "productionExecuted": False,
             "sharedConstraints": invariant,
             "jobs": results,

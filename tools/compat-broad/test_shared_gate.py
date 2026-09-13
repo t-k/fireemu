@@ -193,7 +193,10 @@ def test_adapter_rejects_remote_even_before_authentication(tmp_path):
         candidate(),
         "a" * 32,
         tmp_path / "adapter",
-        local_origins={"auth": "http://127.0.0.1:12345", "firestore": "http://127.0.0.1:12346"},
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
     )
     adapter.shared_gate = Gate(path, "a")
     adapter.shared_gate.claim()
@@ -215,3 +218,142 @@ def test_readback_missing_fields_does_not_establish_state(tmp_path):
         )
     with pytest.raises(ValueError):
         gate.finish()
+
+
+def test_absent_or_failed_cleanup_read_never_sends_unconditional_delete(tmp_path):
+    for failed in (False, True):
+        p = plan()
+        p.update(costMicrousd=700)
+        p["jobs"]["a"]["recovery"] = [
+            p["jobs"]["a"]["recovery"][0],
+            {**p["jobs"]["a"]["recovery"][0], "method": "DELETE", "versionFrom": 0},
+            p["jobs"]["a"]["recovery"][0],
+        ]
+        path = tmp_path / str(failed)
+        create(path, p)
+        gate = Gate(path, "a")
+        gate.claim()
+        gate.dispatch(p["jobs"]["a"]["observation"][0], False, lambda: (404, {}))
+
+        def read(failed=failed):
+            if failed:
+                raise TimeoutError()
+            return 404, {}
+
+        if failed:
+            with pytest.raises(TimeoutError):
+                gate.dispatch(p["jobs"]["a"]["recovery"][0], True, read)
+        else:
+            gate.dispatch(p["jobs"]["a"]["recovery"][0], True, read)
+        sent = []
+        operation = {
+            k: v for k, v in p["jobs"]["a"]["recovery"][1].items() if k != "versionFrom"
+        }
+        status, result = gate.dispatch(
+            operation, True, lambda sent=sent: sent.append(True)
+        )
+        assert status is None and result["skipped"]
+        assert sent == []
+        gate.dispatch(p["jobs"]["a"]["recovery"][2], True, lambda: (404, {}))
+        gate.finish()
+        assert gate.snapshot()["total"] == 3
+
+
+def test_base_exception_retains_uncertain_dispatch(tmp_path):
+    p = plan()
+    path = tmp_path / "gate"
+    create(path, p)
+    gate = Gate(path, "a")
+    gate.claim()
+
+    def interrupted():
+        raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        gate.dispatch(p["jobs"]["a"]["observation"][0], False, interrupted)
+    assert gate.snapshot()["jobs"]["a"]["inflight"]
+
+
+def recover_in_process(path, key, ready, start, results):
+    gate = Gate(path, key)
+    gate.claim()
+    p = gate.snapshot()["plan"]
+    gate.dispatch(p["jobs"][key]["observation"][0], False, lambda: (404, {}))
+    ready.put(key)
+    start.wait(5)
+    refused = False
+    try:
+        gate.dispatch(p["jobs"][key]["observation"][1], False, lambda: (404, {}))
+    except ValueError:
+        refused = True
+    gate.dispatch(p["jobs"][key]["recovery"][0], True, lambda: (404, {}))
+    gate.finish()
+    results.put(refused)
+
+
+def test_two_processes_recover_after_global_observation_exhaustion(tmp_path):
+    p = plan()
+    p.update(observationRequests=2, costMicrousd=400)
+    for job in p["jobs"].values():
+        job["observation"] *= 2
+    path = tmp_path / "gate"
+    create(path, p)
+    ctx = mp.get_context("spawn")
+    ready, results, start = ctx.Queue(), ctx.Queue(), ctx.Event()
+    children = [
+        ctx.Process(target=recover_in_process, args=(path, key, ready, start, results))
+        for key in ("a", "b")
+    ]
+    try:
+        for child in children:
+            child.start()
+        for _ in children:
+            ready.get(timeout=10)
+        start.set()
+        for child in children:
+            child.join(10)
+            assert child.exitcode == 0
+        assert all(results.get(timeout=2) for _ in children)
+        state = Gate(path, "a").snapshot()
+        assert state["total"] == 4 and state["recovery"] == 2
+        assert all(job["complete"] for job in state["jobs"].values())
+    finally:
+        for child in children:
+            if child.is_alive():
+                child.terminate()
+                child.join(5)
+
+
+# Reuse the existing owned HTTP fixture; no external requests are possible.
+from test_second_wire import wire_server  # noqa: F401
+
+
+@pytest.mark.parametrize("mode", ["non-json", "partial", "denied"])
+def test_existing_adapter_wire_failure_is_retained_by_gate(tmp_path, wire_server, mode):  # noqa: F811
+    from batch_adapter import Adapter, observer_digest
+    from batch_contract import candidate
+
+    origin, handler = wire_server
+    handler.mode = mode
+    p = plan()
+    p.update(
+        localOrigins={"auth": origin, "firestore": origin},
+        nonce="a" * 32,
+        observerSha256=observer_digest(),
+    )
+    p["jobs"]["a"]["observation"][0]["method"] = "POST"
+    path = tmp_path / "gate"
+    create(path, p)
+    adapter = Adapter(
+        candidate(), p["nonce"], tmp_path / "adapter", local_origins=p["localOrigins"]
+    )
+    adapter.shared_gate = Gate(path, "a")
+    adapter.shared_gate.claim()
+    with pytest.raises(ValueError):
+        adapter.request(**p["jobs"]["a"]["observation"][0])
+    state = adapter.shared_gate.snapshot()
+    assert state["total"] == 1
+    assert state["jobs"]["a"]["stopped"]
+    assert state["events"][0]["failure"]
+    assert not state["jobs"]["a"]["complete"]
+    assert adapter.budget.counts["total"] == 1

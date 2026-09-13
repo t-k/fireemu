@@ -9,7 +9,9 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import math
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -18,7 +20,10 @@ from broad_contract import digest
 
 def _save(path, state):
     temporary = path / "state.tmp"
-    with temporary.open("w") as stream:
+    fd = os.open(
+        temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+    )
+    with os.fdopen(fd, "w") as stream:
         json.dump(state, stream, allow_nan=False)
         stream.flush()
         os.fsync(stream.fileno())
@@ -42,7 +47,9 @@ def create(path, plan):
         or len(resources) != len(set(resources))
         or not resources
         or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= 1200
+        or not math.isfinite(plan["intervalSeconds"])
         or plan["intervalSeconds"] < 0.25
+        or type(plan["costMicrousd"]) is not int
         or type(plan["observationRequests"]) is not int
         or plan["observationRequests"] < 0
         or type(plan["requestCostMicrousd"]) is not int
@@ -65,6 +72,9 @@ def create(path, plan):
         "costMicrousd": overhead * plan["requestCostMicrousd"],
         "lastSent": 0,
         "stopped": False,
+        "coordinatorPid": os.getpid(),
+        "coordinatorDone": 0,
+        "coordinatorInflight": False,
         "events": [],
         "jobs": {},
     }
@@ -92,8 +102,20 @@ class Gate:
     @contextlib.contextmanager
     def locked(self):
         # Never recreate missing state/lock: no unmanaged fallback or reset.
+        if self.path.stat().st_mode & 0o077 or any(
+            (self.path / name).is_symlink() for name in ("lock", "state.json")
+        ):
+            raise ValueError("private regular gate files required")
         with (self.path / "lock").open("r+") as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX)
+            wait_until = time.monotonic() + 15
+            while True:
+                try:
+                    fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= wait_until:
+                        raise ValueError("gate lock deadline") from None
+                    time.sleep(0.01)
             state = json.loads((self.path / "state.json").read_bytes())
             if digest(state["plan"]) != state["planDigest"] or state[
                 "planDigest"
@@ -104,6 +126,46 @@ class Gate:
     def snapshot(self):
         with self.locked() as state:
             return state
+
+    def coordinator_call(self, index, send):
+        """Two prepaid local ownership-control calls, before worker claims."""
+        with self.locked() as state:
+            if (
+                state["coordinatorPid"] != os.getpid()
+                or state["coordinatorInflight"]
+                or index != state["coordinatorDone"]
+                or index >= state["plan"].get("coordinatorRequests", 0)
+                or any(job["pid"] is not None for job in state["jobs"].values())
+            ):
+                raise ValueError("coordinator admission")
+            delay = max(
+                0,
+                state["lastSent"] + state["plan"]["intervalSeconds"] - time.monotonic(),
+            )
+            time.sleep(delay)
+            if (
+                time.monotonic() + 12
+                > state["started"]
+                + state["plan"]["wallSeconds"]
+                - state["plan"]["recoverySeconds"]
+            ):
+                raise ValueError("coordinator deadline")
+            state["coordinatorInflight"] = True
+            _save(self.path, state)
+            try:
+                result = send()
+            except BaseException:
+                state["stopped"] = True
+                _save(self.path, state)
+                raise
+            state["coordinatorInflight"] = False
+            state["coordinatorDone"] += 1
+            state["lastSent"] = time.monotonic()
+            state.setdefault("coordinatorResults", []).append(
+                {"index": index, "status": result[0], "ended": state["lastSent"]}
+            )
+            _save(self.path, state)
+            return result
 
     def claim(self):
         with self.locked() as state:
@@ -127,6 +189,8 @@ class Gate:
             if (
                 job["pid"] != os.getpid()
                 or job["complete"]
+                or state["coordinatorInflight"]
+                or state["coordinatorDone"] != plan.get("coordinatorRequests", 0)
                 or any(j["inflight"] for j in state["jobs"].values())
                 or (not recovery and (job["stopped"] or state["stopped"]))
             ):
@@ -139,9 +203,7 @@ class Gate:
             source = expected.pop("versionFrom", None)
             if source is not None:
                 capture = job["captures"].get(str(source))
-                if not capture or capture["status"] not in (200, 404):
-                    raise ValueError("cleanup readback unavailable")
-                if capture["status"] == 200:
+                if capture and capture["status"] == 200:
                     from urllib.parse import quote
 
                     version = capture.get("updateTime")
@@ -155,6 +217,20 @@ class Gate:
             resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
             if recovery and resource not in job["owned"]:
                 raise ValueError("cleanup target has no absent-before-use proof")
+            if recovery:
+                job["stopped"] = True  # Recovery is a one-way transition.
+            if source is not None and (not capture or capture["status"] != 200):
+                job[phase] += 1
+                state["reservedRecovery"] -= 1
+                state.setdefault("skips", []).append(
+                    {
+                        "job": self.job,
+                        "index": index,
+                        "reason": "absent-or-unavailable-cleanup-read",
+                    }
+                )
+                _save(self.path, state)
+                return None, {"skipped": "absent-or-unavailable-cleanup-read"}
             now = time.monotonic()
             delay = max(0, state["lastSent"] + plan["intervalSeconds"] - now)
             deadline = (
@@ -173,6 +249,8 @@ class Gate:
             ):
                 raise ValueError("global phase/time/cost capacity")
             time.sleep(delay)
+            if time.monotonic() + 12 > deadline:
+                raise ValueError("deadline after rate wait")
             state["lastSent"] = time.monotonic()
             state["total"] += 1
             state[phase] += 1
@@ -229,8 +307,12 @@ class Gate:
             finally:
                 # Normal exception paths have returned from bounded transport. A killed
                 # process never reaches here: its marker blocks every successor dispatch.
-                job["inflight"] = False
+                interruption = sys.exc_info()[0]
+                job["inflight"] = interruption is not None and not issubclass(
+                    interruption, Exception
+                )
                 event["ended"] = time.monotonic()
+                state["lastSent"] = event["ended"]
                 _save(self.path, state)
 
     def finish(self):
@@ -249,6 +331,16 @@ class Gate:
     def adapter_request(self, adapter, operation, send):
         if not adapter.local:
             raise ValueError("shared gate is local-only; production permission absent")
+
+        plan = self.snapshot()["plan"]
+        from batch_adapter import observer_digest
+
+        if (
+            adapter.local != plan.get("localOrigins")
+            or adapter.nonce != plan.get("nonce")
+            or observer_digest() != plan.get("observerSha256")
+        ):
+            raise ValueError("adapter origin/nonce/observer binding mismatch")
 
         def admitted():
             adapter._shared_dispatch = True

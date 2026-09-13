@@ -148,6 +148,7 @@ class Adapter:
 
     def initialize_state(self, output, nonce):
         """Initialize inert bookkeeping only; admission belongs to each constructor."""
+        self.shared_gate = None
         self.output = output
         output.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.journal = output / "ownership.jsonl"

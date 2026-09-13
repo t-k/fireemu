@@ -31,17 +31,34 @@ def child(output, nonce, *, shared=False):
         from shared_cases import manifest
         from shared_gate import create
 
-        create(output / "gate", manifest(nonce))
     origins = {
         "auth": local_origin("http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"]),
         "firestore": local_origin("http://" + os.environ["FIRESTORE_EMULATOR_HOST"]),
     }
+    if shared:
+        create(output / "gate", {**manifest(nonce), "localOrigins": origins})
     _, control = local_addresses(
         os.environ["FIRESTORE_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
     )
     token = os.environ["FIREEMU_CONTROL_TOKEN"]
-    status, body = control_get(control, "/v1/sessions/default/resources", token)
-    wrong, _ = control_get(control, "/v1/sessions/default/resources", token + "-wrong")
+    if shared:
+        from shared_gate import Gate
+
+        gate = Gate(output / "gate", "partial")
+        status, body = gate.coordinator_call(
+            0, lambda: control_get(control, "/v1/sessions/default/resources", token)
+        )
+        wrong, _ = gate.coordinator_call(
+            1,
+            lambda: control_get(
+                control, "/v1/sessions/default/resources", token + "-wrong"
+            ),
+        )
+    else:
+        status, body = control_get(control, "/v1/sessions/default/resources", token)
+        wrong, _ = control_get(
+            control, "/v1/sessions/default/resources", token + "-wrong"
+        )
     if (
         status != 200
         or body.get("project") != PROJECT
@@ -126,6 +143,8 @@ def run(output, *, shared=False):
         command.append("--shared")
     report = {
         "productionExecuted": False,
+        "configurationSha256": hashlib.sha256(config.read_bytes()).hexdigest(),
+        "stopReason": "not-started",
         "executionCommit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
@@ -144,6 +163,11 @@ def run(output, *, shared=False):
         )
         try:
             report["exitCode"] = process.wait(timeout=180)
+            report["stopReason"] = (
+                "child-completed" if report["exitCode"] == 0 else "child-nonzero"
+            )
+        except subprocess.TimeoutExpired:
+            report.update(exitCode=None, stopReason="child-timeout")
         finally:
             cleanup_run(process, output, nonce, report)
     if before != source_inputs():

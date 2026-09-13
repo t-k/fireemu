@@ -1,21 +1,109 @@
 """Compare acquired shared scenarios without converting local invariants into an oracle."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from urllib.parse import quote
 
 from batch_adapter import observer_digest
-from batch_pair import normalize
+from batch_pair import normalize as batch_normalize
 from broad_contract import digest
 from shared_cases import manifest
 
+G0_PRODUCTION_RESULT_SHA256 = (
+    "47672f4e3162b4a0ddfb7baaab622007602aeed6c1fa3d6e5e84034bcbb87772"
+)
+G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST = (
+    "e20a4f5d2325a3c88306ca30407a3d5b8f224ce9d95f77490f9d0908ec22eb6c"
+)
+G0_ORIGINAL_MANIFEST_DIGEST = (
+    "13e97e0146c483ad6ab93f1dc8ecc4a8ea2615eaf481878047aec94f42fcecd1"
+)
+G0_NORMALIZATION_VERSION = "shared-g0-batchwrite-status-resource-v1"
 
-def validate_record(record, *, local=False):
+
+def g0_contract():
+    from shared_production import binding
+
+    return {
+        "version": "shared-g0-runtime-recomparison-v1",
+        "baseAdmissionContractDigest": digest(binding()),
+        "normalizationVersion": G0_NORMALIZATION_VERSION,
+        "normalizerImplementationDigest": hashlib.sha256(
+            Path(__file__).read_bytes()
+        ).hexdigest(),
+        "scope": "Firestore status/*/message exact owned resource tokens only",
+    }
+
+
+def _normalize_status_message(value, names):
+    resources = names.get("firestoreResources", {})
+    candidates = []
+    for role, parent in names.get("firestoreParents", {}).items():
+        for resource in resources.get(role, []):
+            if not isinstance(resource, str) or not resource.startswith(parent + "/"):
+                continue
+            candidates.append((resource, "documents/" + role + resource[len(parent) :]))
+    candidates.sort(key=lambda item: len(item[0]), reverse=True)
+    boundary = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-"
+    )
+    output = []
+    cursor = 0
+    while cursor < len(value):
+        match = None
+        for token, replacement in candidates:
+            start = value.find(token, cursor)
+            if start < 0:
+                continue
+            end = start + len(token)
+            if (
+                (start == 0 or value[start - 1] not in boundary)
+                and (end == len(value) or value[end] not in boundary)
+                and (match is None or start < match[0])
+            ):
+                match = (start, end, replacement)
+        if match is None:
+            output.append(value[cursor:])
+            break
+        start, end, replacement = match
+        output.extend((value[cursor:start], replacement))
+        cursor = end
+    return "".join(output)
+
+
+def normalize_g0(value, names, *, service, path=()):
+    """Apply the versioned G0 status-message normalization before shared normalization."""
+    if (
+        service == "firestore"
+        and isinstance(value, str)
+        and len(path) == 3
+        and path[0] == "status"
+        and path[2] == "message"
+    ):
+        return _normalize_status_message(value, names)
+    if isinstance(value, list):
+        return [
+            normalize_g0(item, names, service=service, path=(*path, str(i)))
+            for i, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        return {
+            key: normalize_g0(item, names, service=service, path=(*path, key))
+            for key, item in value.items()
+        }
+    return batch_normalize(value, names, service=service, path=path)
+
+
+def validate_record(record, *, local=False, historical_observer=False):
     batch = record.get("batch", record)
     plan = batch["gate"]["plan"]
     expected = manifest(plan["nonce"])
-    if plan["observerSha256"] != observer_digest():
+    expected_observer = (
+        batch.get("observerDigest") if historical_observer else observer_digest()
+    )
+    if plan["observerSha256"] != expected_observer:
         raise ValueError("observer mismatch")
     if digest(plan["jobs"]) != digest(expected["jobs"]):
         raise ValueError("closed scenario mismatch")
@@ -128,7 +216,7 @@ def validate_record(record, *, local=False):
     return batch
 
 
-def compare(production, local):
+def _compare(production, local, *, g0_recompare=False):
     from shared_production import binding
     from shared_production import manifest as production_manifest
 
@@ -140,16 +228,33 @@ def compare(production, local):
         "compatibility": "indeterminate",
     }
     try:
-        left = validate_record(production)
+        left = validate_record(production, historical_observer=g0_recompare)
         right = validate_record(local, local=True)
+        production_contract = (
+            G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST
+            if g0_recompare
+            else digest(binding())
+        )
         if (
             left.get("productionExecuted") is not True
             or left.get("configurationUnchanged") is not True
             or left.get("stateVerified") is not True
-            or left.get("localRecordSha256") != digest(local)
+            or left.get("cleanupComplete") is not True
+            or any(
+                job.get("safety") is not True
+                or job.get("stateVerified") is not True
+                or job.get("cleanupComplete") is not True
+                for job in left["jobs"].values()
+            )
+            or (not g0_recompare and left.get("localRecordSha256") != digest(local))
             or len(left["gate"].get("managementEvents", [])) not in (10, 12)
-            or left.get("manifestDigest") != digest(production_manifest())
-            or left.get("comparisonContractDigest") != digest(binding())
+            or left.get("manifestDigest")
+            != (
+                G0_ORIGINAL_MANIFEST_DIGEST
+                if g0_recompare
+                else digest(production_manifest())
+            )
+            or left.get("comparisonContractDigest") != production_contract
         ):
             raise ValueError("production contract incomplete")
     except (KeyError, TypeError, ValueError) as error:
@@ -160,7 +265,11 @@ def compare(production, local):
         if (
             digest(permission) != left["permissionDigest"]
             or digest(permission) != left["gate"]["plan"]["permissionDigest"]
-            or permission["localRecordSha256"] != digest(local)
+            or (not g0_recompare and permission["localRecordSha256"] != digest(local))
+            or (
+                g0_recompare
+                and permission["localRecordSha256"] != left["localRecordSha256"]
+            )
         ):
             raise ValueError("permission binding differs")
         ids = [e["id"] for e in left["gate"]["managementEvents"]]
@@ -219,7 +328,10 @@ def compare(production, local):
                     key: b["gate"]["plan"]["jobs"][key]["resources"][0].rsplit("/", 1)[
                         0
                     ]
-                }
+                },
+                "firestoreResources": {
+                    key: b["gate"]["plan"]["jobs"][key]["resources"]
+                },
             }
             for b in (left, right)
         ]
@@ -229,7 +341,11 @@ def compare(production, local):
             values = [
                 {
                     "status": r["status"],
-                    "body": normalize(r["body"], n, service="firestore"),
+                    "body": (
+                        normalize_g0(r["body"], n, service="firestore")
+                        if g0_recompare
+                        else batch_normalize(r["body"], n, service="firestore")
+                    ),
                 }
                 for r, n in zip((a, b), names, strict=True)
             ]
@@ -250,16 +366,53 @@ def compare(production, local):
     return result
 
 
+def compare(production, local):
+    return _compare(production, local)
+
+
+def compare_g0_runtime_recompare(production_path, local):
+    """Recompare a pinned G0 production receipt against a new local runtime receipt."""
+    production_path = Path(production_path)
+    raw = production_path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != G0_PRODUCTION_RESULT_SHA256:
+        raise ValueError("G0 production result hash mismatch")
+    production = json.loads(raw)
+    result = _compare(production, local, g0_recompare=True)
+    result["mode"] = "g0-runtime-recomparison"
+    contract = g0_contract()
+    result["contract"] = contract
+    result["comparisonContractDigest"] = digest(contract)
+    result["source"] = {
+        "productionResultSha256": G0_PRODUCTION_RESULT_SHA256,
+        "originalComparisonContractDigest": G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST,
+        "originalManifestDigest": G0_ORIGINAL_MANIFEST_DIGEST,
+        "newComparisonContractDigest": digest(contract),
+        "baseAdmissionContractDigest": contract["baseAdmissionContractDigest"],
+        "oldLocalRecordSha256": production["localRecordSha256"],
+        "limitation": (
+            "The immutable production receipt's old localRecordSha256 is retained "
+            "as provenance and is not used to approve this new runtime receipt."
+        ),
+    }
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--production", required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--production", type=Path)
+    source.add_argument("--g0-runtime-recompare-production", type=Path)
     parser.add_argument("--local", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    result = compare(
-        json.loads(args.production.read_bytes()), json.loads(args.local.read_bytes())
-    )
+    local = json.loads(args.local.read_bytes())
+    if args.g0_runtime_recompare_production:
+        result = compare_g0_runtime_recompare(
+            args.g0_runtime_recompare_production, local
+        )
+    else:
+        result = compare(json.loads(args.production.read_bytes()), local)
     with args.output.open("x") as stream:
         json.dump(result, stream, indent=2, allow_nan=False)
         stream.write("\n")

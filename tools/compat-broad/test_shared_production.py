@@ -1,6 +1,8 @@
 """Whole transport simulations, never production observations or owner permissions."""
 
 import copy
+import json
+import os
 import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,7 +12,13 @@ import pytest
 import shared_production as production
 from broad_contract import digest
 from shared_cases import field, manifest
-from shared_production_pair import compare
+from shared_production_pair import (
+    G0_NORMALIZATION_VERSION,
+    _compare,
+    compare,
+    compare_g0_runtime_recompare,
+    normalize_g0,
+)
 from test_second_production import fixture_permission as old_permission
 
 
@@ -316,6 +324,129 @@ def test_comparator_uses_closed_inputs_and_typed_responses(boundary, tmp_path):
     assert compare(changed, local)["compatibility"] == "indeterminate"
     result["completed"] = False
     assert compare(result, local)["compatibility"] == "indeterminate"
+
+
+def test_g0_status_message_normalization_is_exact_and_owned():
+    parent = "projects/p/databases/(default)/documents/shared_runs/a-partial/docs"
+    resource = parent + "/existing"
+    names = {
+        "firestoreParents": {"partial": parent},
+        "firestoreResources": {"partial": [resource]},
+    }
+    equivalent = {
+        "status": [{}, {"code": 6, "message": "Document already exists: " + resource}]
+    }
+    changed_parent = parent.replace("a-partial", "b-partial")
+    changed_resource = resource.replace("a-partial", "b-partial")
+    changed_names = {
+        "firestoreParents": {"partial": changed_parent},
+        "firestoreResources": {"partial": [changed_resource]},
+    }
+    assert normalize_g0(equivalent, names, service="firestore") == normalize_g0(
+        {
+            "status": [
+                {},
+                {"code": 6, "message": "Document already exists: " + changed_resource},
+            ]
+        },
+        changed_names,
+        service="firestore",
+    )
+    for message in [
+        "x" + resource,
+        resource + "-suffix",
+        "Document already exists: projects/foreign/docs/existing",
+    ]:
+        body = {"status": [{}, {"code": 6, "message": message}]}
+        assert normalize_g0(body, names, service="firestore") == body
+    assert normalize_g0(
+        {"status": [{"code": "6", "message": resource}]},
+        names,
+        service="firestore",
+    ) == {"status": [{"code": "6", "message": "documents/partial/existing"}]}
+
+
+def _g0_local_runtime_fixture(production, local):
+    """Derive a local-shaped receipt from the pinned bodies without changing its inputs."""
+    from batch_adapter import observer_digest
+
+    result = copy.deepcopy(local)
+    result["gate"]["plan"]["observerSha256"] = observer_digest()
+    for key, production_job in production["jobs"].items():
+        local_job = result["jobs"][key]
+        production_resources = production["gate"]["plan"]["jobs"][key]["resources"]
+        local_resources = result["gate"]["plan"]["jobs"][key]["resources"]
+
+        def remap(
+            value,
+            production_resources=production_resources,
+            local_resources=local_resources,
+        ):
+            if isinstance(value, str):
+                for source, target in zip(
+                    production_resources, local_resources, strict=True
+                ):
+                    value = value.replace(source, target)
+                return value
+            if isinstance(value, list):
+                return [remap(item) for item in value]
+            if isinstance(value, dict):
+                return {name: remap(item) for name, item in value.items()}
+            return value
+
+        for production_row, local_row in zip(
+            production_job["rows"], local_job["rows"], strict=True
+        ):
+            local_row["body"] = remap(production_row["body"])
+            event = next(
+                event
+                for event in result["gate"]["events"]
+                if event["job"] == key
+                and event["phase"] == "observation"
+                and event["index"] == local_row["index"]
+            )
+            event["responseDigest"] = digest(local_row["body"])
+    return result
+
+
+def _g0_production_source():
+    source = Path(os.environ.get("FIREEMU_G0_PRODUCTION_RESULT", ""))
+    if not source.exists():
+        pytest.skip("private G0 production record is unavailable")
+    return source
+
+
+def test_g0_runtime_recompare_pins_production_and_does_not_reuse_old_local_hash(
+    tmp_path,
+):
+    source = _g0_production_source()
+    production = json.loads(source.read_bytes())
+    local = _g0_local_runtime_fixture(production, local_fixture())
+    pinned = tmp_path / "g0-production.json"
+    pinned.write_bytes(source.read_bytes())
+    result = compare_g0_runtime_recompare(pinned, local)
+    assert result["compatibility"] == "match", result
+    assert result["mode"] == "g0-runtime-recomparison"
+    assert result["contract"]["normalizationVersion"] == G0_NORMALIZATION_VERSION
+    assert result["source"]["oldLocalRecordSha256"] == production["localRecordSha256"]
+    assert (
+        result["source"]["newComparisonContractDigest"]
+        == result["comparisonContractDigest"]
+    )
+    tampered = tmp_path / "tampered.json"
+    tampered.write_bytes(source.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="G0 production result hash mismatch"):
+        compare_g0_runtime_recompare(tampered, local)
+
+
+@pytest.mark.parametrize("field", ["safety", "stateVerified", "cleanupComplete"])
+def test_g0_runtime_recompare_rejects_missing_production_safety_or_cleanup(field):
+    source = _g0_production_source()
+    production = json.loads(source.read_bytes())
+    local = _g0_local_runtime_fixture(production, local_fixture())
+    production["jobs"]["partial"][field] = False
+    result = _compare(production, local, g0_recompare=True)
+    assert result["compatibility"] == "indeterminate"
 
 
 @pytest.mark.parametrize(

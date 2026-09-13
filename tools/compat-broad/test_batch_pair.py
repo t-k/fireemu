@@ -158,6 +158,14 @@ def test_auth_normalization_preserves_wrong_owner_relative_expiry_and_shape():
     )
 
 
+def test_first46_normalization_contract_remains_unchanged():
+    p = module()
+    from batch_contract import candidate
+
+    assert p.NORMALIZATION["version"] == "batch-response-v2"
+    assert p.binding(candidate())["normalizerVersion"] == "batch-response-v2"
+
+
 def test_auth_emit_retains_completed_rows_before_later_failure():
     import pytest
     from broad_cases import auth_scenario

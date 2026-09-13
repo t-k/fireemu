@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The `fireemu` launcher: find the binary for this platform and become it.
+// The `fireemu` launcher: find the binary for this platform and supervise it.
 //
 // `fireemu` itself carries no binary. Each platform's daemon ships in its own package
 // (`@fireemu/darwin-arm64` and friends), declared here as an optional dependency with an `os`
@@ -11,7 +11,7 @@
 // `package.json` rather than hard-coded, so it always names the platforms that were actually
 // published beside this launcher.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync, accessSync, constants as fsConstants, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
@@ -114,27 +114,43 @@ function main() {
     process.exit(1);
   }
   ensureExecutable(binary.path);
-  // stdio is inherited, so the daemon reads the real terminal and Ctrl-C reaches it directly:
-  // the launcher is in the same process group and does not need to forward anything.
-  const result = spawnSync(binary.path, process.argv.slice(2), {
+  // Keep terminal I/O and the foreground process group intact. PID-directed signals only
+  // reach this launcher, so forward them and wait for the daemon's own shutdown to finish.
+  const child = spawn(binary.path, process.argv.slice(2), {
     stdio: "inherit",
     windowsHide: false,
   });
-  if (result.error) {
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.on(signal, () => {
+      // Windows delivers console Ctrl-C to the child directly; child.kill would forcefully
+      // terminate it instead of requesting graceful shutdown. Only wait on that platform.
+      if (process.platform === "win32") return;
+      // Do not use child.killed here: it means a signal was sent, not that the child exited.
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+    });
+  }
+  child.on("error", (error) => {
+    if (child.pid) {
+      // A failed signal delivery must not orphan a daemon that is still running.
+      process.stderr.write(`fireemu could not signal the daemon: ${error.message}\n`);
+      return;
+    }
     const reason =
-      result.error.code === "ENOENT"
+      error.code === "ENOENT"
         ? `${binary.path} does not exist (from ${binary.from})`
-        : `${binary.path}: ${result.error.message}`;
+        : `${binary.path}: ${error.message}`;
     process.stderr.write(`fireemu could not start the daemon: ${reason}\n`);
     process.exit(1);
-  }
-  if (result.signal) {
-    // Report the death the way a shell does, so `fireemu ... ; echo $?` matches running the
-    // daemon directly.
-    const number = osConstants.signals[result.signal] ?? 0;
-    process.exit(128 + number);
-  }
-  process.exit(result.status ?? 1);
+  });
+  child.on("exit", (code, signal) => {
+    if (signal) {
+      // Report the death the way a shell does, so `fireemu ... ; echo $?` matches running the
+      // daemon directly.
+      const number = osConstants.signals[signal] ?? 0;
+      process.exit(128 + number);
+    }
+    process.exit(code ?? 1);
+  });
 }
 
 main();

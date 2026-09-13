@@ -58,6 +58,8 @@ The generated configuration uses Standard edition Firestore with the Native API:
 
 See the [configuration schema](spec/config/fireemu.schema.json) for the complete set of options.
 
+`--config` accepts either a canonical fireemu configuration (with `"schemaVersion": 1`) or a Firebase project configuration. A file without `schemaVersion` is refused if it contains fireemu-only keys such as `profile`, `daemon`, or `auth.totp`, with a diagnostic naming the file, key, and required version. This check also applies to `--firebase-json` and files referenced by `firebaseJson`; keep fireemu settings in the canonical file and pass it with `--config`. Shared Firebase product sections and deployment settings remain supported, and filenames do not determine the format.
+
 ## Installation
 
 Install fireemu as a development dependency:

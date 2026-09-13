@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { api, gotoApp, resetSession } from "./helpers";
+import { api, gotoApp, resetSession, waitForFunctionsRunner } from "./helpers";
 
 const DOCS = "firestore/v1/projects/demo-app/databases/(default)/documents";
 
@@ -43,6 +43,115 @@ test.describe("Functions", () => {
     await page.getByTestId("await-idle").click();
     await expect(page.getByTestId("invocation-table")).toContainText("mirrorTodo");
     await expect(page.getByTestId("function-logs")).toContainText("mirrorTodo");
+  });
+
+  test("invokes an onRequest function and shows its response", async ({ page, request }) => {
+    await waitForFunctionsRunner(request);
+    await gotoApp(page, "/functions");
+    await page.getByTestId("invoke-echo-toggle").click();
+    // The onRequest form: a header and a JSON body are echoed back by the function.
+    await page.getByLabel("Headers (one per line, Name: value)").fill("x-smoke: hello");
+    await page.getByLabel("Body (optional)").fill('{"ping":1}');
+    await page.getByTestId("invoke-echo-send").click();
+    await expect(page.getByTestId("invoke-result")).toContainText("Status 200");
+    const body = page.getByTestId("invoke-response-body");
+    await expect(body).toContainText('"method":"POST"');
+    await expect(body).toContainText('"header":"hello"');
+    await expect(body).toContainText('"ping":1');
+  });
+
+  test("invokes a callable and shows its result envelope", async ({ page, request }) => {
+    await waitForFunctionsRunner(request);
+    await gotoApp(page, "/functions");
+    await page.getByTestId("invoke-add-toggle").click();
+    await page.getByTestId("invoke-add-data").fill('{"a":2,"b":3}');
+    await page.getByTestId("invoke-add-send").click();
+    await expect(page.getByTestId("invoke-result")).toContainText("Status 200");
+    // A callable's return travels in the `{ "result": ... }` envelope.
+    await expect(page.getByTestId("invoke-response-body")).toContainText('"sum":5');
+  });
+
+  test("enqueues a task that reaches its onTaskDispatched handler", async ({ page, request }) => {
+    await waitForFunctionsRunner(request);
+    await gotoApp(page, "/functions");
+    await page.getByTestId("enqueue-countJob-toggle").click();
+    await page.getByTestId("enqueue-countJob-data").fill('{"id":"ui-task-1","n":42}');
+    await page.getByTestId("enqueue-countJob-send").click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Enqueued a task onto countJob" }),
+    ).toBeVisible();
+    // The handler writes tasks/{data.id} with the task's payload; poll until it lands.
+    await expect(async () => {
+      const doc = (await api(request, "GET", `${DOCS}/tasks/ui-task-1`)) as {
+        fields?: { n?: { integerValue?: string } };
+      };
+      expect(doc.fields?.n?.integerValue).toBe("42");
+    }).toPass({ timeout: 10000 });
+  });
+
+  test("shows a schedule's next run and advances the clock to it", async ({ page }) => {
+    await gotoApp(page, "/functions");
+    await expect(page.getByTestId("next-run-tick")).toContainText("Next run");
+    await page.getByTestId("advance-to-next-tick").click();
+    await expect(page.getByRole("status").filter({ hasText: "Advanced the clock" })).toBeVisible();
+    // Advancing to the next run makes it due; the catch-up policy runs it.
+    await page.getByTestId("await-idle").click();
+    await expect(page.getByTestId("invocation-table")).toContainText("tick");
+  });
+
+  test("disables functions actions and explains when a different session is selected", async ({
+    page,
+    request,
+  }) => {
+    // A second session on a different project. Functions belong to the default session only, so
+    // switching to this one must not leave any action that would fire against the default project.
+    await api(request, "POST", "control/v1/sessions", { project: "demo-b", name: "demo-b" });
+    try {
+      await gotoApp(page, "/functions");
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeEnabled();
+      await page.getByTestId("session-select").selectOption("demo-b");
+      await expect(page.getByTestId("functions-session-mismatch")).toBeVisible();
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeDisabled();
+      await expect(page.getByTestId("enqueue-countJob-toggle")).toBeDisabled();
+      await expect(page.getByTestId("run-tick")).toBeDisabled();
+      await expect(page.getByTestId("advance-to-next-tick")).toBeDisabled();
+      // Selecting the functions' own session restores them.
+      await page.getByTestId("session-select").selectOption("default");
+      await expect(page.getByTestId("functions-session-mismatch")).toHaveCount(0);
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeEnabled();
+    } finally {
+      await api(request, "DELETE", "control/v1/sessions/demo-b");
+    }
+  });
+
+  test("keeps functions actions disabled after the selected session is deleted elsewhere", async ({
+    page,
+    request,
+  }) => {
+    await api(request, "POST", "control/v1/sessions", { project: "demo-b", name: "demo-b" });
+    let cleaned = false;
+    try {
+      await gotoApp(page, "/functions");
+      await page.getByTestId("session-select").selectOption("demo-b");
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeDisabled();
+      // Delete the selected session from elsewhere; the app polls the session list every 5s.
+      await api(request, "DELETE", "control/v1/sessions/demo-b");
+      cleaned = true;
+      // Wait until the list has refreshed and the option is gone.
+      await expect(
+        page.locator('[data-testid="session-select"] option[value="demo-b"]'),
+      ).toHaveCount(0, { timeout: 15000 });
+      // The selection no longer resolves to a real session, so actions must stay disabled
+      // rather than re-enable against the default project via the display fallback.
+      await expect(page.getByTestId("functions-session-mismatch")).toBeVisible();
+      await expect(page.getByTestId("invoke-echo-toggle")).toBeDisabled();
+      await expect(page.getByTestId("enqueue-countJob-toggle")).toBeDisabled();
+      await expect(page.getByTestId("run-tick")).toBeDisabled();
+    } finally {
+      if (!cleaned) {
+        await api(request, "DELETE", "control/v1/sessions/demo-b");
+      }
+    }
   });
 
   test("filters invocations by function and logs by text", async ({ page, request }) => {

@@ -15,7 +15,9 @@
 //! ANY  /ui/api/auth/...                Identity Toolkit admin + emulator routes, as owner
 //! GET  /ui/api/storage/buckets         the buckets of every session project
 //! ANY  /ui/api/storage/...             Storage JSON API, as owner
-//! GET  /ui/api/functions               manifest, status, history, dead letters
+//! GET  /ui/api/functions               manifest (with schedule nextRun), status, history
+//! POST /ui/api/functions/{name}:invoke invoke an HTTP / callable function through the port
+//! POST /ui/api/functions/{name}:enqueue enqueue a Cloud Task onto an onTaskDispatched queue
 //! GET  /ui/api/functions/logs          SSE: runner log lines and invocation outcomes
 //! GET  /ui/api/appcheck/config         App Check: apps and baseline modes (no digest, no secret)
 //! ANY  /ui/api/appcheck/projects/...   App Check debug-token management, as the control token
@@ -29,6 +31,7 @@
 
 pub mod api;
 pub mod assets;
+pub mod functions_actions;
 pub mod server;
 pub mod sse;
 

@@ -26,6 +26,7 @@ import {
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const keep = args.includes("--keep");
@@ -163,6 +164,15 @@ step("exec serves on ephemeral ports, runs the command and exits with its status
   );
   if (r.status !== 3)
     throw new Error(`expected the command's exit code 3, got ${r.status}\n${r.stderr}`);
+});
+
+step("the packaged launcher forwards signals and waits for native shutdown", () => {
+  const tests = fileURLToPath(new URL("launcher.test.mjs", import.meta.url));
+  run(process.execPath, ["--test", tests], {
+    cwd: project,
+    env: { ...process.env, FIREEMU_TEST_LAUNCHER: launcher },
+    timeout: 120_000,
+  });
 });
 
 step("the same installation works through a symlink to the project", () => {

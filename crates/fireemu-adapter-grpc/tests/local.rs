@@ -4493,7 +4493,7 @@ async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn execute_pipeline_is_validated_strictly_and_never_executed() {
+async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_subset() {
     // Typed arguments: a collection path, a boolean function, an integer.
     let stage = |name: &str, args: usize| pb::pipeline::Stage {
         name: name.to_owned(),

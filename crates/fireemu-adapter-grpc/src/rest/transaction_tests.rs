@@ -49,6 +49,7 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn failed_rest_commit_requires_rollback_before_exact_subsequent_poststate() {
     let state = state();
     let original = format!("{DOCS}/locked/doc");
@@ -121,6 +122,25 @@ fn failed_rest_commit_requires_rollback_before_exact_subsequent_poststate() {
     );
     assert_eq!(still_usable["fields"], original_fields);
 
+    let control = format!("{DOCS}/atomic/control");
+    let (status, control_commit) = call(
+        &state,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/atomic/control"}}]}),
+    );
+    assert_eq!(status, 200, "{control_commit}");
+    let (status, control_document) = call(&state, "GET", &control, Value::Null);
+    assert_eq!(status, 200, "{control_document}");
+    assert_eq!(
+        control_document["name"],
+        "projects/demo-app/databases/(default)/documents/atomic/control"
+    );
+    assert!(
+        control_document.get("fields").is_none(),
+        "an empty update writes the document without a fields member: {control_document}"
+    );
+
     let (status, contended) = call(
         &state,
         "POST",
@@ -146,6 +166,10 @@ fn failed_rest_commit_requires_rollback_before_exact_subsequent_poststate() {
     assert_eq!(status, 200, "{committed}");
     let (status, poststate) = call(&state, "GET", &original, Value::Null);
     assert_eq!(status, 200, "{poststate}");
+    assert_eq!(
+        poststate["name"],
+        "projects/demo-app/databases/(default)/documents/locked/doc"
+    );
     assert_eq!(
         poststate["fields"],
         json!({"value": {"integerValue": "2"}}),

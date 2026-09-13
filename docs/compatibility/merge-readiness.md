@@ -21,10 +21,10 @@ New feature stages and adjacent cases do not enter class A unless they close a r
 
 ## Fixed merge candidate
 
-The [final merge-readiness result](../../spec/compatibility/broad-runs/e206d566-merge-ready-local.json) binds the technical candidate `e206d566049570340369d59176166e89872592f0` to base `d987d5ddcc1374cee425f08d6d81915795fc2ab5`. It records the workspace, formal, compatibility, SDK, UI, distribution and scoped G0 evidence without treating local execution as production evidence or the candidate observation as result approval. The earlier [local candidate](../../spec/compatibility/broad-runs/b33a150c-merge-ready-local.json) remains unchanged.
+The [final merge-readiness result](../../spec/compatibility/broad-runs/58392089-merge-ready-local.json) binds the technical candidate `58392089a3fb8e66145491232192d10e221021cb` to base `d987d5ddcc1374cee425f08d6d81915795fc2ab5`. It records the workspace, formal, compatibility, SDK, UI, distribution and scoped G0 evidence without treating local execution as production evidence or the candidate observation as result approval. The earlier [local candidate](../../spec/compatibility/broad-runs/b33a150c-merge-ready-local.json) remains unchanged.
 
 The immutable first46 reference still compares as 46 matches. The last correctly bound second45 saved-reference comparison remains 45 matches at `37e4c396`; a fresh local second45 run completed and cleaned up, but pairing it with the older production record is indeterminate because their observer digests differ. The comparator rejected that pair, and the older 32/13 production result and repaired 45/45 result remain unchanged.
 
 The fixed G0 run completed at `a35f85b4` with configuration unchanged and all four owned documents confirmed absent. Its 12 observation rows originally produced 10 matches and two mismatches; the scoped runtime correction later compares all 12 saved responses without another production operation. The observation remains candidate evidence.
 
-Technical merge preparation is complete with the final process-supervision adjustment independently approved. Hosted CI is the remaining technical confirmation before the candidate can be handed to human final review and merge judgment.
+Technical merge preparation is complete. The final cross-platform CI fixes, including the loopback endpoint normalization, have independent correctness and security approval. Hosted CI is the remaining technical confirmation before the candidate can be handed to human final review and merge judgment.

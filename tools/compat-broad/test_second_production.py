@@ -388,13 +388,15 @@ def test_non_json_diagnostic_received_without_claiming_json_compatibility(
     assert result["productionCompatibility"] == "unobserved"
 
 
-def test_verified_key_cannot_change_before_actual_wire(boundary, tmp_path):
+def test_verified_key_cannot_change_before_actual_wire(boundary, tmp_path, monkeypatch):
     permission, fixture = boundary
     adapter = production.Production45Adapter(
         manifest(), permission, permission["nonce"], tmp_path / "run"
     )
     adapter.preflight()
     before = len(fixture.requests)
+    sent = []
+    monkeypatch.setattr(production, "wire", lambda *args, **kwargs: sent.append(args))
     adapter.api_key = "fixture-key-K2"
     with pytest.raises(ValueError, match="key binding"):
         adapter.collect(
@@ -406,6 +408,7 @@ def test_verified_key_cannot_change_before_actual_wire(boundary, tmp_path):
             {"ordinal": 0, "sent": {"privileged": False}},
         )
     assert len(fixture.requests) == before
+    assert sent == []
 
 
 @pytest.mark.parametrize(
@@ -430,3 +433,52 @@ def test_cost_assumptions_cannot_be_inferred_or_exceed_envelope(boundary, field,
             permission["observerSha256"],
             1000,
         )
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_absolute_permission_deadline_prevents_new_requests_even_in_recovery(
+    boundary, tmp_path, monkeypatch, recovery
+):
+    permission, fixture = boundary
+    adapter = production.Production45Adapter(
+        manifest(), permission, permission["nonce"], tmp_path / "run"
+    )
+    adapter.preflight()
+    adapter.budget.recovery = recovery
+    before = len(fixture.requests)
+    counts = copy.deepcopy(adapter.budget.counts)
+    monkeypatch.setattr(production.time, "time", lambda: permission["expiresAt"] - 11)
+    with pytest.raises(ValueError, match="permission deadline"):
+        adapter.reserve("auth")
+    assert len(fixture.requests) == before
+    assert adapter.budget.counts == counts
+
+
+def test_environment_revalidates_original_permission_binding_not_current_wall_time(
+    boundary, tmp_path, monkeypatch
+):
+    from second_production_contract import validate_receipt_environment
+
+    permission, _fixture = boundary
+    adapter = production.Production45Adapter(
+        manifest(), permission, permission["nonce"], tmp_path / "run"
+    )
+    result = execute_45(
+        adapter, adapter.output, {"executionCommit": permission["frozenCommit"]}
+    )
+    monkeypatch.setattr(production.time, "time", lambda: 9999999)
+    assert validate_receipt_environment(result)
+    for key, value in [
+        ("kind", "owner-execution-permission"),
+        ("nonce", "a" * 32),
+        ("frozenCommit", "a" * 40),
+        ("observerSha256", "a" * 64),
+        ("comparisonContractDigest", "a" * 64),
+    ]:
+        changed = copy.deepcopy(result)
+        changed["permission"][key] = value
+        changed["permissionDigest"] = digest(changed["permission"])
+        assert not validate_receipt_environment(changed)
+    changed = copy.deepcopy(result)
+    changed["productionExecuted"] = False
+    assert not validate_receipt_environment(changed)

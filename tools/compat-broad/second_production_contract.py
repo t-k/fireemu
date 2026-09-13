@@ -115,6 +115,25 @@ def validate_receipt_environment(result):
         return result.get("productionExecuted") is False
     permission = result.get("permission", {})
     if (
+        result.get("target") != "production"
+        or result.get("productionExecuted") is not True
+    ):
+        return False
+    try:
+        approve(
+            manifest(),
+            permission,
+            result.get("nonce"),
+            result.get("observerDigest"),
+            result.get("approvalValidatedAt"),
+        )
+    except (ValueError, TypeError, KeyError):
+        return False
+    if result.get("runtimeIdentity", {}).get("executionCommit") != permission.get(
+        "frozenCommit"
+    ):
+        return False
+    if (
         result.get("permissionDigest") != digest(permission)
         or result.get("configurationUnchanged") is not True
         or result.get("preflightComplete") is not True

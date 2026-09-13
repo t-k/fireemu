@@ -27,7 +27,8 @@ class Production45Adapter(LocalAdapter):
     """A distinct closed constructor; never initialized through loopback state."""
 
     def __init__(self, value, permission, nonce, output):
-        approve(value, permission, nonce, observer_digest(), time.time())
+        validated_at = time.time()
+        approve(value, permission, nonce, observer_digest(), validated_at)
         frozen = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()
@@ -49,6 +50,7 @@ class Production45Adapter(LocalAdapter):
             stream.flush()
             os.fsync(stream.fileno())
         self.manifest, self.permission, self.nonce = value, permission, nonce
+        self.approval_validated_at = validated_at
         self.local, self.ready, self.api_key = None, False, key
         self.initialize_state(output, nonce)
         self.initialize_second(nonce, "mapped")
@@ -56,6 +58,12 @@ class Production45Adapter(LocalAdapter):
         self.configuration_unchanged = None
         self.metadata_phase = None
         self.confirmed_key_digest = None
+
+    def reserve(self, service, duration=12):
+        delay = max(0, self.last_request + 0.25 - time.monotonic())
+        if time.time() + duration + delay > self.permission["expiresAt"]:
+            raise ValueError("owner permission deadline cannot cover operation")
+        super().reserve(service, duration)
 
     def auth_query_key(self):
         # The recipe uses a bound abstract key. Resolve only at the actual wire edge.
@@ -195,6 +203,7 @@ class Production45Adapter(LocalAdapter):
             "preflightComplete": self.ready,
             "permission": self.permission,
             "permissionDigest": digest(self.permission),
+            "approvalValidatedAt": self.approval_validated_at,
         }
 
 

@@ -418,7 +418,7 @@ async fn failed_commit_keeps_transaction_usable_and_locked_until_rollback() {
             database: database_name_from_query_parent(&query_request().parent),
             writes: vec![pb::Write {
                 operation: Some(pb::write::Operation::Update(pb::Document {
-                    name: document_name,
+                    name: document_name.clone(),
                     fields: [(
                         "value".to_owned(),
                         pb::Value {
@@ -436,4 +436,17 @@ async fn failed_commit_keeps_transaction_usable_and_locked_until_rollback() {
     )
     .await
     .unwrap();
+    let after_rollback = Firestore::get_document(
+        &service,
+        Request::new(pb::GetDocumentRequest {
+            name: document_name,
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect("the independent post-rollback write must be visible");
+    assert_eq!(
+        after_rollback.into_inner().fields["value"].value_type,
+        Some(pb::value::ValueType::IntegerValue(2))
+    );
 }

@@ -208,3 +208,232 @@ async fn run_query_multipage_read_write_commits_after_complete_delivery() {
         }
     }
 }
+
+#[tokio::test]
+async fn failed_commit_keeps_transaction_usable_and_locked_until_rollback() {
+    let backend = test_backend();
+    let service = GatewayService::local(test_gateway(), backend.clone());
+    let database = database_name_from_query_parent(&query_request().parent);
+    let document_name = format!("{}/locked/doc", query_request().parent);
+    backend
+        .commit(&pb::CommitRequest {
+            database: database.clone(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: document_name.clone(),
+                    fields: [(
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::IntegerValue(1)),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+
+    let transaction = backend
+        .begin_transaction(&pb::BeginTransactionRequest {
+            database: database.clone(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite::default(),
+                )),
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    Firestore::get_document(
+        &service,
+        Request::new(pb::GetDocumentRequest {
+            name: document_name.clone(),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                transaction.clone(),
+            )),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+
+    let invalid = "x".repeat(1_048_488);
+    let failed = Firestore::commit(
+        &service,
+        Request::new(pb::CommitRequest {
+            database: database.clone(),
+            transaction: transaction.clone(),
+            writes: vec![
+                pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: format!("{}/atomic/valid", query_request().parent),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: format!("{}/atomic/invalid", query_request().parent),
+                        fields: [(
+                            "value".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::StringValue(invalid)),
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect_err("oversized second write must reject the whole Commit");
+    assert_eq!(failed.code(), tonic::Code::InvalidArgument);
+    let missing_valid = Firestore::get_document(
+        &service,
+        Request::new(pb::GetDocumentRequest {
+            name: format!("{}/atomic/valid", query_request().parent),
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect_err("the failed multiwrite must not publish its valid target");
+    assert_eq!(missing_valid.code(), tonic::Code::NotFound);
+
+    let valid_control = Firestore::commit(
+        &service,
+        Request::new(pb::CommitRequest {
+            database: database.clone(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: format!("{}/atomic/valid", query_request().parent),
+                    fields: [(
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::IntegerValue(3)),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect("the same valid document path must commit successfully");
+    assert_eq!(valid_control.into_inner().write_results.len(), 1);
+
+    let valid_document = Firestore::get_document(
+        &service,
+        Request::new(pb::GetDocumentRequest {
+            name: format!("{}/atomic/valid", query_request().parent),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        valid_document.into_inner().fields["value"].value_type,
+        Some(pb::value::ValueType::IntegerValue(3))
+    );
+    let missing_invalid = Firestore::get_document(
+        &service,
+        Request::new(pb::GetDocumentRequest {
+            name: format!("{}/atomic/invalid", query_request().parent),
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect_err("the failed multiwrite must not publish its invalid target");
+    assert_eq!(missing_invalid.code(), tonic::Code::NotFound);
+
+    // The failed request leaves the transaction usable and its read lock held.
+    Firestore::get_document(
+        &service,
+        Request::new(pb::GetDocumentRequest {
+            name: document_name.clone(),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                transaction.clone(),
+            )),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    let contended = Firestore::commit(
+        &service,
+        Request::new(pb::CommitRequest {
+            database: database.clone(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: document_name.clone(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect_err("the active transaction must retain its document lock");
+    assert_eq!(contended.code(), tonic::Code::Aborted);
+    let locked_before_rollback = Firestore::get_document(
+        &service,
+        Request::new(pb::GetDocumentRequest {
+            name: document_name.clone(),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        locked_before_rollback.into_inner().fields["value"].value_type,
+        Some(pb::value::ValueType::IntegerValue(1))
+    );
+
+    Firestore::rollback(
+        &service,
+        Request::new(pb::RollbackRequest {
+            database,
+            transaction,
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    Firestore::commit(
+        &service,
+        Request::new(pb::CommitRequest {
+            database: database_name_from_query_parent(&query_request().parent),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: document_name,
+                    fields: [(
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::IntegerValue(2)),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+}

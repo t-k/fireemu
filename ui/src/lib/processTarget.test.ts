@@ -155,9 +155,18 @@ describe("owned daemon lifecycle", () => {
     );
   });
 
-  it("kills a retained live child before reporting missing supervisor readiness", async () => {
-    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
-    await once(child, "spawn");
+  it("lets an unready retained supervisor reap its descendant before reporting failure", async () => {
+    const script = [
+      "const { spawn } = require('node:child_process');",
+      "const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+      "process.on('SIGINT', () => { descendant.kill('SIGKILL'); descendant.once('exit', () => process.exit(0)); });",
+      "process.stdout.write(String(descendant.pid));",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    const child = spawn(process.execPath, ["-e", script]);
+    const [descendantOutput] = await once(child.stdout!, "data");
+    const descendantPid = Number(descendantOutput.toString());
+    expect(Number.isSafeInteger(descendantPid) && descendantPid > 1).toBe(true);
     const never = new Promise<void>(() => undefined);
     const unready: OwnedProcess = {
       child,
@@ -172,6 +181,7 @@ describe("owned daemon lifecycle", () => {
         "did not establish cleanup ownership",
       );
       expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+      expect(await waitForProcessAbsence(descendantPid)).toBe(true);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");

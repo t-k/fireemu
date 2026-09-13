@@ -114,6 +114,10 @@ export const stopOwnedProcess = async (owned: OwnedProcess): Promise<void> => {
     await waitAtMost(owned.supervisorReadyOrClosed, 1_000);
     if (!owned.supervisorReady()) {
       if (childAlive() && child.pid !== undefined) {
+        child.kill("SIGINT");
+        await waitForExit(child);
+      }
+      if (childAlive()) {
         child.kill("SIGKILL");
         await waitForExit(child);
       }

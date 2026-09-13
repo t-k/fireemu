@@ -623,6 +623,7 @@ service cloud.firestore {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn a_denied_target_stays_removed_until_explicitly_readded_after_rules_recovery() {
     const DEPENDENT_RULES: &str = r"
 rules_version = '2';

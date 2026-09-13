@@ -5614,6 +5614,7 @@ async fn batch_write_continues_after_decode_and_execution_failures() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn transaction_commit_late_precondition_failure_preserves_documents_and_versions() {
     let (mut client, clock, handle) = start().await;
     for verify in [false, true] {

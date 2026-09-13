@@ -4563,7 +4563,7 @@ async fn execute_pipeline_is_validated_strictly_and_never_executed() {
     );
     assert_eq!(
         valid.metadata().get("fireemu-code").unwrap(),
-        "FS_PIPE_VALIDATION_ONLY"
+        "FS_PIPE_UNSUPPORTED_STAGE"
     );
     let unknown = client
         .execute_pipeline(request(vec![stage("collection", 1), stage("explode", 1)]))
@@ -4676,6 +4676,73 @@ async fn execute_pipeline_is_validated_strictly_and_never_executed() {
             "{what}"
         );
     }
+    handle.abort();
+}
+
+#[tokio::test]
+async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit() {
+    let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("items/one", &[("name", s("one")), ("ignored", i(1))]),
+                update_write("items/two", &[("name", s("two")), ("ignored", i(2))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let select = pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: [(
+                "label".to_owned(),
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::FieldReferenceValue("name".to_owned())),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        })),
+    };
+    let mut stream = client
+        .execute_pipeline(pb::ExecutePipelineRequest {
+            database: DB.to_owned(),
+            pipeline_type: Some(
+                pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                    pb::StructuredPipeline {
+                        pipeline: Some(pb::Pipeline {
+                            stages: vec![
+                                pb::pipeline::Stage {
+                                    name: "collection".to_owned(),
+                                    args: vec![s("items")],
+                                    options: HashMap::new(),
+                                },
+                                pb::pipeline::Stage {
+                                    name: "select".to_owned(),
+                                    args: vec![select],
+                                    options: HashMap::new(),
+                                },
+                                pb::pipeline::Stage {
+                                    name: "limit".to_owned(),
+                                    args: vec![i(1)],
+                                    options: HashMap::new(),
+                                },
+                            ],
+                        }),
+                        options: HashMap::new(),
+                    },
+                ),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let response = stream.next().await.unwrap().unwrap();
+    assert_eq!(response.results.len(), 1);
+    assert_eq!(response.results[0].fields.len(), 1);
+    assert_eq!(response.results[0].fields["label"], s("one"));
     handle.abort();
 }
 

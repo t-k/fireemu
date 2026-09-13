@@ -846,9 +846,6 @@ impl Firestore for GatewayService {
         &self,
         request: Request<pb::ExecutePipelineRequest>,
     ) -> Result<Response<Self::ExecutePipelineStream>, Status> {
-        // Strict validation only (FS-PIPE-RPC-1): the pipeline is decoded and canonicalized,
-        // unsupported stages are refused explicitly, and a valid pipeline is answered with
-        // UNIMPLEMENTED carrying its canonical form (execution is 1.x).
         let caller = self.caller(
             request.metadata(),
             &request.get_ref().database,
@@ -867,6 +864,32 @@ impl Firestore for GatewayService {
             return Err(status);
         }
         let ast = crate::pipeline::validate_pipeline(request.get_ref())?;
+        if let Some(local) = self.local_backend() {
+            let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+            let results =
+                match crate::pipeline::execute_supported(request.get_ref(), &parent, local) {
+                    Ok(results) => results,
+                    Err(mut error) => {
+                        if let Ok(value) = ast.canonical_text().parse() {
+                            error.metadata_mut().insert("fireemu-pipeline", value);
+                        }
+                        if error.code() == tonic::Code::Unimplemented {
+                            if let Ok(value) = "FS_PIPE_UNSUPPORTED_STAGE".parse() {
+                                error.metadata_mut().insert("fireemu-code", value);
+                            }
+                        }
+                        return Err(error);
+                    }
+                };
+            let response = pb::ExecutePipelineResponse {
+                results,
+                ..Default::default()
+            };
+            return Ok(Response::new(Box::pin(tokio_stream::iter(vec![Ok(
+                response,
+            )]))));
+        }
         let mut status = Status::unimplemented(format!(
             "FS-PIPE-RPC-1 strict-validation-only: the pipeline is valid ({}) but pipelines are not executed locally",
             ast.canonical_text()

@@ -5,9 +5,17 @@
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
 
+use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
+use fireemu_core_firestore::query::{Query, QueryScope};
+use fireemu_core_firestore::store::Document;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
+
+use crate::decode::Parent;
+use crate::encode::encode_document;
+use crate::local::LocalBackend;
 
 /// Option keys a `StructuredPipeline` may carry.
 const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
@@ -125,6 +133,136 @@ pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst
         };
         with_code(status, code)
     })
+}
+
+/// Executes the finite local Enterprise subset: collection, field-reference select aliases and
+/// limit. Every other stage or option is refused explicitly by the caller.
+pub fn execute_supported(
+    req: &pb::ExecutePipelineRequest,
+    parent: &Parent,
+    backend: &LocalBackend,
+) -> Result<Vec<pb::Document>, Status> {
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &req.pipeline_type
+    else {
+        return Err(Status::invalid_argument("structured pipeline required"));
+    };
+    if !structured.options.is_empty() {
+        return Err(Status::unimplemented(
+            "pipeline options are unsupported locally",
+        ));
+    }
+    let Some(pipeline) = &structured.pipeline else {
+        return Err(Status::invalid_argument("pipeline required"));
+    };
+    let Some(collection) = pipeline.stages.first().filter(|s| s.name == "collection") else {
+        return Err(Status::unimplemented(
+            "pipeline input is unsupported locally",
+        ));
+    };
+    let Some(
+        pb::value::ValueType::ReferenceValue(reference)
+        | pb::value::ValueType::StringValue(reference),
+    ) = collection.args.first().and_then(|v| v.value_type.as_ref())
+    else {
+        return Err(Status::invalid_argument("collection path required"));
+    };
+    let segments: Vec<&str> = reference.trim_start_matches('/').split('/').collect();
+    let collection_id = fireemu_core_types::ids::CollectionId::try_new(*segments.last().unwrap())
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+    let parent_doc = if segments.len() == 1 {
+        None
+    } else {
+        let relative = segments[..segments.len() - 1].join("/");
+        Some(
+            DocumentPath::parse(&parent.project, &parent.database, &relative)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?,
+        )
+    };
+    let mut query = Query::new(QueryScope::collection(parent_doc, collection_id));
+    let mut projection: Option<Vec<(String, FieldPath)>> = None;
+    let mut last_rank = 0u8;
+    for stage in pipeline.stages.iter().skip(1) {
+        let rank = match stage.name.as_str() {
+            "select" => 1,
+            "limit" => 2,
+            _ => 3,
+        };
+        if rank < last_rank {
+            return Err(Status::unimplemented(
+                "pipeline stages are out of supported order",
+            ));
+        }
+        last_rank = rank;
+        match stage.name.as_str() {
+            "limit" => {
+                let Some(pb::value::ValueType::IntegerValue(n)) =
+                    stage.args.first().and_then(|v| v.value_type.as_ref())
+                else {
+                    return Err(Status::invalid_argument("limit must be an integer"));
+                };
+                query.limit = Some(
+                    u32::try_from(*n)
+                        .map_err(|_| Status::invalid_argument("limit is out of range"))?,
+                );
+            }
+            "select" => {
+                let Some(pb::value::ValueType::MapValue(map)) =
+                    stage.args.first().and_then(|v| v.value_type.as_ref())
+                else {
+                    return Err(Status::invalid_argument("select requires an alias map"));
+                };
+                let mut aliases = Vec::new();
+                for (alias, value) in &map.fields {
+                    let Some(pb::value::ValueType::FieldReferenceValue(field)) =
+                        value.value_type.as_ref()
+                    else {
+                        return Err(Status::unimplemented(
+                            "select expressions are unsupported locally",
+                        ));
+                    };
+                    aliases.push((
+                        alias.clone(),
+                        FieldPath::parse(field)
+                            .map_err(|e| Status::invalid_argument(e.to_string()))?,
+                    ));
+                }
+                if aliases.is_empty() {
+                    return Err(Status::invalid_argument(
+                        "select requires a non-empty alias map",
+                    ));
+                }
+                projection = Some(aliases);
+            }
+            other => {
+                return Err(Status::unimplemented(format!(
+                    "pipeline stage {other:?} is unsupported locally"
+                )))
+            }
+        }
+    }
+    let docs = backend.run_query_latest(parent, &query)?;
+    Ok(docs
+        .into_iter()
+        .map(|mut doc: Document| {
+            if let Some(aliases) = &projection {
+                let mut fields = std::collections::BTreeMap::new();
+                for (alias, source) in aliases {
+                    let projected = fireemu_core_firestore::store::project(
+                        &doc.fields,
+                        std::slice::from_ref(source),
+                    );
+                    if source.segments().len() == 1 {
+                        if let Some(value) = projected.get(&source.segments()[0]) {
+                            fields.insert(alias.clone(), value.clone());
+                        }
+                    }
+                }
+                doc.fields = fields;
+            }
+            encode_document(&doc)
+        })
+        .collect())
 }
 
 /// A wire value as a validation argument. A nested pipeline is typed but its stages are

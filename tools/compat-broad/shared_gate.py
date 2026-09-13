@@ -17,6 +17,8 @@ from pathlib import Path
 
 from broad_contract import digest
 
+REQUEST_SECONDS = 13  # 12-second wire deadline plus adapter spacing allowance.
+
 
 def _save(path, state):
     temporary = path / "state.tmp"
@@ -48,6 +50,7 @@ def create(path, plan):
         or len(resources) != len(set(resources))
         or not resources
         or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= 1200
+        or plan["recoverySeconds"] < recovery * (REQUEST_SECONDS + plan["intervalSeconds"])
         or not math.isfinite(plan["intervalSeconds"])
         or plan["intervalSeconds"] < 0.25
         or type(plan["costMicrousd"]) is not int
@@ -148,7 +151,7 @@ class Gate:
             )
             time.sleep(delay)
             if (
-                time.monotonic() + 12
+                time.monotonic() + REQUEST_SECONDS
                 > state["started"]
                 + state["plan"]["wallSeconds"]
                 - state["plan"]["recoverySeconds"]
@@ -250,7 +253,7 @@ class Gate:
             cost = plan["requestCostMicrousd"]
             remaining = state["reservedRecovery"] - (1 if recovery else 0)
             if (
-                now + delay + 12 > deadline
+                now + delay + REQUEST_SECONDS > deadline
                 or (
                     not recovery and state["observation"] >= plan["observationRequests"]
                 )
@@ -258,7 +261,7 @@ class Gate:
             ):
                 raise ValueError("global phase/time/cost capacity")
             time.sleep(delay)
-            if time.monotonic() + 12 > deadline:
+            if time.monotonic() + REQUEST_SECONDS > deadline:
                 raise ValueError("deadline after rate wait")
             state["lastSent"] = time.monotonic()
             state["total"] += 1

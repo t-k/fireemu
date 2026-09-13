@@ -162,7 +162,7 @@ def run(output, *, shared=False):
             stderr=errors,
         )
         try:
-            report["exitCode"] = process.wait(timeout=180)
+            report["exitCode"] = process.wait(timeout=360 if shared else 180)
             report["stopReason"] = (
                 "child-completed" if report["exitCode"] == 0 else "child-nonzero"
             )

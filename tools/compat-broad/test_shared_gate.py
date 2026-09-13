@@ -18,8 +18,8 @@ def plan():
     }
     return {
         "contract": "shared-local-v1",
-        "wallSeconds": 60,
-        "recoverySeconds": 20,
+        "wallSeconds": 120,
+        "recoverySeconds": 60,
         "observationRequests": 1,
         "costMicrousd": 300,
         "requestCostMicrousd": 100,
@@ -141,7 +141,7 @@ def test_deadline_cost_and_wrong_operation_refuse_before_callback(tmp_path):
     for variant in ("deadline", "cost", "query", "duplicate", "method"):
         p = plan()
         if variant == "deadline":
-            p.update(wallSeconds=21, recoverySeconds=20)
+            p.update(wallSeconds=61, recoverySeconds=60)
         if variant == "cost":
             p["costMicrousd"] = 200
         path = tmp_path / variant
@@ -392,5 +392,12 @@ def test_invalid_recovery_version_keeps_independent_cleanup_available(
 def test_fixed_cost_cannot_spend_recovery_reservation(tmp_path):
     p = plan()
     p.update(fixedCostMicrousd=101)
+    with pytest.raises(ValueError):
+        create(tmp_path / "gate", p)
+
+
+def test_recovery_time_is_reserved_before_any_worker_claim(tmp_path):
+    p = plan()
+    p.update(wallSeconds=60, recoverySeconds=20)
     with pytest.raises(ValueError):
         create(tmp_path / "gate", p)

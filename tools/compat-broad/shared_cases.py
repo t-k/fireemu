@@ -78,8 +78,8 @@ def manifest(nonce):
         "contract": "shared-local-v1",
         "nonce": nonce,
         "jobs": jobs,
-        "wallSeconds": 180,
-        "recoverySeconds": 60,
+        "wallSeconds": 300,
+        "recoverySeconds": 180,
         "observationRequests": 12,
         "intervalSeconds": 0.25,
         "requestCostMicrousd": 100,
@@ -198,7 +198,8 @@ def worker(output, key, origins):
 
 def execute(output, origins):
     ctx = mp.get_context("spawn")
-    jobs = list(json.loads((output / "gate/state.json").read_bytes())["plan"]["jobs"])
+    fixed_plan = json.loads((output / "gate/state.json").read_bytes())["plan"]
+    jobs = list(fixed_plan["jobs"])
     processes = [
         ctx.Process(target=worker, args=(output, key, origins)) for key in jobs
     ]
@@ -207,7 +208,9 @@ def execute(output, origins):
         for process in processes:
             process.start()
         for process in processes:
-            process.join(max(0, 170 - (time.monotonic() - started)))
+            process.join(
+                max(0, fixed_plan["wallSeconds"] + 15 - (time.monotonic() - started))
+            )
     finally:
         for process in processes:
             if process.is_alive():

@@ -158,3 +158,42 @@ def test_explicit_binary_rejected_before_execution(tmp_path):
     with pytest.raises(ValueError, match="mutation"):
         run_owned(binary, tmp_path / "receipt")
     assert not (tmp_path / "receipt").exists()
+
+
+@pytest.mark.parametrize(
+    "variable", ["CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_BUILD_DIR"]
+)
+def test_inherited_output_environment_cannot_be_used_for_mutation(tmp_path, variable):
+    import os
+
+    normal, mutant = [workspace(tmp_path / p) for p in ["normal", "mutant"]]
+    shared = tmp_path / "shared-output"
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k
+        not in {"CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_BUILD_DIR"}
+    }
+    env[variable] = str(shared)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("mutation_cargo.py")),
+            "--normal-workspace",
+            str(normal),
+            "--mutation-workspace",
+            str(mutant),
+            "--output-root",
+            str(shared),
+            "--",
+            "check",
+            "--offline",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "overlap" in result.stderr
+    assert not shared.exists()

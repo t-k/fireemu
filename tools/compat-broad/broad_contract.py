@@ -452,6 +452,47 @@ def catalog():
     for family in families:
         if family["id"] in {"auth-accounts", "auth-authorization"}:
             family["recordedCoverage"] = RECORDED_UPDATE_SCOPE
+        local_scope = {
+            "auth-tenants": {
+                "conditions": [
+                    "Bidirectional cross-tenant update-token refusal preserves both namespace snapshots"
+                ],
+                "remaining": [
+                    "Custom-token claims and configuration isolation; production tenant observations"
+                ],
+            },
+            "fs-writes": {
+                "conditions": [
+                    "BatchWrite first/middle decode and execution failure preserves successful suffix and per-write versions"
+                ],
+                "remaining": [
+                    "Production per-item response forms and mixed contention; REST equivalents of new gRPC cases"
+                ],
+            },
+            "fs-transactions": {
+                "conditions": [
+                    "Late Verify/delete precondition rejection preserves all documents and versions; successful counterpart after rollback"
+                ],
+                "remaining": [
+                    "Nondeterministic conflict histories and production failed-transaction reuse semantics"
+                ],
+            },
+            "fs-listen": {
+                "conditions": [
+                    "Rules-denied resume leaks no documents; recovered permission requires explicit target re-add"
+                ],
+                "remaining": [
+                    "SDK identity switch, browser/WebChannel and production reconnect histories"
+                ],
+            },
+        }.get(family["id"])
+        if local_scope:
+            family["recordedLocalCoverage"] = {
+                "basis": "local-invariant-not-production-parity",
+                "executionCommit": "24d07bc230a833453e206c0a0ddb32a22d4d9faa",
+                "report": "spec/compatibility/broad-runs/24d07bc2-next-local-breadth.json",
+                **local_scope,
+            }
         if family["id"] == "fs-enterprise":
             family["implementationUnits"] = [
                 {

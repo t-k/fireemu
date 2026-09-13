@@ -86,7 +86,18 @@
       "currentStatus": "not-run",
       "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
       "capabilitySource": "spec/compatibility/contract.json",
-      "reasonAndNextUnit": "Next: isolated local tenant corpus; production tenant/config scope needs approval"
+      "reasonAndNextUnit": "Next: isolated local tenant corpus; production tenant/config scope needs approval",
+      "recordedLocalCoverage": {
+        "basis": "local-invariant-not-production-parity",
+        "executionCommit": "24d07bc230a833453e206c0a0ddb32a22d4d9faa",
+        "report": "spec/compatibility/broad-runs/24d07bc2-next-local-breadth.json",
+        "conditions": [
+          "Bidirectional cross-tenant update-token refusal preserves both namespace snapshots"
+        ],
+        "remaining": [
+          "Custom-token claims and configuration isolation; production tenant observations"
+        ]
+      }
     },
     {
       "id": "auth-providers",
@@ -164,7 +175,18 @@
       "currentStatus": "not-run",
       "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
       "capabilitySource": "spec/compatibility/contract.json",
-      "reasonAndNextUnit": "Current transforms remain separate from exact historical transform replay"
+      "reasonAndNextUnit": "Current transforms remain separate from exact historical transform replay",
+      "recordedLocalCoverage": {
+        "basis": "local-invariant-not-production-parity",
+        "executionCommit": "24d07bc230a833453e206c0a0ddb32a22d4d9faa",
+        "report": "spec/compatibility/broad-runs/24d07bc2-next-local-breadth.json",
+        "conditions": [
+          "BatchWrite first/middle decode and execution failure preserves successful suffix and per-write versions"
+        ],
+        "remaining": [
+          "Production per-item response forms and mixed contention; REST equivalents of new gRPC cases"
+        ]
+      }
     },
     {
       "id": "fs-queries",
@@ -190,7 +212,18 @@
       "currentStatus": "not-run",
       "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
       "capabilitySource": "spec/compatibility/contract.json",
-      "reasonAndNextUnit": "Existing transaction lifecycle; no-response historical rows remain indeterminate"
+      "reasonAndNextUnit": "Existing transaction lifecycle; no-response historical rows remain indeterminate",
+      "recordedLocalCoverage": {
+        "basis": "local-invariant-not-production-parity",
+        "executionCommit": "24d07bc230a833453e206c0a0ddb32a22d4d9faa",
+        "report": "spec/compatibility/broad-runs/24d07bc2-next-local-breadth.json",
+        "conditions": [
+          "Late Verify/delete precondition rejection preserves all documents and versions; successful counterpart after rollback"
+        ],
+        "remaining": [
+          "Nondeterministic conflict histories and production failed-transaction reuse semantics"
+        ]
+      }
     },
     {
       "id": "fs-aggregations",
@@ -242,7 +275,18 @@
       "currentStatus": "not-run",
       "implementationStatus": "unknown; consult existing capability/requirement evidence, never infer from availability",
       "capabilitySource": "spec/compatibility/contract.json",
-      "reasonAndNextUnit": "Next: existing SDK listen fixtures with invariant/partial-order checks"
+      "reasonAndNextUnit": "Next: existing SDK listen fixtures with invariant/partial-order checks",
+      "recordedLocalCoverage": {
+        "basis": "local-invariant-not-production-parity",
+        "executionCommit": "24d07bc230a833453e206c0a0ddb32a22d4d9faa",
+        "report": "spec/compatibility/broad-runs/24d07bc2-next-local-breadth.json",
+        "conditions": [
+          "Rules-denied resume leaks no documents; recovered permission requires explicit target re-add"
+        ],
+        "remaining": [
+          "SDK identity switch, browser/WebChannel and production reconnect histories"
+        ]
+      }
     },
     {
       "id": "fs-sdk",

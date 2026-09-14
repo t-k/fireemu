@@ -1562,14 +1562,20 @@ impl AuthStore {
             .map(Arc::as_ref)
     }
 
-    /// Changes the email, enforcing uniqueness unless the project enables duplicate emails.
-    pub fn set_email(&mut self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
+    /// Validates an email update without changing the store.
+    pub fn validate_email_update(&self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
         if !email.contains('@') || email.chars().any(char::is_control) {
             return Err(AuthError::InvalidEmail);
         }
         if !self.config.allow_duplicate_emails && self.email_owned_by_other(email, Some(uid)) {
             return Err(AuthError::EmailExists);
         }
+        Ok(())
+    }
+
+    /// Changes the email, enforcing uniqueness unless the project enables duplicate emails.
+    pub fn set_email(&mut self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
+        self.validate_email_update(uid, email)?;
         let user = self
             .users
             .get_mut(uid)

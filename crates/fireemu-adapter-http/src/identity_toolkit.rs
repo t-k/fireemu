@@ -6053,15 +6053,8 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
             if store.user(&uid).is_none() {
                 return error(400, "INVALID_OOB_CODE");
             }
-            if !new_email.contains('@') || new_email.chars().any(char::is_control) {
-                return auth_error(&AuthError::InvalidEmail);
-            }
-            if !store.config().allow_duplicate_emails
-                && store
-                    .user_by_email(&new_email)
-                    .is_some_and(|u| u.local_id != uid)
-            {
-                return auth_error(&AuthError::EmailExists);
+            if let Err(e) = store.validate_email_update(&uid, &new_email) {
+                return auth_error(&e);
             }
             if let Err(e) = store.consume_oob_code(code, None, at) {
                 return auth_error(&e);

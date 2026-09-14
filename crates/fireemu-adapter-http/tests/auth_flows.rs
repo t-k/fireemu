@@ -655,6 +655,108 @@ fn rejected_email_change_preserves_oob_code_and_account_state() {
 }
 
 #[test]
+fn rejected_email_change_preserves_code_for_an_inactive_duplicate_owner() {
+    let s = state();
+    let config_path = format!("{EMU}/config");
+    let enabled = handle_with(
+        &s,
+        "PATCH",
+        &config_path,
+        &owner(),
+        &json!({"signIn": {"allowDuplicateEmails": true}}),
+    );
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+
+    let owner_user = sign_up(&s, "oob-inactive-owner@example.com");
+    let target_a = sign_up(&s, "oob-inactive-target@example.com");
+    let target_b = sign_up(&s, "oob-inactive-target@example.com");
+    let (status, verified) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": owner_user["localId"], "emailVerified": true}),
+    );
+    assert_eq!(status, 200, "{verified}");
+
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({
+            "requestType": "VERIFY_AND_CHANGE_EMAIL",
+            "idToken": owner_user["idToken"],
+            "newEmail": "oob-inactive-target@example.com",
+        }),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"][0]["oobCode"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let (status, deleted) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:delete"),
+        &json!({"localId": target_b["localId"]}),
+    );
+    assert_eq!(status, 200, "{deleted}");
+    let disabled = handle_with(
+        &s,
+        "PATCH",
+        &config_path,
+        &owner(),
+        &json!({"signIn": {"allowDuplicateEmails": false}}),
+    );
+    assert_eq!(disabled.status, 200, "{}", disabled.body);
+
+    let (status, rejected) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": code}),
+    );
+    assert_eq!(status, 400, "{rejected}");
+    assert_eq!(rejected["error"]["message"], "EMAIL_EXISTS");
+    assert_eq!(
+        get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"][0]["oobCode"],
+        code
+    );
+
+    let (_, owner_lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": owner_user["idToken"]}),
+    );
+    assert_eq!(
+        owner_lookup["users"][0]["email"],
+        "oob-inactive-owner@example.com"
+    );
+    let (_, target_lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [target_a["localId"]]}),
+    );
+    assert_eq!(
+        target_lookup["users"][0]["email"],
+        "oob-inactive-target@example.com"
+    );
+
+    let (status, deleted) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:delete"),
+        &json!({"localId": target_a["localId"]}),
+    );
+    assert_eq!(status, 200, "{deleted}");
+    let (status, applied) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": code}),
+    );
+    assert_eq!(status, 200, "{applied}");
+    assert_eq!(applied["email"], "oob-inactive-target@example.com");
+    assert!(get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
+}
+
+#[test]
 fn email_link_sign_in_creates_a_verified_passwordless_user() {
     let s = state();
     let (status, body) = post(

@@ -4817,6 +4817,161 @@ mod lock_tests {
         ))
     }
 
+    fn collection_ids_request_with_token(backend: &LocalBackend) -> pb::ListCollectionIdsRequest {
+        let parent = "projects/demo-app/databases/(default)/documents";
+        backend
+            .commit(&pb::CommitRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                writes: ["a", "b"]
+                    .into_iter()
+                    .map(|id| pb::Write {
+                        operation: Some(pb::write::Operation::Update(pb::Document {
+                            name: format!("{parent}/{id}/doc"),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut request = pb::ListCollectionIdsRequest {
+            parent: parent.to_owned(),
+            page_size: 1,
+            ..Default::default()
+        };
+        request.page_token = backend
+            .list_collection_ids(&request)
+            .unwrap()
+            .next_page_token;
+        assert!(!request.page_token.is_empty());
+        request
+    }
+
+    #[test]
+    fn list_collection_ids_rejects_reset_between_token_validation_and_read() {
+        check_list_collection_ids_reset_during_fault(true);
+    }
+
+    #[test]
+    fn list_collection_ids_rejects_raw_reset_between_token_validation_and_read() {
+        check_list_collection_ids_reset_during_fault(false);
+    }
+
+    fn check_list_collection_ids_reset_during_fault(admitted_reset: bool) {
+        use fireemu_core_session::fault::{
+            FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+        };
+
+        let backend = backend();
+        let request = collection_ids_request_with_token(&backend);
+        let registry = Arc::new(FaultRegistry::new());
+        registry.default_state().lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.read".into(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::Delay { seconds: 1 },
+            }],
+        });
+        backend.set_faults(registry);
+        let weak = Arc::downgrade(&backend);
+        backend.set_clock_observer(Arc::new(move || {
+            let backend = weak.upgrade().unwrap();
+            // The delay callback runs after request/token validation and before the read.
+            let _exclusive = admitted_reset.then(|| backend.barrier.exclusive());
+            backend.reset_project("demo-app");
+        }));
+        let error = backend.list_collection_ids(&request).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn list_collection_ids_rejects_replacement_before_raw_reset_publishes_generation() {
+        let backend = backend();
+        let request = collection_ids_request_with_token(&backend);
+        let parent = parse_parent(&request.parent).unwrap();
+        let original = backend.database_handle(&parent).unwrap();
+        // Pin the old database's read lock: reset can remove it from the catalog, but
+        // cannot detach it or publish the generation until this guard is released.
+        let held = original.0.cell.read().unwrap();
+        let resetting = Arc::clone(&backend);
+        let reset = std::thread::spawn(move || resetting.reset_project("demo-app"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while backend
+            .databases
+            .lock()
+            .unwrap()
+            .contains_key(&database_key(&parent))
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reset did not remove the old database"
+            );
+            std::thread::yield_now();
+        }
+        let replacement = backend.database_handle(&parent).unwrap();
+        assert!(!Arc::ptr_eq(&original.0, &replacement.0));
+        assert_eq!(backend.database_generation(&parent), 0);
+        let result = backend.list_collection_ids(&request);
+        drop(held);
+        reset.join().unwrap();
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn list_collection_ids_rejects_invalid_cursors_with_matching_identity_before_faults() {
+        use fireemu_core_session::fault::{
+            FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+        };
+
+        let backend = backend();
+        let mut request = collection_ids_request_with_token(&backend);
+        let token =
+            String::from_utf8(crate::rest::json::base64_decode(&request.page_token).unwrap())
+                .unwrap();
+        let (_, identity) = token.split_once('\n').unwrap();
+        let registry = Arc::new(FaultRegistry::new());
+        registry.default_state().lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.read".into(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::ReturnError {
+                    code: "UNAVAILABLE".into(),
+                },
+            }],
+        });
+        backend.set_faults(Arc::clone(&registry));
+        for cursor in [
+            "a/b".to_owned(),
+            "a\u{0001}b".to_owned(),
+            "__reserved__".to_owned(),
+            "a".repeat(1501),
+        ] {
+            request.page_token =
+                crate::rest::json::base64_encode(format!("{cursor}\n{identity}").as_bytes());
+            let error = backend.list_collection_ids(&request).unwrap_err();
+            assert_eq!(
+                error.code(),
+                tonic::Code::InvalidArgument,
+                "cursor: {cursor:?}"
+            );
+        }
+        let state = registry.default_state();
+        let state = state.lock().unwrap();
+        assert!(state.counters().is_empty());
+        assert!(state.fired().is_empty());
+    }
+
     #[test]
     fn ordered_selection_resource_charge_follows_last_reference() {
         let backend = backend();

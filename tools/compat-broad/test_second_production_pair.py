@@ -329,6 +329,7 @@ def test_saved_candidate_compares_only_production_rows_and_records_bindings(
         json.dumps(
             {
                 "status": "completed",
+                "productionExecuted": False,
                 "artifactSha256": local["runtimeIdentity"]["artifactSha256"],
                 "executionCommit": local["runtimeIdentity"]["executionCommit"],
                 "configurationDigest": local["runtimeIdentity"]["configurationDigest"],
@@ -353,6 +354,8 @@ def test_saved_candidate_compares_only_production_rows_and_records_bindings(
         "commit-identity",
         "configuration-identity",
         "parent-status",
+        "parent-production-true",
+        "parent-production-missing",
         "recording",
         "cleanup",
     ],
@@ -383,17 +386,17 @@ def test_saved_cli_rejects_unbound_or_incomplete_current_receipt(
     local_path.write_text(json.dumps(local))
     parent_path = tmp_path / "parent.json"
     parent_status = "incomplete" if mutation == "parent-status" else "completed"
-    parent_path.write_text(
-        json.dumps(
-            {
-                "status": parent_status,
-                "artifactSha256": parent_local["runtimeIdentity"]["artifactSha256"],
-                "executionCommit": parent_local["runtimeIdentity"]["executionCommit"],
-                "configurationDigest": parent_local["runtimeIdentity"]["configurationDigest"],
-                "localObservations": {"mapped": parent_local},
-            }
-        )
-    )
+    parent = {
+        "status": parent_status,
+        "productionExecuted": mutation == "parent-production-true",
+        "artifactSha256": parent_local["runtimeIdentity"]["artifactSha256"],
+        "executionCommit": parent_local["runtimeIdentity"]["executionCommit"],
+        "configurationDigest": parent_local["runtimeIdentity"]["configurationDigest"],
+        "localObservations": {"mapped": parent_local},
+    }
+    if mutation == "parent-production-missing":
+        del parent["productionExecuted"]
+    parent_path.write_text(json.dumps(parent))
     script = ROOT / "tools/compat-broad/second_production_pair.py"
     process = subprocess.Popen(
         [

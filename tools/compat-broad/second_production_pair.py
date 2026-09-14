@@ -156,6 +156,8 @@ def compare_saved(candidate_path, local, parent_path):
     try:
         if parent.get("status") != "completed":
             raise ValueError("parent execution manifest is incomplete")
+        if parent.get("productionExecuted") is not False:
+            raise ValueError("parent execution manifest is not local-only")
         observations = parent.get("localObservations")
         parent_local = observations.get("mapped") if isinstance(observations, dict) else None
         if not isinstance(parent_local, dict):

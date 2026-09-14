@@ -4130,29 +4130,43 @@ impl FirestoreState {
         Ok((out, stats))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn run_find_nearest_with_stats(
         &self,
         query: &Query,
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        // Non-name pre-ranking needs an ordered prefix in memory. Keep that prefix within the
+        // public findNearest result ceiling; name-ordered scans stream any ordinary limit.
+        const MAX_MATERIALIZED_NEAREST_ORDINARY_ROWS: u64 = 1_000;
         let Some(find_nearest) = query.find_nearest.as_ref() else {
             unreachable!("nearest execution requires a findNearest stage");
         };
         let mut ordinary = query.clone();
         ordinary.find_nearest = None;
         ordinary.projection = None;
-        if ordinary.limit.is_none() && ordinary.offset > 0 {
-            let order = ordinary.effective_order_by();
-            if !matches!(order.as_slice(), [clause] if clause.field.is_document_name()) {
+        let order = ordinary.effective_order_by();
+        let name_order = matches!(order.as_slice(), [clause] if clause.field.is_document_name());
+        let ordinary_bound = ordinary
+            .limit
+            .map(|limit| u64::from(ordinary.offset).saturating_add(u64::from(limit)));
+        if !name_order {
+            if ordinary.limit.is_none() && ordinary.offset > 0 {
                 return Err(FirestoreError::InvalidArgument(
                     "findNearest with an unbounded offset requires document-name ordering or a top-level limit".into(),
+                ));
+            }
+            if ordinary_bound.is_some_and(|bound| bound > MAX_MATERIALIZED_NEAREST_ORDINARY_ROWS) {
+                return Err(FirestoreError::InvalidArgument(
+                    "findNearest explicit ordering requires offset + limit no greater than 1000"
+                        .into(),
                 ));
             }
         }
         let mut candidates = BinaryHeap::new();
         let nearest_limit = usize::try_from(find_nearest.limit).unwrap_or(usize::MAX);
         let nearest_peak_candidates = std::cell::Cell::new(0usize);
-        let consumption = if ordinary.limit.is_none() {
+        let consumption = if name_order || ordinary.limit.is_none() {
             Consumption::Unordered
         } else {
             Consumption::Ordered
@@ -4826,7 +4840,7 @@ where
             && order[0].direction == source_direction
     });
     let streaming =
-        consumption == Consumption::Unordered && bound.is_none() && (offset == 0 || path_ordered);
+        consumption == Consumption::Unordered && (path_ordered || (bound.is_none() && offset == 0));
     let mut stats = QueryStats::default();
     if bound == Some(0) {
         return Ok(stats);
@@ -4834,6 +4848,7 @@ where
     let mut heap: BinaryHeap<Candidate<'a, '_>> = BinaryHeap::new();
     let mut rows: Vec<Candidate<'a, '_>> = Vec::new();
     let mut skipped = 0usize;
+    let mut emitted = 0usize;
     for document in documents {
         stats.scanned += 1;
         if !document_in_scope(document, scope) {
@@ -4863,7 +4878,13 @@ where
                 skipped += 1;
                 continue;
             }
+            if let Some(limit) = query.limit {
+                if emitted >= usize::try_from(limit).unwrap_or(usize::MAX) {
+                    break;
+                }
+            }
             sink(document);
+            emitted += 1;
             continue;
         }
         let candidate = Candidate {

@@ -634,16 +634,34 @@ impl RestState {
         collection_id: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
+        let page_size = first(params, "pageSize").map_or(Ok(0), |value| {
+            value
+                .parse::<i32>()
+                .map_err(|_| Status::invalid_argument("pageSize must be an int32"))
+        })?;
+        let show_missing = match first(params, "showMissing") {
+            None | Some("false") => false,
+            Some("true") => true,
+            Some(_) => {
+                return Err(Status::invalid_argument(
+                    "showMissing must be true or false",
+                ))
+            }
+        };
+        let order_by = first(params, "orderBy").unwrap_or("");
+        if show_missing && !order_by.is_empty() {
+            return Err(Status::invalid_argument(
+                "showMissing cannot be used with orderBy",
+            ));
+        }
         let req = pb::ListDocumentsRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
-            page_size: first(params, "pageSize")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0),
+            page_size,
             page_token: first(params, "pageToken").unwrap_or("").to_owned(),
-            order_by: first(params, "orderBy").unwrap_or("").to_owned(),
+            order_by: order_by.to_owned(),
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
-            show_missing: first(params, "showMissing") == Some("true"),
+            show_missing,
             consistency_selector: match (first(params, "transaction"), first(params, "readTime")) {
                 (Some(_), Some(_)) => {
                     return Err(Status::invalid_argument(

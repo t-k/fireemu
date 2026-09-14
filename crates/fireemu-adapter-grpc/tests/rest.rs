@@ -1365,6 +1365,111 @@ fn rest_listing_and_batch_get_follow_production() {
     assert_eq!(order, ["1", "3", "none"], "{batch}");
 }
 
+#[test]
+fn rest_accepts_an_empty_document_mask_object() {
+    let s = state(None);
+    let (status, created) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/masked/doc"),
+        json!({"fields": {"kept": {"stringValue": "value"}}}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({
+            "documents": ["projects/demo-app/databases/(default)/documents/masked/doc"],
+            "mask": {}
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response[0]["found"]["name"],
+        "projects/demo-app/databases/(default)/documents/masked/doc"
+    );
+}
+
+#[test]
+fn rest_list_rejects_invalid_page_size_and_show_missing_encodings() {
+    let s = state(None);
+    let (status, created) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/listed/doc"),
+        json!({"fields": {"value": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    for page_size in ["invalid", "-1", "2147483648"] {
+        let (status, _) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/listed?pageSize={page_size}"),
+            json!({}),
+        );
+        assert_eq!(status, 400, "pageSize={page_size}");
+    }
+
+    for show_missing in ["1", "TRUE", ""] {
+        let (status, _) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/listed?showMissing={show_missing}"),
+            json!({}),
+        );
+        assert_eq!(status, 400, "showMissing={show_missing:?}");
+    }
+
+    let (status, baseline) = call(&s, "GET", &format!("{DOCS}/listed"), json!({}));
+    assert_eq!(status, 200, "{baseline}");
+    for query in [
+        "pageSize=0",
+        "pageSize=1",
+        "showMissing=false",
+        "showMissing=false&orderBy=__name__",
+    ] {
+        let (status, body) = call(&s, "GET", &format!("{DOCS}/listed?{query}"), json!({}));
+        assert_eq!(status, 200, "{query}: {body}");
+    }
+    let (status, after) = call(&s, "GET", &format!("{DOCS}/listed"), json!({}));
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(
+        after, baseline,
+        "refused requests must not change listed data"
+    );
+}
+
+#[test]
+fn rest_list_rejects_show_missing_with_order_by() {
+    let s = state(None);
+    let (status, created) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/ordered/doc"),
+        json!({"fields": {"value": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    let (status, _) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/ordered?showMissing=true&orderBy=__name__"),
+        json!({}),
+    );
+    assert_eq!(status, 400);
+
+    let (status, body) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/ordered?showMissing=true"),
+        json!({}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
 /// Validation answers where production and the official emulator disagree: fireemu follows
 /// production (conformance/firestore-production-matrix.json, `errors/rest-shapes`,
 /// `transactions`, `read-time`).

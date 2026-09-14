@@ -487,18 +487,19 @@ pub fn document_from_json(v: &Value) -> Result<pb::Document, JsonError> {
 /// `{"fieldPaths": [...]}` → mask.
 pub fn mask_from_json(v: Option<&Value>) -> Result<Option<pb::DocumentMask>, JsonError> {
     let Some(v) = v else { return Ok(None) };
-    let paths = v
-        .get("fieldPaths")
-        .and_then(Value::as_array)
-        .ok_or_else(|| JsonError("mask.fieldPaths must be an array".into()))?;
-    let field_paths = paths
-        .iter()
-        .map(|p| {
-            p.as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| JsonError("field paths must be strings".into()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let field_paths = match v.get("fieldPaths") {
+        None => Vec::new(),
+        Some(paths) => paths
+            .as_array()
+            .ok_or_else(|| JsonError("mask.fieldPaths must be an array".into()))?
+            .iter()
+            .map(|p| {
+                p.as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| JsonError("field paths must be strings".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
     Ok(Some(pb::DocumentMask { field_paths }))
 }
 

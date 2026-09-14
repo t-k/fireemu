@@ -1136,6 +1136,17 @@ impl SnapshotHook for Injected {
         self.set(value);
         Ok(())
     }
+    fn rollback(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let value = part
+            .downcast_ref::<String>()
+            .ok_or_else(|| TransitionFailure::new(self.name, "not a string"))?;
+        self.applied
+            .lock()
+            .unwrap()
+            .push(format!("rollback:{}={value}", self.name));
+        self.set(value);
+        Ok(())
+    }
 }
 
 /// A control state whose snapshot hooks can be made to refuse a phase, the hooks
@@ -1292,6 +1303,13 @@ fn a_restore_that_fails_at_any_position_rolls_the_earlier_hooks_back() {
         // were never touched.
         let log = applied.lock().unwrap().clone();
         assert_eq!(log.len(), position * 2, "position {position}: {log:?}");
+        assert_eq!(
+            log.iter()
+                .filter(|entry| entry.starts_with("rollback:"))
+                .count(),
+            position,
+            "position {position}: compensating rollback uses the distinct hook contract"
+        );
         // The snapshot survives the failed restore and can still be applied.
         hooks[position].refuse(Refuse::Nothing);
         let r = handle(

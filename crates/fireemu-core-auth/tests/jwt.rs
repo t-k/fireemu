@@ -84,6 +84,10 @@ fn unsigned_token_has_three_parts_and_round_trips() {
     assert_eq!(decoded.header_alg, "none");
     assert_eq!(decoded.header_typ, "JWT");
     assert_eq!(decoded.payload_json, claims.canonical_json());
+    assert!(
+        !decoded.payload_json.contains("fireemu_session_epoch"),
+        "ordinary production-shaped Auth stores omit the private control-session claim"
+    );
     assert_eq!(decoded.sub(), Some(uid.as_str()));
     assert_eq!(decoded.exp(), Some(claims.exp));
 }

@@ -173,14 +173,29 @@ pub trait SnapshotHook: Send + Sync {
     fn shared(&self) -> bool {
         false
     }
-    /// Captures what `scope` owns. Never mutates: the restore protocol also uses it to
-    /// take the pre-image it rolls back to.
+    /// Captures what `scope` owns for a named, user-visible snapshot. Never mutates.
     fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure>;
+    /// Captures an exact, transient pre-image for compensating rollback.
+    ///
+    /// The default reuses the user-visible snapshot shape. A hook whose published snapshot
+    /// deliberately removes secrets or whose normal restore rotates credentials overrides this
+    /// method; the returned part exists only for the duration of one restore request.
+    fn capture_rollback(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        self.capture(scope)
+    }
     /// Whether `part` belongs to this hook and `scope` can be restored right now, without
     /// mutating anything. Every hook is validated before any hook applies.
     fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure>;
     /// Puts a captured part back for `scope`.
     fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure>;
+    /// Restores a rollback pre-image after a later hook refused the operation.
+    ///
+    /// Most stores can use the normal restore operation. Stores whose successful restore has
+    /// an intentional side effect, such as rotating a credential lifecycle value, override
+    /// this method so a failed multi-store transition remains observationally exact.
+    fn rollback(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        self.restore(scope, part)
+    }
     /// A cheap, saturating estimate of the heap bytes `part` retains, for the per-session
     /// byte budget (`SNAP-MEM-01`). The default is zero: a hook whose part is negligible
     /// (the clock, the ruleset slot, the functions marker) need not implement it. A part
@@ -1932,7 +1947,7 @@ fn restore_parts(
     }
     let mut pre_image = Vec::with_capacity(applicable.len());
     for (hook, _) in applicable {
-        pre_image.push(hook.capture(scope).map_err(|e| {
+        pre_image.push(hook.capture_rollback(scope).map_err(|e| {
             format!("INTERNAL : preparing the rollback of {e}; nothing was restored")
         })?);
     }
@@ -1942,7 +1957,7 @@ fn restore_parts(
         };
         let mut rollback: Vec<String> = Vec::new();
         for ((earlier, _), pre) in applicable[..i].iter().zip(&pre_image).rev() {
-            if let Err(e) = earlier.restore(scope, pre) {
+            if let Err(e) = earlier.rollback(scope, pre) {
                 rollback.push(e.to_string());
             }
         }

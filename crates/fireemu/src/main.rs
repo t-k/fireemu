@@ -2133,12 +2133,15 @@ fn random_secret() -> Result<String, String> {
     }))
 }
 
+/// An unpredictable 128-bit daemon-local incarnation from the operating system CSPRNG.
+fn random_u128() -> Result<u128, String> {
+    let hex = random_secret()?;
+    u128::from_str_radix(&hex, 16).map_err(|e| format!("cannot build a daemon incarnation: {e}"))
+}
+
 /// An unpredictable 128-bit project session epoch from the operating system CSPRNG (spec 7.2).
 fn random_epoch() -> Result<fireemu_core_app_check::ProjectEpoch, String> {
-    let hex = random_secret()?;
-    let value = u128::from_str_radix(&hex, 16)
-        .map_err(|e| format!("cannot build an App Check epoch: {e}"))?;
-    Ok(fireemu_core_app_check::ProjectEpoch::new(value))
+    random_u128().map(fireemu_core_app_check::ProjectEpoch::new)
 }
 
 /// Builds the App Check state from canonical configuration: the registry, a fresh epoch per

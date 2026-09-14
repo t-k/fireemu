@@ -1056,7 +1056,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "codes are deterministic from the session seed rather than random",
+              "behaviour": "normal daemon starts re-key generated credential handles from a CSPRNG lifecycle incarnation so restart or namespace recreation cannot replay them; tests may inject a fixed incarnation for reproducibility",
               "precision": "exact-for-local-semantics"
             },
             {

@@ -159,6 +159,9 @@ impl SnapshotHook for Storage {
 /// faithful.
 pub struct Auth(pub Arc<AuthRegistry>);
 
+#[derive(Clone)]
+struct AuthRollback(AuthStore);
+
 impl Auth {
     fn store(&self, scope: &Scope) -> Result<Arc<Mutex<AuthStore>>, TransitionFailure> {
         match scope {
@@ -182,6 +185,13 @@ impl SnapshotHook for Auth {
         let snapshot = AuthSnapshot::capture(&guard);
         debug_assert!(snapshot.holds_no_totp_secret());
         Ok(Arc::new(snapshot))
+    }
+    fn capture_rollback(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let store = self.store(scope)?;
+        let guard = store
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Auth store"))?;
+        Ok(Arc::new(AuthRollback(guard.clone())))
     }
     fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         part.downcast_ref::<AuthSnapshot>()
@@ -208,6 +218,17 @@ impl SnapshotHook for Auth {
                 report.totp_factors_dropped
             );
         }
+        Ok(())
+    }
+    fn rollback(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let rollback = part
+            .downcast_ref::<AuthRollback>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        let store = self.store(scope)?;
+        let mut store = store
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Auth store"))?;
+        *store = rollback.0.clone();
         Ok(())
     }
     fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
@@ -712,6 +733,71 @@ mod tests {
             s.user(&uid).unwrap().mfa.is_empty(),
             "AUTH-SNAPSHOT-SECRET-05: no secret, no factor"
         );
+    }
+
+    #[test]
+    fn auth_hook_rollback_preserves_credentials_valid_before_a_failed_restore() {
+        use fireemu_core_auth::jwt::{encode_unsigned, verify_id_token, JwtError};
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
+        use fireemu_core_types::determinism::SplitMix64;
+        use std::collections::BTreeMap;
+        use std::sync::{Arc, Mutex};
+
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = Arc::new(
+            AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+                "demo-app",
+                default,
+                BTreeMap::new(),
+                73,
+            ),
+        );
+        assert!(registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default(),),
+        ));
+        let store = registry.store_for("worker-alpha").unwrap();
+        let uid = store
+            .lock()
+            .unwrap()
+            .create_user_with_id(
+                NewUser::email("rollback@example.test"),
+                Some("same-user"),
+                AT,
+            )
+            .unwrap();
+        let hook = super::Auth(registry);
+        let scope = Scope::Project("worker-alpha".to_owned());
+        let target = hook.capture(&scope).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("later@example.test"), AT)
+            .unwrap();
+        let valid_before_route = {
+            let store = store.lock().unwrap();
+            encode_unsigned(&store.id_token_claims(&uid, None, AT).unwrap())
+        };
+        let pre_image = hook.capture_rollback(&scope).unwrap();
+
+        hook.restore(&scope, &target).unwrap();
+        assert!(matches!(
+            verify_id_token(&valid_before_route, &store.lock().unwrap(), AT),
+            Err(JwtError::WrongSessionEpoch { .. })
+        ));
+        hook.rollback(&scope, &pre_image).unwrap();
+
+        assert!(store
+            .lock()
+            .unwrap()
+            .user_by_email("later@example.test")
+            .is_some());
+        assert!(verify_id_token(&valid_before_route, &store.lock().unwrap(), AT).is_ok());
     }
 
     /// `SNAP-MEM-01`: the production Auth hook reports a positive retained-byte estimate for a

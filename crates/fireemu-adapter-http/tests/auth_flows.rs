@@ -1982,7 +1982,7 @@ fn compatibility_profile_routes_unregistered_admin_projects_without_leaking_stat
         "isolated-a",
         AuthStore::new("isolated-a", SplitMix64::new(11), TotpPolicy::default())
     ));
-    registry.clear_routed();
+    registry.clear_routed().unwrap();
     assert_eq!(registry.routed_count(), 0);
 }
 

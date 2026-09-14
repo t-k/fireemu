@@ -404,6 +404,7 @@ fn auth_context_is_built_from_id_token_claims() {
             second_factor_identifier: Some("mfa-1".into()),
             tenant: None,
             sign_in_attributes: None,
+            fireemu_session_epoch: None,
         },
         custom,
     };

@@ -143,6 +143,13 @@ pub enum JwtError {
         /// Tenant carried by the token.
         actual: Option<String>,
     },
+    /// A locally issued token belongs to a different fireemu control-session incarnation.
+    WrongSessionEpoch {
+        /// Epoch required by the selected Auth store.
+        expected: String,
+        /// Epoch carried by the token, or `None` when absent.
+        actual: Option<String>,
+    },
     /// `sub` is not a known user.
     UnknownUser,
     /// The authenticated token belongs to a disabled user.
@@ -169,6 +176,9 @@ impl fmt::Display for JwtError {
             }
             Self::WrongTenant { expected, actual } => {
                 write!(f, "tenant {actual:?} != {expected:?}")
+            }
+            Self::WrongSessionEpoch { expected, actual } => {
+                write!(f, "fireemu session epoch {actual:?} != {expected:?}")
             }
             Self::UnknownUser => f.write_str("token subject is not a known user"),
             Self::Revoked => f.write_str("token revoked"),
@@ -493,6 +503,17 @@ pub fn verify_id_token_decoded(
             expected: expected_tenant,
             actual: actual_tenant,
         });
+    }
+    if let Some(expected) = store.lifecycle_epoch_claim() {
+        let actual = decoded
+            .payload
+            .get("firebase")
+            .and_then(|firebase| firebase.get("fireemu_session_epoch"))
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned);
+        if actual.as_deref() != Some(expected.as_str()) {
+            return Err(JwtError::WrongSessionEpoch { expected, actual });
+        }
     }
     let exp = decoded.exp().ok_or(JwtError::Malformed)?;
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);

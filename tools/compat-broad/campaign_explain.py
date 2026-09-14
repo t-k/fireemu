@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -434,6 +435,30 @@ class DataAdapter(SharedDataAdapter):
 
 
 class Coordinator(SharedCoordinator):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.database_responses = []
+
+    def request(
+        self, service, path, body=None, *, method="POST", privileged=False, form=False
+    ):
+        status, response = super().request(
+            service, path, body, method=method, privileged=privileged, form=form
+        )
+        if (
+            service == "metadata"
+            and path
+            == f"firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)"
+            and status == 200
+        ):
+            self.database_responses.append(
+                {
+                    "phase": "recovery" if self.budget.recovery else "observation",
+                    "body": response,
+                }
+            )
+        return status, response
+
     def preflight(self):
         accepted_configuration(self.permission, self.api_key)
         super().preflight()
@@ -530,6 +555,15 @@ def _validate_envelope(value, *, local, directory):
         _require(isinstance(value.get("permission"), dict), "permission missing")
         permission = value["permission"]
         accepted_configuration(permission)
+        _require(
+            all(
+                type(permission.get(key)) in (int, float)
+                and math.isfinite(permission[key])
+                for key in ("issuedAt", "expiresAt")
+            ),
+            "permission time missing",
+        )
+        approve(permission, nonce, value["localRecordSha256"], permission["issuedAt"])
         _require(
             permission.get("nonce") == nonce
             and permission.get("frozenCommit") == value.get("executionCommit"),
@@ -649,8 +683,72 @@ def _validate_envelope(value, *, local, directory):
         and state["costMicrousd"] <= 10000,
         "gate budget differs",
     )
+    validate_gate_accounting(state, local=local)
     if local:
         validate_local_runtime(value, directory)
+
+
+def validate_gate_accounting(state, *, local):
+    def number(value):
+        return type(value) in (int, float) and math.isfinite(value)
+
+    started = state.get("started")
+    _require(number(started) and started >= 0, "gate start time invalid")
+    for event in state["events"]:
+        start, end = event.get("started"), event.get("ended")
+        limit = 900 if event["phase"] == "observation" else 1200
+        _require(
+            number(start)
+            and number(end)
+            and started <= start <= end <= started + limit,
+            "dispatch time missing or outside phase",
+        )
+    observation = [
+        "observation:" + entry["id"]
+        for entry in state["plan"]["management"]["observation"]
+    ]
+    recovery = [
+        "recovery:" + entry["id"] for entry in state["plan"]["management"]["recovery"]
+    ]
+    used = state["managementUsed"]
+    expected = (
+        []
+        if local
+        else observation
+        + (recovery if "recovery:access-command" in used else recovery[2:])
+    )
+    _require(
+        used == expected
+        and [event.get("id") for event in state["managementEvents"]] == expected,
+        "management dispatch differs",
+    )
+    for event in state["managementEvents"]:
+        phase, key = event["id"].split(":")
+        declared = next(
+            entry for entry in state["plan"]["management"][phase] if entry["id"] == key
+        )
+        _require(
+            type(event.get("durationReserved")) is int
+            and event["durationReserved"] == declared["duration"]
+            and number(event.get("started"))
+            and started
+            <= event["started"]
+            <= started + (900 if phase == "observation" else 1200),
+            "management reservation differs",
+        )
+    observation_count = 12 + sum(key.startswith("observation:") for key in used)
+    recovery_count = 6 + sum(key.startswith("recovery:") for key in used)
+    for key, expected_count in {
+        "total": observation_count + recovery_count,
+        "observation": observation_count,
+        "recovery": recovery_count,
+        "reservedRecovery": 12 - recovery_count,
+        "costMicrousd": 1000 + 100 * (observation_count + recovery_count),
+    }.items():
+        _require(
+            type(state.get(key)) is int and state[key] == expected_count,
+            "management/data accounting differs",
+        )
 
 
 def validate_metadata(value):
@@ -694,6 +792,20 @@ def validate_metadata(value):
             )
         else:
             _require(body == accepted["apiKeyOwnership"], "API key ownership differs")
+    raw = value["databaseResponses"]
+    _require(
+        isinstance(raw, list)
+        and [item.get("phase") for item in raw] == ["observation", "recovery"],
+        "raw database phases missing",
+    )
+    for item in raw:
+        expected = next(
+            row["value"] for row in metadata if row["id"] == item["phase"] + ":database"
+        )
+        _require(
+            digest(database_evidence(item["body"])) == digest(expected),
+            "raw database response binding differs",
+        )
     observations = value["databaseObservations"]
     _require(len(observations) == 2, "database phase observations missing")
     for phase, row in zip(("observation", "recovery"), observations, strict=True):
@@ -906,6 +1018,7 @@ def execute(
             "configurationDigest": digest(configuration()),
             "metadataEvidence": coordinator.metadata_evidence,
             "databaseObservations": coordinator.database_observations,
+            "databaseResponses": coordinator.database_responses,
             "jobs": jobs,
             "gate": state,
             "failure": failure,

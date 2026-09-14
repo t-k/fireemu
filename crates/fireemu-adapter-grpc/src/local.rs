@@ -3925,6 +3925,19 @@ impl LocalBackend {
         };
         let (aliases, aggregations) = decode_aggregations(saq)?;
         let accepted = self.accepted_aggregation_query(&parent, sq, &aggregations)?;
+        if req
+            .explain_options
+            .as_ref()
+            .is_some_and(|options| !options.analyze)
+        {
+            return Ok((
+                pb::RunAggregationQueryResponse {
+                    explain_metrics: Some(crate::service::explain_metrics(None, false)),
+                    ..Default::default()
+                },
+                QueryStats::default(),
+            ));
+        }
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_aggregation_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -3967,7 +3980,17 @@ impl LocalBackend {
                     result: Some(pb::AggregationResult { aggregate_fields }),
                     transaction: access.report().to_vec(),
                     read_time: Some(encode_instant(read_time)),
-                    explain_metrics: None,
+                    explain_metrics: req.explain_options.as_ref().and_then(|options| {
+                        options.analyze.then(|| {
+                            crate::service::explain_metrics(
+                                Some(crate::local::QueryExecutionStats {
+                                    pages: stats,
+                                    ..Default::default()
+                                }),
+                                true,
+                            )
+                        })
+                    }),
                 },
                 stats,
             ))

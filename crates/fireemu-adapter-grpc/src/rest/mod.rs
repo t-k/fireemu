@@ -25,9 +25,9 @@ use crate::local::LocalBackend;
 use crate::rules::{self, Principal, RulesEnforcer};
 use json::{
     aggregation_query_from_json, base64_decode, base64_encode, commit_to_json, document_from_json,
-    document_to_json, mask_from_json, mask_from_paths, optional_timestamp_to_json,
-    precondition_from_json, structured_query_from_json, transaction_options_from_json,
-    value_to_json, write_from_json, write_result_to_json, JsonError,
+    document_to_json, explain_options_from_json, mask_from_json, mask_from_paths,
+    optional_timestamp_to_json, precondition_from_json, structured_query_from_json,
+    transaction_options_from_json, value_to_json, write_from_json, write_result_to_json, JsonError,
 };
 
 /// Shared REST state.
@@ -1025,6 +1025,8 @@ impl RestState {
             return Err(Status::invalid_argument("structuredQuery is required"));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
+        let explain_options =
+            explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         exclusive_selectors(body)?;
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(pb::run_query_request::ConsistencySelector::Transaction(
@@ -1042,7 +1044,7 @@ impl RestState {
         };
         let req = pb::RunQueryRequest {
             parent: resource.to_owned(),
-            explain_options: None,
+            explain_options,
             request_options: None,
             query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
                 structured,
@@ -1082,6 +1084,16 @@ impl RestState {
                 if r.skipped_results != 0 {
                     v["skippedResults"] = json!(r.skipped_results);
                 }
+                if let Some(metrics) = &r.explain_metrics {
+                    let mut explain = json!({"planSummary": {"indexesUsed": []}});
+                    if let Some(stats) = &metrics.execution_stats {
+                        explain["executionStats"] = json!({
+                            "resultsReturned": stats.results_returned.to_string(),
+                            "readOperations": stats.read_operations.to_string()
+                        });
+                    }
+                    v["explainMetrics"] = explain;
+                }
                 // Production Firestore sends no `done` marker over REST (the official emulator
                 // does); the last element is simply the last element of the array.
                 v
@@ -1113,6 +1125,8 @@ impl RestState {
             ));
         };
         let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;
+        let explain_options =
+            explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         if !matches!(
             aggregation.query_type,
             Some(pb::structured_aggregation_query::QueryType::StructuredQuery(_))
@@ -1142,7 +1156,7 @@ impl RestState {
         };
         let req = pb::RunAggregationQueryRequest {
             parent: resource.to_owned(),
-            explain_options: None,
+            explain_options,
             request_options: None,
             query_type: Some(
                 pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
@@ -1163,7 +1177,20 @@ impl RestState {
                     .collect()
             })
             .unwrap_or_default();
-        let mut v = json!({"result": {"aggregateFields": fields}, "readTime": optional_timestamp_to_json(response.read_time.as_ref())});
+        let mut v = json!({"readTime": optional_timestamp_to_json(response.read_time.as_ref())});
+        if response.result.is_some() {
+            v["result"] = json!({"aggregateFields": fields});
+        }
+        if let Some(metrics) = &response.explain_metrics {
+            let mut explain = json!({"planSummary": {"indexesUsed": []}});
+            if let Some(stats) = &metrics.execution_stats {
+                explain["executionStats"] = json!({
+                    "resultsReturned": stats.results_returned.to_string(),
+                    "readOperations": stats.read_operations.to_string()
+                });
+            }
+            v["explainMetrics"] = explain;
+        }
         if !response.transaction.is_empty() {
             v["transaction"] = Value::String(base64_encode(&response.transaction));
         }

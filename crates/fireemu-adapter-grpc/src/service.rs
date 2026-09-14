@@ -32,6 +32,24 @@ pub type BoxStream<T> = tonic::codegen::BoxStream<T>;
 const RUN_QUERY_BATCH_SIZE: i32 = 32;
 const RUN_QUERY_CHANNEL_CAPACITY: usize = 16;
 
+pub(crate) fn explain_metrics(
+    stats: Option<crate::local::QueryExecutionStats>,
+    analyze: bool,
+) -> pb::ExplainMetrics {
+    let execution_stats = stats.map(|stats| pb::ExecutionStats {
+        results_returned: i64::try_from(stats.pages.matched).unwrap_or(i64::MAX),
+        execution_duration: None,
+        read_operations: i64::try_from(stats.pages.scanned).unwrap_or(i64::MAX),
+        debug_stats: None,
+    });
+    pb::ExplainMetrics {
+        plan_summary: Some(pb::PlanSummary {
+            indexes_used: Vec::new(),
+        }),
+        execution_stats: analyze.then_some(execution_stats).flatten(),
+    }
+}
+
 /// Where validated requests go.
 pub enum Backend {
     /// Execute locally.
@@ -1045,6 +1063,19 @@ impl GatewayService {
     ) -> Result<Response<BoxStream<pb::RunQueryResponse>>, Status> {
         if let Some(local) = self.local_backend() {
             let local = Arc::clone(local);
+            if req
+                .explain_options
+                .as_ref()
+                .is_some_and(|options| !options.analyze)
+            {
+                let response = pb::RunQueryResponse {
+                    explain_metrics: Some(explain_metrics(None, false)),
+                    ..Default::default()
+                };
+                return Ok(Response::new(Box::pin(tokio_stream::iter(vec![Ok(
+                    response,
+                )]))));
+            }
             let name_order_continuation = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
                     let parent = parse_parent(&req.parent)
@@ -1267,6 +1298,17 @@ impl GatewayService {
                     ) {
                         let _ = sender.send(Err(error)).await;
                         return;
+                    }
+                }
+                if req
+                    .explain_options
+                    .as_ref()
+                    .is_some_and(|options| options.analyze)
+                {
+                    if let Some(metrics) = local.query_execution_stats(query_execution_id) {
+                        if let Some(response) = pending.as_mut() {
+                            response.explain_metrics = Some(explain_metrics(Some(metrics), true));
+                        }
                     }
                 }
                 drop(rollback);

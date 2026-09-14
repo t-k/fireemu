@@ -141,6 +141,38 @@ pub fn strict_keys(v: &Value, allowed: &[&str]) -> Result<(), JsonError> {
     Ok(())
 }
 
+/// Parses the finite local `ExplainOptions` contract.
+pub fn explain_options_from_json(
+    v: Option<&Value>,
+) -> Result<Option<pb::ExplainOptions>, JsonError> {
+    let Some(v) = v else { return Ok(None) };
+    strict_keys(v, &["analyze"])?;
+    let Some(analyze) = v.get("analyze") else {
+        return Ok(Some(pb::ExplainOptions::default()));
+    };
+    let Some(analyze) = analyze.as_bool() else {
+        return err("explainOptions.analyze must be a boolean");
+    };
+    Ok(Some(pb::ExplainOptions { analyze }))
+}
+
+#[cfg(test)]
+mod explain_tests {
+    use super::*;
+
+    #[test]
+    fn explain_options_accepts_only_boolean_analyze() {
+        assert!(
+            explain_options_from_json(Some(&json!({"analyze": true})))
+                .unwrap()
+                .unwrap()
+                .analyze
+        );
+        assert!(explain_options_from_json(Some(&json!({"analyze": "true"}))).is_err());
+        assert!(explain_options_from_json(Some(&json!({"unknown": false}))).is_err());
+    }
+}
+
 /// Returns the first request key that is not part of the endpoint's accepted key set.
 pub fn first_unknown_key<'a>(v: &'a Value, allowed: &[&str]) -> Option<&'a str> {
     v.as_object()?

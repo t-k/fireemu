@@ -158,6 +158,10 @@ class Backend:
                 "fields": body["fields"],
                 "updateTime": "2026-09-13T01:00:00Z",
             }
+            if self.variant == "lost-create":
+                raise ValueError("creation acknowledgement lost after commit")
+            if self.variant == "interrupted-create":
+                raise KeyboardInterrupt()
             return 200, copy.deepcopy(self.docs[path]), "application/json"
         if method == "DELETE":
             if self.variant == "unrecovered":
@@ -627,3 +631,32 @@ def test_compare_cli_preserves_existing_inputs(boundary, tmp_path, monkeypatch):
     with pytest.raises(FileExistsError):
         pair.main()
     assert p.read_bytes() == original
+
+
+@pytest.mark.parametrize("variant", ["lost-create", "interrupted-create"])
+def test_unacknowledged_creation_never_reports_top_level_cleanup_complete(boundary, tmp_path, variant):
+    boundary[1].variant = variant
+    if variant == "interrupted-create":
+        with pytest.raises(KeyboardInterrupt):
+            run(boundary, tmp_path)
+        result = json.loads((tmp_path / "run/result.json").read_bytes())
+    else:
+        result = run(boundary, tmp_path)
+        assert result["jobs"]["partial"]["cleanupComplete"] is False
+    assert len(boundary[1].docs) == 1
+    assert result["gate"]["jobs"]["partial"]["owned"] == []
+    assert result["cleanupComplete"] is False
+    assert result["recordingComplete"] is False
+    assert result["completed"] is False
+    assert compare(result, boundary[2])["compatibility"] == "indeterminate"
+    assert not any(method == "DELETE" for _url, method, _body, _headers in boundary[1].calls)
+    assert json.loads((tmp_path / "run/result.json").read_bytes())["cleanupComplete"] is False
+
+
+def test_no_data_dispatch_does_not_claim_uncertain_document_cleanup(boundary, tmp_path):
+    boundary[1].variant = "auth-command"
+    result = run(boundary, tmp_path)
+    assert not boundary[1].docs
+    assert all(job["pid"] is None for job in result["gate"]["jobs"].values())
+    assert result["cleanupComplete"] is True
+    assert result["completed"] is False

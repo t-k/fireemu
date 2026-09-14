@@ -16,9 +16,6 @@ from second_mapping import comparable, expected_ids, validate_rows, validate_tra
 PINNED_PRODUCTION_CANDIDATE_SHA256 = (
     "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73"
 )
-PINNED_PARENT_MANIFEST_SHA256 = (
-    "749c4ea888d192843fa9a90d500cd8b2fade556bc33418d3092632ee0b158183"
-)
 
 
 def observed_value(row, bindings):
@@ -166,10 +163,14 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
         unsigned_parent = {
             key: value for key, value in parent.items() if key != "parentManifestSha256"
         }
+        trusted_result = json.loads(
+            (Path(__file__).parents[2] / "spec/compatibility/broad-runs/af1d2bc3-second45-runtime-recomparison.json").read_bytes()
+        )
+        trusted_parent_hash = trusted_result["comparison"]["parentManifestSha256"]
         if (
             not isinstance(parent_hash, str)
             or parent_hash != digest(unsigned_parent)
-            or parent_hash != PINNED_PARENT_MANIFEST_SHA256
+            or parent_hash != trusted_parent_hash
         ):
             raise ValueError("parent manifest integrity binding is invalid")
         if parent.get("status") != "completed":

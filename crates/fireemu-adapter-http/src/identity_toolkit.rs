@@ -2823,7 +2823,7 @@ fn valid_provider_id(id: &str, kind: ProviderKind) -> bool {
         ProviderKind::Saml => "saml.",
     };
     id.starts_with(prefix)
-        && (prefix.len()..=128).contains(&id.len())
+        && (prefix.len() + 1..=128).contains(&id.len())
         && id[prefix.len()..].chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
         })
@@ -2873,13 +2873,18 @@ fn parse_response_type(value: Option<&Value>) -> Result<OAuthResponseType, JsonR
         code: read("code")?,
         token: read("token")?,
     };
+    validate_response_type(response)?;
+    Ok(response)
+}
+
+fn validate_response_type(response: OAuthResponseType) -> Result<(), JsonResponse> {
     if response.token
         || (!response.id_token && !response.code)
         || (response.id_token && response.code)
     {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
-    Ok(response)
+    Ok(())
 }
 
 fn parse_oidc(body: &Value, id: String) -> Result<OidcProviderConfig, JsonResponse> {
@@ -3009,9 +3014,7 @@ fn patch_oidc(
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         }
     }
-    if current.response_type.id_token && current.response_type.code {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    }
+    validate_response_type(current.response_type)?;
     validate_oidc(&current)?;
     Ok(current)
 }

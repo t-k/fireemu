@@ -1898,7 +1898,7 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
         "GET",
         &format!(
             "{project_collection}?pageSize=1&pageToken={}",
-            first_page.body["nextPageToken"]
+            first_page.body["nextPageToken"].as_str().unwrap()
         ),
         &owner(),
         &json!({}),
@@ -1907,6 +1907,18 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
     assert_eq!(
         next_page.body["oauthIdpConfigs"].as_array().unwrap().len(),
         1
+    );
+    assert_eq!(
+        first_page.body["oauthIdpConfigs"][0]["name"],
+        "projects/demo-app/oauthIdpConfigs/oidc.second"
+    );
+    assert_eq!(
+        next_page.body["oauthIdpConfigs"][0]["name"],
+        "projects/demo-app/oauthIdpConfigs/oidc.shared"
+    );
+    assert_ne!(
+        first_page.body["oauthIdpConfigs"][0]["name"],
+        next_page.body["oauthIdpConfigs"][0]["name"]
     );
     let deleted = handle_with(
         &s,
@@ -1943,6 +1955,17 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
             &s,
             "GET",
             &format!("{tenant_collection}/oidc.missing"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        404
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/missing/oauthIdpConfigs",
             &owner(),
             &json!({})
         )
@@ -2033,7 +2056,12 @@ fn provider_ids_and_semantic_validation_are_kind_specific_and_atomic() {
             "oauthIdpConfigId=saml.wrong",
             json!({"clientId": "c", "issuer": "https://idp.example"}),
         ),
+        (
+            "oauthIdpConfigId=oidc.",
+            json!({"clientId": "c", "issuer": "https://idp.example"}),
+        ),
         ("inboundSamlConfigId=oidc.wrong", json!({})),
+        ("inboundSamlConfigId=saml.", json!({})),
     ];
     for (query, body) in invalid_ids {
         let path = if query.starts_with("inbound") {
@@ -2111,6 +2139,30 @@ fn provider_ids_and_semantic_validation_are_kind_specific_and_atomic() {
         );
         assert_eq!(refused.status, 400, "{}", refused.body);
     }
+    let nested_token = handle_with(
+        &s,
+        "PATCH",
+        &format!("{oidc}/oidc.defaults?updateMask=responseType.token"),
+        &owner(),
+        &json!({"responseType": {"token": true}}),
+    );
+    assert_eq!(nested_token.status, 400, "{}", nested_token.body);
+    let nested_all_false = handle_with(
+        &s,
+        "PATCH",
+        &format!("{oidc}/oidc.defaults?updateMask=responseType.idToken"),
+        &owner(),
+        &json!({"responseType": {"idToken": false}}),
+    );
+    assert_eq!(nested_all_false.status, 400, "{}", nested_all_false.body);
+    let valid_partial = handle_with(
+        &s,
+        "PATCH",
+        &format!("{oidc}/oidc.defaults?updateMask=responseType.code"),
+        &owner(),
+        &json!({"responseType": {"code": false}}),
+    );
+    assert_eq!(valid_partial.status, 200, "{}", valid_partial.body);
     let unchanged = handle_with(
         &s,
         "GET",

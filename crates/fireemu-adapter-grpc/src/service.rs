@@ -32,22 +32,19 @@ pub type BoxStream<T> = tonic::codegen::BoxStream<T>;
 const RUN_QUERY_BATCH_SIZE: i32 = 32;
 const RUN_QUERY_CHANNEL_CAPACITY: usize = 16;
 
-pub(crate) fn explain_metrics(
-    stats: Option<crate::local::QueryExecutionStats>,
-    analyze: bool,
-) -> pb::ExplainMetrics {
-    let execution_stats = stats.map(|stats| pb::ExecutionStats {
-        results_returned: i64::try_from(stats.pages.matched).unwrap_or(i64::MAX),
-        execution_duration: None,
-        // Do not expose pre-authorization scan work. Only report the authorized result count.
-        read_operations: i64::try_from(stats.pages.matched).unwrap_or(i64::MAX),
-        debug_stats: None,
-    });
+/// Local Explain reports emitted results only; billing and index plans are not modeled.
+pub(crate) fn explain_metrics(results_returned: Option<i64>) -> pb::ExplainMetrics {
     pb::ExplainMetrics {
         plan_summary: Some(pb::PlanSummary {
             indexes_used: Vec::new(),
         }),
-        execution_stats: analyze.then_some(execution_stats).flatten(),
+        execution_stats: results_returned.map(|results_returned| pb::ExecutionStats {
+            results_returned,
+            // No production billing estimate or pre-authorization scan work is exposed.
+            read_operations: 0,
+            execution_duration: None,
+            debug_stats: None,
+        }),
     }
 }
 
@@ -693,12 +690,27 @@ impl Firestore for GatewayService {
             let local = local.clone();
             let rules = self.rules.clone();
             let request = request.into_inner();
-            let response = blocking_read(local, rules, caller, move |local, guard| {
-                local.run_aggregation_query(&request, guard)
-            })
-            .await?;
-            let stream: Vec<Result<pb::RunAggregationQueryResponse, Status>> = vec![Ok(response)];
-            return Ok(Response::new(Box::pin(tokio_stream::iter(stream))));
+            let creates_transaction = matches!(
+                request.consistency_selector,
+                Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(_))
+            );
+            let guard_local = Arc::clone(&local);
+            let database = database_name_from_query_parent(&request.parent);
+            let (response, announcement_guard) =
+                blocking_read(local, rules, caller, move |local, guard| {
+                    let response = local.run_aggregation_query(&request, guard)?;
+                    let rollback = creates_transaction.then(|| QueryTransactionGuard {
+                        local: guard_local,
+                        database,
+                        transaction: response.transaction.clone(),
+                    });
+                    Ok((response, rollback))
+                })
+                .await?;
+            return Ok(Response::new(Box::pin(AggregationResponseStream {
+                response: Some(response),
+                announcement_guard,
+            })));
         }
         let req = request.into_inner();
         let warnings = self.validate_run_aggregation_query(&req)?;
@@ -953,6 +965,32 @@ impl tokio_stream::Stream for QueryResponseStream {
     }
 }
 
+struct AggregationResponseStream {
+    response: Option<pb::RunAggregationQueryResponse>,
+    announcement_guard: Option<QueryTransactionGuard>,
+}
+
+impl tokio_stream::Stream for AggregationResponseStream {
+    type Item = Result<pb::RunAggregationQueryResponse, Status>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let response = this.response.take();
+        if response
+            .as_ref()
+            .is_some_and(|response| !response.transaction.is_empty())
+        {
+            if let Some(mut guard) = this.announcement_guard.take() {
+                guard.transaction.clear();
+            }
+        }
+        std::task::Poll::Ready(response.map(Ok))
+    }
+}
+
 fn pipeline_status(mut error: Status, canonical: &str) -> Status {
     if let Ok(value) = canonical.parse() {
         error.metadata_mut().insert("fireemu-pipeline", value);
@@ -1174,12 +1212,14 @@ impl GatewayService {
                 let mut pending = None;
                 for mut response in first {
                     response.continuation_selector = None;
+                    response.explain_metrics = None;
                     if let Some(previous) = pending.replace(response) {
                         if sender.send(Ok(previous)).await.is_err() {
                             return;
                         }
                     }
                 }
+                let mut results_returned = i64::try_from(first_documents).unwrap_or(i64::MAX);
                 let mut delivered = i32::try_from(first_documents).unwrap_or(i32::MAX);
                 let mut batch_documents = delivered;
                 let mut after_document = first_after_document;
@@ -1277,6 +1317,7 @@ impl GatewayService {
                     }
                     for mut response in responses {
                         response.continuation_selector = None;
+                        response.explain_metrics = None;
                         if let Some(previous) = pending.replace(response) {
                             if sender.send(Ok(previous)).await.is_err() {
                                 return;
@@ -1284,8 +1325,9 @@ impl GatewayService {
                         }
                     }
                     delivered = delivered.saturating_add(batch_documents);
+                    results_returned = results_returned.saturating_add(i64::from(batch_documents));
                 }
-                if let Some(transaction) = transaction.as_deref() {
+                if let Some(transaction) = transaction.as_deref().filter(|_| !plan_only) {
                     if let Err(error) = local.finish_query_execution(
                         &database_name_from_query_parent(&req.parent),
                         transaction,
@@ -1297,17 +1339,16 @@ impl GatewayService {
                 }
                 if plan_only {
                     if let Some(response) = pending.as_mut() {
-                        response.explain_metrics = Some(explain_metrics(None, false));
+                        response.explain_metrics = Some(explain_metrics(None));
                     }
                 } else if req
                     .explain_options
                     .as_ref()
                     .is_some_and(|options| options.analyze)
                 {
-                    if let Some(metrics) = local.query_execution_stats(query_execution_id) {
-                        if let Some(response) = pending.as_mut() {
-                            response.explain_metrics = Some(explain_metrics(Some(metrics), true));
-                        }
+                    if let Some(response) = pending.as_mut() {
+                        // Stream-owned count survives eviction from the bounded diagnostic cache.
+                        response.explain_metrics = Some(explain_metrics(Some(results_returned)));
                     }
                 }
                 drop(rollback);
@@ -1794,6 +1835,7 @@ mod tests {
         }
     }
 
+    mod explain_tests;
     mod query_transaction_tests;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

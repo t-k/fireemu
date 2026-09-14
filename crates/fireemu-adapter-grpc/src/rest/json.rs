@@ -795,6 +795,9 @@ pub fn int32(v: Option<&Value>, what: &str) -> Result<Option<i32>, JsonError> {
 
 /// JSON → structured query.
 pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, JsonError> {
+    if !v.is_object() {
+        return err("structuredQuery must be an object");
+    }
     let from = v
         .get("from")
         .and_then(Value::as_array)

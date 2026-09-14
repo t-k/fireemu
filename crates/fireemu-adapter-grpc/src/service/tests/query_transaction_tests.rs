@@ -4,7 +4,11 @@ use fireemu_core_types::resources::RootBudget;
 use std::collections::BTreeSet;
 use tokio_stream::StreamExt;
 
-fn seeded_query(backend: &LocalBackend, count: i64, field_order: bool) -> pb::RunQueryRequest {
+pub(super) fn seeded_query(
+    backend: &LocalBackend,
+    count: i64,
+    field_order: bool,
+) -> pb::RunQueryRequest {
     let mut request = query_request();
     backend
         .commit(&pb::CommitRequest {

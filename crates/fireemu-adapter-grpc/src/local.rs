@@ -3829,7 +3829,7 @@ impl LocalBackend {
                 return Ok((
                     vec![pb::RunQueryResponse {
                         transaction: access.report().to_vec(),
-                        explain_metrics: Some(crate::service::explain_metrics(None, false)),
+                        explain_metrics: Some(crate::service::explain_metrics(None)),
                         ..Default::default()
                     }],
                     authorization.warnings.clone(),
@@ -3905,16 +3905,9 @@ impl LocalBackend {
                 .as_ref()
                 .is_some_and(|options| options.analyze)
             {
-                let metrics = crate::service::explain_metrics(
-                    Some(crate::local::QueryExecutionStats {
-                        pages: QueryStats {
-                            matched: u64::try_from(docs.len()).unwrap_or(u64::MAX),
-                            ..stats
-                        },
-                        ..Default::default()
-                    }),
-                    true,
-                );
+                let metrics = crate::service::explain_metrics(Some(
+                    i64::try_from(docs.len()).unwrap_or(i64::MAX),
+                ));
                 if let Some(response) = responses.last_mut() {
                     response.explain_metrics = Some(metrics);
                 }
@@ -3992,7 +3985,7 @@ impl LocalBackend {
                 return Ok((
                     pb::RunAggregationQueryResponse {
                         transaction: access.report().to_vec(),
-                        explain_metrics: Some(crate::service::explain_metrics(None, false)),
+                        explain_metrics: Some(crate::service::explain_metrics(None)),
                         ..Default::default()
                     },
                     QueryStats::default(),
@@ -4013,15 +4006,9 @@ impl LocalBackend {
                     transaction: access.report().to_vec(),
                     read_time: Some(encode_instant(read_time)),
                     explain_metrics: req.explain_options.as_ref().and_then(|options| {
-                        options.analyze.then(|| {
-                            crate::service::explain_metrics(
-                                Some(crate::local::QueryExecutionStats {
-                                    pages: stats,
-                                    ..Default::default()
-                                }),
-                                true,
-                            )
-                        })
+                        options
+                            .analyze
+                            .then(|| crate::service::explain_metrics(Some(1)))
                     }),
                 },
                 stats,

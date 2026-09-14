@@ -1177,7 +1177,10 @@ impl RestState {
                     .collect()
             })
             .unwrap_or_default();
-        let mut v = json!({"readTime": optional_timestamp_to_json(response.read_time.as_ref())});
+        let mut v = json!({});
+        if response.read_time.is_some() {
+            v["readTime"] = optional_timestamp_to_json(response.read_time.as_ref());
+        }
         if response.result.is_some() {
             v["result"] = json!({"aggregateFields": fields});
         }

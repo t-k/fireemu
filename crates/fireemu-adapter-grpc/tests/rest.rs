@@ -1390,3 +1390,156 @@ fn negative_limit_query_error_is_a_single_array_element() {
         assert_eq!(status, 200, "{body}");
     }
 }
+
+fn explain_body(aggregation: bool, analyze: bool) -> Value {
+    let query = json!({"from": [{"collectionId": "items"}], "offset": 2});
+    if aggregation {
+        json!({"structuredAggregationQuery": {"structuredQuery": query, "aggregations": [{"alias": "count", "count": {}}]}, "explainOptions": {"analyze": analyze}})
+    } else {
+        json!({"structuredQuery": query, "explainOptions": {"analyze": analyze}})
+    }
+}
+
+fn explain_method(aggregation: bool) -> &'static str {
+    if aggregation {
+        "runAggregationQuery"
+    } else {
+        "runQuery"
+    }
+}
+
+#[test]
+fn explain_rest_plan_and_analyze_return_only_requested_data_and_one_metrics_object() {
+    let s = state(None);
+    for index in 0..5 {
+        assert_eq!(
+            call(
+                &s,
+                "PATCH",
+                &format!("{DOCS}/items/{index}"),
+                json!({"fields": {}})
+            )
+            .0,
+            200
+        );
+    }
+    for aggregation in [false, true] {
+        for analyze in [false, true] {
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:{}", explain_method(aggregation)),
+                explain_body(aggregation, analyze),
+            );
+            assert_eq!(status, 200, "{body}");
+            let rows = body.as_array().unwrap();
+            let metrics: Vec<_> = rows
+                .iter()
+                .filter_map(|row| row.get("explainMetrics"))
+                .collect();
+            assert_eq!(metrics.len(), 1, "{body}");
+            if analyze {
+                assert_eq!(
+                    metrics[0]["executionStats"]["resultsReturned"],
+                    if aggregation { "1" } else { "3" }
+                );
+            } else {
+                assert_eq!(rows.len(), 1);
+                assert!(metrics[0].get("executionStats").is_none());
+                for row in rows {
+                    assert!(row.get("document").is_none());
+                    assert!(row.get("result").is_none());
+                    assert!(row.get("readTime").is_none(), "{body}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn explain_rest_plan_only_new_and_existing_transactions_can_be_rolled_back() {
+    let s = state(None);
+    for aggregation in [false, true] {
+        for options in [json!({"readOnly": {}}), json!({"readWrite": {}})] {
+            let mut request = explain_body(aggregation, false);
+            request["newTransaction"] = options;
+            let path = format!("{DOCS}:{}", explain_method(aggregation));
+            let (status, body) = call(&s, "POST", &path, request);
+            assert_eq!(status, 200, "{body}");
+            let token = body[0]["transaction"].as_str().unwrap();
+            let mut reuse = explain_body(aggregation, false);
+            reuse["transaction"] = json!(token);
+            let (status, body) = call(&s, "POST", &path, reuse);
+            assert_eq!(status, 200, "{body}");
+            assert!(body[0].get("transaction").is_none());
+            assert_eq!(
+                call(
+                    &s,
+                    "POST",
+                    "/v1/projects/demo-app/databases/(default)/documents:rollback",
+                    json!({"transaction": token})
+                )
+                .0,
+                200
+            );
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::result_large_err)]
+fn explain_rest_authorization_denies_without_metrics_or_leaked_transactions() {
+    for source in [
+        "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }",
+        "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if request.auth != null; } } }",
+    ] {
+        let s = state(Some(source));
+        for aggregation in [false, true] {
+            for analyze in [false, true] {
+                let mut request = explain_body(aggregation, analyze);
+                request["newTransaction"] = json!({"readOnly": {}});
+                let (status, body) = call_as(&s, "POST", &format!("{DOCS}:{}", explain_method(aggregation)), request, None);
+                assert_eq!(status, 403, "{body}");
+                assert_eq!(body["error"]["status"], "PERMISSION_DENIED");
+                assert!(!body.to_string().contains("explainMetrics"));
+                assert!(s.local.latest_query_execution_stats().is_none());
+            }
+        }
+        let parent = fireemu_adapter_grpc::decode::parse_parent(&DOCS[4..]).unwrap();
+        assert_eq!(s.local.database_handle(&parent).unwrap().with(|db| Ok(db.transaction_bookkeeping_stats().active)).unwrap(), 0);
+    }
+}
+
+#[test]
+fn explain_rest_validates_queries_parents_and_consistency_selectors() {
+    let s = state(None);
+    for aggregation in [false, true] {
+        for analyze in [false, true] {
+            let path = format!("{DOCS}:{}", explain_method(aggregation));
+            for field in ["transaction", "readTime"] {
+                let mut request = explain_body(aggregation, analyze);
+                request[field] = json!(if field == "transaction" {
+                    "YmFk"
+                } else {
+                    "invalid"
+                });
+                let (status, body) = call(&s, "POST", &path, request);
+                assert_eq!(status, 400, "{body}");
+            }
+            for request in [
+                json!({"explainOptions": {"analyze": analyze}}),
+                json!({"structuredQuery": [], "explainOptions": {"analyze": analyze}}),
+            ] {
+                let (status, body) = call(&s, "POST", &path, request);
+                assert_eq!(status, 400, "{body}");
+            }
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}/items:{}", explain_method(aggregation)),
+                explain_body(aggregation, analyze),
+            );
+            assert_eq!(status, 400, "{body}");
+        }
+    }
+}

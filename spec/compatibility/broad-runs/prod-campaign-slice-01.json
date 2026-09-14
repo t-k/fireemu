@@ -310,7 +310,7 @@
     "accounts": 0,
     "configurationChanges": 0,
     "metadataRequests": 0,
-    "observerSha256": "cbd76feb7a7ddff718fccc7b7dd38dcc53292b8dca3dd95127c586bbf42e2c38",
+    "observerSha256": "d807dfb88e7234299b175b93c5d830b8d0213a8bccd4aaccb1de598c21ed9734",
     "transport": "local-only",
     "collector": "existing-batch-adapter-shared-v1"
   },

@@ -1,0 +1,54 @@
+# Identity Platform and Firestore Standard production compatibility
+
+Status: `IN_PROGRESS`
+
+Goal ID: `IP-FS-PRODUCTION-COMPATIBILITY`
+
+This is the current acceptance table for pull request #1. The earlier [merge-readiness record](merge-readiness.md) remains an intermediate historical checkpoint. Passing that checkpoint does not complete this goal.
+
+The target is application-facing Identity Platform and Firestore Standard/Native behavior for the pinned API and SDK versions and declared configurations. Production compatibility means compatible responses, side effects, authorization, errors and notifications for equivalent logical inputs and state transitions. It does not mean reproducing Google infrastructure, external identity providers, delivery networks, billing, SLAs or undisclosed abuse systems. A local trust root or delivery sink may replace an external boundary only when the replacement and its protocol checks are explicit.
+
+The exact REST/API-definition denominator is [version `ip-fs-standard-2026-09-14.v1`](../../spec/compatibility/denominators/ip-fs-standard-2026-09-14.v1.json). Its 2,713 surfaces comprise 2,592 targets, 119 Enterprise-only exclusions and 2 explicit Datastore-mode boundary surfaces. Endpoint and field counts are not semantic coverage percentages. SDK paths, Rules, transitions, equivalence classes and cross-product behavior are tracked below and in the capability, requirement and gap records.
+
+## Acceptance classes
+
+| Class | Meaning | Current decision |
+| --- | --- | --- |
+| A | Required for this production-compatibility goal | Every target feature group below must reach `COMPAT_VERIFIED` on the final artifact. Existing bounded results may satisfy only their recorded conditions. |
+| B | Outside this goal | Firestore Enterprise-only Pipeline, Enterprise full-text search and MongoDB-compatible product surfaces. Existing implementation remains and shared regressions are prevented. Datastore-mode variants remain an explicit product boundary. |
+| C | Owner decision | Production campaign identity, project/database/tenant profiles, permission window, fresh nonce, accepted settings and cost limits, recovery responsibility, and any shared-setting changes. Missing decisions block only their production operations, not local work. |
+
+No target feature is moved to class B merely because it is unimplemented, unobserved, preview, available in Enterprise too, or dependent on an adjacent service. A scope change requires an explicit owner decision.
+
+## Feature-group status
+
+`LOCAL_VERIFIED` and `ORACLE_COMPARED` describe evidence for finite conditions. They do not complete the parent group. `COMPAT_VERIFIED` requires the declared conditions, required production comparison, repaired differences, final-artifact regression and independent review.
+
+| Feature group | Required conditions | Current evidence | Parent state | Remaining completion work |
+| --- | --- | --- | --- | --- |
+| AUTH-ACCOUNT | Create/get/search/list/update/delete, disable/re-enable, email/password/anonymous/phone/provider lifecycle, Admin batch/import/export, protected fields and configured policies | Bounded production account/update receipts and repaired 45/46-row slices; broader local coverage | `IMPLEMENTING` | Provider lifecycle, Admin batch/hash formats, policies and unobserved value/state classes need final-runtime production comparison. |
+| AUTH-CREDENTIAL | ID/refresh/custom tokens, session cookies, signature/issuer/audience/project/tenant/expiry/revocation and claim composition across client/Admin/Rules | Finite saved production token flows; signed local and unsigned-emulator cases are separated | `IMPLEMENTING` | Strict signed custom-token/session-cookie matrices, claim precedence and SDK/Admin/Rules handoffs need complete comparison. |
+| AUTH-ACTION | Verify email, reset password, email link/change operations, code ownership, consumption, reuse and expiry | Local OOB authorization and code-shape/lifetime tests; selected saved references | `WAITING_ORACLE` | Delivery-boundary protocol and representative production code transitions remain unobserved. |
+| AUTH-MFA | SMS/TOTP enrollment/sign-in/withdrawal, factor limits and tenant/policy/revocation interactions; separate pending/session/code/TOTP lifetimes | Revision 1/2 evidence, revision 3 offline corpus, GAP-AUTH-007 and AUTH-U03 retained | `WAITING_ORACLE` | Age causality, 300/450/600 controls, fresh same-account control, TOTP and interaction matrices remain required. |
+| AUTH-FEDERATION | OAuth/OIDC/SAML provider configuration, assertion verification, redirect/link/collision behavior and controlled external boundary | Local fixture-IdP behavior only; provider configuration work is active | `IMPLEMENTING` | Signed issuer/audience/expiry/replay controls and representative production configuration/flow comparison are required. |
+| AUTH-TENANT-BLOCKING | Project/tenant isolation for users, credentials, providers, MFA and policies; blocking events, ordering, claims, refusal, timeout and rollback | Local tenant invariants and selected production blocking-function receipts | `IMPLEMENTING` | Provider/policy inheritance, event breadth, concurrency and representative tenant production comparison remain. |
+| AUTH-CONFIG-SDK | Project/tenant Auth settings, password/email-enumeration/recaptcha policy, client/Admin SDK paths and configuration-dependent results | Configuration digests and finite SDK runs exist | `IMPLEMENTING` | Field parity, policy boundary behavior and declared SDK-version end-to-end comparisons remain. |
+| FS-DATA-WRITE | CRUD, BatchGet/List, Commit, BatchWrite, Write stream, values, masks, preconditions, transforms, limits, atomicity and post-state | Broad saved production comparisons; first46/second45 and G0 keep original and repaired results | `IMPLEMENTING` | Remaining types/limits/stream cases and final-runtime saved-reference evaluation must be connected without weakening bindings. |
+| FS-QUERY-INDEX | Filters, projection, sort, cursor, offset, limit, collection group, aggregation, vector, PartitionQuery, Explain and index acceptance/refusal | Broad query references; local PartitionQuery and Explain controls; vector work is active | `IMPLEMENTING` | Standard vector/index behavior, Explain, partitions and uncovered filter/aggregation conditions need representative production comparison. |
+| FS-TRANSACTION | Read-only/read-write snapshots, token ownership, read/write/query sets, conflict/retry/expiry/rollback and post-state | Local REST/gRPC atomicity, lock, paging and cancellation controls; limited saved references | `WAITING_ORACLE` | Production conflict/error/retention behavior and SDK retry semantics need bounded observations. |
+| FS-RULES | Principals/claims/tenant, request/resource/get/exists/getAfter, query proofs, multiwrite budgets, rule limits and publication consistency | Local Rules tests and selected SDK interactions | `WAITING_ORACLE` | User-token production Rules behavior and Ruleset transition cases cannot be substituted with administrator REST evidence. |
+| FS-LISTEN-SDK | gRPC Listen, WebChannel and declared client SDKs; event order, resume, reconnect, cache, pending writes, unsubscribe and auth switching | Local gRPC/WebChannel and finite Node SDK reconnect/switch controls | `WAITING_ORACLE` | Browser and declared mobile SDK paths plus production notification/reconnect equivalence remain. |
+| FS-CONFIG-LIFECYCLE | Default/named Native databases, project boundary, indexes/exemptions, TTL, import/export, backup/PITR and management-operation contract | Database projection v2 and configuration preservation evidence; API surfaces enumerated | `WAITING_ORACLE` | Data-plane contract versus managed infrastructure responsibilities must be classified and representative management behavior compared. |
+| AUTH-FS-CROSS | Auth tokens, claims, tenant and revocation observed through Firestore Rules, transactions, listeners and SDK state changes | Local principal/project/tenant and SDK state invariants | `WAITING_ORACLE` | Cross-product production scenarios and final-artifact comparisons remain. |
+
+## Existing evidence boundaries
+
+- First46 retains its original 35 matches/11 mismatches and corrected 46/46 saved-reference comparison.
+- Second45 retains its original 32 matches/13 mismatches and the corrected 45/45 comparison at the valid observer/runtime pair. A newer local result is not paired until its exact local-only parent receipt and runtime identity satisfy the saved comparator.
+- G0 ran exactly once at fixed checkout `a35f85b4`, retaining the original 10/2 result and repaired 12/12 comparison. Its consumed permission and nonce authorize no rerun.
+- Local SDK, Rules, Listen, Query Explain and other invariants are not presented as production comparisons.
+- Raw observations, original mismatches, collector versions, hashes, approvals and failed execution records remain immutable. Re-evaluation creates a separate result.
+
+## Completion rule
+
+This goal reaches `READY_FOR_COMPATIBILITY_REVIEW` only when every target parent group is `COMPAT_VERIFIED`, all required CI and final-artifact checks pass, saved and new production evidence remains reproducible, independent reviews have no blocker, and owned resources and processes are reclaimed. Until then the repository reports `IN_PROGRESS`, `BLOCKED_OWNER` for the specific owner-dependent production actions, or `BLOCKED_TECHNICAL` for a concrete technical blocker.

@@ -1,5 +1,7 @@
 # Compatibility inventory merge acceptance
 
+> Historical checkpoint: this document records the earlier finite merge-readiness scope. The active, broader acceptance target is [IP-FS-PRODUCTION-COMPATIBILITY](ip-fs-production-compatibility.md); this checkpoint is not its completion claim.
+
 This table fixes the scope of the `feat/compatibility-inventory` pull request. It does not claim complete Firebase compatibility. Production observations, saved-production comparisons, local invariants, SDK runs and direct/mapped local comparisons remain separate evidence classes.
 
 | Class | Acceptance item | Required state for this pull request |

@@ -127,9 +127,11 @@
       "locator": "google.firestore.v1.RunAggregationQueryRequest",
       "kind": "request",
       "transport": "gRPC",
-      "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
     },
     {
       "id": "FS-AGGREGATION-RESPONSE",
@@ -137,9 +139,11 @@
       "locator": "google.firestore.v1.RunAggregationQueryResponse",
       "kind": "response",
       "transport": "gRPC",
-      "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
     },
     {
       "id": "FS-AGGREGATION-FIELD",
@@ -147,9 +151,11 @@
       "locator": "google.firestore.v1.StructuredAggregationQuery.aggregations",
       "kind": "field",
       "transport": "gRPC",
-      "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
     },
     {
       "id": "FS-AGGREGATION-ONEOF",
@@ -157,9 +163,11 @@
       "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.operator",
       "kind": "oneof",
       "transport": "gRPC",
-      "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
     },
     {
       "id": "FS-FILTER-ENUM",
@@ -167,9 +175,11 @@
       "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator",
       "kind": "enum",
       "transport": "gRPC",
-      "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
     },
     {
       "id": "FS-LISTEN",
@@ -177,9 +187,11 @@
       "locator": "google.firestore.v1.Firestore.Listen",
       "kind": "method",
       "transport": "gRPC",
-      "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "FS-WEB-BOUND-001"
+      ]
     },
     {
       "id": "FS-WRITE",

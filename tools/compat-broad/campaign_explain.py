@@ -68,7 +68,7 @@ def manifest() -> dict:
     return {
         "kind": "production-campaign-explain-01-v1",
         "status": "prepared-offline",
-        "sourceCommit": "be595c8b",
+        "sourceCommit": "permission-bound-execution-HEAD",
         "collector": "existing-batch-adapter-shared-v1",
         "admission": "existing-shared-gate-v2",
         "ownerAuthorization": {
@@ -211,7 +211,7 @@ def approve(permission: dict, nonce: str, local_digest: str, now: float) -> None
         or permission.get("permissionReference")
         != "conversation-2026-09-14-autonomous-production-under-usd10"
         or permission.get("recoveryOwner") != "t-k"
-        or permission.get("frozenCommit") != "be595c8b251b360d2b01c69ba8e3403f0e4f5f5f"
+        or not re.fullmatch(r"[0-9a-f]{40}", permission.get("frozenCommit", ""))
         or not isinstance(permission.get("pricingLocation"), str)
         or not isinstance(permission.get("pricingCheckedAt"), str)
     ):

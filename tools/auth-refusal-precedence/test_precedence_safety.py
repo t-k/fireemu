@@ -5,6 +5,7 @@ writes credentials to any file even when a request is lost or the process is sig
 writes no configuration before its preconditions hold, and restores what it read."""
 
 import base64
+import copy
 import json
 import os
 import secrets
@@ -72,6 +73,8 @@ class World:
         self.fail_restore = options.pop("fail_restore", False)
         self.fail_delete = options.pop("fail_delete", False)
         self.ignore_disable = options.pop("ignore_disable", False)
+        self.ignore_compound_display = options.pop("ignore_compound_display", None)
+        self.local = options.pop("local", False)
         self.dirty = options.pop("dirty", False)
         assert not options, options
         self.users = {}
@@ -138,6 +141,21 @@ class World:
         return 200, {}
 
     def request(self, url, body=None, token=None, quota=False, form=False):
+        if self.local:
+            assert url.startswith("http://127.0.0.1:9099/")
+            if url.endswith("/verificationCodes"):
+                return 200, {
+                    "verificationCodes": [
+                        {"sessionInfo": session, "code": TEST_CODE}
+                        for session in self.sessions
+                    ]
+                }
+            url = url.replace(
+                "http://127.0.0.1:9099/identitytoolkit.googleapis.com/",
+                "https://identitytoolkit.googleapis.com/",
+            ).replace("key=local-test-key", "key=key-secret-value")
+            if token == "owner":
+                token, quota = "access-secret-token", True
         if url == recorder.CONFIG_URL:
             assert body is None and token == "access-secret-token"
             return 200, json.loads(json.dumps(self.config))
@@ -246,14 +264,16 @@ class World:
             user = self.users[self.tokens[body["idToken"]]]
             if "emailVerified" in body:
                 assert set(body) == {"idToken", "emailVerified", "displayName"}
-                user["displayName"] = body["displayName"]
+                if self.ignore_compound_display != "emailVerified":
+                    user["displayName"] = body["displayName"]
                 return 200, {"localId": user["localId"], "email": user["email"]}
             if "disableUser" in body:
                 assert set(body) == {"idToken", "disableUser", "displayName"}
                 if body["disableUser"] is True:
                     return self.error("OPERATION_NOT_ALLOWED")
                 assert body["disableUser"] is None
-                user["displayName"] = body["displayName"]
+                if self.ignore_compound_display != "disableUser:null":
+                    user["displayName"] = body["displayName"]
                 return 200, {"localId": user["localId"], "email": user["email"]}
             admin_fields = set(body) & set(contract.LOCAL_VALID_ACTIVE_FIELDS)
             if admin_fields:
@@ -341,7 +361,9 @@ def run(tmp_path, monkeypatch, world, projection_sha=CONFIG_SHA):
         lambda status, config: {"sha256": projection_sha},
     )
     monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
-    report = recorder.observe(world.output)
+    report = recorder.observe(
+        world.output, origin="http://127.0.0.1:9099" if world.local else None
+    )
     saved = json.loads((world.output / "observation.json").read_bytes())
     # Every credential the scripted world hands out carries a marker; no file the run
     # wrote may contain one, and the handlers are restored.
@@ -422,6 +444,67 @@ def test_disabled_first_order_completes(tmp_path, monkeypatch):
     assert rows["reenabled-a-held-finalize"]["outcome"] == "accepted"
 
 
+@pytest.mark.parametrize("field", ["disableUser:null", "emailVerified"])
+def test_local_accepted_compound_update_without_display_name_is_incomplete(
+    tmp_path, monkeypatch, field
+):
+    w = world(tmp_path, local=True, ignore_compound_display=field)
+    report, saved = run(tmp_path, monkeypatch, w)
+    assert not complete(saved)
+    assert report["status"] == "incomplete"
+    assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
+    assert w.users == {} and w.patches == []
+
+
+def test_local_complete_requires_all_field_state_and_continuity_projections(
+    tmp_path, monkeypatch
+):
+    _, saved = run(tmp_path, monkeypatch, world(tmp_path, local=True))
+    assert complete(saved), saved.get("failure")
+    extension = saved["localValidActiveToken"]
+    for index, row in enumerate(extension["fields"]):
+        if row["outcome"] == "accepted":
+            assert row["displayNameApplied"] is True
+            assert row["allAccountStateRestored"] is True
+            assert row["ownerOtherStateUnchanged"] is True
+            assert row["otherAccountUnchanged"] is True
+        for key, value in row.items():
+            if type(value) is bool:
+                for replacement in (False, "true", None):
+                    changed = copy.deepcopy(saved)
+                    changed["localValidActiveToken"]["fields"][index][key] = replacement
+                    assert not complete(changed), (row["account"], row["field"], key)
+                changed = copy.deepcopy(saved)
+                del changed["localValidActiveToken"]["fields"][index][key]
+                assert not complete(changed), key
+            if key == "heldMfaContinuity":
+                for check in FINALIZE_CHECKS:
+                    changed = copy.deepcopy(saved)
+                    changed["localValidActiveToken"]["fields"][index][key][check] = (
+                        False
+                    )
+                    assert not complete(changed), check
+    for key in extension:
+        changed = copy.deepcopy(saved)
+        del changed["localValidActiveToken"][key]
+        assert not complete(changed), key
+    for account in ("a", "b"):
+        for check in FINALIZE_CHECKS:
+            changed = copy.deepcopy(saved)
+            changed["localValidActiveToken"]["heldCredentialsAndSessions"][account][
+                check
+            ] = False
+            assert not complete(changed), (account, check)
+    changed = copy.deepcopy(saved)
+    changed["localValidActiveToken"]["fields"].pop()
+    assert not complete(changed)
+    changed = copy.deepcopy(saved)
+    changed["localValidActiveToken"]["ordinaryFieldControls"][0][
+        "accountStateRestored"
+    ] = False
+    assert not complete(changed)
+
+
 def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
     w = world(tmp_path)
     for label in ("a", "b"):
@@ -431,7 +514,9 @@ def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
             "email": f"{label}@example.test",
             "displayName": f"marker-{label}",
             "emailVerified": True,
-            "mfaInfo": [{"mfaEnrollmentId": f"factor-{label}", "phoneInfo": "+15555550100"}],
+            "mfaInfo": [
+                {"mfaEnrollmentId": f"factor-{label}", "phoneInfo": "+15555550100"}
+            ],
         }
         w.users[uid] = user
     tokens = {
@@ -445,11 +530,18 @@ def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
         values = {
             "customAttributes": json.dumps({"sentinel": label}),
             "mfa": {"enrollments": [{"phoneInfo": "+15555550102"}]},
-            "linkProviderUserInfo": {"providerId": "google.com", "rawId": f"raw-{label}"},
+            "linkProviderUserInfo": {
+                "providerId": "google.com",
+                "rawId": f"raw-{label}",
+            },
         }
         for field in contract.LOCAL_VALID_ACTIVE_REFUSED_FIELDS:
             status, response = w.update(
-                {"idToken": token, "displayName": "must-not-apply", field: values[field]}
+                {
+                    "idToken": token,
+                    "displayName": "must-not-apply",
+                    field: values[field],
+                }
             )
             assert status == 400
             assert error_code(response) == contract.LOCAL_VALID_ACTIVE_ERRORS[field]
@@ -465,22 +557,34 @@ def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
         )
         assert status == 200
         assert user["displayName"] == "disable-null"
-        assert user.get("disabled", False) is before_accounts[uid].get("disabled", False)
-        assert w.users["uid-a" if label == "b" else "uid-b"] == before_accounts[
-            "uid-a" if label == "b" else "uid-b"
-        ]
-        status, _ = w.update({"idToken": token, "displayName": before_accounts[uid]["displayName"]})
+        assert user.get("disabled", False) is before_accounts[uid].get(
+            "disabled", False
+        )
+        assert (
+            w.users["uid-a" if label == "b" else "uid-b"]
+            == before_accounts["uid-a" if label == "b" else "uid-b"]
+        )
+        status, _ = w.update(
+            {"idToken": token, "displayName": before_accounts[uid]["displayName"]}
+        )
         assert status == 200 and w.users == before_accounts
         status, _ = w.update(
-            {"idToken": token, "emailVerified": False, "displayName": "ignored-email-verified"}
+            {
+                "idToken": token,
+                "emailVerified": False,
+                "displayName": "ignored-email-verified",
+            }
         )
         assert status == 200
         assert user["displayName"] == "ignored-email-verified"
         assert user["emailVerified"] is True
-        assert w.users["uid-a" if label == "b" else "uid-b"] == before_accounts[
-            "uid-a" if label == "b" else "uid-b"
-        ]
-        status, _ = w.update({"idToken": token, "displayName": before_accounts[uid]["displayName"]})
+        assert (
+            w.users["uid-a" if label == "b" else "uid-b"]
+            == before_accounts["uid-a" if label == "b" else "uid-b"]
+        )
+        status, _ = w.update(
+            {"idToken": token, "displayName": before_accounts[uid]["displayName"]}
+        )
         assert status == 200 and w.users == before_accounts
 
 
@@ -896,7 +1000,8 @@ def test_complete_rejects_missing_or_inconsistent_projections():
     report = complete_report()
     del report["committedCheckout"]
     assert complete(report) is False
-    assert complete({**report, "target": "local"})
+    # Local completion additionally requires its valid-token authorization matrix.
+    assert complete({**report, "target": "local"}) is False
     assert complete({**complete_report(), "cleanup": {}}) is False
     assert complete({**complete_report(), "setup": {"a": True}}) is False
     assert complete({**complete_report(), "held": {"a": True}}) is False

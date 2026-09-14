@@ -517,7 +517,8 @@ def observe(output, origin=None):
                             "httpStatus": status,
                             "outcome": "refused",
                             "observedError": error_code(response),
-                            "allAccountStateUnchanged": after_accounts == before_accounts,
+                            "allAccountStateUnchanged": after_accounts
+                            == before_accounts,
                         }
                     )
 
@@ -535,11 +536,17 @@ def observe(output, origin=None):
                 after_accounts = {
                     name: lookup(candidate) for name, candidate in accounts.items()
                 }
-                owner_before_without_display = without_display_name(before_accounts[label])
-                owner_after_without_display = without_display_name(after_accounts[label])
+                owner_before_without_display = without_display_name(
+                    before_accounts[label]
+                )
+                owner_after_without_display = without_display_name(
+                    after_accounts[label]
+                )
                 require(
                     status == 200
                     and "error" not in response
+                    and after_accounts[label].get("displayName")
+                    == "auth-u13-email-verified-ignored"
                     and owner_after_without_display == owner_before_without_display
                     and after_accounts["b" if label == "a" else "a"]
                     == before_accounts["b" if label == "a" else "a"]
@@ -577,6 +584,9 @@ def observe(output, origin=None):
                     and restored_accounts[label] == before_accounts[label]
                     and restored_accounts["b" if label == "a" else "a"]
                     == before_accounts["b" if label == "a" else "a"]
+                )
+                observations[-1]["allAccountStateRestored"] = (
+                    restored_accounts == before_accounts
                 )
 
                 # `disableUser:true` is administrator-only. Verify atomic refusal and
@@ -656,6 +666,8 @@ def observe(output, origin=None):
                 require(
                     status == 200
                     and "error" not in response
+                    and after_disable_null[label].get("displayName")
+                    == "auth-u13-disable-null"
                     and owner_without_display == owner_before_without_display
                     and after_disable_null[label].get("disabled", False)
                     == before_disable_null[label].get("disabled", False)
@@ -683,8 +695,14 @@ def observe(output, origin=None):
                             "disabled", False
                         )
                         == before_disable_null[label].get("disabled", False),
-                        "displayNameApplied": after_disable_null[label].get("displayName")
+                        "displayNameApplied": after_disable_null[label].get(
+                            "displayName"
+                        )
                         == "auth-u13-disable-null",
+                        "ownerOtherStateUnchanged": owner_without_display
+                        == owner_before_without_display,
+                        "otherAccountUnchanged": after_disable_null[other]
+                        == before_disable_null[other],
                         "allAccountStateRestored": restored_disable_null
                         == before_disable_null,
                         "heldMfaContinuity": null_continuity_checks,
@@ -712,9 +730,7 @@ def observe(output, origin=None):
                 )
                 restored = lookup(account)
                 require(
-                    status == 200
-                    and "error" not in response
-                    and restored == before
+                    status == 200 and "error" not in response and restored == before
                 )
                 controls.append(
                     {

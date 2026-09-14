@@ -532,6 +532,30 @@ def production_fixture(local):
         {**copy.deepcopy(config["databaseEvidence"]), "phase": phase}
         for phase in ("observation", "recovery")
     ]
+    production["databaseResponses"] = [
+        {"phase": phase, "body": copy.deepcopy(config["databaseResponse"])}
+        for phase in ("observation", "recovery")
+    ]
+    state = production["gate"]
+    state["managementUsed"] = [
+        "observation:" + key
+        for key in ("access-command", "tokeninfo", "project", "database", "auth", "key")
+    ] + ["recovery:" + key for key in ("project", "database", "auth", "key")]
+    state["managementEvents"] = [
+        {
+            "id": key,
+            "started": state["started"],
+            "durationReserved": next(
+                entry["duration"]
+                for entry in plan["management"][key.split(":")[0]]
+                if entry["id"] == key.split(":")[1]
+            ),
+        }
+        for key in state["managementUsed"]
+    ]
+    state.update(
+        total=28, observation=18, recovery=10, reservedRecovery=2, costMicrousd=3800
+    )
     return production
 
 
@@ -615,6 +639,49 @@ def test_production_permission_drift_is_indeterminate(real_shadow, field):
     production = production_fixture(local)
     production["permission"][field] = "drift"
     production["permissionDigest"] = digest(production["permission"])
+    production["gate"]["plan"]["permissionDigest"] = production["permissionDigest"]
+    production["gate"]["planDigest"] = digest(production["gate"]["plan"])
+    production["receipt"]["principalEvidence"]["planDigest"] = production["gate"][
+        "planDigest"
+    ]
+    production["receipt"]["principalEvidence"]["permissionDigest"] = production[
+        "permissionDigest"
+    ]
     assert (
         compare_production_local(production, local)["compatibility"] == "indeterminate"
     )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-raw",
+        "changed-raw",
+        "missing-management",
+        "management-count",
+        "duplicate-management",
+        "deleted-time",
+    ],
+)
+def test_complete_production_rejects_rebound_metadata_and_time(real_shadow, mutation):
+    from campaign_explain import validate_envelope
+
+    local, _ = real_shadow
+    production = production_fixture(local)
+    if mutation == "missing-raw":
+        production.pop("databaseResponses")
+    elif mutation == "changed-raw":
+        production["databaseResponses"][0]["body"]["etag"] = "changed"
+    elif mutation == "missing-management":
+        production["gate"]["managementEvents"] = []
+    elif mutation == "management-count":
+        production["gate"]["total"] = 18
+        production["gate"]["costMicrousd"] = 2800
+    elif mutation == "duplicate-management":
+        production["gate"]["managementUsed"].append(
+            production["gate"]["managementUsed"][0]
+        )
+    else:
+        production["gate"]["events"][0].pop("ended")
+    with pytest.raises(ValueError):
+        validate_envelope(production, local=False)

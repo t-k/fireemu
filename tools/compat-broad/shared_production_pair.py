@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -128,6 +129,91 @@ def normalize_g0(value, names, *, service, path=()):
     return batch_normalize(value, names, service=service, path=path)
 
 
+def _validate_v2_creation_proofs(job, state, declared):
+    """Independently derive authority from acknowledged creates, never cleanup reads."""
+    proofs = {}
+
+    def created(name, fields, version, row):
+        if (
+            name not in declared["resources"]
+            or not isinstance(fields, dict)
+            or fields.get("_sharedOwner") != {"referenceValue": name}
+            or not isinstance(version, str)
+            or not re.fullmatch(
+                r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", version
+            )
+        ):
+            raise ValueError("invalid typed creation ownership evidence")
+        datetime.fromisoformat(version)
+        proofs.setdefault(
+            name,
+            {
+                "name": name,
+                "updateTime": version,
+                "fieldsDigest": digest(fields),
+                "requestDigest": digest(row["request"]),
+                "responseDigest": digest(row["body"]),
+            },
+        )
+
+    for row in job["rows"]:
+        operation, body = row["request"], row["body"]
+        if row["status"] != 200:
+            continue
+        if operation["method"] == "PATCH" and operation["path"].endswith(
+            "?currentDocument.exists=false"
+        ):
+            name = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+            fields = operation["body"]["fields"]
+            if (
+                not isinstance(body, dict)
+                or body.get("name") != name
+                or digest(body.get("fields")) != digest(fields)
+            ):
+                raise ValueError("creation acknowledgement identity/fields mismatch")
+            created(name, fields, body.get("updateTime"), row)
+        elif operation["method"] == "POST" and operation["path"].endswith(
+            ":batchWrite"
+        ):
+            writes = operation["body"]["writes"]
+            if not any(
+                digest(write.get("currentDocument")) == digest({"exists": False})
+                for write in writes
+            ):
+                continue
+            statuses = body.get("status") if isinstance(body, dict) else None
+            results = body.get("writeResults") if isinstance(body, dict) else None
+            if (
+                not isinstance(statuses, list)
+                or not isinstance(results, list)
+                or len(statuses) != len(writes)
+                or len(results) != len(writes)
+            ):
+                raise ValueError("creation acknowledgement write results unavailable")
+            for write, status, result in zip(writes, statuses, results, strict=True):
+                if not isinstance(status, dict) or type(status.get("code")) is not int:
+                    raise ValueError("creation acknowledgement status is not typed")
+                if status["code"] != 0 or digest(
+                    write.get("currentDocument")
+                ) != digest({"exists": False}):
+                    continue
+                if not isinstance(result, dict):
+                    raise ValueError(  # noqa: TRY004 -- Admission uses ValueError.
+                        "creation acknowledgement write result unavailable"
+                    )
+                created(
+                    write["update"]["name"],
+                    write["update"]["fields"],
+                    result.get("updateTime"),
+                    row,
+                )
+    if digest(state.get("creationProofs")) != digest(proofs) or digest(
+        state.get("owned")
+    ) != digest(list(proofs)):
+        raise ValueError("creation ownership journal differs from acknowledgements")
+    return proofs
+
+
 def validate_record(record, *, local=False, historical_observer=False):
     """Validate current v2, or the explicitly selected frozen G0 v1 contract."""
     batch = record.get("batch", record)
@@ -212,12 +298,23 @@ def validate_record(record, *, local=False, historical_observer=False):
             or sorted(state["absent"]) != sorted(expected["jobs"][key]["resources"])
         ):
             raise ValueError("cleanup evidence incomplete")
+        proofs = (
+            _validate_v2_creation_proofs(job, state, expected["jobs"][key])
+            if not historical_observer
+            else None
+        )
         declared_cleanup = expected["jobs"][key]["recovery"]
         if len(job["cleanup"]) != len(declared_cleanup):
             raise ValueError("cleanup sequence incomplete")
         for index, (row, declared) in enumerate(
             zip(job["cleanup"], declared_cleanup, strict=True)
         ):
+            if (
+                proofs is not None
+                and row.get("status") is not None
+                and type(row["status"]) is not int
+            ):
+                raise ValueError("cleanup response status is not typed")
             operation = dict(declared)
             source = operation.pop("versionFrom", None)
             if source is not None:
@@ -228,6 +325,20 @@ def validate_record(record, *, local=False, historical_observer=False):
                     and isinstance(version, str)
                     and version
                 ):
+                    if proofs is not None:
+                        resource = operation["path"].removeprefix("/v1/")
+                        proof = proofs.get(resource)
+                        if (
+                            proof is None
+                            or proof["updateTime"] != version
+                            or original["body"].get("name") != resource
+                            or digest(original["body"].get("fields"))
+                            != proof["fieldsDigest"]
+                            or type(row.get("status")) is not int
+                        ):
+                            raise ValueError(
+                                "DELETE differs from acknowledged creation ownership/version"
+                            )
                     operation["path"] += "?currentDocument.updateTime=" + quote(
                         version, safe=""
                     )
@@ -256,6 +367,13 @@ def validate_record(record, *, local=False, historical_observer=False):
                 or matching[0].get("requestDigest") != digest(row["request"])
                 or matching[0].get("responseDigest") != digest(row["body"])
                 or matching[0].get("status") != row["status"]
+                or (
+                    not historical_observer
+                    and (
+                        matching[0].get("completed") is not True
+                        or type(matching[0].get("status")) is not int
+                    )
+                )
             ):
                 raise ValueError("recovery receipt mismatch")
     state = batch["gate"]

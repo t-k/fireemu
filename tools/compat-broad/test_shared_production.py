@@ -25,6 +25,8 @@ from test_second_production import fixture_permission as old_permission
 def local_fixture():
     from urllib.parse import quote
 
+    from shared_gate import _creation_proofs
+
     plan = manifest("a" * 32)
     backend = Backend(old_permission())
     jobs, events, states = {}, [], {}
@@ -34,6 +36,7 @@ def local_fixture():
     }
     for key, job in plan["jobs"].items():
         rows, cleanup = [], []
+        proofs = {}
         for phase, operations, target in (
             ("observation", job["observation"], rows),
             ("recovery", job["recovery"], cleanup),
@@ -51,6 +54,9 @@ def local_fixture():
                     operation["body"],
                     headers,
                 )
+                if phase == "observation":
+                    for proof in _creation_proofs(operation, status, body, job, plan):
+                        proofs.setdefault(proof["name"], proof)
                 target.append(
                     {"index": i, "request": operation, "status": status, "body": body}
                 )
@@ -73,7 +79,13 @@ def local_fixture():
             "rows": rows,
             "cleanup": cleanup,
         }
-        states[key] = {"complete": True, "inflight": False, "absent": job["resources"]}
+        states[key] = {
+            "complete": True,
+            "inflight": False,
+            "absent": job["resources"],
+            "owned": list(proofs),
+            "creationProofs": proofs,
+        }
     return {
         "gate": {
             "plan": plan,
@@ -749,5 +761,175 @@ def test_g0_contract_retains_frozen_v1_admission_without_current_builder():
     assert "currentDocument" not in writes[2]
     assert all("_sharedOwner" not in write["update"]["fields"] for write in writes)
     contract = g0_contract()
-    assert contract["baseAdmissionContractDigest"] == G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST
+    assert (
+        contract["baseAdmissionContractDigest"]
+        == G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST
+    )
     assert contract["baseAdmissionContractDigest"] != digest(production.binding())
+
+
+def rebind_fixture_events(record):
+    for event in record["gate"]["events"]:
+        job = record["jobs"][event["job"]]
+        rows = job["rows"] if event["phase"] == "observation" else job["cleanup"]
+        row = rows[event["index"]]
+        event["requestDigest"] = digest(row["request"])
+        event["responseDigest"] = digest(row["body"])
+        event["status"] = row["status"]
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_current_v2_requires_creation_proofs_even_when_foreign_cleanup_is_rebound(
+    replace,
+):
+    from urllib.parse import quote
+
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    validate_record(record, local=True)
+    record["gate"]["jobs"]["partial"].pop("creationProofs", None)
+    if replace:
+        rows = record["jobs"]["partial"]["cleanup"]
+        rows[0]["body"]["updateTime"] = "2026-09-14T01:00:00Z"
+        rows[1]["request"]["path"] = (
+            rows[1]["request"]["path"].split("?")[0]
+            + "?currentDocument.updateTime="
+            + quote(rows[0]["body"]["updateTime"], safe="")
+        )
+        rebind_fixture_events(record)
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "empty",
+        "extra",
+        "owned-missing",
+        "name",
+        "updateTime",
+        "fieldsDigest",
+        "requestDigest",
+        "responseDigest",
+    ],
+)
+def test_current_v2_creation_journal_must_match_acknowledged_exact_proofs(variant):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    state = record["gate"]["jobs"]["partial"]
+    name = record["gate"]["plan"]["jobs"]["partial"]["resources"][1]
+    if variant == "empty":
+        state["creationProofs"] = {}
+    elif variant == "extra":
+        state["creationProofs"][name + "-foreign"] = copy.deepcopy(
+            state["creationProofs"][name]
+        )
+    elif variant == "owned-missing":
+        state["owned"].remove(name)
+    else:
+        state["creationProofs"][name][variant] = "foreign"
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize(
+    "variant", ["version", "fields", "name", "skipped-status", "bool-status"]
+)
+def test_current_v2_rebound_cleanup_cannot_replace_created_resource_state(variant):
+    from urllib.parse import quote
+
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    rows = record["jobs"]["partial"]["cleanup"]
+    if variant == "version":
+        rows[0]["body"]["updateTime"] = "2026-09-14T01:00:00Z"
+        rows[1]["request"]["path"] = (
+            rows[1]["request"]["path"].split("?")[0]
+            + "?currentDocument.updateTime="
+            + quote(rows[0]["body"]["updateTime"], safe="")
+        )
+    elif variant == "fields":
+        rows[0]["body"]["fields"] = {"foreign": {"booleanValue": True}}
+    elif variant == "name":
+        rows[0]["body"]["name"] += "-foreign"
+    else:
+        rows[1]["status"] = None if variant == "skipped-status" else True
+    rebind_fixture_events(record)
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "conflict",
+        "lost",
+        "bool-status",
+        "foreign-name",
+        "missing-version",
+        "invalid-version",
+        "bool-version",
+        "foreign-marker",
+        "bool-batch-code",
+        "missing-batch-result",
+    ],
+)
+def test_current_v2_rebound_creation_response_cannot_grant_destructive_authority(
+    variant,
+):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    job = record["jobs"]["partial"]
+    row = job["rows"][3]
+    state = record["gate"]["jobs"]["partial"]
+    name = row["body"]["name"]
+    if variant == "conflict":
+        row["status"] = 409
+    elif variant == "lost":
+        row["status"] = None
+    elif variant == "bool-status":
+        row["status"] = True
+    elif variant == "foreign-name":
+        row["body"]["name"] += "-foreign"
+    elif variant == "missing-version":
+        del row["body"]["updateTime"]
+    elif variant == "invalid-version":
+        row["body"]["updateTime"] = "invalid"
+    elif variant == "bool-version":
+        row["body"]["updateTime"] = True
+    elif variant == "foreign-marker":
+        row["body"]["fields"]["_sharedOwner"] = {"referenceValue": name + "-foreign"}
+    elif variant == "bool-batch-code":
+        job["rows"][4]["body"]["status"][0]["code"] = False
+    else:
+        job["rows"][4]["body"]["writeResults"].pop()
+    state["creationProofs"][name]["responseDigest"] = digest(row["body"])
+    state["creationProofs"][name]["fieldsDigest"] = digest(row["body"].get("fields"))
+    state["creationProofs"][name]["updateTime"] = row["body"].get("updateTime")
+    rebind_fixture_events(record)
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize("variant", ["read-status", "final-status", "incomplete-event"])
+def test_current_v2_cleanup_chain_requires_typed_completed_receipts(variant):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    rows = record["jobs"]["partial"]["cleanup"]
+    if variant == "read-status":
+        rows[0]["status"] = 200.0
+    elif variant == "final-status":
+        rows[2]["status"] = 404.0
+    rebind_fixture_events(record)
+    if variant == "incomplete-event":
+        next(
+            event for event in record["gate"]["events"] if event["phase"] == "recovery"
+        )["completed"] = False
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)

@@ -3821,6 +3821,22 @@ impl LocalBackend {
                     query: &authorization.query,
                 },
             )?;
+            if req
+                .explain_options
+                .as_ref()
+                .is_some_and(|options| !options.analyze)
+            {
+                let read_time = Some(encode_instant(access.read_time(now)?));
+                return Ok((
+                    vec![pb::RunQueryResponse {
+                        read_time,
+                        explain_metrics: Some(crate::service::explain_metrics(None, false)),
+                        ..Default::default()
+                    }],
+                    authorization.warnings.clone(),
+                    selection,
+                ));
+            }
             let mut selection_stage = None;
             let selection = match selection {
                 Some(selection) => Some(selection),
@@ -3925,19 +3941,10 @@ impl LocalBackend {
         };
         let (aliases, aggregations) = decode_aggregations(saq)?;
         let accepted = self.accepted_aggregation_query(&parent, sq, &aggregations)?;
-        if req
+        let plan_only = req
             .explain_options
             .as_ref()
-            .is_some_and(|options| !options.analyze)
-        {
-            return Ok((
-                pb::RunAggregationQueryResponse {
-                    explain_metrics: Some(crate::service::explain_metrics(None, false)),
-                    ..Default::default()
-                },
-                QueryStats::default(),
-            ));
-        }
+            .is_some_and(|options| !options.analyze);
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_aggregation_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -3966,6 +3973,15 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
+            if plan_only {
+                return Ok((
+                    pb::RunAggregationQueryResponse {
+                        explain_metrics: Some(crate::service::explain_metrics(None, false)),
+                        ..Default::default()
+                    },
+                    QueryStats::default(),
+                ));
+            }
             // Inside a transaction the aggregation and its conflict observation share one
             // borrowed selection pass, so matching document bodies are never materialized just
             // to record the query.

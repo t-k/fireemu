@@ -39,7 +39,8 @@ pub(crate) fn explain_metrics(
     let execution_stats = stats.map(|stats| pb::ExecutionStats {
         results_returned: i64::try_from(stats.pages.matched).unwrap_or(i64::MAX),
         execution_duration: None,
-        read_operations: i64::try_from(stats.pages.scanned).unwrap_or(i64::MAX),
+        // Do not expose pre-authorization scan work. Only report the authorized result count.
+        read_operations: i64::try_from(stats.pages.matched).unwrap_or(i64::MAX),
         debug_stats: None,
     });
     pb::ExplainMetrics {
@@ -1063,19 +1064,10 @@ impl GatewayService {
     ) -> Result<Response<BoxStream<pb::RunQueryResponse>>, Status> {
         if let Some(local) = self.local_backend() {
             let local = Arc::clone(local);
-            if req
+            let plan_only = req
                 .explain_options
                 .as_ref()
-                .is_some_and(|options| !options.analyze)
-            {
-                let response = pb::RunQueryResponse {
-                    explain_metrics: Some(explain_metrics(None, false)),
-                    ..Default::default()
-                };
-                return Ok(Response::new(Box::pin(tokio_stream::iter(vec![Ok(
-                    response,
-                )]))));
-            }
+                .is_some_and(|options| !options.analyze);
             let name_order_continuation = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
                     let parent = parse_parent(&req.parent)
@@ -1094,6 +1086,9 @@ impl GatewayService {
             let internal_transaction = req.consistency_selector.is_none();
             let mut first_request = req.clone();
             set_run_query_page(&mut first_request, original_offset, original_limit);
+            if plan_only {
+                set_run_query_page(&mut first_request, 0, Some(0));
+            }
             if internal_transaction {
                 first_request.consistency_selector =
                     Some(pb::run_query_request::ConsistencySelector::NewTransaction(
@@ -1300,7 +1295,11 @@ impl GatewayService {
                         return;
                     }
                 }
-                if req
+                if plan_only {
+                    if let Some(response) = pending.as_mut() {
+                        response.explain_metrics = Some(explain_metrics(None, false));
+                    }
+                } else if req
                     .explain_options
                     .as_ref()
                     .is_some_and(|options| options.analyze)

@@ -1619,6 +1619,7 @@ fn rest_list_rejects_duplicate_page_token_without_fault_or_state_change() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rest_list_collection_ids_validates_body_and_honors_read_time() {
     let (s, clock) = state_with_clock(None, TokenAcceptance::Verified);
     let (status, first) = call(
@@ -1642,10 +1643,68 @@ fn rest_list_collection_ids_validates_body_and_honors_read_time() {
         json!({"fields": {"value": {"integerValue": "2"}}}),
     );
     assert_eq!(status, 200, "{second}");
+    clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+        .unwrap();
+    let (status, descendant) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/missing-parent/sub/children/doc"),
+        json!({"fields": {"value": {"integerValue": "3"}}}),
+    );
+    assert_eq!(status, 200, "{descendant}");
+    let descendant_time = descendant["updateTime"].as_str().unwrap().to_owned();
+    let (status, _) = call(&s, "DELETE", &format!("{DOCS}/second/doc"), json!({}));
+    assert_eq!(status, 200);
+    let (status, after_delete) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), json!({}));
+    assert_eq!(status, 200, "{after_delete}");
+    assert_eq!(
+        after_delete["collectionIds"],
+        json!(["first", "missing-parent"])
+    );
+    let (status, before_delete) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:listCollectionIds"),
+        json!({"readTime": descendant_time}),
+    );
+    assert_eq!(status, 200, "{before_delete}");
+    assert_eq!(
+        before_delete["collectionIds"],
+        json!(["first", "missing-parent", "second"])
+    );
+    let (status, recreated) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/second/new"),
+        json!({"fields": {"value": {"integerValue": "4"}}}),
+    );
+    assert_eq!(status, 200, "{recreated}");
 
     let (status, latest) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), json!({}));
     assert_eq!(status, 200, "{latest}");
-    assert_eq!(latest["collectionIds"], json!(["first", "second"]));
+    assert_eq!(
+        latest["collectionIds"],
+        json!(["first", "missing-parent", "second"])
+    );
+    let (status, first_page) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:listCollectionIds"),
+        json!({"pageSize": 1}),
+    );
+    assert_eq!(status, 200, "{first_page}");
+    let token = first_page["nextPageToken"].as_str().unwrap().to_owned();
+    let (status, second_page) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:listCollectionIds"),
+        json!({"pageSize": 1, "pageToken": token}),
+    );
+    assert_eq!(status, 200, "{second_page}");
+    assert_eq!(second_page["collectionIds"], json!(["missing-parent"]));
     let (status, historical) = call(
         &s,
         "POST",
@@ -1654,12 +1713,23 @@ fn rest_list_collection_ids_validates_body_and_honors_read_time() {
     );
     assert_eq!(status, 200, "{historical}");
     assert_eq!(historical["collectionIds"], json!(["first"]));
+    let (status, _) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:listCollectionIds"),
+        json!({"pageSize": 1, "pageToken": token, "readTime": read_time}),
+    );
+    assert_eq!(status, 400);
 
     for body in [
         json!({"unknown": true}),
         json!({"pageSize": []}),
         json!({"pageToken": 1}),
+        json!({"pageToken": "eg=="}),
         json!({"readTime": "not-a-timestamp"}),
+        json!({"requestOptions": []}),
+        json!({"requestOptions": {"unknown": true}}),
+        json!({"requestOptions": {"requestTags": [1]}}),
     ] {
         let (status, _) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), body);
         assert_eq!(status, 400);

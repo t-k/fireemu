@@ -1896,8 +1896,14 @@ async fn commit_get_query_and_delete_round_trip() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn list_collection_ids_supports_read_time_and_rejects_negative_page_size() {
-    let (mut client, clock, handle) = start().await;
+    use fireemu_core_session::fault::{
+        FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+    };
+
+    let (mut client, clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
     let first = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -1935,6 +1941,39 @@ async fn list_collection_ids_supports_read_time_and_rejects_negative_page_size()
         .into_inner();
     assert_eq!(historical.collection_ids, vec!["first"]);
 
+    let token = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .next_page_token;
+    assert!(!token.is_empty());
+    let cross_parent = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: "projects/other/databases/(default)/documents".to_owned(),
+            page_size: 1,
+            page_token: token.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(cross_parent.code(), tonic::Code::InvalidArgument);
+    backend.reset_project("demo-app");
+    let after_reset = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            page_size: 1,
+            page_token: token,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(after_reset.code(), tonic::Code::InvalidArgument);
+
     let invalid = client
         .list_collection_ids(pb::ListCollectionIdsRequest {
             parent: DOCS.to_owned(),
@@ -1944,6 +1983,35 @@ async fn list_collection_ids_supports_read_time_and_rejects_negative_page_size()
         .await
         .unwrap_err();
     assert_eq!(invalid.code(), tonic::Code::InvalidArgument);
+    let registry = Arc::new(FaultRegistry::new());
+    registry.default_state().lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "firestore.read".into(),
+                nth: None,
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::ReturnError {
+                code: "UNAVAILABLE".into(),
+            },
+        }],
+    });
+    backend.set_faults(Arc::clone(&registry));
+    let invalid_again = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            page_token: "eg==".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(invalid_again.code(), tonic::Code::InvalidArgument);
+    let state = registry.default_state();
+    let state = state.lock().unwrap();
+    assert!(state.counters().is_empty());
+    assert!(state.fired().is_empty());
     handle.abort();
 }
 

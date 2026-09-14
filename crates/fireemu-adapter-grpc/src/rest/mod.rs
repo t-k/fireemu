@@ -26,8 +26,9 @@ use crate::rules::{self, Principal, RulesEnforcer};
 use json::{
     aggregation_query_from_json, base64_decode, base64_encode, commit_to_json, document_from_json,
     document_to_json, explain_options_from_json, mask_from_json, mask_from_paths,
-    optional_timestamp_to_json, precondition_from_json, structured_query_from_json,
-    transaction_options_from_json, value_to_json, write_from_json, write_result_to_json, JsonError,
+    optional_timestamp_to_json, precondition_from_json, request_options_from_json,
+    structured_query_from_json, transaction_options_from_json, value_to_json, write_from_json,
+    write_result_to_json, JsonError,
 };
 
 /// Shared REST state.
@@ -835,6 +836,8 @@ impl RestState {
                     .transpose()
                     .map_err(|e| bad(&e))?
                     .flatten();
+                let request_options =
+                    request_options_from_json(body.get("requestOptions")).map_err(|e| bad(&e))?;
                 let response = self
                     .local
                     .list_collection_ids(&pb::ListCollectionIdsRequest {
@@ -852,7 +855,7 @@ impl RestState {
                             .transpose()?
                             .unwrap_or_default()
                             .to_owned(),
-                        request_options: None,
+                        request_options,
                         consistency_selector: read_time
                             .map(pb::list_collection_ids_request::ConsistencySelector::ReadTime),
                     })?;

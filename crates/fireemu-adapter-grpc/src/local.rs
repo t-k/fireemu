@@ -2620,6 +2620,15 @@ impl LocalBackend {
             .unwrap_or(now)
     }
 
+    fn read_time_horizon_without_creation(
+        &self,
+        parent: &Parent,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> fireemu_core_types::time::LogicalInstant {
+        self.read_unadmitted(parent, |db| db.read_time(now))
+            .unwrap_or(now)
+    }
+
     fn read_time_selector(
         &self,
         ts: &prost_types::Timestamp,
@@ -4315,32 +4324,41 @@ impl LocalBackend {
         req: &pb::ListCollectionIdsRequest,
     ) -> Result<pb::ListCollectionIdsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
-        self.fault(parent.project.as_str(), "firestore.read")?;
         if req.page_size < 0 {
             return Err(Status::invalid_argument("page_size must not be negative"));
         }
         let now = self.write_time();
-        let selector = match &req.consistency_selector {
+        let read_at = match &req.consistency_selector {
             Some(pb::list_collection_ids_request::ConsistencySelector::ReadTime(ts)) => {
-                SnapshotSelector::ReadTime(self.read_time_selector(
+                Some(self.read_time_selector(
                     ts,
                     now,
-                    self.read_time_horizon(&parent, now),
+                    self.read_time_horizon_without_creation(&parent, now),
                 )?)
+            }
+            None => None,
+        };
+        let selector = match &req.consistency_selector {
+            Some(pb::list_collection_ids_request::ConsistencySelector::ReadTime(_)) => {
+                SnapshotSelector::ReadTime(read_at.expect("read time was decoded"))
             }
             None => SnapshotSelector::Latest,
         };
-        let after: Option<String> = if req.page_token.is_empty() {
-            None
-        } else {
-            Some(
-                String::from_utf8(
-                    crate::rest::json::base64_decode(&req.page_token)
-                        .map_err(|_| Status::invalid_argument("malformed page_token"))?,
-                )
-                .map_err(|_| Status::invalid_argument("malformed page_token"))?,
-            )
-        };
+        let identity = format!(
+            "{}|{}|{}|{}|{}",
+            req.parent,
+            self.epoch(),
+            self.database_generation(&parent),
+            match read_at {
+                Some(at) => format!("rt:{}", at.as_nanos()),
+                None => "live".to_owned(),
+            },
+            req.request_options
+                .as_ref()
+                .map_or_else(String::new, |options| format!("{options:?}")),
+        );
+        let after = list_collection_ids_page_cursor(&req.page_token, &identity)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let page_size = if req.page_size > 0 {
             usize::try_from(req.page_size).unwrap_or(usize::MAX)
         } else {
@@ -4358,7 +4376,7 @@ impl LocalBackend {
             ids.truncate(page_size);
             let next_page_token = if full {
                 ids.last().map_or(String::new(), |id| {
-                    crate::rest::json::base64_encode(id.as_bytes())
+                    crate::rest::json::base64_encode(format!("{id}\n{identity}").as_bytes())
                 })
             } else {
                 String::new()
@@ -4658,6 +4676,26 @@ fn list_page_cursor(page_token: &str, identity: &str) -> Result<Option<String>, 
     }
     decode_document_name(name).map_err(|_| malformed())?;
     Ok(Some(name.to_owned()))
+}
+
+fn list_collection_ids_page_cursor(
+    page_token: &str,
+    identity: &str,
+) -> Result<Option<String>, Status> {
+    if page_token.is_empty() {
+        return Ok(None);
+    }
+    let malformed = || Status::invalid_argument("malformed page_token");
+    let token =
+        String::from_utf8(crate::rest::json::base64_decode(page_token).map_err(|_| malformed())?)
+            .map_err(|_| malformed())?;
+    let (id, token_identity) = token.split_once('\n').ok_or_else(malformed)?;
+    if token_identity != identity || id.is_empty() {
+        return Err(Status::invalid_argument(
+            "page_token was issued for a different listing",
+        ));
+    }
+    Ok(Some(id.to_owned()))
 }
 
 /// `RunQuery` responses for `docs`: one per document (or one empty response carrying the

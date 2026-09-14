@@ -521,6 +521,124 @@ fn commit_query_aggregation_and_transactions_over_rest() {
 }
 
 #[test]
+fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
+    let s = state(None);
+    let document = |id: &str, fields: Value| {
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/agg/{id}"),
+            json!({"fields": fields}),
+        );
+        assert_eq!(status, 200, "{body}");
+    };
+    document("a", json!({"x": {"integerValue": "10"}}));
+    document("b", json!({"x": {"integerValue": "20"}}));
+    document("c", json!({"x": {"doubleValue": 0.5}}));
+    document("d", json!({"other": {"stringValue": "missing"}}));
+
+    let (status, before) = call(&s, "GET", &format!("{DOCS}/agg/a"), json!({}));
+    assert_eq!(status, 200, "{before}");
+    let (status, aggregate) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runAggregationQuery"),
+        json!({
+            "structuredAggregationQuery": {
+                "structuredQuery": {"from": [{"collectionId": "agg"}]},
+                "aggregations": [
+                    {"alias": "count", "count": {}},
+                    {"alias": "sum", "sum": {"field": {"fieldPath": "x"}}},
+                    {"alias": "avg", "avg": {"field": {"fieldPath": "x"}}}
+                ]
+            }
+        }),
+    );
+    assert_eq!(status, 200, "{aggregate}");
+    assert_eq!(
+        aggregate[0]["result"]["aggregateFields"]["count"]["integerValue"],
+        "3"
+    );
+    assert_eq!(
+        aggregate[0]["result"]["aggregateFields"]["sum"]["doubleValue"],
+        30.5
+    );
+    assert_eq!(
+        aggregate[0]["result"]["aggregateFields"]["avg"]["doubleValue"],
+        10.166666666666666
+    );
+
+    // The failed precondition is checked before any write is applied. This mirrors the
+    // saved production aggregation receipt's refused-commit and unchanged-state cases.
+    let (status, refused) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({
+            "writes": [
+                {"update": {"name": "projects/demo-app/databases/(default)/documents/agg/a", "fields": {"x": {"integerValue": "99"}}}},
+                {"update": {"name": "projects/demo-app/databases/(default)/documents/agg/d", "fields": {}}, "currentDocument": {"exists": false}}
+            ]
+        }),
+    );
+    assert_eq!(status, 409, "{refused}");
+    assert_eq!(refused["error"]["status"], "ALREADY_EXISTS");
+    let (status, after) = call(&s, "GET", &format!("{DOCS}/agg/a"), json!({}));
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(
+        after, before,
+        "a refused commit must preserve fields and timestamps"
+    );
+
+    let (status, aggregate_after) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runAggregationQuery"),
+        json!({
+            "structuredAggregationQuery": {
+                "structuredQuery": {"from": [{"collectionId": "agg"}]},
+                "aggregations": [{"alias": "sum", "sum": {"field": {"fieldPath": "x"}}}]
+            }
+        }),
+    );
+    assert_eq!(status, 200, "{aggregate_after}");
+    assert_eq!(
+        aggregate_after[0]["result"]["aggregateFields"]["sum"]["doubleValue"],
+        30.5
+    );
+
+    let (status, transaction_aggregate) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runAggregationQuery"),
+        json!({
+            "structuredAggregationQuery": {
+                "structuredQuery": {"from": [{"collectionId": "agg"}]},
+                "aggregations": [{"alias": "count", "count": {}}]
+            },
+            "newTransaction": {"readWrite": {}}
+        }),
+    );
+    assert_eq!(status, 200, "{transaction_aggregate}");
+    assert_eq!(transaction_aggregate.as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        transaction_aggregate[0]["result"]["aggregateFields"]["count"]["integerValue"],
+        "4"
+    );
+    let transaction = transaction_aggregate[0]["transaction"]
+        .as_str()
+        .expect("REST aggregation announces new transaction")
+        .to_owned();
+    let (status, committed) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"transaction": transaction, "writes": []}),
+    );
+    assert_eq!(status, 200, "{committed}");
+}
+
+#[test]
 fn rest_find_nearest_without_a_source_is_rejected_before_kindless_scan() {
     let s = state(None);
     let vector = json!({

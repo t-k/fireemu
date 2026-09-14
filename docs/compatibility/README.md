@@ -21,7 +21,7 @@ Declared profiles: strict; emulator. These are scope dimensions, not a claim tha
 | FS-SDK | 1 | [Open](sdk-matrix.md) |
 | MANAGED-SERVICE-BOUNDARY | 1 | [Open](limitations.md) |
 
-Known source entries: 25. Reviewed sources: 0. Enumerated seed surfaces: 20. Accepted feature execution receipts: 0. None of these counts is a product compatibility percentage.
+Known source entries: 25. Reviewed sources: 0. Enumerated seed surfaces: 23. Accepted feature execution receipts: 0. None of these counts is a product compatibility percentage.
 
 [Production compatibility goal](ip-fs-production-compatibility.md) · [Production denominator](production-denominator.md) · [Source inventory](sources.md) · [API surface seed](surfaces.md) · [Requirement mappings and debt](requirements.md) · [Evidence policy](evidence-policy.md) · [Gap ledger](gaps.md)
 

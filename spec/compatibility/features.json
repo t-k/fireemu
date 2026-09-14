@@ -145,7 +145,8 @@
       ],
       "surfaces": [],
       "requirements": [
-        "AUTH-TENANT-001"
+        "AUTH-TENANT-001",
+        "AUTH-CONFIG-MASK-001"
       ],
       "capabilities": [
         "AUTH-CORE-1"
@@ -169,7 +170,9 @@
         "AUTH-DISCOVERY-V2"
       ],
       "surfaces": [],
-      "requirements": [],
+      "requirements": [
+        "AUTH-SAML-MASK-001"
+      ],
       "capabilities": [
         "AUTH-OAUTH-0",
         "AUTH-PROVIDER-CONFIG-1"

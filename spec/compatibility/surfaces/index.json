@@ -242,6 +242,42 @@
       "requirements": [
         "REQ-FS-PARITY-01"
       ]
+    },
+    {
+      "id": "AUTH-PROJECT-CONFIG",
+      "source": "AUTH-DISCOVERY-V1",
+      "locator": "identitytoolkit.projects.updateConfig",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "The real Admin v2 handler and regression matrix cover the bounded updateMask contract; production configuration parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-CONFIG-MASK-001"
+      ]
+    },
+    {
+      "id": "AUTH-PROJECT-CONFIG-MASK",
+      "source": "AUTH-DISCOVERY-V1",
+      "locator": "identitytoolkit.projects.updateConfig/parameters/updateMask",
+      "kind": "field",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "The bounded leaf-mask selection and atomic validation behavior are locally verified; production field-level parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-CONFIG-MASK-001"
+      ]
+    },
+    {
+      "id": "AUTH-SAML-SIGN-REQUEST",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "schemas/GoogleCloudIdentitytoolkitAdminV2IdpConfig/properties/signRequest",
+      "kind": "field",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Project and tenant inbound SAML leaf-mask defaults and atomic validation are locally verified; production provider-configuration parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-SAML-MASK-001"
+      ]
     }
   ]
 }

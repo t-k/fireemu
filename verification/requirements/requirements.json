@@ -1883,6 +1883,32 @@
           "crates/fireemu/tests/capabilities.rs"
         ]
       }
+    },
+    {
+      "id": "AUTH-CONFIG-MASK-001",
+      "statement": "The Identity Toolkit projects.updateConfig PATCH applies only the project configuration fields named by updateMask, validates every selected value before mutation, applies multiple selected fields atomically, preserves unselected fields and follows the endpoint-specific empty or omitted-mask behavior.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/auth_flows.rs"
+        ]
+      },
+      "note": "The real Admin v2 handler covers mask-scoped updates, type rejection with unchanged state, multiple fields, reset-to-default values, empty/omitted masks and disjoint concurrent updates. Production projects.updateConfig response and configuration parity remain unobserved."
+    },
+    {
+      "id": "AUTH-SAML-MASK-001",
+      "statement": "An inbound SAML PATCH treats idpConfig.signRequest as a selected boolean leaf: an omitted JSON presence under that mask resets it to false, an explicit boolean is applied, unselected provider fields remain unchanged and invalid selected values leave the whole configuration unchanged.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+        ]
+      },
+      "note": "The project and tenant Admin v2 handlers exercise parent-mask versus leaf-mask semantics, omitted/default and explicit values, validation-before-mutation and provider-field isolation. Production SAML configuration PATCH parity remains unobserved."
     }
   ]
 }

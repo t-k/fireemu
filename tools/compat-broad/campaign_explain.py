@@ -14,28 +14,70 @@ import subprocess
 import time
 from pathlib import Path
 
-from batch_contract import DATABASE_PROJECTION, NUMBER, PROJECT, validate_owner_baseline
-from broad_contract import digest
-from shared_cases import campaign_cases, campaign_manifest as _campaign_manifest
-from shared_production import management
-from shared_production import Coordinator, DataAdapter, ProductionGate
-from shared_cases import run_scenario, save
+from batch_contract import (
+    DATABASE_PROJECTION,
+    NUMBER,
+    PROJECT,
+    database_evidence,
+    validate_owner_baseline,
+)
+from broad_contract import ROOT, digest, local_origin
+from shared_cases import campaign_cases, run_scenario, save
+from shared_cases import campaign_manifest as _campaign_manifest
+from shared_gate import Gate as SharedGate
 from shared_gate import create
-from batch_adapter import observer_digest
+from shared_production import (
+    Coordinator as SharedCoordinator,
+)
+from shared_production import (
+    DataAdapter as SharedDataAdapter,
+)
+from shared_production import (
+    ProductionGate as SharedProductionGate,
+)
+from shared_production import management
 
-
-CAMPAIGN_FILES = ("campaign_explain.py", "campaign_explain_shadow.py", "batch_adapter.py", "shared_cases.py", "shared_gate.py", "shared_production.py", "shared_production_pair.py")
+CAMPAIGN_FILES = (
+    "campaign_explain.py",
+    "campaign_explain_shadow.py",
+    "batch_adapter.py",
+    "shared_cases.py",
+    "shared_gate.py",
+    "shared_production.py",
+    "shared_production_pair.py",
+)
 
 
 def campaign_observer_digest() -> str:
     here = Path(__file__).parent
-    return digest({name: hashlib.sha256((here / name).read_bytes()).hexdigest() for name in CAMPAIGN_FILES})
+    from batch_adapter import observer_digest
+
+    return digest(
+        {
+            "campaign": {
+                name: hashlib.sha256((here / name).read_bytes()).hexdigest()
+                for name in CAMPAIGN_FILES
+            },
+            "shared": observer_digest(),
+            "runtimeHelpers": {
+                name: hashlib.sha256(
+                    (ROOT / "tools/compat-inventory" / name).read_bytes()
+                ).hexdigest()
+                for name in ("owned_runner.py", "evidence_common.py")
+            },
+            "baseline": hashlib.sha256(
+                (here / "fixtures/database-settings-7be6cf08.json").read_bytes()
+            ).hexdigest(),
+        }
+    )
 
 
 def _schedule(nonce: str) -> dict:
     plan = _campaign_manifest(nonce)
     plan.update(
         transport="shared-explicit-production-v1",
+        observerSha256=campaign_observer_digest(),
+        configurationDigest=digest(configuration()),
         wallSeconds=1200,
         recoverySeconds=300,
         observationRequests=18,
@@ -91,9 +133,7 @@ def manifest() -> dict:
             {
                 "id": case["id"],
                 "method": (
-                    "runAggregationQuery"
-                    if "aggregation" in case["id"]
-                    else "runQuery"
+                    "runAggregationQuery" if "aggregation" in case["id"] else "runQuery"
                 ),
                 "mode": case["id"].rsplit("/", 1)[1],
                 "path": case["path"],
@@ -161,16 +201,81 @@ def fresh_nonce(value: str) -> str:
 
 
 def configuration() -> dict:
+    """The reviewed baseline is fixed offline; live metadata can never replace it."""
+    raw = json.loads(
+        (
+            ROOT / "tools/compat-broad/fixtures/database-settings-7be6cf08.json"
+        ).read_bytes()
+    )["observations"][0]["body"]
     return {
         "project": PROJECT,
         "projectNumber": NUMBER,
+        "quotaProject": PROJECT,
         "database": "(default)",
         "edition": "STANDARD",
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
+        "databaseResponse": raw,
+        "databaseEvidence": database_evidence(raw),
+        "authConfigDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2",
+        "apiKeyDigest": "122fca5d0ae44787ff78dd852f186fbeab71bfef183ea13e30d2d7c86b5aca96",
+        "apiKeyOwnership": {
+            "parent": "projects/592603257417/locations/global",
+            "name": "projects/592603257417/locations/global/keys/6209b4d3-e86d-487b-860a-c5a54fdd8004",
+        },
         "pricingSource": "https://firebase.google.com/docs/firestore/pricing",
         "pricingQueryExplainSource": "https://firebase.google.com/docs/firestore/query-data/query-explain",
-        "pricingLocationRequired": True,
+        "pricingLocation": "us-central1",
+        "pricingCheckedAt": "2026-09-14",
+        "tariffInputs": {
+            "requests": 30,
+            "requestMicrousd": 100,
+            "fixedMicrousd": 1000,
+            "computedMicrousd": 4000,
+            "ceilingMicrousd": 10000,
+        },
+        "permissionBaseline": {
+            "ownerIdentity": "t-k",
+            "permissionReference": "conversation-2026-09-14-autonomous-production-under-usd10",
+            "recoveryOwner": "t-k",
+            "tariffsConfirmedBelowPlanningCeilings": True,
+            "costAssumptions": {
+                "ownerConfirmed": True,
+                "retentionHours": 24,
+                "maximumUsd": 1,
+            },
+        },
     }
+
+
+def accepted_configuration(permission: dict, api_key: str | None = None) -> dict:
+    expected = configuration()
+    required = {
+        "configurationDigest": digest(expected),
+        "databaseProjection": expected["databaseEvidence"]["projection"],
+        "databaseProjectionDigest": expected["databaseEvidence"]["projectionDigest"],
+        "databaseResponseDigest": expected["databaseEvidence"]["responseDigest"],
+        **{
+            key: expected[key]
+            for key in (
+                "authConfigDigest",
+                "apiKeyDigest",
+                "apiKeyOwnership",
+                "pricingLocation",
+                "pricingCheckedAt",
+                "pricingSource",
+                "pricingQueryExplainSource",
+                "tariffInputs",
+            )
+        },
+        **expected["permissionBaseline"],
+    }
+    if not isinstance(permission, dict) or any(
+        digest(permission.get(key)) != digest(value) for key, value in required.items()
+    ):
+        raise ValueError("accepted configuration/permission baseline differs")
+    if api_key is not None and digest(api_key) != expected["apiKeyDigest"]:
+        raise ValueError("accepted API key differs")
+    return expected
 
 
 def production_preflight_requirements(permission: dict) -> dict:
@@ -191,6 +296,7 @@ def production_preflight_requirements(permission: dict) -> dict:
 def approve(permission: dict, nonce: str, local_digest: str, now: float) -> None:
     """Validate the new conversation-scoped permission before any network call."""
     fresh_nonce(nonce)
+    accepted_configuration(permission)
     required = {
         "kind": "production-campaign-explain-01-permission-v1",
         "manifestSha256": digest(manifest()),
@@ -234,58 +340,505 @@ def shadow_hashes(output: Path) -> dict:
 
 
 def compare_production_local(production: dict, local: dict) -> dict:
-    """Compare campaign rows while preserving lifecycle incompleteness."""
+    """Only complete, independently bound receipts reach semantic comparison."""
     result = {"compatibility": "indeterminate", "rows": [], "cleanupComplete": False}
-    if any(
-        value.get("configurationUnchanged") is not True
-        for value in (production, local)
-    ):
-        result["reason"] = "configuration drift"
-        return result
-    for value in (production, local):
-        if value.get("manifestDigest") != digest(manifest()):
-            result["reason"] = "manifest drift"
-            return result
-        if value.get("observerSha256") != campaign_observer_digest():
-            result["reason"] = "observer drift"
-            return result
-        if value.get("configurationDigest") != digest(configuration()):
-            result["reason"] = "configuration drift"
-            return result
-        if not isinstance(value.get("nonce"), str) or not re.fullmatch(r"[a-f0-9]{32}", value["nonce"]):
-            result["reason"] = "nonce evidence missing"
-            return result
-    production_job = production.get("jobs", {}).get("query-explain", production)
-    local_job = local.get("jobs", {}).get("query-explain", local)
-    if not all(
-        value.get("recordingComplete") is True
-        and value.get("cleanupComplete") is True
-        for value in (production_job, local_job)
-    ):
-        result["reason"] = "incomplete recording or cleanup"
-        return result
-    left, right = production_job.get("rows", []), local_job.get("rows", [])
-    expected = campaign_manifest(production.get("nonce", "a" * 32))["jobs"]["query-explain"]["stepIds"]
-    if [row.get("id") for row in left] != expected or [row.get("id") for row in right] != expected:
-        result["reason"] = "campaign row identity drift"
-        return result
-    for before, after in zip(left, right, strict=True):
-        result["rows"].append({"id": before["id"], "production": {"status": before.get("status"), "body": before.get("body")}, "local": {"status": after.get("status"), "body": after.get("body")}, "verdict": "match" if digest([before.get("status"), before.get("body")]) == digest([after.get("status"), after.get("body")]) else "mismatch"})
-    result["cleanupComplete"] = True
-    result["compatibility"] = "match" if all(row["verdict"] == "match" for row in result["rows"]) else "mismatch"
+    try:
+        validate_envelope(local, local=True)
+        validate_envelope(production, local=False)
+        if production["localRecordSha256"] != digest(local):
+            raise ValueError("local record binding differs")
+        for before, after in zip(
+            production["receipt"]["rows"], local["receipt"]["rows"], strict=True
+        ):
+            left = normalize_response(before["body"], production["nonce"])
+            right = normalize_response(after["body"], local["nonce"])
+            result["rows"].append(
+                {
+                    "id": before["id"],
+                    "production": {"status": before["status"], "body": left},
+                    "local": {"status": after["status"], "body": right},
+                    "verdict": "match"
+                    if digest([before["status"], left])
+                    == digest([after["status"], right])
+                    else "mismatch",
+                }
+            )
+        result["cleanupComplete"] = True
+        result["compatibility"] = (
+            "match"
+            if all(row["verdict"] == "match" for row in result["rows"])
+            else "mismatch"
+        )
+    except (ValueError, TypeError, KeyError, AttributeError, OSError) as error:
+        result["reason"] = str(error)
     return result
 
 
-def execute(permission: dict, nonce: str, output: Path, api_key: str, local: Path) -> dict:
+def normalize_response(value, nonce):
+    from batch_pair import normalize
+
+    parent = f"projects/{PROJECT}/databases/(default)/documents/campaign/{nonce}"
+    return normalize(
+        value, {"firestoreParents": {"campaign": parent}}, service="firestore"
+    )
+
+
+class Gate(SharedGate):
+    """Campaign identity over the unchanged shared scheduler and journal."""
+
+    def adapter_request(self, adapter, operation, send):
+        plan = self.snapshot()["plan"]
+        expected = {**campaign_manifest(adapter.nonce), "localOrigins": adapter.local}
+        if not adapter.local or digest(plan) != digest(expected):
+            raise ValueError("campaign adapter origin/nonce/observer binding mismatch")
+        return _dispatch(self, adapter, operation, send)
+
+
+class ProductionGate(SharedProductionGate):
+    def adapter_request(self, adapter, operation, send):
+        plan = self.snapshot()["plan"]
+        expected = {
+            **campaign_manifest(adapter.nonce),
+            "permissionDigest": digest(adapter.permission),
+        }
+        if (
+            not isinstance(adapter, DataAdapter)
+            or adapter.local is not None
+            or digest(plan) != digest(expected)
+            or time.time() + 13 > adapter.permission["expiresAt"]
+        ):
+            raise ValueError("campaign production data binding refused")
+        try:
+            return _dispatch(self, adapter, operation, send)
+        except Exception:
+            if adapter.credential.failed:
+                self.stop(environment=True)
+            raise
+
+
+def _dispatch(gate, adapter, operation, send):
+    def admitted():
+        adapter._shared_dispatch = True
+        try:
+            return send()
+        finally:
+            adapter._shared_dispatch = False
+
+    return gate.dispatch(operation, adapter.budget.recovery, admitted)
+
+
+class DataAdapter(SharedDataAdapter):
+    def __init__(self, coordinator, key, output):
+        super().__init__(coordinator, key, output)
+        self.shared_gate = ProductionGate(coordinator.gate.path, key)
+
+
+class Coordinator(SharedCoordinator):
+    def preflight(self):
+        accepted_configuration(self.permission, self.api_key)
+        super().preflight()
+        key = self.metadata_evidence[-1]
+        if key["value"] != configuration()["apiKeyOwnership"]:
+            self.ready = False
+            raise ValueError("accepted API key ownership differs")
+
+
+def bind_receipt(receipt, state, adapter):
+    evidence = receipt["principalEvidence"]
+    evidence.update(
+        observerSha256=campaign_observer_digest(),
+        manifestDigest=digest(manifest()),
+        comparisonContractDigest=digest(binding()),
+        configurationDigest=digest(configuration()),
+        principal="administrator",
+        quotaProject=PROJECT,
+        authentication=adapter.auth_evidence,
+        permissionDigest=None if adapter.local else digest(adapter.permission),
+    )
+    receipt["lifecycleStateVerified"] = state_readback_valid(receipt, state["plan"])
+    save(adapter.output / "result.json", receipt)
+
+
+def state_readback_valid(receipt, plan):
+    rows = receipt.get("rows", [])
+    if len(rows) != 12:
+        return False
+    for setup, readback, resource in zip(
+        rows[2:4], rows[-2:], plan["jobs"]["query-explain"]["resources"], strict=True
+    ):
+        if setup.get("status") != 200 or readback.get("status") != 200:
+            return False
+        for row in (setup, readback):
+            body = row.get("body")
+            if (
+                not isinstance(body, dict)
+                or body.get("name") != resource
+                or not isinstance(body.get("updateTime"), str)
+                or not body["updateTime"]
+            ):
+                return False
+        if digest(setup["body"]["fields"]) != digest(readback["body"].get("fields")):
+            return False
+    return all(row.get("status") == 404 for row in rows[:2])
+
+
+def _require(condition, reason):
+    if not condition:
+        raise ValueError("campaign envelope: " + reason)
+
+
+def validate_envelope(value, *, local, directory=None):
+    """Single fail-closed validator for admission and both comparison operands."""
+    try:
+        _validate_envelope(value, local=local, directory=directory)
+    except (KeyError, TypeError, AttributeError, IndexError, OSError) as error:
+        raise ValueError("campaign envelope: malformed or missing evidence") from error
+    return True
+
+
+def _validate_envelope(value, *, local, directory):
+    from shared_production_pair import _campaign_receipt_matches_manifest
+
+    _require(isinstance(value, dict), "object required")
+    _require(
+        value.get("kind")
+        == (
+            "production-campaign-explain-01-local-v2"
+            if local
+            else "production-campaign-explain-01-result-v2"
+        ),
+        "local/result kind differs",
+    )
+    _require(value.get("productionExecuted") is (not local), "execution target differs")
+    for key, expected in {
+        "manifestDigest": digest(manifest()),
+        "observerSha256": campaign_observer_digest(),
+        "comparisonContractDigest": digest(binding()),
+        "configurationDigest": digest(configuration()),
+    }.items():
+        _require(value.get(key) == expected, key + " differs")
+    _require(
+        digest(value.get("configuration")) == digest(configuration()),
+        "accepted configuration differs",
+    )
+    _require(value.get("configurationUnchanged") is True, "configuration drift")
+    nonce = fresh_nonce(value["nonce"])
+    plan = campaign_manifest(nonce)
+    if local:
+        plan["localOrigins"] = value["receipt"]["principalEvidence"]["localOrigins"]
+    else:
+        _require(isinstance(value.get("permission"), dict), "permission missing")
+        permission = value["permission"]
+        accepted_configuration(permission)
+        _require(
+            permission.get("nonce") == nonce
+            and permission.get("frozenCommit") == value.get("executionCommit"),
+            "permission nonce/source differs",
+        )
+        for key, expected in {
+            "manifestSha256": digest(manifest()),
+            "observerSha256": campaign_observer_digest(),
+            "comparisonContractDigest": digest(binding()),
+            "localRecordSha256": value.get("localRecordSha256"),
+            "project": PROJECT,
+            "projectNumber": NUMBER,
+            "quotaProject": PROJECT,
+            "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
+        }.items():
+            _require(permission.get(key) == expected, "permission " + key + " differs")
+        _require(
+            value.get("permissionDigest") == digest(permission),
+            "permission digest differs",
+        )
+        plan["permissionDigest"] = digest(permission)
+        validate_metadata(value)
+    receipt = value["receipt"]
+    evidence = receipt["principalEvidence"]
+    _require(
+        _campaign_receipt_matches_manifest(receipt, evidence, expected_plan=plan),
+        "request/dispatch/cleanup binding differs",
+    )
+    for key in (
+        "recordingComplete",
+        "collectionComplete",
+        "cleanupComplete",
+        "lifecycleStateVerified",
+    ):
+        _require(receipt.get(key) is True, key + " incomplete")
+    _require(state_readback_valid(receipt, plan), "state readback differs")
+    for key in (
+        "manifestDigest",
+        "comparisonContractDigest",
+        "observerSha256",
+        "configurationDigest",
+        "nonce",
+    ):
+        _require(evidence.get(key) == value[key], "principal " + key + " differs")
+    _require(
+        evidence.get("principal") == "administrator"
+        and evidence.get("quotaProject") == PROJECT,
+        "principal differs",
+    )
+    _require(
+        evidence.get("permissionDigest")
+        == (None if local else digest(value["permission"])),
+        "principal permission differs",
+    )
+    authentication = evidence["authentication"]
+    rows = receipt["rows"] + receipt["cleanup"]
+    _require(len(authentication) == len(rows), "authentication count differs")
+    for index, (auth, row) in enumerate(zip(authentication, rows, strict=True)):
+        _require(
+            auth.get("operation") == row["request"]["path"].split("?", 1)[0]
+            and auth.get("phase") == ("observation" if index < 12 else "recovery")
+            and auth.get("basis") == ("local-owner" if local else "tokeninfo"),
+            "authentication request differs",
+        )
+        remaining = auth.get("verifiedRemainingSeconds")
+        _require(
+            remaining is None
+            if local
+            else type(remaining) in (int, float) and 13 <= remaining < 86400,
+            "credential lifetime missing",
+        )
+    state = value["gate"]
+    _require(
+        digest(state["plan"]) == digest(plan)
+        and state.get("planDigest") == digest(plan),
+        "gate plan differs",
+    )
+    job = state["jobs"]["query-explain"]
+    _require(
+        job.get("complete") is True
+        and job.get("inflight") is False
+        and state.get("coordinatorInflight") is False,
+        "gate lifecycle incomplete",
+    )
+    _require(
+        job.get("owned") == plan["jobs"]["query-explain"]["resources"]
+        and job.get("absent") == job["owned"],
+        "ownership or final absence differs",
+    )
+    for phase, count in (("observation", 12), ("recovery", 6)):
+        _require(
+            type(job.get(phase)) is int and job[phase] == count, "gate count differs"
+        )
+        events = [
+            {
+                key: event.get(key)
+                for key in (
+                    "index",
+                    "requestDigest",
+                    "status",
+                    "responseDigest",
+                    "completed",
+                )
+            }
+            for event in state["events"]
+            if event["job"] == "query-explain" and event["phase"] == phase
+        ]
+        _require(
+            digest(events) == digest(evidence["dispatch"][phase]),
+            "gate dispatch differs",
+        )
+    _require(len(state["events"]) == 18, "extra gate dispatch")
+    _require(
+        type(state.get("total")) is int
+        and 18 <= state["total"] <= 30
+        and state["costMicrousd"] == 1000 + state["total"] * 100
+        and state["costMicrousd"] <= 10000,
+        "gate budget differs",
+    )
+    if local:
+        validate_local_runtime(value, directory)
+
+
+def validate_metadata(value):
+    accepted = configuration()
+    metadata = value["metadataEvidence"]
+    _require(
+        [row.get("id") for row in metadata]
+        == [
+            phase + ":" + name
+            for phase in ("observation", "recovery")
+            for name in ("project", "database", "auth", "key")
+        ],
+        "metadata operations differ",
+    )
+    for row in metadata:
+        _require(
+            type(row.get("status")) is int and row["status"] == 200,
+            "metadata response failed",
+        )
+        kind = row["id"].split(":")[1]
+        body = row["value"]
+        if kind == "project":
+            _require(
+                body == {"projectId": PROJECT, "projectNumber": NUMBER},
+                "project differs",
+            )
+        elif kind == "database":
+            _require(
+                body.get("projectionDigest")
+                == accepted["databaseEvidence"]["projectionDigest"]
+                and digest(body.get("projection")) == body["projectionDigest"]
+                and body.get("contractDigest") == digest(DATABASE_PROJECTION)
+                and body.get("contract") == DATABASE_PROJECTION
+                and body.get("responseDigest") == row.get("responseDigest"),
+                "database metadata differs",
+            )
+        elif kind == "auth":
+            _require(
+                row.get("responseDigest") == accepted["authConfigDigest"],
+                "Auth metadata differs",
+            )
+        else:
+            _require(body == accepted["apiKeyOwnership"], "API key ownership differs")
+    observations = value["databaseObservations"]
+    _require(len(observations) == 2, "database phase observations missing")
+    for phase, row in zip(("observation", "recovery"), observations, strict=True):
+        expected = next(
+            item["value"] for item in metadata if item["id"] == phase + ":database"
+        )
+        _require(row == {**expected, "phase": phase}, "database phase binding differs")
+
+
+def validate_local_runtime(value, directory):
+    from broad import CONFIG, FIRESTORE_CONFIG, source_inputs
+    from evidence_common import runtime_inputs
+    from owned_runner import validate_build
+
+    report = value["runtime"]
+    instance = value["instance"]
+    _require(
+        report.get("parentManifestSha256")
+        == digest(
+            {key: item for key, item in report.items() if key != "parentManifestSha256"}
+        ),
+        "parent seal differs",
+    )
+    _require(
+        report.get("status") == "completed"
+        and report.get("stopReason") == "child-completed"
+        and type(report.get("exitCode")) is int
+        and report["exitCode"] == 0
+        and report.get("recordingComplete") is True,
+        "runtime incomplete",
+    )
+    _require(
+        report.get("executionInputs") == source_inputs()
+        and report.get("runtimeInputs") == runtime_inputs(ROOT),
+        "source/runtime inputs differ",
+    )
+    _require(
+        value.get("executionCommit")
+        == report.get("executionCommit")
+        == subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip(),
+        "execution source differs",
+    )
+    validate_build(report["build"], report["artifactSha256"], report["runtimeInputs"])
+    _require(
+        instance.get("artifactSha256") == report["artifactSha256"],
+        "executed artifact differs",
+    )
+    expected_config = {
+        **CONFIG,
+        "daemon": {"authProjectNumbers": {PROJECT: NUMBER}},
+        "firestore": {**FIRESTORE_CONFIG, "indexFile": "<owned-private-index-file>"},
+    }
+    _require(
+        report.get("configuration") == expected_config, "runtime configuration differs"
+    )
+    actual_config = instance["configuration"]
+    normalized = {
+        **actual_config,
+        "firestore": {
+            **actual_config["firestore"],
+            "indexFile": "<owned-private-index-file>",
+        },
+    }
+    _require(
+        normalized == expected_config
+        and digest(actual_config) == report.get("configurationDigest"),
+        "executed configuration differs",
+    )
+    _require(
+        instance.get("indexSha256") == report["indexConfiguration"]["sha256"],
+        "executed index differs",
+    )
+    process = report["ownedProcess"]
+    _require(
+        process.get("stopped") is True
+        and process.get("listenersClosed") is True
+        and type(process.get("pid")) is int
+        and process["pid"] > 1
+        and instance.get("parentPid") == process["pid"],
+        "process/listeners incomplete",
+    )
+    _require(
+        type(instance.get("pid")) is int
+        and instance["pid"] > 1
+        and instance.get("nonce") == value["nonce"]
+        and instance.get("wrongTokenStatus") == 403
+        and instance.get("project") == PROJECT,
+        "instance identity differs",
+    )
+    command = instance["parentArgv"]
+    _require(
+        isinstance(command, list)
+        and command[0] == instance["artifactPath"]
+        and command[1:3] == ["exec", "--config"]
+        and command[3] == instance["configurationPath"]
+        and command[command.index("--project") + 1] == PROJECT
+        and command[-2:] == ["--nonce", value["nonce"]],
+        "executed command differs",
+    )
+    origins = value["receipt"]["principalEvidence"]["localOrigins"]
+    _require(
+        origins
+        == {"auth": instance["authOrigin"], "firestore": instance["firestoreOrigin"]},
+        "listener origin binding differs",
+    )
+    for key in ("authOrigin", "firestoreOrigin", "controlOrigin"):
+        local_origin(instance[key])
+    _require(
+        value["fileDigests"]
+        == {
+            "manifest.json": digest(report),
+            "instance.json": digest(instance),
+            "gate/state.json": digest(value["gate"]),
+            "worker/result.json": digest(value["receipt"]),
+        },
+        "artifact file bindings differ",
+    )
+    if directory is not None:
+        for name, expected in value["fileDigests"].items():
+            _require(
+                digest(json.loads((directory / name).read_bytes())) == expected,
+                "artifact file changed: " + name,
+            )
+
+
+def execute(
+    permission: dict, nonce: str, output: Path, api_key: str, local: Path
+) -> dict:
     """Execute after all permission and current-environment gates pass."""
-    local_bytes = local.read_bytes()
-    local_digest = hashlib.sha256(local_bytes).hexdigest()
-    local_evidence = json.loads(local_bytes)
-    if not isinstance(local_evidence, dict) or local_evidence.get("cleanupComplete") is not True:
-        raise ValueError("validated local evidence required")
+    local_evidence = json.loads(local.read_bytes())
+    validate_envelope(local_evidence, local=True, directory=local.parent)
+    local_digest = digest(local_evidence)
     approve(permission, nonce, local_digest, time.time())
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    if head != permission.get("frozenCommit") or subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
+    accepted_configuration(permission, api_key)
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    if (
+        head != permission.get("frozenCommit")
+        or subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=ROOT, text=True
+        ).strip()
+    ):
         raise ValueError("approved frozen checkout required")
     if not isinstance(api_key, str) or not api_key:
         raise ValueError("existing API key required")
@@ -297,7 +850,14 @@ def execute(permission: dict, nonce: str, output: Path, api_key: str, local: Pat
         stream.flush()
         os.fsync(stream.fileno())
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    save(output / "execution-inputs.json", {"permission": permission, "localRecordSha256": local_digest, "manifest": manifest()})
+    save(
+        output / "execution-inputs.json",
+        {
+            "permission": permission,
+            "localRecordSha256": local_digest,
+            "manifest": manifest(),
+        },
+    )
     plan = campaign_manifest(nonce)
     plan["permissionDigest"] = digest(permission)
     create(output / "gate", plan)
@@ -311,7 +871,7 @@ def execute(permission: dict, nonce: str, output: Path, api_key: str, local: Pat
         jobs["query-explain"] = run_scenario(
             adapter, plan, "query-explain", coordinator.recover_credentials
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 -- Always retain lifecycle failures and cleanup.
         failure = type(error).__name__ + ":" + str(error)
     finally:
         if coordinator.ready:
@@ -319,12 +879,16 @@ def execute(permission: dict, nonce: str, output: Path, api_key: str, local: Pat
                 coordinator.recover_credentials()
                 coordinator.preflight()
                 coordinator.configuration_unchanged = True
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- Persist recovery failure.
                 failure = failure or type(error).__name__
         state = gate.snapshot()
         job = jobs.get("query-explain", {})
         result = {
-            "kind": "production-campaign-explain-01-result-v1",
+            "kind": "production-campaign-explain-01-result-v2",
+            "executionCommit": head,
+            "permission": permission,
+            "configuration": configuration(),
+            "receipt": job,
             "productionExecuted": True,
             "recordingComplete": job.get("recordingComplete") is True,
             "stateVerified": job.get("stateVerified") is True,
@@ -348,6 +912,13 @@ def execute(permission: dict, nonce: str, output: Path, api_key: str, local: Pat
             and coordinator.configuration_unchanged
             and failure is None,
         }
+        if job:
+            bind_receipt(job, state, adapter)
+        save(output / "result.json", result)
+        comparison = compare_production_local(result, local_evidence)
+        save(output / "comparison.json", comparison)
+        result["compatibility"] = comparison["compatibility"]
+        result["completed"] = comparison["compatibility"] in {"match", "mismatch"}
         save(output / "result.json", result)
     return result
 
@@ -367,7 +938,10 @@ def main() -> int:
     if args.compare:
         if not args.production or not args.local or not args.output:
             parser.error("--compare requires --production, --local and --output")
-        result = compare_production_local(json.loads(args.production.read_bytes()), json.loads(args.local.read_bytes()))
+        result = compare_production_local(
+            json.loads(args.production.read_bytes()),
+            json.loads(args.local.read_bytes()),
+        )
         save(args.output, result)
         return 0 if result["compatibility"] in {"match", "mismatch"} else 2
     if args.manifest:
@@ -376,7 +950,13 @@ def main() -> int:
     if not args.execute or not all((args.permission, args.local, args.output)):
         parser.error("--execute requires --permission, --local and --output")
     permission = json.loads(args.permission.read_bytes())
-    result = execute(permission, permission.get("nonce"), args.output, os.environ.get("PRODUCTION_ORACLE_API_KEY"), args.local)
+    result = execute(
+        permission,
+        permission.get("nonce"),
+        args.output,
+        os.environ.get("PRODUCTION_ORACLE_API_KEY"),
+        args.local,
+    )
     return 0 if result["completed"] else 2
 
 

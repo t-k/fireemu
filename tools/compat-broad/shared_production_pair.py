@@ -411,7 +411,9 @@ def compare_campaign_rows(production, local, expected_ids, expected_preflight=No
         if not _campaign_receipt_matches_manifest(receipt, evidence):
             return result
         evidences.append(evidence)
-    if _campaign_evidence_binding(evidences[0]) != _campaign_evidence_binding(evidences[1]):
+    if _campaign_evidence_binding(evidences[0]) != _campaign_evidence_binding(
+        evidences[1]
+    ):
         return result
     left, right = production.get("rows", []), local.get("rows", [])
     if [row.get("id") for row in left] != list(expected_ids) or [
@@ -431,32 +433,85 @@ def compare_campaign_rows(production, local, expected_ids, expected_preflight=No
             }
         )
     result["compatibility"] = (
-        "match" if all(row["verdict"] == "match" for row in result["rows"]) else "mismatch"
+        "match"
+        if all(row["verdict"] == "match" for row in result["rows"])
+        else "mismatch"
     )
     return result
 
 
-def _campaign_receipt_matches_manifest(receipt, evidence):
+def _campaign_receipt_matches_manifest(receipt, evidence, *, expected_plan=None):
     if not isinstance(evidence, dict):
         return False
-    if evidence.get("job") != "query-explain" or not isinstance(evidence.get("nonce"), str):
+    if evidence.get("job") != "query-explain" or not isinstance(
+        evidence.get("nonce"), str
+    ):
         return False
     try:
-        expected = campaign_manifest(evidence["nonce"])
+        expected = (
+            campaign_manifest(evidence["nonce"])
+            if expected_plan is None
+            else dict(expected_plan)
+        )
     except ValueError:
         return False
     origins = evidence.get("localOrigins")
-    if not isinstance(origins, dict) or set(origins) != {"auth", "firestore"}:
+    production = expected_plan is not None and "permissionDigest" in expected_plan
+    if production:
+        if origins != {} or expected["nonce"] != evidence["nonce"]:
+            return False
+    elif not isinstance(origins, dict) or set(origins) != {"auth", "firestore"}:
         return False
     try:
-        local_origin(origins["auth"])
-        local_origin(origins["firestore"])
+        if not production:
+            local_origin(origins["auth"])
+            local_origin(origins["firestore"])
     except (TypeError, ValueError):
         return False
-    expected["localOrigins"] = origins
+    if not production:
+        expected["localOrigins"] = origins
     if evidence.get("planDigest") != digest(expected):
         return False
     job = expected["jobs"]["query-explain"]
+    if expected_plan is not None:
+        if expected["nonce"] != evidence["nonce"]:
+            return False
+        for phase, rows in (
+            ("observation", receipt.get("rows")),
+            ("recovery", receipt.get("cleanup")),
+        ):
+            events = evidence.get("dispatch", {}).get(phase)
+            if not isinstance(rows, list) or not isinstance(events, list):
+                return False
+            if any(
+                not isinstance(row, dict)
+                or type(row.get("index")) is not int
+                or row["index"] != index
+                or type(row.get("status")) is not int
+                or not 100 <= row["status"] <= 599
+                for index, row in enumerate(rows)
+            ):
+                return False
+            if any(
+                not isinstance(event, dict)
+                or type(event.get("index")) is not int
+                or type(event.get("status")) is not int
+                for event in events
+            ):
+                return False
+        if digest([row.get("request") for row in receipt["rows"]]) != digest(
+            job["observation"]
+        ):
+            return False
+        if [row["status"] for row in receipt["cleanup"]] != [
+            200,
+            200,
+            404,
+            200,
+            200,
+            404,
+        ]:
+            return False
     rows = receipt.get("rows", [])
     if [row.get("id") for row in rows] != job["stepIds"]:
         return False
@@ -486,7 +541,9 @@ def _campaign_receipt_matches_manifest(receipt, evidence):
         return False
     recovery_events = dispatch.get("recovery", [])
     verified_events = 0
-    for index, (row, declared) in enumerate(zip(cleanup, declared_cleanup, strict=True)):
+    for index, (row, declared) in enumerate(
+        zip(cleanup, declared_cleanup, strict=True)
+    ):
         operation = dict(declared)
         source = operation.pop("versionFrom", None)
         valid_version = False
@@ -496,7 +553,9 @@ def _campaign_receipt_matches_manifest(receipt, evidence):
                 version = prior["body"].get("updateTime")
                 if isinstance(version, str) and version:
                     valid_version = True
-                    operation["path"] += "?currentDocument.updateTime=" + quote(version, safe="")
+                    operation["path"] += "?currentDocument.updateTime=" + quote(
+                        version, safe=""
+                    )
         if row.get("index") != index or row.get("request") != operation:
             return False
         matching = [event for event in recovery_events if event.get("index") == index]
@@ -507,7 +566,11 @@ def _campaign_receipt_matches_manifest(receipt, evidence):
                 "status": None,
                 "body": {"skipped": "absent-or-unavailable-cleanup-read"},
             }
-            if operation.get("method") != "DELETE" or digest(row) != digest(skipped) or matching:
+            if (
+                operation.get("method") != "DELETE"
+                or digest(row) != digest(skipped)
+                or matching
+            ):
                 return False
             continue
         if row.get("status") is None or len(matching) != 1:
@@ -526,7 +589,8 @@ def _campaign_receipt_matches_manifest(receipt, evidence):
         return False
     for resource in job["resources"]:
         reads = [
-            row for row in cleanup
+            row
+            for row in cleanup
             if row["request"]["method"] == "GET"
             and row["request"]["path"] == "/v1/" + resource
         ]

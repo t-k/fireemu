@@ -16,8 +16,8 @@
     "database": "(default)",
     "edition": "STANDARD",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
-    "observerSha256": "f3f5ae0e5dc690fa1038d824a61908ca05c96daae31e212cd41092ef17e80d48",
-    "configurationDigest": "3c4373d176fa6f939bbba0b3c9cb7b682abdef0365ce086b59d8198028867b6f"
+    "observerSha256": "10bfa9c49b9092a699b7a7cf21882597bb42e59a187592ecda25d105dfac269d",
+    "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
   },
   "template": {
     "contract": "shared-local-v1",
@@ -315,9 +315,10 @@
     "accounts": 0,
     "configurationChanges": 0,
     "metadataRequests": 0,
-    "observerSha256": "f40b1074e96b21c9ce0028aafe52cfcc9f69272bbda564c14126b12f019118b0",
+    "observerSha256": "10bfa9c49b9092a699b7a7cf21882597bb42e59a187592ecda25d105dfac269d",
     "transport": "shared-explicit-production-v1",
     "collector": "existing-batch-adapter-shared-v1",
+    "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",
     "recoveryRequests": 12,
     "totalRequests": 30,
     "management": {
@@ -515,4 +516,3 @@
   "productionExecutable": true,
   "scope": "six Query Explain REST recipes over exactly two owned documents; no settings, indexes, rules or auth changes"
 }
-

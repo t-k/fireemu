@@ -1024,6 +1024,10 @@
               "status": "implemented"
             },
             {
+              "id": "AUTH-ACCOUNT-LIFECYCLE-1",
+              "status": "implemented"
+            },
+            {
               "id": "AUTH-OAUTH-0",
               "status": "implemented"
             }

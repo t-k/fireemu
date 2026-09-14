@@ -12,7 +12,7 @@ Declared profiles: strict; emulator. These are scope dimensions, not a claim tha
 
 | Goal | Mapped feature groups | Details |
 | --- | --- | --- |
-| AUTH-CORE | 2 | [Open](authentication.md) |
+| AUTH-CORE | 3 | [Open](authentication.md) |
 | AUTH-IP-MAIN | 5 | [Open](authentication.md) |
 | FS-STD-NATIVE | 5 | [Open](firestore-standard-native.md) |
 | FS-ENT-NATIVE | 2 | [Open](firestore-enterprise-native.md) |

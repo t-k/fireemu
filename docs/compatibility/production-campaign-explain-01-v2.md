@@ -19,3 +19,13 @@ For example, a production HTTP 200 Explain response paired with a local HTTP
 rest of the envelope is complete. This change only revises the comparison
 contract; it does not change runtime behavior or rewrite the frozen v1
 evidence.
+
+## Current local shadow
+
+A fresh local shadow was completed from the pushed source `5dfa8fc03f8c4951d21a72eb7d666d6d5c551cdd`. It dispatched the six bounded Explain cases plus setup/readback through the existing shared gate, recorded 12 observation rows and 6 recovery rows, verified the owned state, and stopped its process and listeners. The redacted binding summary is [5dfa8fc0-explain-local-shadow.json](../../spec/compatibility/broad-runs/5dfa8fc0-explain-local-shadow.json). Its artifact, input, process and cleanup hashes are recorded there. This is local shadow evidence only; it does not promote the campaign to production compatibility and does not alter the frozen v1/v2 receipts.
+
+The local command was:
+
+```sh
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/campaign_explain_shadow.py --output /absolute/private/explain-shadow
+```

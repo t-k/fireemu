@@ -213,6 +213,57 @@ function canonical(value) {
   return JSON.stringify(sort(value));
 }
 
+/** A transport result is not an observation that can establish an HTTP comparison. */
+function isCompletedHttpObservation(step) {
+  return (
+    step &&
+    step.missing !== true &&
+    Number.isInteger(step.status) &&
+    step.status >= 100 &&
+    step.status <= 599 &&
+    typeof step.code === "string" &&
+    step.code.length > 0 &&
+    (step.code !== "OK" || Object.hasOwn(step, "body"))
+  );
+}
+
+/** Compare saved production decisions with a current normalized fireemu response. */
+export function compareProductionToFireemu({ production, fireemu, programDefinitions = PROGRAMS }) {
+  const savedPrograms = Array.isArray(production)
+    ? Object.fromEntries(production.map((program) => [program.id, program]))
+    : production.programs
+      ? Object.fromEntries(production.programs.map((program) => [program.id, program]))
+      : production;
+  const rows = [];
+  for (const program of programDefinitions) {
+    for (const step of program.steps) {
+      const saved = savedPrograms[program.id]?.steps?.[step.id]?.production ?? { missing: true };
+      const actual = fireemu[program.id]?.steps?.[step.id] ?? { missing: true };
+      const savedDecision = decision(saved);
+      const localDecision = decision(actual);
+      const comparison =
+        isCompletedHttpObservation(saved) && isCompletedHttpObservation(actual)
+          ? canonical(savedDecision) === canonical(localDecision)
+            ? "match"
+            : "mismatch"
+          : "indeterminate";
+      rows.push({
+        id: step.id,
+        comparison,
+        production: savedDecision,
+        local: localDecision,
+      });
+    }
+  }
+  const matches = rows.filter((row) => row.comparison === "match").length;
+  return {
+    rowCount: rows.length,
+    matches,
+    mismatches: rows.length - matches,
+    rows,
+  };
+}
+
 const rowKey = (programId, stepId) => `${programId}#${stepId}`;
 
 /**

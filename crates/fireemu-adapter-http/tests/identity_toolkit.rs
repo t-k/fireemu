@@ -2632,10 +2632,17 @@ fn admin_create_is_atomic_and_typed() {
         &s,
         "POST",
         &format!("{ADMIN}/accounts"),
-        &json!({"localId": "u-alice", "email": "alice@example.com", "password": "password1", "displayName": "Alice"}),
+        &json!({"localId": "u-alice", "email": "Alice@example.com", "password": "password1", "displayName": "Alice"}),
     );
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["localId"], "u-alice");
+    let (status, duplicate) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "u-alice-duplicate", "email": "alice@example.com"}),
+    );
+    assert_eq!(status, 400, "{duplicate}");
     let (status, _) = admin(
         &s,
         "POST",

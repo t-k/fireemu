@@ -130,7 +130,11 @@ fn emails_and_phone_numbers_are_validated_and_unique_across_users() {
     s.set_email(&b, "b2@example.com").unwrap();
     assert_eq!(s.user_by_email("b2@example.com").unwrap().local_id, b);
     assert!(s.user_by_email("b@example.com").is_none());
-    assert!(s.user_by_email("B2@example.com").is_none(), "exact match");
+    assert_eq!(
+        s.user_by_email("B2@example.com").unwrap().local_id,
+        b,
+        "email lookup is case-insensitive"
+    );
     // E.164: `+` and 7..=15 digits.
     for ok in ["+1234567", "+123456789012345"] {
         assert_eq!(AuthStore::validate_phone_number(ok), Ok(()), "{ok}");
@@ -166,6 +170,26 @@ fn emails_and_phone_numbers_are_validated_and_unique_across_users() {
     assert_eq!(
         s.set_phone_number(&ghost, None),
         Err(AuthError::UserNotFound)
+    );
+}
+
+#[test]
+fn email_creation_canonicalizes_storage_and_rejects_case_variant_duplicates() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("MixedCase@example.com"), t0())
+        .unwrap();
+    assert_eq!(
+        s.user(&uid).and_then(|user| user.email.as_deref()),
+        Some("mixedcase@example.com")
+    );
+    assert_eq!(
+        s.user_by_email("MIXEDCASE@EXAMPLE.COM").unwrap().local_id,
+        uid
+    );
+    assert_eq!(
+        s.create_user(NewUser::email("mixedcase@example.com"), t(1)),
+        Err(AuthError::EmailExists)
     );
 }
 

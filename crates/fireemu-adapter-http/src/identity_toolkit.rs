@@ -4889,7 +4889,9 @@ fn update(
     // address also ends the existing sessions, as a password change does.
     let mut email_changed = false;
     if let Some(email) = &plan.email {
-        email_changed = store.user(&uid).and_then(|u| u.email.as_deref()) != Some(email);
+        let canonical_email = canonicalize_email(email);
+        email_changed =
+            store.user(&uid).and_then(|u| u.email.as_deref()) != Some(canonical_email.as_str());
         if let Err(e) = store.set_email(&uid, email) {
             return auth_error(&e);
         }
@@ -6071,11 +6073,11 @@ fn send_oob_code(
     };
     let (email, uid, new_email) = match request_type {
         OobRequestType::PasswordReset => {
-            let Some(email) = str_field(body, "email") else {
+            let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
-            match store.user_by_email(email) {
-                Some(u) => (email.to_owned(), Some(u.local_id.clone()), None),
+            match store.user_by_email(&email) {
+                Some(u) => (email.clone(), Some(u.local_id.clone()), None),
                 // Improved email privacy: an unknown address is answered as if a mail had
                 // been sent, and no code is created.
                 None if store.config().enable_improved_email_privacy => {
@@ -6088,14 +6090,14 @@ fn send_oob_code(
             }
         }
         OobRequestType::EmailSignIn => {
-            let Some(email) = str_field(body, "email") else {
+            let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
             if !email.contains('@') {
                 return error(400, "INVALID_EMAIL");
             }
-            let uid = store.user_by_email(email).map(|u| u.local_id.clone());
-            (email.to_owned(), uid, None)
+            let uid = store.user_by_email(&email).map(|u| u.local_id.clone());
+            (email.clone(), uid, None)
         }
         OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => {
             // Email-based target selection is reserved for authenticated Admin generators.
@@ -6118,17 +6120,17 @@ fn send_oob_code(
                 return error(400, "MISSING_EMAIL : the user has no email");
             };
             let new_email = if request_type == OobRequestType::VerifyAndChangeEmail {
-                let Some(new_email) = str_field(body, "newEmail") else {
+                let Some(new_email) = str_field(body, "newEmail").map(canonicalize_email) else {
                     return error(400, "MISSING_NEW_EMAIL");
                 };
                 if !store.config().allow_duplicate_emails
                     && store
-                        .user_by_email(new_email)
+                        .user_by_email(&new_email)
                         .is_some_and(|u| u.local_id != uid)
                 {
                     return error(400, "EMAIL_EXISTS");
                 }
-                Some(new_email.to_owned())
+                Some(new_email.clone())
             } else {
                 None
             };
@@ -6578,6 +6580,7 @@ fn sign_in_with_email_link(
     let (Some(email), Some(code)) = (str_field(body, "email"), str_field(body, "oobCode")) else {
         return error(400, "MISSING_OOB_CODE");
     };
+    let email = canonicalize_email(email);
     let matches = store
         .oob_code(code)
         .is_some_and(|c| c.request_type == OobRequestType::EmailSignIn && c.email == email);
@@ -6593,7 +6596,7 @@ fn sign_in_with_email_link(
         };
         if !store.config().allow_duplicate_emails
             && store
-                .user_by_email(email)
+                .user_by_email(&email)
                 .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
@@ -6601,7 +6604,7 @@ fn sign_in_with_email_link(
         if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
             return auth_error(&e);
         }
-        if let Err(e) = store.set_email(&uid, email) {
+        if let Err(e) = store.set_email(&uid, &email) {
             return auth_error(&e);
         }
         if let Some(u) = store.user_mut(&uid) {
@@ -6621,7 +6624,7 @@ fn sign_in_with_email_link(
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
         return auth_error(&e);
     }
-    let (uid, is_new) = match store.sign_in_with_email_link(email, at) {
+    let (uid, is_new) = match store.sign_in_with_email_link(&email, at) {
         Ok(r) => r,
         Err(e) => return auth_error(&e),
     };

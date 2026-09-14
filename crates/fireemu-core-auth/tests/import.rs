@@ -93,6 +93,35 @@ fn an_imported_account_keeps_its_recorded_identity_and_times() {
 }
 
 #[test]
+fn imported_email_uses_the_same_canonical_ownership_key_as_sign_up() {
+    let mut store = store();
+    let imported = store
+        .import_user(ImportedUser {
+            email: Some("MixedCase@example.com".to_owned()),
+            ..account("mixed")
+        })
+        .expect("the import succeeds");
+    assert_eq!(
+        store.user(&imported).and_then(|user| user.email.as_deref()),
+        Some("mixedcase@example.com")
+    );
+    assert_eq!(
+        store
+            .user_by_email("MIXEDCASE@example.com")
+            .unwrap()
+            .local_id,
+        imported
+    );
+    assert_eq!(
+        store.import_user(ImportedUser {
+            email: Some("mixedcase@example.com".to_owned()),
+            ..account("duplicate")
+        }),
+        Err(ImportUserError::Account(AuthError::EmailExists))
+    );
+}
+
+#[test]
 fn an_imported_password_signs_in_and_is_written_back_in_the_emulator_form() {
     let mut store = store();
     let uid = store

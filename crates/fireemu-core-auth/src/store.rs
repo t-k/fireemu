@@ -1070,13 +1070,23 @@ impl AuthStore {
         self.users.get(uid).map(Arc::as_ref)
     }
 
+    /// Identity Toolkit treats email addresses case-insensitively and stores their canonical
+    /// lowercase representation. Keep this normalization at the ownership/index boundary so
+    /// every route (including imports and email actions) uses the same key without affecting
+    /// local IDs or other selectors.
+    fn canonicalize_email(email: &str) -> String {
+        email.to_lowercase()
+    }
+
     fn email_owned_by_other(&self, email: &str, uid: Option<&LocalId>) -> bool {
+        let email = Self::canonicalize_email(email);
         self.local_ids_for_email
-            .get(email)
+            .get(&email)
             .is_some_and(|owners| owners.iter().any(|owner| Some(owner) != uid))
     }
 
-    fn add_email_owner(&mut self, email: String, uid: &LocalId) {
+    fn add_email_owner(&mut self, email: &str, uid: &LocalId) {
+        let email = Self::canonicalize_email(email);
         self.local_ids_for_email
             .entry(email.clone())
             .or_default()
@@ -1094,19 +1104,20 @@ impl AuthStore {
     }
 
     fn remove_email_owner(&mut self, email: &str, uid: &LocalId) {
-        if let Some(owners) = self.local_ids_for_email.get_mut(email) {
+        let email = Self::canonicalize_email(email);
+        if let Some(owners) = self.local_ids_for_email.get_mut(&email) {
             owners.remove(uid);
         }
         if self
             .local_ids_for_email
-            .get(email)
+            .get(&email)
             .is_some_and(BTreeSet::is_empty)
         {
-            self.local_ids_for_email.remove(email);
+            self.local_ids_for_email.remove(&email);
         }
         // The official Auth Emulator deletes the single active email index entry whenever
         // any duplicate owner is removed; it does not restore another owner automatically.
-        self.local_id_for_email.remove(email);
+        self.local_id_for_email.remove(&email);
     }
 
     fn next_id(&mut self, prefix: &str) -> String {
@@ -1449,7 +1460,7 @@ impl AuthStore {
 
     fn import_user_with_password_policy(
         &mut self,
-        user: ImportedUser,
+        mut user: ImportedUser,
         enforce_password_policy: bool,
     ) -> Result<LocalId, ImportUserError> {
         if user.local_id.is_empty()
@@ -1467,7 +1478,8 @@ impl AuthStore {
         }
         // The same checks a sign-up gets: a well-formed email without control characters,
         // unique unless the project allows duplicates, and bounded custom claims.
-        if let Some(email) = &user.email {
+        if let Some(email) = user.email.as_mut() {
+            *email = Self::canonicalize_email(email);
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(ImportUserError::Account(AuthError::InvalidEmail));
             }
@@ -1543,7 +1555,7 @@ impl AuthStore {
         );
         self.by_sequence.insert(sequence, local_id.clone());
         if let Some(email) = email {
-            self.add_email_owner(email, &local_id);
+            self.add_email_owner(&email, &local_id);
         }
         if let Some(phone) = phone {
             self.local_ids_for_phone
@@ -1593,10 +1605,11 @@ impl AuthStore {
 
     /// Validates an email update without changing the store.
     pub fn validate_email_update(&self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
+        let email = Self::canonicalize_email(email);
         if !email.contains('@') || email.chars().any(char::is_control) {
             return Err(AuthError::InvalidEmail);
         }
-        if !self.config.allow_duplicate_emails && self.email_owned_by_other(email, Some(uid)) {
+        if !self.config.allow_duplicate_emails && self.email_owned_by_other(&email, Some(uid)) {
             return Err(AuthError::EmailExists);
         }
         Ok(())
@@ -1604,17 +1617,18 @@ impl AuthStore {
 
     /// Changes the email, enforcing uniqueness unless the project enables duplicate emails.
     pub fn set_email(&mut self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
-        self.validate_email_update(uid, email)?;
+        let email = Self::canonicalize_email(email);
+        self.validate_email_update(uid, &email)?;
         let user = self
             .users
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        let old = user.email.replace(email.to_owned());
+        let old = user.email.replace(email.clone());
         if let Some(old) = old {
             self.remove_email_owner(&old, uid);
         }
-        self.add_email_owner(email.to_owned(), uid);
+        self.add_email_owner(&email, uid);
         Ok(())
     }
 
@@ -1810,10 +1824,13 @@ impl AuthStore {
 
     fn create_user_with_email_policy(
         &mut self,
-        new: NewUser,
+        mut new: NewUser,
         now: LogicalInstant,
         enforce_unique_email: bool,
     ) -> Result<LocalId, AuthError> {
+        if let Some(email) = new.email.take() {
+            new.email = Some(Self::canonicalize_email(&email));
+        }
         if let Some(email) = &new.email {
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(AuthError::InvalidEmail);
@@ -1863,7 +1880,7 @@ impl AuthStore {
             password: None,
         }));
         if let Some(email) = email {
-            self.add_email_owner(email, &local_id);
+            self.add_email_owner(&email, &local_id);
         }
         self.by_sequence.insert(sequence, local_id.clone());
         self.created_users.push(local_id.clone());
@@ -1882,6 +1899,8 @@ impl AuthStore {
         new_email: Option<String>,
         now: LogicalInstant,
     ) -> Result<String, AuthError> {
+        let email = Self::canonicalize_email(email);
+        let new_email = new_email.map(|value| Self::canonicalize_email(&value));
         self.sweep_transient_credentials(now);
         if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
@@ -1892,7 +1911,7 @@ impl AuthStore {
             OobCode {
                 code: code.clone(),
                 request_type,
-                email: email.to_owned(),
+                email,
                 uid,
                 new_email,
                 created_at: now,
@@ -2615,8 +2634,9 @@ impl AuthStore {
     /// Looks up a user by email.
     #[must_use]
     pub fn user_by_email(&self, email: &str) -> Option<&UserRecord> {
+        let email = Self::canonicalize_email(email);
         self.local_id_for_email
-            .get(email)
+            .get(&email)
             .and_then(|uid| self.users.get(uid))
             .map(Arc::as_ref)
     }

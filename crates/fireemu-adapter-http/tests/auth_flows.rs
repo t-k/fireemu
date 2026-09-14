@@ -258,6 +258,50 @@ fn sign_up(state: &AuthState, email: &str) -> Value {
     body
 }
 
+#[test]
+fn password_routes_canonicalize_email_case_and_reject_case_variant_duplicates() {
+    let s = state();
+    let created = sign_up(&s, "MixedCase@example.com");
+    assert_eq!(created["email"], "mixedcase@example.com");
+
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "MIXEDCASE@EXAMPLE.COM",
+            "password": "hunter22",
+            "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    assert_eq!(signed_in["email"], "mixedcase@example.com");
+    assert_eq!(signed_in["localId"], created["localId"]);
+
+    let (status, reset) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "MIXEDCASE@EXAMPLE.COM"}),
+    );
+    assert_eq!(status, 200, "{reset}");
+    assert_eq!(reset["email"], "mixedcase@example.com");
+
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["MIXEDCASE@EXAMPLE.COM"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["localId"], created["localId"]);
+
+    let (status, duplicate) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "mixedcase@example.com", "password": "hunter23"}),
+    );
+    assert_eq!(status, 400, "{duplicate}");
+    assert_eq!(duplicate["error"]["message"], "EMAIL_EXISTS");
+}
+
 fn claims(id_token: &str) -> Value {
     serde_json::from_str(&decode_unsigned(id_token).unwrap().payload_json).unwrap()
 }
@@ -799,6 +843,29 @@ fn email_link_sign_in_creates_a_verified_passwordless_user() {
         &json!({"identifier": "nobody@example.com", "continueUri": "http://localhost"}),
     );
     assert_eq!(unknown["registered"], false);
+}
+
+#[test]
+fn email_link_codes_match_case_insensitively_and_store_canonical_email() {
+    let s = state();
+    let (status, issued) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+        &json!({
+            "requestType": "EMAIL_SIGNIN",
+            "email": "mixedlink@example.com",
+            "returnOobLink": true
+        }),
+    );
+    assert_eq!(status, 200, "{issued}");
+    let code = issued["oobCode"].as_str().unwrap();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "MixedLink@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["email"], "mixedlink@example.com");
 }
 
 #[test]

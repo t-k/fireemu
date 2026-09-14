@@ -213,6 +213,20 @@ function canonical(value) {
   return JSON.stringify(sort(value));
 }
 
+/** A transport result is not an observation that can establish an HTTP comparison. */
+function isCompletedHttpObservation(step) {
+  return (
+    step &&
+    step.missing !== true &&
+    Number.isInteger(step.status) &&
+    step.status >= 100 &&
+    step.status <= 599 &&
+    typeof step.code === "string" &&
+    step.code.length > 0 &&
+    (step.code !== "OK" || Object.hasOwn(step, "body"))
+  );
+}
+
 /** Compare saved production decisions with a current normalized fireemu response. */
 export function compareProductionToFireemu({ production, fireemu, programDefinitions = PROGRAMS }) {
   const savedPrograms = Array.isArray(production)
@@ -228,7 +242,11 @@ export function compareProductionToFireemu({ production, fireemu, programDefinit
       const savedDecision = decision(saved);
       const localDecision = decision(actual);
       const comparison =
-        canonical(savedDecision) === canonical(localDecision) ? "match" : "mismatch";
+        isCompletedHttpObservation(saved) && isCompletedHttpObservation(actual)
+          ? canonical(savedDecision) === canonical(localDecision)
+            ? "match"
+            : "mismatch"
+          : "indeterminate";
       rows.push({
         id: step.id,
         comparison,

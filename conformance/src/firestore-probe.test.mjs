@@ -159,4 +159,53 @@ describe("Firestore production recorder", () => {
       local: { status: 400, code: "INVALID_ARGUMENT" },
     });
   });
+
+  it("does not match missing or transport-failed observations", () => {
+    const cases = [
+      {
+        name: "both missing",
+        production: {},
+        fireemu: {},
+      },
+      {
+        name: "production missing",
+        production: {},
+        fireemu: { sample: { steps: { read: { status: 200, code: "OK", body: {} } } } },
+      },
+      {
+        name: "fireemu missing",
+        production: {
+          sample: {
+            steps: { read: { production: { status: 200, code: "OK", body: {} } } },
+          },
+        },
+        fireemu: {},
+      },
+      {
+        name: "both transport failures",
+        production: {
+          sample: { steps: { read: { production: { status: 0, code: "NO_RESPONSE" } } } },
+        },
+        fireemu: { sample: { steps: { read: { status: 0, code: "NO_RESPONSE" } } } },
+      },
+      {
+        name: "one transport failure",
+        production: {
+          sample: { steps: { read: { production: { status: 0, code: "NO_RESPONSE" } } } },
+        },
+        fireemu: { sample: { steps: { read: { status: 200, code: "OK", body: {} } } } },
+      },
+    ];
+
+    for (const { name, production, fireemu } of cases) {
+      const result = compareProductionToFireemu({
+        production,
+        fireemu,
+        programDefinitions: [{ id: "sample", area: "queries", steps: [{ id: "read" }] }],
+      });
+      assert.equal(result.matches, 0, name);
+      assert.equal(result.mismatches, 1, name);
+      assert.notEqual(result.rows[0].comparison, "match", name);
+    }
+  });
 });

@@ -182,14 +182,30 @@ async fn atomic_rules_read_before_and_final_state_in_batches_and_transactions() 
                 .commit(with_bearer(
                     commit(vec![
                         set_write("stats/posts", &[("owner", s(&alice)), ("count", int(0))]),
+                        set_write(
+                            "stats/unrelated",
+                            &[("owner", s(&alice)), ("count", int(0))],
+                        ),
                         set_write(&format!("members/{alice}"), &[("role", s("writer"))]),
                     ]),
                     "owner",
                 ))
                 .await
                 .unwrap();
-            for permitted in [false, true] {
+            // The unrelated counter increment passes its own rule. Only the post
+            // getAfter relation denies that case, isolating final-state validation.
+            for (permitted, counter, count) in [
+                (false, "stats/posts", 2),
+                (false, "stats/unrelated", 1),
+                (true, "stats/posts", 1),
+            ] {
                 let before = snapshot(&h);
+                let wire_before = h
+                    .client
+                    .get_document(with_bearer(get(counter), "owner"))
+                    .await
+                    .unwrap()
+                    .into_inner();
                 let transaction = if transactional {
                     begin(&mut h, &token).await
                 } else {
@@ -197,13 +213,7 @@ async fn atomic_rules_read_before_and_final_state_in_batches_and_transactions() 
                 };
                 let mut writes = vec![
                     set_write("posts/new", &[("owner", s(&alice))]),
-                    set_write(
-                        "stats/posts",
-                        &[
-                            ("owner", s(&alice)),
-                            ("count", int(if permitted { 1 } else { 2 })),
-                        ],
-                    ),
+                    set_write(counter, &[("owner", s(&alice)), ("count", int(count))]),
                 ];
                 if reverse {
                     writes.reverse();
@@ -232,6 +242,22 @@ async fn atomic_rules_read_before_and_final_state_in_batches_and_transactions() 
                 } else {
                     assert_eq!(result.unwrap_err().code(), tonic::Code::PermissionDenied);
                     assert_eq!(snapshot(&h), before);
+                    assert_eq!(
+                        h.client
+                            .get_document(with_bearer(get(counter), "owner"))
+                            .await
+                            .unwrap()
+                            .into_inner(),
+                        wire_before
+                    );
+                    assert_eq!(
+                        h.client
+                            .get_document(with_bearer(get("posts/new"), "owner"))
+                            .await
+                            .unwrap_err()
+                            .code(),
+                        tonic::Code::NotFound
+                    );
                     if transactional {
                         rollback(&mut h, transaction, &token).await;
                     }

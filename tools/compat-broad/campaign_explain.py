@@ -531,7 +531,98 @@ def bind_receipt(receipt, state, adapter):
     ]
     receipt["ownershipJournalSha256"] = hashlib.sha256(journal_bytes).hexdigest()
     receipt["lifecycleStateVerified"] = state_readback_valid(receipt, state["plan"])
+    # Shared recipe assertions are not production expectations. These campaign
+    # flags describe owned state and cleanup; typed response validation is separate.
+    receipt.update(
+        stateVerified=receipt["lifecycleStateVerified"],
+        stateValidation=receipt["lifecycleStateVerified"],
+        safety=receipt["lifecycleStateVerified"] and receipt["cleanupComplete"] is True,
+    )
     save(adapter.output / "result.json", receipt)
+
+
+def explain_response_valid(operation, status, value):
+    """Validate REST wire shape while retaining well-formed semantic differences."""
+
+    def error_valid(row):
+        error = row.get("error") if isinstance(row, dict) else None
+        return (
+            isinstance(error, dict)
+            and isinstance(error.get("status"), str)
+            and bool(re.fullmatch(r"[A-Z][A-Z_]+", error["status"]))
+            and ("code" not in error or type(error["code"]) is int)
+            and ("message" not in error or isinstance(error["message"], str))
+        )
+
+    if type(status) is not int or not 100 <= status <= 599:
+        return False
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(row, dict) for row in value)
+    ):
+        return False
+    if any("error" in row for row in value):
+        return all(set(row) == {"error"} and error_valid(row) for row in value)
+    if status != 200:
+        return False
+    metrics_rows = [row["explainMetrics"] for row in value if "explainMetrics" in row]
+    if len(metrics_rows) != 1 or not isinstance(metrics_rows[0], dict):
+        return False
+    metrics = metrics_rows[0]
+    plan = metrics.get("planSummary")
+    if (
+        not isinstance(plan, dict)
+        or not isinstance(plan.get("indexesUsed"), list)
+        or not all(isinstance(index, dict) for index in plan["indexesUsed"])
+    ):
+        return False
+    analyze = operation["body"]["explainOptions"]["analyze"]
+    if analyze:
+        stats = metrics.get("executionStats")
+        if (
+            not isinstance(stats, dict)
+            or not isinstance(stats.get("resultsReturned"), str)
+            or not re.fullmatch(r"\d+", stats["resultsReturned"])
+        ):
+            return False
+    for row in value:
+        if not any(key in row for key in ("document", "result", "explainMetrics")):
+            return False
+        if "readTime" in row:
+            read_time = row["readTime"]
+            if not isinstance(read_time, str) or not re.fullmatch(
+                r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", read_time
+            ):
+                return False
+            try:
+                datetime.fromisoformat(read_time)
+            except ValueError:
+                return False
+        if "document" in row:
+            doc = row["document"]
+            if (
+                not isinstance(doc, dict)
+                or not isinstance(doc.get("name"), str)
+                or not doc["name"]
+                or not isinstance(doc.get("fields"), dict)
+            ):
+                return False
+        if "result" in row:
+            aggregate = row["result"]
+            if not isinstance(aggregate, dict) or not isinstance(
+                aggregate.get("aggregateFields"), dict
+            ):
+                return False
+            for field in aggregate["aggregateFields"].values():
+                if (
+                    not isinstance(field, dict)
+                    or set(field) != {"integerValue"}
+                    or not isinstance(field["integerValue"], str)
+                    or not re.fullmatch(r"-?\d+", field["integerValue"])
+                ):
+                    return False
+    return True
 
 
 def state_readback_valid(receipt, plan):
@@ -585,6 +676,12 @@ def _validate_envelope(value, *, local, directory):
         "local/result kind differs",
     )
     _require(value.get("productionExecuted") is (not local), "execution target differs")
+    for key in ("completed", "cleanupComplete", "recordingComplete", "stateVerified"):
+        _require(value.get(key) is True, "envelope " + key + " incomplete")
+    _require(
+        "failure" in value and value["failure"] is None,
+        "envelope failure present or missing",
+    )
     for key, expected in {
         "manifestDigest": digest(manifest()),
         "observerSha256": campaign_observer_digest(),
@@ -647,8 +744,22 @@ def _validate_envelope(value, *, local, directory):
         "collectionComplete",
         "cleanupComplete",
         "lifecycleStateVerified",
+        "stateVerified",
+        "stateValidation",
+        "safety",
     ):
         _require(receipt.get(key) is True, key + " incomplete")
+    _require(
+        "failure" in receipt and receipt["failure"] is None,
+        "receipt failure present or missing",
+    )
+    _require(
+        all(
+            explain_response_valid(row["request"], row["status"], row["body"])
+            for row in receipt["rows"][4:10]
+        ),
+        "typed Explain response incomplete",
+    )
     _require(state_readback_valid(receipt, plan), "state readback differs")
     validate_creation_journal(receipt, plan)
     if local and directory is not None:
@@ -1094,6 +1205,8 @@ def execute(
                 failure = failure or type(error).__name__
         state = gate.snapshot()
         job = jobs.get("query-explain", {})
+        if job:
+            bind_receipt(job, state, adapter)
         result = {
             "kind": "production-campaign-explain-01-result-v2",
             "executionCommit": head,
@@ -1124,8 +1237,6 @@ def execute(
             and coordinator.configuration_unchanged
             and failure is None,
         }
-        if job:
-            bind_receipt(job, state, adapter)
         save(output / "result.json", result)
         comparison = compare_production_local(result, local_evidence)
         save(output / "comparison.json", comparison)

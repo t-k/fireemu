@@ -144,9 +144,14 @@ def run(output: Path) -> dict:
                 ("worker/result.json", "receipt"),
             )
         }
+        envelope.update(
+            cleanupComplete=envelope["receipt"]["cleanupComplete"],
+            recordingComplete=envelope["receipt"]["recordingComplete"],
+            stateVerified=envelope["receipt"]["stateVerified"],
+            completed=report["status"] == "completed",
+            failure=envelope["receipt"]["failure"],
+        )
         validate_envelope(envelope, local=True, directory=output)
-        envelope["cleanupComplete"] = True
-        envelope["completed"] = True
     except (ValueError, KeyError, OSError) as error:
         envelope.update(completed=False, cleanupComplete=False, failure=str(error))
     save(output / "result.json", envelope)

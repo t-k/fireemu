@@ -487,6 +487,11 @@ def production_fixture(local):
     production.update(
         kind="production-campaign-explain-01-result-v2",
         productionExecuted=True,
+        completed=True,
+        cleanupComplete=True,
+        recordingComplete=True,
+        stateVerified=True,
+        failure=None,
         permission=permission,
         permissionDigest=digest(permission),
         localRecordSha256=digest(local),
@@ -590,7 +595,7 @@ def test_fully_bound_mismatch_is_valid_collection(real_shadow):
     production["receipt"]["rows"][4]["body"] = [
         {"error": {"status": "FAILED_PRECONDITION"}}
     ]
-    production["receipt"]["stateValidation"] = False
+    assert production["receipt"]["stateValidation"] is True
     rebind_responses(production)
     assert validate_envelope(production, local=False)
     assert compare_production_local(production, local)["compatibility"] == "mismatch"

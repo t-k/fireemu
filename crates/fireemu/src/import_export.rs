@@ -737,6 +737,7 @@ fn refuse_symlink(product: &'static str, entry: &std::fs::DirEntry) -> Result<()
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn read_firestore_section(
     dir: &Path,
     section: &Section,
@@ -753,10 +754,124 @@ fn read_firestore_section(
     let overall_path = dir.join(&metadata_file);
     let bytes = read_inside_limited(dir, &overall_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
         .map_err(|e| ArtifactError::new("firestore", &overall_path, e))?;
-    let overall = OverallMetadata::parse(&bytes)
+    let overalls = OverallMetadata::parse_all(&bytes)
         .map_err(|e| ArtifactError::new("firestore", &overall_path, e.to_string()))?;
 
     let section_dir = dir.join(&section.path);
+    let mut references = BTreeMap::new();
+    for overall in &overalls {
+        if let Some((entity_count, byte_count)) = references.insert(
+            overall.metadata_file.clone(),
+            (overall.entity_count, overall.byte_count),
+        ) {
+            let description =
+                if entity_count == overall.entity_count && byte_count == overall.byte_count {
+                    "more than once".to_owned()
+                } else {
+                    format!("with conflicting counts ({entity_count} entities, {byte_count} bytes)")
+                };
+            return Err(ArtifactError::new(
+                "firestore",
+                &overall_path,
+                format!(
+                    "the overall export metadata names partition metadata file {:?} {description}",
+                    overall.metadata_file,
+                ),
+            ));
+        }
+    }
+
+    let mut foreign = BTreeSet::new();
+    let mut declared_entity_count = 0u64;
+    let mut imported_entity_count = 0u64;
+    let mut declared_byte_count = 0u64;
+    let mut imported_byte_count = 0u64;
+    for overall in overalls {
+        declared_entity_count = declared_entity_count
+            .checked_add(overall.entity_count)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "firestore",
+                    &overall_path,
+                    "the overall export entity count overflows".to_owned(),
+                )
+            })?;
+        declared_byte_count = declared_byte_count
+            .checked_add(overall.byte_count)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "firestore",
+                    &overall_path,
+                    "the overall export byte count overflows".to_owned(),
+                )
+            })?;
+
+        let (partition_entity_count, partition_byte_count) = read_firestore_partition(
+            dir,
+            &section_dir,
+            &overall,
+            remaining_bytes,
+            databases,
+            database,
+            &mut foreign,
+            run_project,
+        )?;
+        imported_entity_count = imported_entity_count
+            .checked_add(partition_entity_count)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "firestore",
+                    &overall_path,
+                    "the imported entity count overflows",
+                )
+            })?;
+        imported_byte_count = imported_byte_count
+            .checked_add(partition_byte_count)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "firestore",
+                    &overall_path,
+                    "the imported byte count overflows",
+                )
+            })?;
+    }
+    if imported_entity_count != declared_entity_count {
+        return Err(ArtifactError::new(
+            "firestore",
+            &overall_path,
+            format!(
+                "the imported entity count is {imported_entity_count}, but overall metadata records {declared_entity_count}"
+            ),
+        ));
+    }
+    if imported_byte_count != declared_byte_count {
+        return Err(ArtifactError::new(
+            "firestore",
+            &overall_path,
+            format!(
+                "the imported byte count is {imported_byte_count}, but overall metadata records {declared_byte_count}"
+            ),
+        ));
+    }
+    for project in foreign {
+        notices.push(format!(
+            "the Firestore export holds documents of the project {project}, not the {run_project} this run serves; they were imported under {project}, so point the SDK at that project to read them"
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_firestore_partition(
+    dir: &Path,
+    section_dir: &Path,
+    overall: &OverallMetadata,
+    remaining_bytes: &mut u64,
+    databases: &mut BTreeMap<(String, String), Vec<ImportedDocument>>,
+    database: &str,
+    foreign: &mut BTreeSet<String>,
+    run_project: &str,
+) -> Result<(u64, u64), ArtifactError> {
     let partition_path = section_dir.join(&overall.metadata_file);
     let bytes = read_inside_limited(dir, &partition_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
         .map_err(|e| ArtifactError::new("firestore", &partition_path, e))?;
@@ -765,8 +880,7 @@ fn read_firestore_section(
 
     let partition_dir = partition_path
         .parent()
-        .map_or_else(|| section_dir.clone(), Path::to_path_buf);
-    let mut foreign = BTreeSet::new();
+        .map_or_else(|| section_dir.to_path_buf(), Path::to_path_buf);
     let mut entity_count = 0u64;
     let mut byte_count = 0u64;
     for output in &partition.output_files {
@@ -788,7 +902,7 @@ fn read_firestore_section(
         }
         let mut limited = std::io::Read::take(file, remaining_bytes.saturating_add(1));
         let decoded = for_each_output(&mut limited, |document| {
-            collect_document(databases, document, database, &mut foreign, run_project)?;
+            collect_document(databases, document, database, foreign, run_project)?;
             entity_count = entity_count.saturating_add(1);
             Ok(())
         });
@@ -811,7 +925,7 @@ fn read_firestore_section(
     if entity_count != overall.entity_count {
         return Err(ArtifactError::new(
             "firestore",
-            &overall_path,
+            &partition_path,
             format!(
                 "the partition entity count is {entity_count}, but its overall metadata records {}",
                 overall.entity_count
@@ -821,19 +935,14 @@ fn read_firestore_section(
     if byte_count != overall.byte_count {
         return Err(ArtifactError::new(
             "firestore",
-            &overall_path,
+            &partition_path,
             format!(
                 "the partition byte count is {byte_count}, but its overall metadata records {}",
                 overall.byte_count
             ),
         ));
     }
-    for project in foreign {
-        notices.push(format!(
-            "the Firestore export holds documents of the project {project}, not the {run_project} this run serves; they were imported under {project}, so point the SDK at that project to read them"
-        ));
-    }
-    Ok(())
+    Ok((entity_count, byte_count))
 }
 
 /// Turns one decoded entity into an import document, validating its project and path.

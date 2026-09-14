@@ -6,7 +6,9 @@
 
 mod census;
 
-use fireemu_core_export::firestore::{read_output, write_output, OverallMetadata};
+use fireemu_core_export::firestore::{
+    read_output, write_output, ExportDocument, OverallMetadata, PartitionMetadata, EXPORT_NAME,
+};
 use fireemu_core_firestore::value::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -94,6 +96,29 @@ fn add_named_database_references(section: &Path) {
     let mut overall = OverallMetadata::parse(&std::fs::read(&overall_path).unwrap()).unwrap();
     overall.byte_count = bytes.len() as u64;
     std::fs::write(overall_path, overall.to_bytes()).unwrap();
+}
+
+fn write_partition(section: &Path, name: &str, documents: &[ExportDocument]) -> OverallMetadata {
+    let partition = section.join(name);
+    std::fs::create_dir_all(&partition).unwrap();
+    let output = write_output(documents).unwrap();
+    std::fs::write(partition.join("output-0"), &output).unwrap();
+    std::fs::write(
+        partition.join("partition.export_metadata"),
+        PartitionMetadata {
+            export_name: EXPORT_NAME.to_owned(),
+            start_micros: 0,
+            end_micros: 0,
+            output_files: vec!["output-0".to_owned()],
+        }
+        .to_bytes(),
+    )
+    .unwrap();
+    OverallMetadata {
+        metadata_file: format!("{name}/partition.export_metadata"),
+        entity_count: documents.len() as u64,
+        byte_count: output.len() as u64,
+    }
 }
 
 fn assert_named_database_references(section: &Path) {
@@ -537,6 +562,169 @@ fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
         "{log}"
     );
     assert!(log.contains("storage: 4 object(s) in 2 bucket(s)"), "{log}");
+}
+
+#[test]
+fn all_firestore_partitions_import_and_preserve_every_document() {
+    let dir = scratch("firestore-partitions");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    let split = documents.len() / 2;
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let overall = vec![
+        write_partition(&section, "partition-0", &documents[..split]),
+        write_partition(&section, "partition-1", &documents[split..]),
+    ];
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&overall),
+    )
+    .unwrap();
+
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(
+        log.contains("firestore: 30 document(s) in 1 database(s)"),
+        "{log}"
+    );
+
+    let imported = read_output(
+        &std::fs::read(out.join("firestore_export/all_namespaces/all_kinds/output-0")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        imported
+            .iter()
+            .map(|document| format!("{document:?}"))
+            .collect::<std::collections::BTreeSet<_>>(),
+        documents
+            .iter()
+            .map(|document| format!("{document:?}"))
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+}
+
+#[test]
+fn duplicate_firestore_partition_references_are_refused() {
+    let dir = scratch("duplicate-firestore-partition");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let partition = write_partition(&section, "partition-0", &documents);
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[partition.clone(), partition]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "partition metadata file");
+    assert!(text(&output).contains("more than once"));
+}
+
+#[test]
+fn conflicting_firestore_partition_references_are_refused() {
+    let dir = scratch("conflicting-firestore-partition");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let partition = write_partition(&section, "partition-0", &documents);
+    let mut conflicting = partition.clone();
+    conflicting.entity_count = conflicting.entity_count.saturating_add(1);
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[partition, conflicting]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "partition metadata file");
+    assert!(text(&output).contains("conflicting counts"));
+}
+
+#[test]
+fn a_missing_firestore_partition_is_refused_before_starting_the_command() {
+    let dir = scratch("missing-firestore-partition");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let first = write_partition(&section, "partition-0", &documents);
+    let missing = OverallMetadata {
+        metadata_file: "partition-missing/partition.export_metadata".to_owned(),
+        entity_count: 0,
+        byte_count: 0,
+    };
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[first, missing]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "partition-missing");
+}
+
+#[test]
+fn a_corrupt_later_firestore_partition_is_refused_before_starting_the_command() {
+    let dir = scratch("corrupt-later-firestore-partition");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let split = documents.len() / 2;
+    let first = write_partition(&section, "partition-0", &documents[..split]);
+    let second = write_partition(&section, "partition-1", &documents[split..]);
+    let corrupt_output = section.join("partition-1/output-0");
+    let mut corrupt_bytes = std::fs::read(&corrupt_output).unwrap();
+    let last = corrupt_bytes.len() - 1;
+    corrupt_bytes[last] ^= 0xff;
+    std::fs::write(corrupt_output, corrupt_bytes).unwrap();
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[first, second]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "partition-1/output-0");
 }
 
 // --------------------------------------------------------------------------------------

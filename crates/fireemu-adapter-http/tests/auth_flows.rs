@@ -531,6 +531,301 @@ fn email_link_sign_in_creates_a_verified_passwordless_user() {
 }
 
 #[test]
+fn email_link_sign_in_consumes_the_code_once() {
+    let s = state();
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "single-use@example.com"}),
+    );
+    assert_eq!(status, 200);
+    let code = issued_code(&s, "EMAIL_SIGNIN");
+
+    let (status, first) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "single-use@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{first}");
+    let (status, reused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "single-use@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 400, "{reused}");
+    assert_eq!(reused["error"]["message"], "INVALID_OOB_CODE");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn all_oob_kinds_are_usable_at_the_exact_virtual_expiry_boundary() {
+    let s = state();
+    let _reset = sign_up(&s, "boundary-reset@example.com");
+    let verify = sign_up(&s, "boundary-verify@example.com");
+    let change = sign_up(&s, "boundary-change@example.com");
+
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"requestType": "PASSWORD_RESET", "email": "boundary-reset@example.com"}),
+        )
+        .0,
+        200
+    );
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"requestType": "VERIFY_EMAIL", "idToken": verify["idToken"]}),
+        )
+        .0,
+        200
+    );
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"requestType": "EMAIL_SIGNIN", "email": "boundary-link@example.com"}),
+        )
+        .0,
+        200
+    );
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": change["idToken"], "newEmail": "boundary-new@example.com"}),
+        )
+        .0,
+        200
+    );
+
+    advance_clock(&s, 3_600);
+    let reset_code = issued_code(&s, "PASSWORD_RESET");
+    let verify_code = issued_code(&s, "VERIFY_EMAIL");
+    let link_code = issued_code(&s, "EMAIL_SIGNIN");
+    let change_code = issued_code(&s, "VERIFY_AND_CHANGE_EMAIL");
+
+    let (status, reset_result) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": reset_code, "newPassword": "boundary-password1"}),
+    );
+    assert_eq!(status, 200, "{reset_result}");
+    let (status, verify_result) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": verify_code}),
+    );
+    assert_eq!(status, 200, "{verify_result}");
+    let (status, link_result) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "boundary-link@example.com", "oobCode": link_code}),
+    );
+    assert_eq!(status, 200, "{link_result}");
+    let (status, change_result) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": change_code}),
+    );
+    assert_eq!(status, 200, "{change_result}");
+    assert_eq!(change_result["email"], "boundary-new@example.com");
+
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "boundary-reset@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400);
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "boundary-reset@example.com", "password": "boundary-password1"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let (_, verified_lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [verify["localId"]]}),
+    );
+    assert_eq!(
+        verified_lookup["users"][0]["emailVerified"], true,
+        "{verified_lookup}"
+    );
+    let (_, link_lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": link_result["idToken"]}),
+    );
+    assert_eq!(
+        link_lookup["users"][0]["email"],
+        "boundary-link@example.com"
+    );
+    assert_eq!(link_lookup["users"][0]["emailVerified"], true);
+    let (_, changed_lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [change["localId"]]}),
+    );
+    assert_eq!(
+        changed_lookup["users"][0]["email"],
+        "boundary-new@example.com"
+    );
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "boundary-change@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400);
+    let (status, changed_sign_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "boundary-new@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{changed_sign_in}");
+
+    let (_, remaining) = get(&s, &format!("{EMU}/oobCodes"));
+    let remaining = remaining["oobCodes"].as_array().unwrap();
+    for code in [&reset_code, &verify_code, &link_code, &change_code] {
+        assert!(!remaining.iter().any(|row| row["oobCode"] == *code));
+    }
+    for (path, body) in [
+        (
+            format!("{V1}/accounts:resetPassword"),
+            json!({"oobCode": reset_code, "newPassword": "another-password1"}),
+        ),
+        (
+            format!("{V1}/accounts:update"),
+            json!({"oobCode": verify_code}),
+        ),
+        (
+            format!("{V1}/accounts:signInWithEmailLink"),
+            json!({"email": "boundary-link@example.com", "oobCode": link_code}),
+        ),
+        (
+            format!("{V1}/accounts:update"),
+            json!({"oobCode": change_code}),
+        ),
+    ] {
+        assert_eq!(post(&s, &path, &body).0, 400, "{path}: {body}");
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn malformed_oob_inputs_do_not_consume_or_mutate_action_codes() {
+    let s = state();
+    let user = sign_up(&s, "malformed-oob@example.com");
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": user["idToken"]}),
+    );
+    assert_eq!(status, 200);
+    let code = issued_code(&s, "VERIFY_EMAIL");
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "malformed-link@example.com"}),
+    );
+    assert_eq!(status, 200);
+    let link_code = issued_code(&s, "EMAIL_SIGNIN");
+
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "malformed-oob@example.com"}),
+    );
+    assert_eq!(status, 200);
+    let reset_code = issued_code(&s, "PASSWORD_RESET");
+    for body in [
+        json!({}),
+        json!({"oobCode": Value::Null}),
+        json!({"oobCode": 42}),
+    ] {
+        let (status, response) = post(&s, &format!("{V1}/accounts:resetPassword"), &body);
+        assert_eq!(status, 400, "{body}: {response}");
+        assert_eq!(issued_code(&s, "PASSWORD_RESET"), reset_code);
+    }
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": reset_code, "newPassword": Value::Null}),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(issued_code(&s, "PASSWORD_RESET"), reset_code);
+
+    for body in [
+        json!({}),
+        json!({"oobCode": Value::Null}),
+        json!({"oobCode": 42}),
+        json!({"oobCode": code, "emailVerified": Value::Null}),
+    ] {
+        let (status, response) = post(&s, &format!("{V1}/accounts:update"), &body);
+        assert_eq!(status, 400, "{body}: {response}");
+        assert_eq!(issued_code(&s, "VERIFY_EMAIL"), code);
+    }
+
+    for body in [
+        json!({"email": Value::Null, "oobCode": link_code}),
+        json!({"email": "malformed-link@example.com", "oobCode": Value::Null}),
+        json!({"email": "malformed-link@example.com", "oobCode": 42}),
+    ] {
+        let (status, response) = post(&s, &format!("{V1}/accounts:signInWithEmailLink"), &body);
+        assert_eq!(status, 400, "{body}: {response}");
+        assert_eq!(issued_code(&s, "EMAIL_SIGNIN"), link_code);
+    }
+
+    let owner = sign_up(&s, "session-owner@example.com");
+    let other = sign_up(&s, "session-other@example.com");
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "session-owner@example.com"}),
+    );
+    assert_eq!(status, 200);
+    let session_code = issued_code(&s, "EMAIL_SIGNIN");
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "session-owner@example.com", "oobCode": session_code, "idToken": "malformed"}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(response["error"]["message"], "INVALID_ID_TOKEN");
+    assert_eq!(issued_code(&s, "EMAIL_SIGNIN"), session_code);
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "session-owner@example.com", "oobCode": session_code, "idToken": other["idToken"]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(response["error"]["message"], "EMAIL_EXISTS");
+    assert_eq!(issued_code(&s, "EMAIL_SIGNIN"), session_code);
+    let (_, owner_lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": owner["idToken"]}),
+    );
+    let (_, other_lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": other["idToken"]}),
+    );
+    assert_eq!(
+        owner_lookup["users"][0]["email"],
+        "session-owner@example.com"
+    );
+    assert_eq!(
+        other_lookup["users"][0]["email"],
+        "session-other@example.com"
+    );
+    assert_eq!(owner_lookup["users"][0]["emailVerified"], false);
+    assert_eq!(other_lookup["users"][0]["emailVerified"], false);
+}
+
+#[test]
 fn phone_sign_in_uses_a_deterministic_code_from_the_inspection_route() {
     let s = state();
     let (status, body) = post(

@@ -245,7 +245,7 @@
     },
     {
       "id": "AUTH-PROJECT-CONFIG",
-      "source": "AUTH-DISCOVERY-V1",
+      "source": "AUTH-DISCOVERY-V2",
       "locator": "identitytoolkit.projects.updateConfig",
       "kind": "method",
       "transport": "REST",
@@ -257,7 +257,7 @@
     },
     {
       "id": "AUTH-PROJECT-CONFIG-MASK",
-      "source": "AUTH-DISCOVERY-V1",
+      "source": "AUTH-DISCOVERY-V2",
       "locator": "identitytoolkit.projects.updateConfig/parameters/updateMask",
       "kind": "field",
       "transport": "REST",
@@ -275,6 +275,30 @@
       "transport": "REST",
       "classification": "requirement",
       "reason": "Project and tenant inbound SAML leaf-mask defaults and atomic validation are locally verified; production provider-configuration parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-SAML-MASK-001"
+      ]
+    },
+    {
+      "id": "AUTH-SAML-PATCH",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "identitytoolkit.projects.inboundSamlConfigs.patch",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "The project inbound SAML PATCH path is covered by the bounded signRequest leaf-mask/default and atomicity matrix; production provider-configuration parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-SAML-MASK-001"
+      ]
+    },
+    {
+      "id": "AUTH-SAML-TENANT-PATCH",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "identitytoolkit.projects.tenants.inboundSamlConfigs.patch",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "The tenant inbound SAML PATCH path is covered by the same bounded leaf-mask/default and atomicity matrix; production provider-configuration parity remains separately unobserved.",
       "requirements": [
         "AUTH-SAML-MASK-001"
       ]

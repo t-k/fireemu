@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
@@ -163,13 +164,29 @@ def validate_frozen(value):
 
     original_inputs = _publisher.inputs
     original_runtime_inputs = _publisher.runtime_inputs
+    original_review = _publisher.REVIEW
+    original_contract = _publisher.publication_contract_sha
     _publisher.inputs = lambda: value["probeInputs"]
     _publisher.runtime_inputs = lambda root: _runtime_inputs_at_commit(runtime_commit)
+    _publisher.publication_contract_sha = lambda: _publication_contract_at_commit(commit)
     try:
-        _ORIGINAL_VALIDATE(value)
+        with tempfile.TemporaryDirectory(
+            prefix="fireemu-auth-session-review-"
+        ) as directory:
+            historical_review = Path(directory) / "source-review.json"
+            historical_review.write_bytes(
+                _git_bytes(
+                    commit,
+                    "spec/compatibility/evidence/auth-session-v2/source-review.json",
+                )
+            )
+            _publisher.REVIEW = historical_review
+            _ORIGINAL_VALIDATE(value)
     finally:
         _publisher.inputs = original_inputs
         _publisher.runtime_inputs = original_runtime_inputs
+        _publisher.REVIEW = original_review
+        _publisher.publication_contract_sha = original_contract
 
 
 def validate(value):

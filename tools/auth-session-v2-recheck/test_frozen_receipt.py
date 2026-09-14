@@ -75,6 +75,15 @@ def test_frozen_receipt_rejects_source_review_not_at_probe_commit(frozen, tmp_pa
         frozen.validate_frozen(value)
 
 
+def test_frozen_validation_uses_historical_contract_and_review(frozen, tmp_path, monkeypatch):
+    value = receipt(frozen)
+    changed_review = tmp_path / "source-review.json"
+    changed_review.write_text("not the historical review")
+    monkeypatch.setattr(frozen._publisher, "REVIEW", changed_review)
+    monkeypatch.setattr(frozen._publisher, "publication_contract_sha", lambda: "0" * 64)
+    frozen.validate_frozen(value)
+
+
 @pytest.mark.parametrize(
     "mutation",
     ["artifact", "case", "timing", "corpus", "approval", "secret", "control"],

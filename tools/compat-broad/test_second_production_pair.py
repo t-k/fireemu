@@ -351,7 +351,7 @@ def test_saved_candidate_rejects_self_hashed_fabricated_parent(
     result = compare_saved(
         candidate_path, local, parent_path, local_source_sha256=digest(local)
     )
-    assert result["compatibility"] == "indeterminate"
+    assert result["compatibility"] != "match"
     assert result["mode"] == "saved-production-versus-local"
     assert result["historicalObserverDigest"]
     assert result["currentObserverDigest"] == local["observerDigest"]

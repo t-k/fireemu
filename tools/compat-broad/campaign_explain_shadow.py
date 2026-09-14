@@ -58,7 +58,7 @@ def run(output: Path, nonce: str = "a" * 32) -> dict:
     gate = Gate(output / "gate", "query-explain")
     gate.claim()
     binary, build = build_artifact()
-    subprocess.run([str(binary), "--help"], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run([str(binary), "--version"], check=True, stdout=subprocess.DEVNULL)
     adapter = batch_adapter.Adapter(batch_adapter.candidate(), nonce, output / "worker", local_origins=origins)
     adapter.shared_gate = gate
     wire = FixtureWire()

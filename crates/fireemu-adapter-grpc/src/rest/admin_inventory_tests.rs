@@ -104,6 +104,22 @@ fn admin_inventory_coexists_with_document_crud_commit_and_query_routes() {
     assert_eq!(status, 200, "{database}");
 }
 
+#[test]
+fn admin_inventory_does_not_claim_non_get_database_routes() {
+    let state = state();
+    for authorization in [None, Some("Bearer owner")] {
+        for method in ["POST", "PATCH", "DELETE"] {
+            for path in [
+                "/v1/projects/demo/databases",
+                "/v1/projects/demo/databases/(default)",
+            ] {
+                let (status, body) = call_request(&state, authorization, method, path, Value::Null);
+                assert_eq!(status, 404, "{method} {path}: {body}");
+            }
+        }
+    }
+}
+
 fn create_database(state: &RestState, project: &str, database: &str) {
     state
         .local

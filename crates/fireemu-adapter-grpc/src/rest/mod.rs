@@ -654,7 +654,8 @@ impl RestState {
         };
         let params = query_params(&req.query);
         let segments: Vec<&str> = path.split('/').collect();
-        if action.is_none()
+        if req.method == "GET"
+            && action.is_none()
             && matches!(
                 segments.as_slice(),
                 ["projects", _, "databases"] | ["projects", _, "databases", _]

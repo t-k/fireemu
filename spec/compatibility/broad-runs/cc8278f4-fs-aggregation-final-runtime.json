@@ -3,7 +3,7 @@
   "kind": "firestore-aggregation-final-runtime-local-result",
   "status": "local-production-reference-complete",
   "capturedOn": "2026-09-14",
-  "executionCommit": "516154bfd1b2ce478d982eee9e14c3534ec4bddc",
+  "executionCommit": "7cc598a24df09699c6db3b894ac27a832788357e",
   "baseCommit": "984ecfd3",
   "target": "owned-local-artifact",
   "project": "demo-firestore-probe",
@@ -147,7 +147,7 @@
   },
   "comparator": {
     "source": "conformance/src/firestore-probe/run.mjs",
-    "sourceSha256": "sha256-ec442fb4595b8306a4b158ae523b956d1dbb8bf189db9e8c7b0ef0b8f1c4b58f",
+    "sourceSha256": "sha256-8350cbed7aa73433b2bd61f0313e74a7b581156727589089df00d618fc1aa181",
     "normalizer": "conformance/src/firestore-probe/session.mjs",
     "normalizerSha256": "sha256-af4e664ac4d1efe9cfa5de445c2ee8833ee91d1c0c515283133e8e0a8c5b4823",
     "normalizationSupportSource": "conformance/src/normalize.mjs",

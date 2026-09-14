@@ -45,7 +45,7 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
 use fireemu_core_types::ids::DatabaseId;
 
-use crate::leveldb::{for_each_record, read_log, write_log, LogError, LogWriter};
+use crate::leveldb::{for_each_record, write_log, LogError, LogWriter};
 use crate::wire::{Reader, WireError, WireType, Writer};
 
 /// The partition every emulator export writes: all namespaces, all kinds.
@@ -189,6 +189,12 @@ pub struct OverallMetadata {
 
 /// The single byte the emulator writes as the first record of every overall metadata file.
 const OVERALL_PREFIX_RECORD: u8 = 0x33;
+/// Safety bound for the number of partition entries an import may declare.
+///
+/// Official exports normally contain one entry; this bound prevents an adversarial metadata
+/// file from forcing unbounded partition metadata allocation while retaining ample room for
+/// large managed exports.
+pub const MAX_PARTITION_ENTRIES: usize = 10_000;
 
 impl OverallMetadata {
     /// Encodes the file, `LevelDB` framing included.
@@ -232,12 +238,26 @@ impl OverallMetadata {
 
     /// Decodes every partition entry in the file.
     pub fn parse_all(bytes: &[u8]) -> Result<Vec<Self>, FirestoreExportError> {
-        let records = read_log(bytes)?;
-        let entries = records
-            .iter()
-            .filter(|record| record.len() > 1)
-            .map(|record| {
-                let mut reader = Reader::new(record);
+        let mut entries = Vec::new();
+        let mut prefix_seen = false;
+        let visited = for_each_record(std::io::Cursor::new(bytes), |record| {
+            if !prefix_seen {
+                if record != [OVERALL_PREFIX_RECORD] {
+                    return Err(FirestoreExportError::Shape(
+                        "the overall export metadata does not start with its prefix record"
+                            .to_owned(),
+                    ));
+                }
+                prefix_seen = true;
+                return Ok(());
+            }
+            if entries.len() >= MAX_PARTITION_ENTRIES {
+                return Err(FirestoreExportError::Shape(format!(
+                    "the overall export metadata names more than {MAX_PARTITION_ENTRIES} partition entries"
+                )));
+            }
+            let mut reader = Reader::new(record);
+            let entry = {
                 let mut found = None;
                 while let Some((field, wire)) = reader.field()? {
                     if field == 1 && wire == WireType::Delimited {
@@ -258,9 +278,15 @@ impl OverallMetadata {
                             .to_owned(),
                     )
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if entries.is_empty() {
+            }?;
+            entries.push(entry);
+            Ok(())
+        })?;
+        match visited {
+            Ok(()) => {}
+            Err(error) => return Err(error),
+        }
+        if !prefix_seen || entries.is_empty() {
             return Err(FirestoreExportError::Shape(
                 "the overall export metadata holds no partition entry".to_owned(),
             ));
@@ -996,8 +1022,10 @@ fn as_vector(fields: &BTreeMap<String, Value>) -> Option<Value> {
 mod tests {
     use super::{
         read_entity, read_output, read_output_from, write_entity, write_output, write_output_to,
-        ExportDocument, OverallMetadata, PartitionMetadata, Value,
+        ExportDocument, OverallMetadata, PartitionMetadata, Value, MAX_PARTITION_ENTRIES,
+        OVERALL_PREFIX_RECORD,
     };
+    use crate::leveldb::read_log;
     use fireemu_core_firestore::value::{GeoPoint, Timestamp};
     use std::collections::BTreeMap;
 
@@ -1423,6 +1451,55 @@ mod tests {
             OverallMetadata::parse_all(&OverallMetadata::to_bytes_many(&entries)).unwrap(),
             entries
         );
+    }
+
+    #[test]
+    fn corrupt_overall_metadata_records_are_not_discarded() {
+        let metadata = OverallMetadata {
+            metadata_file: "partition/partition.export_metadata".to_owned(),
+            entity_count: 0,
+            byte_count: 0,
+        };
+        let records = read_log(&metadata.to_bytes()).unwrap();
+        for corrupt in [vec![OVERALL_PREFIX_RECORD], vec![0]] {
+            let mut records_with_corruption = records.clone();
+            records_with_corruption.push(corrupt);
+            let error = OverallMetadata::parse_all(&super::write_log(&records_with_corruption))
+                .expect_err("a corrupt trailing record must be refused");
+            assert!(
+                error.to_string().contains("partition metadata file")
+                    || error.to_string().contains("prefix")
+                    || error.to_string().contains("malformed"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_overall_metadata_partition_bound_has_an_exact_acceptance_boundary() {
+        let entries: Vec<_> = (0..MAX_PARTITION_ENTRIES)
+            .map(|index| OverallMetadata {
+                metadata_file: format!("partition-{index}/partition.export_metadata"),
+                entity_count: 0,
+                byte_count: 0,
+            })
+            .collect();
+        assert_eq!(
+            OverallMetadata::parse_all(&OverallMetadata::to_bytes_many(&entries))
+                .unwrap()
+                .len(),
+            MAX_PARTITION_ENTRIES
+        );
+
+        let mut too_many = entries;
+        too_many.push(OverallMetadata {
+            metadata_file: "partition-over-bound/partition.export_metadata".to_owned(),
+            entity_count: 0,
+            byte_count: 0,
+        });
+        let error = OverallMetadata::parse_all(&OverallMetadata::to_bytes_many(&too_many))
+            .expect_err("the partition bound must refuse one entry above its limit");
+        assert!(error.to_string().contains("more than 10000"), "{error}");
     }
 
     #[test]

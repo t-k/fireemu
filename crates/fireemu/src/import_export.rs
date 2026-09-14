@@ -151,6 +151,13 @@ impl Endpoints<'_> {
 /// The documents of every database, keyed by `(project, database)`.
 type PreparedDatabases = BTreeMap<(String, String), Vec<ImportedDocument>>;
 
+struct FirestorePartition {
+    overall: OverallMetadata,
+    metadata_path: PathBuf,
+    metadata: PartitionMetadata,
+    directory: PathBuf,
+}
+
 /// The default accounts, project configuration and isolated tenant accounts of the Auth
 /// section.
 #[derive(Debug, Default)]
@@ -781,12 +788,44 @@ fn read_firestore_section(
         }
     }
 
+    let mut output_paths = BTreeSet::new();
+    let mut partitions = Vec::with_capacity(overalls.len());
+    for overall in overalls {
+        let metadata_path = section_dir.join(&overall.metadata_file);
+        let bytes = read_inside_limited(dir, &metadata_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
+            .map_err(|e| ArtifactError::new("firestore", &metadata_path, e))?;
+        let metadata = PartitionMetadata::parse(&bytes)
+            .map_err(|e| ArtifactError::new("firestore", &metadata_path, e.to_string()))?;
+        let directory = metadata_path
+            .parent()
+            .map_or_else(|| section_dir.clone(), Path::to_path_buf);
+        for output in &metadata.output_files {
+            let output_path = directory.join(output);
+            let identity = normalized_import_path(dir, &output_path)
+                .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
+            if !output_paths.insert(identity) {
+                return Err(ArtifactError::new(
+                    "firestore",
+                    &output_path,
+                    "the Firestore export references this output file from more than one partition metadata file",
+                ));
+            }
+        }
+        partitions.push(FirestorePartition {
+            overall,
+            metadata_path,
+            metadata,
+            directory,
+        });
+    }
+
     let mut foreign = BTreeSet::new();
     let mut declared_entity_count = 0u64;
     let mut imported_entity_count = 0u64;
     let mut declared_byte_count = 0u64;
     let mut imported_byte_count = 0u64;
-    for overall in overalls {
+    for partition in partitions {
+        let overall = &partition.overall;
         declared_entity_count = declared_entity_count
             .checked_add(overall.entity_count)
             .ok_or_else(|| {
@@ -808,8 +847,7 @@ fn read_firestore_section(
 
         let (partition_entity_count, partition_byte_count) = read_firestore_partition(
             dir,
-            &section_dir,
-            &overall,
+            &partition,
             remaining_bytes,
             databases,
             database,
@@ -861,30 +899,38 @@ fn read_firestore_section(
     Ok(())
 }
 
+fn normalized_import_path(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "it is outside the export directory".to_owned())?;
+    let mut normalized = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(name) => normalized.push(name),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                return Err("it contains a parent path component".to_owned());
+            }
+            _ => return Err("it is not a normal path inside the export directory".to_owned()),
+        }
+    }
+    Ok(normalized)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn read_firestore_partition(
     dir: &Path,
-    section_dir: &Path,
-    overall: &OverallMetadata,
+    partition: &FirestorePartition,
     remaining_bytes: &mut u64,
     databases: &mut BTreeMap<(String, String), Vec<ImportedDocument>>,
     database: &str,
     foreign: &mut BTreeSet<String>,
     run_project: &str,
 ) -> Result<(u64, u64), ArtifactError> {
-    let partition_path = section_dir.join(&overall.metadata_file);
-    let bytes = read_inside_limited(dir, &partition_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
-        .map_err(|e| ArtifactError::new("firestore", &partition_path, e))?;
-    let partition = PartitionMetadata::parse(&bytes)
-        .map_err(|e| ArtifactError::new("firestore", &partition_path, e.to_string()))?;
-
-    let partition_dir = partition_path
-        .parent()
-        .map_or_else(|| section_dir.to_path_buf(), Path::to_path_buf);
     let mut entity_count = 0u64;
     let mut byte_count = 0u64;
-    for output in &partition.output_files {
-        let output_path = partition_dir.join(output);
+    for output in &partition.metadata.output_files {
+        let output_path = partition.directory.join(output);
         let file = open_file_inside(dir, &output_path)
             .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
         let len = file
@@ -922,23 +968,23 @@ fn read_firestore_partition(
         byte_count = byte_count.saturating_add(consumed);
         decoded.map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))??;
     }
-    if entity_count != overall.entity_count {
+    if entity_count != partition.overall.entity_count {
         return Err(ArtifactError::new(
             "firestore",
-            &partition_path,
+            &partition.metadata_path,
             format!(
                 "the partition entity count is {entity_count}, but its overall metadata records {}",
-                overall.entity_count
+                partition.overall.entity_count
             ),
         ));
     }
-    if byte_count != overall.byte_count {
+    if byte_count != partition.overall.byte_count {
         return Err(ArtifactError::new(
             "firestore",
-            &partition_path,
+            &partition.metadata_path,
             format!(
                 "the partition byte count is {byte_count}, but its overall metadata records {}",
-                overall.byte_count
+                partition.overall.byte_count
             ),
         ));
     }

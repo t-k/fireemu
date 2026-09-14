@@ -354,6 +354,38 @@ fn passwords_are_validated_hashed_and_verified() {
 }
 
 #[test]
+fn password_policy_counts_utf16_units_and_rejects_invalid_values_before_storage() {
+    assert_eq!(
+        AuthStore::validate_password("a".repeat(4095).as_str()),
+        Ok(())
+    );
+    assert_eq!(
+        AuthStore::validate_password("a".repeat(4096).as_str()),
+        Ok(())
+    );
+    assert!(AuthStore::validate_password("a".repeat(4097).as_str()).is_err());
+    assert_eq!(
+        AuthStore::validate_password("😀".repeat(2048).as_str()),
+        Ok(())
+    );
+    assert!(AuthStore::validate_password("😀".repeat(2049).as_str()).is_err());
+    assert_eq!(AuthStore::validate_password("123456"), Ok(()));
+    assert!(AuthStore::validate_password("12345").is_err());
+    assert!(AuthStore::validate_password("12345\u{0000}").is_err());
+
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("password-boundary@example.com"), t0())
+        .unwrap();
+    s.set_password(&uid, "original-password", t0()).unwrap();
+    assert!(s.set_password(&uid, &"a".repeat(4097), t(1)).is_err());
+    assert_eq!(
+        s.verify_password("password-boundary@example.com", "original-password", t(2)),
+        Ok(uid)
+    );
+}
+
+#[test]
 fn refresh_revocation_boundary_preserves_stateless_and_disabled_precedence() {
     for issued in [2, 3, 4] {
         let mut s = store();

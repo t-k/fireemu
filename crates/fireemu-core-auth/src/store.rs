@@ -544,6 +544,8 @@ pub enum AuthError {
     InvalidEmail,
     /// Password shorter than six characters (Firebase minimum).
     WeakPassword,
+    /// Password exceeds the configured UTF-16 length limit.
+    PasswordTooLong,
     /// Unknown email or wrong password, undistinguished (the improved email privacy mode).
     InvalidCredentials,
     /// Wrong password, or no password credential, for a known email (the default mode of
@@ -587,6 +589,7 @@ impl fmt::Display for AuthError {
             Self::EmailExists => f.write_str("email already exists"),
             Self::InvalidEmail => f.write_str("invalid email"),
             Self::WeakPassword => f.write_str("password must be at least 6 characters"),
+            Self::PasswordTooLong => f.write_str("password exceeds the maximum length"),
             Self::InvalidCredentials => f.write_str("invalid email or password"),
             Self::InvalidPassword => f.write_str("invalid password"),
             Self::UserDisabled => f.write_str("user is disabled"),
@@ -2333,11 +2336,16 @@ impl AuthStore {
 
     /// Minimum password length enforced by Firebase.
     pub const MIN_PASSWORD_CHARS: usize = 6;
+    /// Maximum password length enforced by Firebase's default password policy.
+    pub const MAX_PASSWORD_UTF16_UNITS: usize = 4096;
 
     /// Validates a password without storing it (lets callers fail before mutating).
     pub fn validate_password(password: &str) -> Result<(), AuthError> {
         if password.chars().count() < Self::MIN_PASSWORD_CHARS {
             return Err(AuthError::WeakPassword);
+        }
+        if password.encode_utf16().count() > Self::MAX_PASSWORD_UTF16_UNITS {
+            return Err(AuthError::PasswordTooLong);
         }
         if password.chars().any(char::is_control) {
             return Err(AuthError::WeakPassword);

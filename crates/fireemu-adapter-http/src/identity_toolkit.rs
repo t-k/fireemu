@@ -703,6 +703,7 @@ fn auth_error(e: &AuthError) -> JsonResponse {
             400,
             "WEAK_PASSWORD : Password should be at least 6 characters",
         ),
+        AuthError::PasswordTooLong => error(400, "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"),
         AuthError::InvalidCredentials => error(400, "INVALID_LOGIN_CREDENTIALS"),
         AuthError::InvalidPassword => error(400, "INVALID_PASSWORD"),
         AuthError::UserDisabled => error(400, "USER_DISABLED"),
@@ -3590,8 +3591,14 @@ fn sign_up(
     if body.get("localId").is_some_and(|v| !v.is_null()) {
         return error(400, "UNEXPECTED_PARAMETER : User ID");
     }
-    let email = str_field(body, "email");
-    let password = str_field(body, "password");
+    let email = match opt_str(body, "email") {
+        Ok(email) => email,
+        Err(r) => return r,
+    };
+    let password = match opt_str(body, "password") {
+        Ok(password) => password,
+        Err(r) => return r,
+    };
     // With an `idToken` the request upgrades that session's account (the client SDK's
     // `linkWithCredential` for an email credential) instead of creating one.
     let has_session = body.get("idToken").is_some_and(|t| !t.is_null());
@@ -4583,16 +4590,6 @@ fn update(
         Ok(p) => p,
         Err(r) => return r,
     };
-    // The eight-input production diagnostic fits a 4096 UTF-16-unit update cap.
-    // Keep Admin/import/reset and minimum-length semantics separate.
-    if !privileged
-        && plan
-            .password
-            .as_ref()
-            .is_some_and(|p| p.encode_utf16().count() > 4096)
-    {
-        return error(400, "PASSWORD_DOES_NOT_MEET_REQUIREMENTS");
-    }
     // Improved email privacy requires a proof-of-ownership OOB flow for address changes.
     // It also removes the legacy setAccountInfo email/password linking path; clients link
     // through accounts:signUp with the current ID token instead. Privileged Admin updates
@@ -5932,11 +5929,15 @@ fn reset_password(
     let Some(uid) = entry.uid.clone() else {
         return error(400, "INVALID_OOB_CODE");
     };
-    let Some(new_password) = str_field(body, "newPassword") else {
-        return JsonResponse {
-            status: 200,
-            body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
-        };
+    let new_password = match opt_str(body, "newPassword") {
+        Ok(Some(new_password)) => new_password,
+        Ok(None) => {
+            return JsonResponse {
+                status: 200,
+                body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
+            };
+        }
+        Err(r) => return r,
     };
     if let Err(e) = AuthStore::validate_password(new_password) {
         return auth_error(&e);

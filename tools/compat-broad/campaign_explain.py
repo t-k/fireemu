@@ -111,7 +111,7 @@ def manifest() -> dict:
     plan = _schedule("0" * 32)
     template = _replace_namespace(plan, "0" * 32, "{freshNonce}")
     return {
-        "kind": "production-campaign-explain-01-v1",
+        "kind": "production-campaign-explain-01-v2",
         "status": "prepared-offline",
         "sourceCommit": "permission-bound-execution-HEAD",
         "collector": "existing-batch-adapter-shared-v1",
@@ -166,7 +166,7 @@ def manifest() -> dict:
 
 def binding() -> dict:
     return {
-        "kind": "production-campaign-explain-01-comparison-v1",
+        "kind": "production-campaign-explain-01-comparison-v2",
         "manifestDigest": digest(manifest()),
         "observerSha256": campaign_observer_digest(),
         "normalization": "shared-campaign-typed-json-v1",
@@ -541,6 +541,14 @@ def bind_receipt(receipt, state, adapter):
     save(adapter.output / "result.json", receipt)
 
 
+_COMPARABLE_EXPLAIN_ERRORS = {
+    400: {"INVALID_ARGUMENT", "FAILED_PRECONDITION", "OUT_OF_RANGE"},
+    404: {"NOT_FOUND"},
+    409: {"ALREADY_EXISTS"},
+    501: {"UNIMPLEMENTED"},
+}
+
+
 def explain_response_valid(operation, status, value):
     """Validate REST wire shape while retaining well-formed semantic differences."""
 
@@ -624,9 +632,17 @@ def explain_response_valid(operation, status, value):
     ):
         return False
     if any("error" in row for row in value):
-        # Explain observations are a six-case success campaign; an error body
-        # is never a typed Explain response, regardless of HTTP status.
-        return False
+        if (
+            len(value) != 1
+            or set(value[0]) != {"error"}
+            or not error_valid(value[0])
+        ):
+            return False
+        error = value[0]["error"]
+        # A complete, structured API rejection is observable evidence. Auth,
+        # quota, and transient transport/service failures remain incomplete so
+        # they cannot be misclassified as a runtime semantic difference.
+        return error["status"] in _COMPARABLE_EXPLAIN_ERRORS.get(status, set())
     if status != 200:
         return False
     metrics_rows = [row["explainMetrics"] for row in value if "explainMetrics" in row]

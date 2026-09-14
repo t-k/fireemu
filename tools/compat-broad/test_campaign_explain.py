@@ -75,8 +75,11 @@ def test_explain_validator_accepts_new_empty_analyze_protojson_shape():
         "huge-results",
         "omitted-default-nonempty",
         "invalid-media",
-        "http-error-body",
         "http-200-error-body",
+        "http-auth-error-body",
+        "http-quota-error-body",
+        "http-temporary-error-body",
+        "malformed-error-body",
         "wrong-error-status",
     ],
 )
@@ -130,18 +133,44 @@ def test_explain_validator_rejects_invalid_metric_and_error_shapes(mutation):
         operation = explain_operation(empty=False)
     elif mutation == "invalid-media":
         operation["contentType"] = "text/html"
-    elif mutation in {"http-error-body", "http-200-error-body"}:
-        status = 400 if mutation == "http-error-body" else 200
+    elif mutation == "http-200-error-body":
+        status = 200
         body = [{"error": {"status": "FAILED_PRECONDITION"}}]
+    elif mutation == "http-auth-error-body":
+        status = 403
+        body = [{"error": {"status": "PERMISSION_DENIED"}}]
+    elif mutation == "http-quota-error-body":
+        status = 429
+        body = [{"error": {"status": "RESOURCE_EXHAUSTED"}}]
+    elif mutation == "http-temporary-error-body":
+        status = 503
+        body = [{"error": {"status": "UNAVAILABLE"}}]
+    elif mutation == "malformed-error-body":
+        status = 400
+        body = [{"error": {"status": "FAILED_PRECONDITION"}, "result": []}]
     else:
         status = 400
         body = [{"error": {"status": "bad status"}}]
     assert not explain_response_valid(operation, status, body)
 
 
+@pytest.mark.parametrize(
+    ("status", "error_status"),
+    [
+        (400, "INVALID_ARGUMENT"),
+        (400, "FAILED_PRECONDITION"),
+        (501, "UNIMPLEMENTED"),
+    ],
+)
+def test_explain_validator_accepts_structured_comparable_api_errors(status, error_status):
+    operation = explain_operation()
+    body = [{"error": {"status": error_status, "message": "request rejected"}}]
+    assert explain_response_valid(operation, status, body)
+
+
 def test_manifest_is_exactly_six_owned_explain_cases():
     value = manifest()
-    assert value["kind"] == "production-campaign-explain-01-v1"
+    assert value["kind"] == "production-campaign-explain-01-v2"
     assert value["status"] == "prepared-offline"
     assert value["productionExecutable"] is True
     assert value["template"]["nonce"] == "{freshNonce}"
@@ -190,7 +219,7 @@ def test_manifest_binds_metadata_and_recovery_budget():
 def test_checked_in_manifest_and_binding_are_stable():
     path = (
         __import__("pathlib").Path(__file__).parents[2]
-        / "spec/compatibility/broad-runs/prod-campaign-explain-01.json"
+        / "spec/compatibility/broad-runs/prod-campaign-explain-01-v2.json"
     )
     assert json.loads(path.read_bytes()) == manifest()
     assert binding()["manifestDigest"] == digest(manifest())
@@ -725,6 +754,48 @@ def test_fully_bound_mismatch_is_valid_collection(real_shadow):
     rebind_responses(production)
     assert validate_envelope(production, local=False)
     assert compare_production_local(production, local)["compatibility"] == "mismatch"
+
+
+def test_fully_bound_success_vs_structured_api_rejection_is_mismatch(real_shadow):
+    from campaign_explain import compare_production_local
+
+    original, _ = real_shadow
+    local = copy.deepcopy(original)
+    local["receipt"]["rows"][4]["status"] = 501
+    local["receipt"]["rows"][4]["body"] = [
+        {"error": {"status": "UNIMPLEMENTED", "message": "not implemented"}}
+    ]
+    rebind_responses(local)
+
+    production = production_fixture(local)
+    production["receipt"]["rows"][4] = copy.deepcopy(original["receipt"]["rows"][4])
+    rebind_responses(production)
+
+    assert compare_production_local(production, local)["compatibility"] == "mismatch"
+
+
+@pytest.mark.parametrize(
+    ("status", "error_status"),
+    [
+        (401, "UNAUTHENTICATED"),
+        (403, "PERMISSION_DENIED"),
+        (429, "RESOURCE_EXHAUSTED"),
+        (503, "UNAVAILABLE"),
+    ],
+)
+def test_unreliable_api_errors_remain_indeterminate(real_shadow, status, error_status):
+    from campaign_explain import compare_production_local
+
+    original, _ = real_shadow
+    local = copy.deepcopy(original)
+    local["receipt"]["rows"][4]["status"] = status
+    local["receipt"]["rows"][4]["body"] = [{"error": {"status": error_status}}]
+    rebind_responses(local)
+    production = production_fixture(local)
+    production["receipt"]["rows"][4] = copy.deepcopy(original["receipt"]["rows"][4])
+    rebind_responses(production)
+
+    assert compare_production_local(production, local)["compatibility"] == "indeterminate"
 
 
 def test_fully_bound_envelope_rejects_out_of_range_results_returned(real_shadow):

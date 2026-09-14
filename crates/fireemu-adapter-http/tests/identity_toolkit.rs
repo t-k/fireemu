@@ -2231,6 +2231,153 @@ fn inbound_saml_provider_config_crud_preserves_configuration_and_rejects_bad_ids
 
 #[test]
 #[allow(clippy::too_many_lines)]
+fn inbound_saml_sign_request_mask_defaults_and_is_atomic_for_project_and_tenant() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    s.registry = Some(registry);
+    let collections = [
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/inboundSamlConfigs",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/customer/inboundSamlConfigs",
+    ];
+    for (index, collection) in collections.into_iter().enumerate() {
+        let id = if index == 0 {
+            "saml.project"
+        } else {
+            "saml.tenant"
+        };
+        let item = format!("{collection}/{id}");
+        let create = handle_with(
+            &s,
+            "POST",
+            &format!("{collection}?inboundSamlConfigId={id}"),
+            &owner(),
+            &json!({
+                "displayName": "Original",
+                "idpConfig": {
+                    "idpEntityId": "entity",
+                    "ssoUrl": "https://idp.example/sso",
+                    "idpCertificates": [{"x509Certificate": "CERT"}],
+                    "signRequest": true
+                },
+                "spConfig": {
+                    "spEntityId": "sp",
+                    "callbackUri": "https://sp.example/callback"
+                }
+            }),
+        );
+        assert_eq!(create.status, 200, "{}", create.body);
+
+        let parent_no_presence = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig"),
+            &owner(),
+            &json!({"idpConfig": {}}),
+        );
+        assert_eq!(
+            parent_no_presence.status, 200,
+            "{}",
+            parent_no_presence.body
+        );
+        assert_eq!(parent_no_presence.body["idpConfig"]["signRequest"], true);
+
+        let omitted_leaf = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({"idpConfig": {}}),
+        );
+        assert_eq!(omitted_leaf.status, 200, "{}", omitted_leaf.body);
+        assert_eq!(omitted_leaf.body["idpConfig"]["signRequest"], false);
+
+        let explicit_true = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": true}}),
+        );
+        assert_eq!(explicit_true.status, 200, "{}", explicit_true.body);
+
+        let outside_mask = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({
+                "displayName": "Changed",
+                "idpConfig": {"signRequest": true, "idpEntityId": "changed"}
+            }),
+        );
+        assert_eq!(outside_mask.status, 200, "{}", outside_mask.body);
+        assert_eq!(outside_mask.body["displayName"], "Original");
+        assert_eq!(outside_mask.body["idpConfig"]["idpEntityId"], "entity");
+        assert_eq!(outside_mask.body["idpConfig"]["signRequest"], true);
+
+        let invalid = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": "wrong type"}}),
+        );
+        assert_eq!(invalid.status, 400, "{}", invalid.body);
+        let unchanged = handle_with(&s, "GET", &item, &owner(), &json!({}));
+        assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+        assert_eq!(unchanged.body["displayName"], "Original");
+        assert_eq!(unchanged.body["idpConfig"]["idpEntityId"], "entity");
+        assert_eq!(unchanged.body["idpConfig"]["signRequest"], true);
+
+        let explicit_false = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": false}}),
+        );
+        assert_eq!(explicit_false.status, 200, "{}", explicit_false.body);
+        assert_eq!(explicit_false.body["idpConfig"]["signRequest"], false);
+
+        let empty = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask="),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": true}}),
+        );
+        assert_eq!(empty.status, 200, "{}", empty.body);
+        assert_eq!(empty.body["idpConfig"]["signRequest"], false);
+
+        for mask in [
+            "idpConfig.unknown",
+            "idpConfig.signRequest,idpConfig.signRequest",
+            "idpConfig.signRequest,,displayName",
+        ] {
+            let refused = handle_with(
+                &s,
+                "PATCH",
+                &format!("{item}?updateMask={mask}"),
+                &owner(),
+                &json!({
+                    "displayName": "Changed",
+                    "idpConfig": {"signRequest": true}
+                }),
+            );
+            assert_eq!(refused.status, 400, "mask={mask}: {}", refused.body);
+        }
+        let after_bad_masks = handle_with(&s, "GET", &item, &owner(), &json!({}));
+        assert_eq!(after_bad_masks.status, 200, "{}", after_bad_masks.body);
+        assert_eq!(after_bad_masks.body["displayName"], "Original");
+        assert_eq!(after_bad_masks.body["idpConfig"]["signRequest"], false);
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
 fn provider_ids_and_semantic_validation_are_kind_specific_and_atomic() {
     let s = state();
     let oidc = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/oauthIdpConfigs";

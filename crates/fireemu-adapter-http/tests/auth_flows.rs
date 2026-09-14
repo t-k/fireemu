@@ -2742,6 +2742,138 @@ fn admin_v2_config_toggles_email_enumeration_protection_and_propagates_to_tenant
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
+    let s = state();
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let read = || handle_with(&s, "GET", path, &owner(), &json!({}));
+
+    let initial = handle_with(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=signIn.allowDuplicateEmails,emailPrivacyConfig.enableImprovedEmailPrivacy"),
+        &owner(),
+        &json!({
+            "signIn": {"allowDuplicateEmails": true},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+        }),
+    );
+    assert_eq!(initial.status, 200, "{}", initial.body);
+
+    let outside_mask = handle_with(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=signIn.allowDuplicateEmails"),
+        &owner(),
+        &json!({
+            "signIn": {"allowDuplicateEmails": false},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": "wrong type"}
+        }),
+    );
+    assert_eq!(outside_mask.status, 200, "{}", outside_mask.body);
+    assert_eq!(outside_mask.body["signIn"]["allowDuplicateEmails"], false);
+    assert_eq!(
+        outside_mask.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+
+    let invalid = handle_with(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=signIn.allowDuplicateEmails,emailPrivacyConfig.enableImprovedEmailPrivacy"),
+        &owner(),
+        &json!({
+            "signIn": {"allowDuplicateEmails": true},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": "wrong type"}
+        }),
+    );
+    assert_eq!(invalid.status, 400, "{}", invalid.body);
+    let after_invalid = read();
+    assert_eq!(after_invalid.status, 200, "{}", after_invalid.body);
+    assert_eq!(after_invalid.body["signIn"]["allowDuplicateEmails"], false);
+    assert_eq!(
+        after_invalid.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+
+    let reset = handle_with(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=signIn.allowDuplicateEmails,emailPrivacyConfig.enableImprovedEmailPrivacy"),
+        &owner(),
+        &json!({
+            "signIn": {"allowDuplicateEmails": false},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}
+        }),
+    );
+    assert_eq!(reset.status, 200, "{}", reset.body);
+    assert_eq!(reset.body["signIn"]["allowDuplicateEmails"], false);
+    assert_eq!(
+        reset.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        false
+    );
+
+    let omitted_mask = handle_with(
+        &s,
+        "PATCH",
+        path,
+        &owner(),
+        &json!({
+            "signIn": {"allowDuplicateEmails": true},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+        }),
+    );
+    assert_eq!(omitted_mask.status, 200, "{}", omitted_mask.body);
+    assert_eq!(omitted_mask.body["signIn"]["allowDuplicateEmails"], true);
+    assert_eq!(
+        omitted_mask.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+
+    for mask in [
+        "signIn.unknown",
+        "signIn.allowDuplicateEmails,signIn.allowDuplicateEmails",
+        "signIn.allowDuplicateEmails,,emailPrivacyConfig.enableImprovedEmailPrivacy",
+    ] {
+        let refused = handle_with(
+            &s,
+            "PATCH",
+            &format!("{path}?updateMask={mask}"),
+            &owner(),
+            &json!({
+                "signIn": {"allowDuplicateEmails": true},
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+            }),
+        );
+        assert_eq!(refused.status, 400, "mask={mask}: {}", refused.body);
+    }
+    let after_bad_masks = read();
+    assert_eq!(after_bad_masks.status, 200, "{}", after_bad_masks.body);
+    assert_eq!(after_bad_masks.body["signIn"]["allowDuplicateEmails"], true);
+    assert_eq!(
+        after_bad_masks.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+
+    let empty = handle_with(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask="),
+        &owner(),
+        &json!({
+            "signIn": {"allowDuplicateEmails": true},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+        }),
+    );
+    assert_eq!(empty.status, 200, "{}", empty.body);
+    assert_eq!(empty.body["signIn"]["allowDuplicateEmails"], true);
+    assert_eq!(
+        empty.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+}
+
+#[test]
 fn email_enumeration_protection_requires_verified_email_changes_but_keeps_signup_linking() {
     let s = state();
     let enabled = handle_with(

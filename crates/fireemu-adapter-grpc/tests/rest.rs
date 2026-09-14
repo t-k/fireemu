@@ -12,11 +12,16 @@ use fireemu_adapter_grpc::rules::RulesEnforcer;
 use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
-use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::index::{
+    IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
+    PlanningContext,
+};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+use fireemu_core_types::ids::CollectionId;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
@@ -518,6 +523,17 @@ fn commit_query_aggregation_and_transactions_over_rest() {
 #[test]
 fn rest_run_query_supports_standard_find_nearest() {
     let s = state(None);
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(IndexDefinition {
+        collection_group: CollectionId::try_new("items").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![IndexField {
+            path: FieldPath::parse("embedding").unwrap(),
+            mode: IndexFieldMode::Vector { dimension: 2 },
+        }],
+    });
+    s.local
+        .replace_project_database_indexes("demo-app", "(default)", indexes);
     let vector = |values: &[f64]| {
         json!({
             "mapValue": {"fields": {

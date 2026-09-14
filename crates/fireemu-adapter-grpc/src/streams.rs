@@ -704,6 +704,11 @@ fn decode_target(
                 ));
             };
             let accepted = ctx.local.accepted_query(&query_parent, sq)?;
+            if accepted.query.find_nearest.is_some() {
+                return Err(Status::unimplemented(
+                    "Listen does not support findNearest targets",
+                ));
+            }
             Ok(TargetKind::Query(Box::new(accepted.query)))
         }
         None => Err(Status::invalid_argument("target without target_type")),
@@ -1275,7 +1280,11 @@ impl WireCommit {
 mod refresh_tests {
     use super::*;
     use crate::local::{CommitChangeKind, CommitPathChange, FirestoreSnapshot};
-    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::index::{
+        IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet,
+        IndexValidationPolicy, PlanningContext,
+    };
     use fireemu_core_firestore::store::{FirestoreState, WriteOp};
     use fireemu_core_firestore::value::Value;
     use fireemu_core_session::clock::VirtualClock;
@@ -1353,6 +1362,70 @@ mod refresh_tests {
         }
     }
 
+    #[test]
+    fn listen_decoder_refuses_find_nearest_targets() {
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap();
+        let mut request = query_request(1, "restored");
+        let Some(pb::listen_request::TargetChange::AddTarget(target)) = &mut request.target_change
+        else {
+            unreachable!();
+        };
+        let Some(pb::target::TargetType::Query(query)) = &mut target.target_type else {
+            unreachable!();
+        };
+        let Some(pb::target::query_target::QueryType::StructuredQuery(structured)) =
+            &mut query.query_type
+        else {
+            unreachable!();
+        };
+        structured.find_nearest = Some(pb::structured_query::FindNearest {
+            vector_field: Some(pb::structured_query::FieldReference {
+                field_path: "embedding".to_owned(),
+            }),
+            query_vector: Some(pb::Value {
+                value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                    fields: [
+                        (
+                            "__type__".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::StringValue(
+                                    "__vector__".to_owned(),
+                                )),
+                            },
+                        ),
+                        (
+                            "value".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::ArrayValue(
+                                    pb::ArrayValue {
+                                        values: vec![pb::Value {
+                                            value_type: Some(pb::value::ValueType::DoubleValue(
+                                                1.0,
+                                            )),
+                                        }],
+                                    },
+                                )),
+                            },
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                })),
+            }),
+            distance_measure: pb::structured_query::find_nearest::DistanceMeasure::Euclidean as i32,
+            limit: Some(1),
+            ..Default::default()
+        });
+        let Some(pb::listen_request::TargetChange::AddTarget(target)) = request.target_change
+        else {
+            unreachable!();
+        };
+        let error = decode_target(&fixture.context, parent, &target).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented);
+        assert!(error.message().contains("findNearest"));
+    }
+
     struct GenerationFixture {
         context: StreamContext,
         scope: Scope,
@@ -1370,7 +1443,18 @@ mod refresh_tests {
                 api_mode: FirestoreApiMode::Native,
                 policy: IndexValidationPolicy::Production,
             },
-            indexes: IndexSet::default(),
+            indexes: {
+                let mut indexes = IndexSet::default();
+                indexes.add_composite(IndexDefinition {
+                    collection_group: CollectionId::try_new("restored").unwrap(),
+                    query_scope: IndexQueryScope::Collection,
+                    fields: vec![IndexField {
+                        path: FieldPath::parse("embedding").unwrap(),
+                        mode: IndexFieldMode::Vector { dimension: 1 },
+                    }],
+                });
+                indexes
+            },
         };
         let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
             LogicalInstant::UNIX_EPOCH,

@@ -24,14 +24,22 @@ pub enum IndexFieldMode {
     Descending,
     /// Array contains.
     Contains,
+    /// Vector index with the configured embedding dimension.
+    Vector {
+        /// Number of components accepted by the index.
+        dimension: u32,
+    },
 }
 
 impl IndexFieldMode {
-    fn json(self) -> &'static str {
+    fn json(self) -> String {
         match self {
-            Self::Ascending => "\"order\": \"ASCENDING\"",
-            Self::Descending => "\"order\": \"DESCENDING\"",
-            Self::Contains => "\"arrayConfig\": \"CONTAINS\"",
+            Self::Ascending => "\"order\": \"ASCENDING\"".to_owned(),
+            Self::Descending => "\"order\": \"DESCENDING\"".to_owned(),
+            Self::Contains => "\"arrayConfig\": \"CONTAINS\"".to_owned(),
+            Self::Vector { dimension } => {
+                format!("\"vectorConfig\": {{\"dimension\": {dimension}, \"flat\": {{}}}}")
+            }
         }
     }
 }
@@ -805,9 +813,128 @@ fn decide_with_requirements(
     }
 }
 
+fn required_vector_index(
+    disjunction: &[FilterExpr],
+    explicit_order: &[OrderClause],
+    find_nearest: &crate::query::FindNearest,
+    collection: &CollectionId,
+    group: bool,
+) -> IndexDefinition {
+    let req = requirement_for(disjunction, explicit_order);
+    let mut fields = Vec::new();
+    let mut equality = req.equality;
+    equality.sort();
+    for field in equality {
+        if field != find_nearest.vector_field {
+            fields.push(IndexField {
+                path: field,
+                mode: IndexFieldMode::Ascending,
+            });
+        }
+    }
+    if let Some(field) = req.contains {
+        if field != find_nearest.vector_field {
+            fields.push(IndexField {
+                path: field,
+                mode: IndexFieldMode::Contains,
+            });
+        }
+    }
+    for order in req.order {
+        if !order.field.is_document_name() && order.field != find_nearest.vector_field {
+            fields.push(IndexField {
+                path: order.field,
+                mode: mode_for_direction(order.direction),
+            });
+        }
+    }
+    fields.push(IndexField {
+        path: find_nearest.vector_field.clone(),
+        mode: IndexFieldMode::Vector {
+            dimension: u32::try_from(find_nearest.query_vector.len())
+                .expect("validated vector dimension fits u32"),
+        },
+    });
+    IndexDefinition {
+        collection_group: collection.clone(),
+        query_scope: scope_for(group),
+        fields,
+    }
+}
+
+fn vector_index_serves(index: &IndexDefinition, required: &IndexDefinition) -> bool {
+    index.collection_group == required.collection_group
+        && index.query_scope == required.query_scope
+        && index.fields == required.fields
+}
+
+fn decide_find_nearest(query: &Query, indexes: &IndexSet, ctx: PlanningContext) -> IndexDecision {
+    let Some(collection) = query.scope.collection_id() else {
+        return IndexDecision::KindlessScan;
+    };
+    let Some(find_nearest) = query.find_nearest.as_ref() else {
+        unreachable!("nearest planner requires a findNearest stage");
+    };
+    let group = query.scope.all_descendants();
+    let explicit_order = query.effective_order_by();
+    let mut chosen = None;
+    let mut assumed = None;
+    for disjunction in query.dnf() {
+        let required = required_vector_index(
+            &disjunction,
+            &explicit_order,
+            find_nearest,
+            collection,
+            group,
+        );
+        if let Some(index) = indexes
+            .composites()
+            .iter()
+            .find(|index| vector_index_serves(index, &required))
+        {
+            chosen.get_or_insert(index.clone());
+            continue;
+        }
+        if ctx.policy == IndexValidationPolicy::Emulator
+            && ctx.edition == FirestoreEdition::Standard
+        {
+            assumed.get_or_insert(required);
+            continue;
+        }
+        return match ctx.edition {
+            FirestoreEdition::Standard => IndexDecision::MissingRequired {
+                requirement: required,
+            },
+            FirestoreEdition::Enterprise => IndexDecision::FullScanAllowed {
+                plan: FullScanPlan {
+                    collection_scope: format!(
+                        "{}{}",
+                        collection.as_str(),
+                        if group { " (collection group)" } else { "" }
+                    ),
+                    diagnostics: vec!["FS_ENT_FULL_COLLECTION_SCAN"],
+                    missing_index: required,
+                },
+            },
+        };
+    }
+    if let Some(requirement) = assumed {
+        return IndexDecision::AssumedIndex { requirement };
+    }
+    chosen.map_or(
+        IndexDecision::Unsupported {
+            feature: "empty query plan",
+        },
+        |index| IndexDecision::UseIndex { index },
+    )
+}
+
 /// Decides how a canonical query is served.
 #[must_use]
 pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> IndexDecision {
+    if query.find_nearest.is_some() {
+        return decide_find_nearest(query, indexes, *ctx);
+    }
     decide_with_requirements(query, indexes, *ctx, requirement_for)
 }
 

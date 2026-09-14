@@ -1118,6 +1118,18 @@ impl GatewayService {
                 }
                 None => false,
             };
+            let find_nearest_query = match req.query_type.as_ref() {
+                Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
+                    let parent = parse_parent(&req.parent)
+                        .map_err(|error| Rejection::Decode(error).to_status())?;
+                    local
+                        .accepted_query(&parent, query)?
+                        .query
+                        .find_nearest
+                        .is_some()
+                }
+                None => false,
+            };
             let original_limit = req.query_type.as_ref().and_then(|query| match query {
                 pb::run_query_request::QueryType::StructuredQuery(query) => query.limit,
             });
@@ -1126,7 +1138,15 @@ impl GatewayService {
             });
             let internal_transaction = req.consistency_selector.is_none() && !plan_only;
             let mut first_request = req.clone();
-            set_run_query_page(&mut first_request, original_offset, original_limit);
+            set_run_query_page(
+                &mut first_request,
+                if find_nearest_query {
+                    0
+                } else {
+                    original_offset
+                },
+                original_limit,
+            );
             if plan_only {
                 set_run_query_page(&mut first_request, 0, Some(0));
             }
@@ -1253,9 +1273,14 @@ impl GatewayService {
                             original_limit.map(|limit| limit.saturating_sub(delivered)),
                         );
                     } else {
+                        let page_offset = if find_nearest_query {
+                            delivered
+                        } else {
+                            original_offset.saturating_add(delivered)
+                        };
                         set_run_query_page(
                             &mut page,
-                            original_offset.saturating_add(delivered),
+                            page_offset,
                             original_limit.map(|limit| limit.saturating_sub(delivered)),
                         );
                     }

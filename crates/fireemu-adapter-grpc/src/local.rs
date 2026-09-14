@@ -3845,11 +3845,13 @@ impl LocalBackend {
                         || accepted.query.effective_order_by().len() != 1) =>
                 {
                     let mut selection_query = authorization.query.clone();
-                    let original_offset = selection_query.offset;
-                    selection_query.offset = 0;
-                    selection_query.limit = selection_query
-                        .limit
-                        .map(|limit| limit.saturating_add(original_offset));
+                    if selection_query.find_nearest.is_none() {
+                        let original_offset = selection_query.offset;
+                        selection_query.offset = 0;
+                        selection_query.limit = selection_query
+                            .limit
+                            .map(|limit| limit.saturating_add(original_offset));
+                    }
                     let (paths, stats) = access
                         .db()
                         .run_query_paths_with_stats(&selection_query, version)

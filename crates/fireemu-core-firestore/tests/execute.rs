@@ -209,6 +209,80 @@ fn nearest_vector_query_excludes_wrong_dimensions_and_non_vectors_and_adds_dista
 }
 
 #[test]
+fn nearest_projection_controls_synthesized_distance_field() {
+    let state = vector_state();
+    let mut without_distance = nearest(DistanceMeasure::Euclidean, 1);
+    without_distance.projection = Some(vec![fp("embedding")]);
+    let document = state
+        .run_query(&without_distance.canonicalize().unwrap(), None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert!(document.fields.contains_key("embedding"));
+    assert!(!document.fields.contains_key("distance"));
+
+    let mut with_distance = nearest(DistanceMeasure::Euclidean, 1);
+    with_distance.projection = Some(vec![fp("distance")]);
+    let document = state
+        .run_query(&with_distance.canonicalize().unwrap(), None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(document.fields.get("distance"), Some(&Value::Double(0.0)));
+    assert!(!document.fields.contains_key("embedding"));
+}
+
+#[test]
+fn nearest_distance_math_excludes_non_finite_results() {
+    let mut state = FirestoreState::new();
+    for (id, vector) in [
+        ("finite", vec![f64::MAX, f64::MAX]),
+        ("infinite", vec![f64::INFINITY, 0.0]),
+    ] {
+        state
+            .commit(
+                &[Write {
+                    op: WriteOp::Set {
+                        path: path(&format!("items/{id}")),
+                        fields: [("embedding".to_owned(), Value::Vector(vector))]
+                            .into_iter()
+                            .collect(),
+                        update_mask: None,
+                    },
+                    precondition: None,
+                    transforms: vec![],
+                }],
+                None,
+                LogicalInstant::from_unix_seconds(2_200),
+            )
+            .unwrap();
+    }
+    let mut euclidean = nearest(DistanceMeasure::Euclidean, 10);
+    euclidean.find_nearest.as_mut().unwrap().query_vector = vec![f64::MAX, f64::MAX];
+    let documents = state
+        .run_query(&euclidean.canonicalize().unwrap(), None)
+        .unwrap();
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0].path.document_id().as_str(), "finite");
+    let Value::Double(euclidean_distance) = documents[0].fields["distance"] else {
+        panic!("distance is not a double");
+    };
+    assert!(euclidean_distance.is_finite());
+
+    let mut cosine = nearest(DistanceMeasure::Cosine, 10);
+    cosine.find_nearest.as_mut().unwrap().query_vector = vec![f64::MAX, f64::MAX];
+    let documents = state
+        .run_query(&cosine.canonicalize().unwrap(), None)
+        .unwrap();
+    assert_eq!(documents.len(), 1);
+    let Value::Double(cosine_distance) = documents[0].fields["distance"] else {
+        panic!("distance is not a double");
+    };
+    assert!(cosine_distance.is_finite());
+    assert!((0.0..=2.0).contains(&cosine_distance));
+}
+
+#[test]
 fn nearest_vector_query_limit_and_threshold_are_applied() {
     let state = vector_state();
     let mut query = nearest(DistanceMeasure::Euclidean, 3);

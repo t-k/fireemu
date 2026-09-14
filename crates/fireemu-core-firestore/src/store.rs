@@ -4158,7 +4158,13 @@ impl FirestoreState {
         for (distance, document) in candidates.into_iter().take(find_nearest.limit as usize) {
             let mut projected = project_document(document, query.projection.as_deref());
             if let Some(field) = &find_nearest.distance_result_field {
-                set_field(&mut projected.fields, field, Value::Double(distance));
+                let include_distance = query
+                    .projection
+                    .as_ref()
+                    .is_none_or(|projection| projection.iter().any(|path| path == field));
+                if include_distance {
+                    set_field(&mut projected.fields, field, Value::Double(distance));
+                }
             }
             out.push(projected);
         }
@@ -5460,7 +5466,13 @@ fn project_document_for_query(document: &Document, query: &Query) -> Option<Docu
         }
         let mut projected = project_document(document, query.projection.as_deref());
         if let Some(field) = &find_nearest.distance_result_field {
-            set_field(&mut projected.fields, field, Value::Double(distance));
+            let include_distance = query
+                .projection
+                .as_ref()
+                .is_none_or(|projection| projection.iter().any(|path| path == field));
+            if include_distance {
+                set_field(&mut projected.fields, field, Value::Double(distance));
+            }
         }
         Some(projected)
     } else {
@@ -5468,34 +5480,105 @@ fn project_document_for_query(document: &Document, query: &Query) -> Option<Docu
     }
 }
 
+fn scaled_norm(values: &[f64]) -> Option<f64> {
+    let mut scale = 0.0;
+    let mut sum = 0.0;
+    for value in values {
+        if !value.is_finite() {
+            return None;
+        }
+        let absolute = value.abs();
+        if absolute == 0.0 {
+            continue;
+        }
+        if scale == 0.0 {
+            scale = absolute;
+            sum = 1.0;
+        } else if absolute > scale {
+            let ratio = scale / absolute;
+            sum = 1.0 + sum * ratio * ratio;
+            scale = absolute;
+        } else {
+            let ratio = absolute / scale;
+            sum += ratio * ratio;
+        }
+        if !sum.is_finite() {
+            return None;
+        }
+    }
+    let norm = scale * sum.sqrt();
+    norm.is_finite().then_some(norm)
+}
+
+fn normalized_components(values: &[f64]) -> Option<Vec<f64>> {
+    if values.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let scale = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
+    if scale == 0.0 {
+        return None;
+    }
+    let norm = values
+        .iter()
+        .map(|value| {
+            let scaled = value / scale;
+            scaled * scaled
+        })
+        .sum::<f64>()
+        .sqrt();
+    if !norm.is_finite() || norm == 0.0 {
+        return None;
+    }
+    values
+        .iter()
+        .map(|value| {
+            let component = (value / scale) / norm;
+            component.is_finite().then_some(component)
+        })
+        .collect()
+}
+
+fn checked_dot(left: &[f64], right: &[f64]) -> Option<f64> {
+    let mut dot = 0.0;
+    for (left, right) in left.iter().zip(right) {
+        if !left.is_finite() || !right.is_finite() {
+            return None;
+        }
+        let product = left * right;
+        if !product.is_finite() {
+            return None;
+        }
+        dot += product;
+        if !dot.is_finite() {
+            return None;
+        }
+    }
+    Some(dot)
+}
+
 fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) -> Option<f64> {
     if vector.len() != query.len() {
         return None;
     }
-    let dot = vector
-        .iter()
-        .zip(query)
-        .map(|(left, right)| left * right)
-        .sum::<f64>();
     match measure {
-        DistanceMeasure::Euclidean => Some(
-            vector
+        DistanceMeasure::Euclidean => {
+            let differences: Option<Vec<f64>> = vector
                 .iter()
                 .zip(query)
-                .map(|(left, right)| (left - right).powi(2))
-                .sum::<f64>()
-                .sqrt(),
-        ),
-        DistanceMeasure::Cosine => {
-            let left_norm = vector.iter().map(|value| value * value).sum::<f64>().sqrt();
-            let right_norm = query.iter().map(|value| value * value).sum::<f64>().sqrt();
-            if left_norm == 0.0 || right_norm == 0.0 {
-                None
-            } else {
-                Some(1.0 - dot / (left_norm * right_norm))
-            }
+                .map(|(left, right)| {
+                    let difference = left - right;
+                    difference.is_finite().then_some(difference)
+                })
+                .collect();
+            scaled_norm(&differences?)
         }
-        DistanceMeasure::DotProduct => Some(dot),
+        DistanceMeasure::Cosine => {
+            let left = normalized_components(vector)?;
+            let right = normalized_components(query)?;
+            let similarity = checked_dot(&left, &right)?;
+            Some((1.0 - similarity.clamp(-1.0, 1.0)).clamp(0.0, 2.0))
+        }
+        DistanceMeasure::DotProduct => checked_dot(vector, query),
     }
 }
 

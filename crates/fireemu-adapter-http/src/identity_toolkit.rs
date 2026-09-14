@@ -5359,16 +5359,29 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
                 continue;
             }
         };
-        if store.user_by_id(&user.local_id).is_some() {
+        let import_result = if store.user_by_id(&user.local_id).is_some() {
             if !allow_overwrite {
                 errors.push(refused(
                     "localId belongs to an existing account - can not overwrite.".to_owned(),
                 ));
                 continue;
             }
-            let _ = store.delete_user_by_id(&user.local_id);
-        }
-        if let Err(e) = store.import_user(user) {
+            // Validate and install a replacement on a copy first. A row can fail after the
+            // UID collision check (for example because its email belongs to another account),
+            // and a failed import must leave the existing account untouched.
+            let mut replacement = store.clone();
+            let _ = replacement.delete_user_by_id(&user.local_id);
+            match replacement.import_user(user) {
+                Ok(uid) => {
+                    *store = replacement;
+                    Ok(uid)
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            store.import_user(user)
+        };
+        if let Err(e) = import_result {
             errors.push(refused(e.to_string()));
         }
     }

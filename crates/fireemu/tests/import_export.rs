@@ -902,6 +902,122 @@ fn tenant_accounts_import_and_export_in_isolated_files() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
+    let dir = scratch("auth-rich-round-trip");
+    let source = copy_fixture("official-multiproduct", &dir);
+    let long_password = "a".repeat(4_097);
+    let default_hash = format!("fakeHash:salt=default-salt:password={long_password}");
+    let default_accounts = serde_json::json!({
+        "kind": "identitytoolkit#DownloadAccountResponse",
+        "users": [{
+            "localId": "shared-uid",
+            "email": "default@example.com",
+            "emailVerified": true,
+            "displayName": "Default user",
+            "photoUrl": "https://example.com/default.png",
+            "phoneNumber": "+15555550111",
+            "disabled": true,
+            "passwordHash": default_hash,
+            "salt": "default-salt",
+            "passwordUpdatedAt": 1_111_111_111_111_i64,
+            "validSince": "1111111111",
+            "createdAt": "1111111111000",
+            "lastLoginAt": "1111111111222",
+            "lastRefreshAt": "2005-03-18T01:58:31Z",
+            "customAttributes": "{\"tier\":\"default\"}",
+            "providerUserInfo": [
+                {"providerId":"password","rawId":"default@example.com","federatedId":"default@example.com","email":"default@example.com"},
+                {"providerId":"google.com","rawId":"google-default","federatedId":"google-default","email":"default@example.com","displayName":"Default user"}
+            ],
+            "mfaInfo": [
+                {"mfaEnrollmentId":"phone-factor","displayName":"phone","phoneInfo":"+15555550112","unobfuscatedPhoneInfo":"+15555550112","enrolledAt":"2005-03-18T01:58:31Z"},
+                {"mfaEnrollmentId":"totp-factor","displayName":"totp","enrolledAt":"2005-03-18T01:58:31Z","totpInfo":{"sharedSecretKey":"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"}}
+            ]
+        }]
+    });
+    std::fs::write(
+        source.join("auth_export/accounts.json"),
+        serde_json::to_vec(&default_accounts).unwrap(),
+    )
+    .unwrap();
+    let tenant_accounts = serde_json::json!({
+        "kind": "identitytoolkit#DownloadAccountResponse",
+        "users": [{
+            "localId": "shared-uid",
+            "tenantId": "customer-a",
+            "email": "tenant@example.com",
+            "emailVerified": true,
+            "passwordHash": "fakeHash:salt=tenant-salt:password=tenant-password",
+            "salt": "tenant-salt",
+            "passwordUpdatedAt": 2_222_222_222_222_i64,
+            "validSince": "2222222222",
+            "createdAt": "2222222222000",
+            "providerUserInfo": [
+                {"providerId":"password","rawId":"tenant@example.com","federatedId":"tenant@example.com","email":"tenant@example.com"}
+            ]
+        }]
+    });
+    std::fs::write(
+        source.join("auth_export/accounts-customer-a.json"),
+        serde_json::to_vec(&tenant_accounts).unwrap(),
+    )
+    .unwrap();
+
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+
+    let read_user = |path: &Path| -> serde_json::Value {
+        let text = std::fs::read_to_string(path).unwrap();
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["users"][0].clone()
+    };
+    let default = read_user(&out.join("auth_export/accounts.json"));
+    let tenant = read_user(&out.join("auth_export/accounts-customer-a.json"));
+    assert_eq!(default["localId"], "shared-uid");
+    assert_eq!(default["passwordUpdatedAt"], 1_111_111_111_111_i64);
+    assert_eq!(default["disabled"], true);
+    assert_eq!(default["customAttributes"], "{\"tier\":\"default\"}");
+    assert_eq!(default["providerUserInfo"].as_array().unwrap().len(), 3);
+    assert_eq!(default["mfaInfo"].as_array().unwrap().len(), 2, "{default}");
+    assert_eq!(
+        default["passwordHash"].as_str().unwrap().len(),
+        default_hash.len()
+    );
+    assert_eq!(tenant["localId"], "shared-uid");
+    assert_eq!(tenant["tenantId"], "customer-a");
+    assert_eq!(tenant["passwordUpdatedAt"], 2_222_222_222_222_i64);
+
+    let again = dir.join("again");
+    let second = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .arg("--export-on-exit")
+        .arg(&again)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&second);
+    assert!(second.status.success(), "{log}");
+    assert_eq!(
+        read_user(&again.join("auth_export/accounts.json"))["passwordUpdatedAt"],
+        1_111_111_111_111_i64
+    );
+    assert_eq!(
+        read_user(&again.join("auth_export/accounts-customer-a.json"))["passwordUpdatedAt"],
+        2_222_222_222_222_i64
+    );
+}
+
+#[test]
 fn an_export_covers_exactly_the_products_only_selected() {
     let dir = scratch("only-export");
     let out = dir.join("out");

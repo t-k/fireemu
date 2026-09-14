@@ -156,9 +156,9 @@ type PreparedDatabases = BTreeMap<(String, String), Vec<ImportedDocument>>;
 #[derive(Debug, Default)]
 struct PreparedAuth {
     users: Vec<ImportedUser>,
-    /// `passwordUpdatedAt` per imported account (default store and tenants), restored after
-    /// the account is imported so a lookup answers what the artifact recorded.
-    password_updated_at: BTreeMap<String, LogicalInstant>,
+    /// `passwordUpdatedAt` per imported account and tenant namespace, restored after the account
+    /// is imported so a lookup answers what the artifact recorded.
+    password_updated_at: BTreeMap<(Option<String>, String), LogicalInstant>,
     config: ProjectAuthConfig,
     /// Whether the artifact declared `emailPrivacyConfig.enableImprovedEmailPrivacy`. When it
     /// did not (the official emulator's export without the key, or no config.json at all),
@@ -437,7 +437,7 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
                 format!("account {id}: {e}"),
             )
         })?;
-        if let Some(at) = auth.password_updated_at.get(&id) {
+        if let Some(at) = auth.password_updated_at.get(&(None, id.clone())) {
             store.set_password_updated_at(&uid, *at);
         }
     }
@@ -479,7 +479,10 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
                     format!("account {id}: {e}"),
                 )
             })?;
-            if let Some(at) = auth.password_updated_at.get(&id) {
+            if let Some(at) = auth
+                .password_updated_at
+                .get(&(Some(tenant.clone()), id.clone()))
+            {
                 tenant_store.set_password_updated_at(&uid, *at);
             }
         }
@@ -990,7 +993,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
                     ));
                 }
                 users.push(imported_user(record, &entry.path())?);
-                note_password_updated_at(&mut password_updated_at, record);
+                note_password_updated_at(&mut password_updated_at, Some(tenant), record);
             }
             tenants.insert(tenant.to_owned(), users);
         }
@@ -1003,7 +1006,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     let mut users = Vec::with_capacity(accounts.users.len());
     for record in &accounts.users {
         users.push(imported_user(record, &accounts_path)?);
-        note_password_updated_at(&mut password_updated_at, record);
+        note_password_updated_at(&mut password_updated_at, None, record);
     }
     Ok(PreparedAuth {
         users,
@@ -1024,16 +1027,20 @@ fn seconds_instant(text: Option<&str>) -> Option<LogicalInstant> {
     Some(LogicalInstant::from_unix_seconds(seconds))
 }
 
-/// Remembers the `passwordUpdatedAt` an account record carries (milliseconds), keyed by
-/// account id, for restoration after the account is imported.
-fn note_password_updated_at(into: &mut BTreeMap<String, LogicalInstant>, record: &UserRecord) {
+/// Remembers the `passwordUpdatedAt` an account record carries (milliseconds), keyed by tenant
+/// namespace and account id, for restoration after the account is imported.
+fn note_password_updated_at(
+    into: &mut BTreeMap<(Option<String>, String), LogicalInstant>,
+    tenant_id: Option<&str>,
+    record: &UserRecord,
+) {
     if let Some(millis) = record.password_updated_at {
         if millis.is_finite() && millis.fract() == 0.0 && millis.abs() < 9.007_199_254_740_992e15 {
             // Guarded above: finite, whole and inside the exactly representable range.
             #[allow(clippy::cast_possible_truncation)]
             let millis = millis as i64;
             into.insert(
-                record.local_id.clone(),
+                (tenant_id.map(str::to_owned), record.local_id.clone()),
                 LogicalInstant::from_nanos(i128::from(millis) * 1_000_000),
             );
         }

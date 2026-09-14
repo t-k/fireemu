@@ -3606,6 +3606,63 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
 }
 
 #[test]
+fn batch_import_failed_overwrite_keeps_the_existing_account() {
+    let s = state();
+    let (status, existing) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "existing-overwrite@example.com",
+            "password": "original-password",
+        }),
+    );
+    assert_eq!(status, 200, "{existing}");
+    let uid = existing["localId"].as_str().unwrap();
+
+    let (status, other) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "other-overwrite@example.com"}),
+    );
+    assert_eq!(status, 200, "{other}");
+
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "allowOverwrite": true,
+            "users": [{
+                "localId": uid,
+                "email": "other-overwrite@example.com",
+                "passwordHash": "fakeHash:salt=fakeSalt:password=replacement-password",
+            }],
+        }),
+    );
+    assert_eq!(status, 200, "{refused}");
+    assert_eq!(refused["error"].as_array().unwrap().len(), 1, "{refused}");
+    assert_eq!(refused["error"][0]["index"], 0, "{refused}");
+
+    let (status, unchanged) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "existing-overwrite@example.com",
+            "password": "original-password",
+        }),
+    );
+    assert_eq!(status, 200, "{unchanged}");
+    assert_eq!(unchanged["localId"], uid);
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id(other["localId"].as_str().unwrap())
+        .is_some());
+}
+
+#[test]
 fn end_user_update_cannot_select_an_account_by_local_id() {
     let s = strict_state();
     let (_, victim) = post(

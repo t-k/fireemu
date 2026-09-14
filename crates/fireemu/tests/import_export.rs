@@ -944,6 +944,7 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
             "tenantId": "customer-a",
             "email": "tenant@example.com",
             "emailVerified": true,
+            "disabled": true,
             "passwordHash": "fakeHash:salt=tenant-salt:password=tenant-password",
             "salt": "tenant-salt",
             "passwordUpdatedAt": 2_222_222_222_222_i64,
@@ -977,10 +978,16 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
         .arg(&probe)
         .output()
         .unwrap();
-    let log = text(&output);
-    assert!(output.status.success(), "{log}");
-    assert!(log.contains("\"localId\":\"shared-uid\""), "{log}");
-    assert!(log.contains("\"idToken\":"), "{log}");
+    let output_text = text(&output);
+    assert!(
+        output.status.success(),
+        "rich auth import command failed: status {:?}",
+        output.status.code()
+    );
+    assert!(
+        output_text.contains("\"localId\":\"shared-uid\"") && output_text.contains("\"idToken\":"),
+        "long-password sign-in did not return an ID token"
+    );
 
     let read_user = |path: &Path| -> serde_json::Value {
         let text = std::fs::read_to_string(path).unwrap();
@@ -1015,18 +1022,23 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
         default["providerUserInfo"][2]["email"],
         "default@example.com"
     );
-    assert_eq!(
-        default["passwordHash"].as_str().unwrap().len(),
-        default_hash.len()
+    assert!(
+        default["passwordHash"].as_str() == Some(default_hash.as_str()),
+        "default password hash changed during import/export"
     );
     assert_eq!(tenant["localId"], "shared-uid");
     assert_eq!(tenant["tenantId"], "customer-a");
     assert_eq!(tenant["emailVerified"], true);
-    assert_eq!(tenant["disabled"], false);
+    assert_eq!(tenant["disabled"], true);
     assert_eq!(tenant["passwordUpdatedAt"], 2_222_222_222_222_i64);
     assert_eq!(tenant["providerUserInfo"][0]["providerId"], "password");
     assert_eq!(tenant["providerUserInfo"][0]["rawId"], "tenant@example.com");
-    assert_eq!(tenant["mfaInfo"].as_array().unwrap().len(), 2, "{tenant}");
+    assert!(
+        tenant["mfaInfo"]
+            .as_array()
+            .is_some_and(|factors| factors.len() == 2),
+        "tenant MFA factor count changed during import/export"
+    );
     assert_eq!(tenant["mfaInfo"][0]["mfaEnrollmentId"], "phone-factor");
     assert_eq!(tenant["mfaInfo"][0]["displayName"], "phone");
     assert_eq!(tenant["mfaInfo"][0]["phoneInfo"], "+15555550112");
@@ -1044,9 +1056,9 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
         tenant["mfaInfo"][1]["enrolledAt"],
         "2005-03-18T01:58:31.000Z"
     );
-    assert_eq!(
-        tenant["mfaInfo"][1]["totpInfo"]["sharedSecretKey"],
-        "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+    assert!(
+        tenant["mfaInfo"][1]["totpInfo"]["sharedSecretKey"] == "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+        "tenant TOTP secret changed during import/export"
     );
 
     let again = dir.join("again");
@@ -1058,12 +1070,21 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
         .args(["--", "true"])
         .output()
         .unwrap();
-    let log = text(&second);
-    assert!(second.status.success(), "{log}");
+    assert!(
+        second.status.success(),
+        "second auth import command failed: status {:?}",
+        second.status.code()
+    );
     let again_default = read_user(&again.join("auth_export/accounts.json"));
     let again_tenant = read_user(&again.join("auth_export/accounts-customer-a.json"));
-    assert_eq!(again_default, default);
-    assert_eq!(again_tenant, tenant);
+    assert!(
+        again_default == default,
+        "default account changed across repeated import/export"
+    );
+    assert!(
+        again_tenant == tenant,
+        "tenant account changed across repeated import/export"
+    );
     assert_eq!(again_default["passwordUpdatedAt"], 1_111_111_111_111_i64);
     assert_eq!(again_tenant["passwordUpdatedAt"], 2_222_222_222_222_i64);
 }

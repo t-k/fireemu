@@ -3536,7 +3536,10 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
         &format!("{V1}/accounts:signUp"),
         &json!({"email": "fake-hash-overwrite@example.com", "password": "original-password"}),
     );
-    assert_eq!(status, 200, "{existing}");
+    assert_eq!(
+        status, 200,
+        "initial account creation failed: status {status}"
+    );
     let oversized = password_with_utf16_units(4097);
     let (status, refused) = admin(
         &s,
@@ -3618,11 +3621,14 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
             "returnSecureToken": true,
         }),
     );
-    assert_eq!(status, 200, "{existing}");
+    assert_eq!(
+        status, 200,
+        "initial account creation failed: status {status}"
+    );
     let uid = existing["localId"].as_str().unwrap();
     let refresh = existing["refreshToken"].as_str().unwrap().to_owned();
 
-    let (status, seeded) = admin(
+    let (status, _seeded) = admin(
         &s,
         "POST",
         &format!("{ADMIN}/accounts:update"),
@@ -3636,7 +3642,7 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
             }]}
         }),
     );
-    assert_eq!(status, 200, "{seeded}");
+    assert_eq!(status, 200, "account state setup failed: status {status}");
     let (_, before) = admin(
         &s,
         "POST",
@@ -3650,7 +3656,10 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
         &format!("{ADMIN}/accounts"),
         &json!({"email": "other-overwrite@example.com"}),
     );
-    assert_eq!(status, 200, "{other}");
+    assert_eq!(
+        status, 200,
+        "neighbor account creation failed: status {status}"
+    );
 
     let (status, refused) = admin(
         &s,
@@ -3665,24 +3674,38 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
             }],
         }),
     );
-    assert_eq!(status, 200, "{refused}");
-    assert_eq!(refused["error"].as_array().unwrap().len(), 1, "{refused}");
-    assert_eq!(refused["error"][0]["index"], 0, "{refused}");
+    assert_eq!(
+        status, 200,
+        "failed overwrite request failed: status {status}"
+    );
+    assert!(
+        refused["error"]
+            .as_array()
+            .is_some_and(|errors| errors.len() == 1),
+        "failed overwrite did not return one row error"
+    );
+    assert!(
+        refused["error"][0]["index"] == 0,
+        "failed overwrite error did not identify row zero"
+    );
 
-    let (status, refreshed) = post(
+    let (status, _refreshed) = post(
         &s,
         "/securetoken.googleapis.com/v1/token",
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
-    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(
+        status, 200,
+        "existing refresh token was rejected: status {status}"
+    );
     let (_, after) = admin(
         &s,
         "POST",
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": [uid]}),
     );
-    assert_eq!(
-        after, before,
+    assert!(
+        after == before,
         "a failed overwrite preserves every account index"
     );
 
@@ -3694,8 +3717,14 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
             "password": "original-password",
         }),
     );
-    assert_eq!(status, 200, "{unchanged}");
-    assert_eq!(unchanged["localId"], uid);
+    assert_eq!(
+        status, 200,
+        "unchanged password sign-in failed: status {status}"
+    );
+    assert!(
+        unchanged["localId"] == uid,
+        "existing UID changed after failed overwrite"
+    );
     assert!(s
         .store
         .lock()
@@ -3716,12 +3745,15 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
             }],
         }),
     );
-    assert_eq!(status, 200, "{replaced}");
-    assert!(
-        replaced["error"].as_array().unwrap().is_empty(),
-        "{replaced}"
+    assert_eq!(
+        status, 200,
+        "successful overwrite request failed: status {status}"
     );
-    let (status, signed_replacement) = post(
+    assert!(
+        replaced["error"].as_array().is_some_and(Vec::is_empty),
+        "successful overwrite returned row errors"
+    );
+    let (status, _signed_replacement) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
         &json!({
@@ -3729,8 +3761,11 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
             "password": "replacement-password",
         }),
     );
-    assert_eq!(status, 200, "{signed_replacement}");
-    let (status, old_email) = post(
+    assert_eq!(
+        status, 200,
+        "replacement password sign-in failed: status {status}"
+    );
+    let (status, _old_email) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
         &json!({
@@ -3738,7 +3773,10 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
             "password": "original-password",
         }),
     );
-    assert_eq!(status, 400, "{old_email}");
+    assert_eq!(
+        status, 400,
+        "old email remained indexed after overwrite: status {status}"
+    );
 }
 
 #[test]

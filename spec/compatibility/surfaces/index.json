@@ -91,9 +91,11 @@
       "locator": "google.firestore.v1.Firestore.BatchWrite",
       "kind": "method",
       "transport": "gRPC",
-      "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "Local REST/gRPC partial-failure cases cover response slots and post-state; production response and broader BatchWrite parity remain open.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
     },
     {
       "id": "FS-AGGREGATE",
@@ -185,9 +187,11 @@
       "locator": "google.firestore.v1.Firestore.Write",
       "kind": "method",
       "transport": "gRPC",
-      "classification": "unknown",
-      "reason": "FS-WRITE-STREAM-LOCAL records finite local gRPC evidence only; production/REST parity remains unmapped.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "FS-WRITE-STREAM-LOCAL records finite local gRPC handshake, acknowledgement and post-state evidence; production, REST and SDK parity remain open.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
     },
     {
       "id": "FS-WEBCHANNEL",

@@ -409,6 +409,15 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
         );
         assert_eq!(status, expected_status, "{response}");
         if expected_status == 400 {
+            assert_eq!(
+                response["error"]["message"],
+                if new_password.encode_utf16().count() > AuthStore::MAX_PASSWORD_UTF16_UNITS {
+                    "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+                } else {
+                    "WEAK_PASSWORD : Password should be at least 6 characters"
+                },
+                "{response}"
+            );
             let (status, unchanged) = post(
                 &s,
                 &format!("{V1}/accounts:signInWithPassword"),
@@ -416,6 +425,24 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
             );
             assert_eq!(status, 200, "{unchanged}");
             assert_eq!(issued_code(&s, "PASSWORD_RESET"), code);
+            let (status, applied) = post(
+                &s,
+                &format!("{V1}/accounts:resetPassword"),
+                &json!({"oobCode": code, "newPassword": "recovered-password"}),
+            );
+            assert_eq!(status, 200, "{applied}");
+            let (status, old) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": user["email"], "password": "hunter22"}),
+            );
+            assert_eq!(status, 400, "{old}");
+            let (status, recovered) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": user["email"], "password": "recovered-password"}),
+            );
+            assert_eq!(status, 200, "{recovered}");
         }
     }
 
@@ -434,6 +461,10 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
         &json!({"oobCode": code, "newPassword": 42}),
     );
     assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        "INVALID_ARGUMENT : newPassword must be a string"
+    );
     assert_eq!(issued_code(&s, "PASSWORD_RESET"), code);
     let (status, unchanged) = post(
         &s,
@@ -441,6 +472,18 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
         &json!({"email": user["email"], "password": "hunter22"}),
     );
     assert_eq!(status, 200, "{unchanged}");
+    let (status, applied) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code, "newPassword": "recovered-password"}),
+    );
+    assert_eq!(status, 200, "{applied}");
+    let (status, recovered) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": user["email"], "password": "recovered-password"}),
+    );
+    assert_eq!(status, 200, "{recovered}");
 }
 
 #[test]

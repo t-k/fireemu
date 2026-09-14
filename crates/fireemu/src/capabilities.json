@@ -160,7 +160,7 @@
   "AUTH-CORE-1": {
     "implemented": [
       "accounts:signUp (email, anonymous)",
-      "password policy validation across accounts:signUp, client and Admin accounts:update, accounts:resetPassword, and Admin batchCreate rawPassword/fakeHash imports: minimum 6 scalar characters, maximum 4096 UTF-16 units, and control-character rejection happen before account or credential mutation",
+      "local password policy validation across accounts:signUp, client and Admin accounts:update, accounts:resetPassword, and Admin batchCreate rawPassword/fakeHash imports: minimum 6 scalar characters, maximum 4096 UTF-16 units, and control-character rejection happen before account or credential mutation; trusted artifact restoration preserves the recorded credential without applying new-password policy; saved production evidence is limited to the approved end-user client accounts:update corpus (including finite 4095/4096/4097 UTF-16-unit maximum cases and six/five-character ASCII controls), so the other routes and local malformed/control/minimum cases remain production-unobserved",
       "accounts:signInWithPassword",
       "accounts:signInWithCustomToken (unsigned JWT or strict JSON fake token, uid or user_id)",
       "accounts:lookup",

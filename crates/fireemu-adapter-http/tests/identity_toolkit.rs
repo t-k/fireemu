@@ -3122,6 +3122,12 @@ fn password_policy_boundaries_apply_to_sign_up_without_creating_rejected_account
             &json!({"email": email, "password": password, "returnSecureToken": true}),
         );
         assert_eq!(status, expected_status, "{response}");
+        if expected_status == 400 {
+            assert_eq!(
+                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                "{response}"
+            );
+        }
         assert_eq!(
             s.store.lock().unwrap().user_by_email(&email).is_some(),
             expected_status == 200
@@ -3137,6 +3143,11 @@ fn password_policy_boundaries_apply_to_sign_up_without_creating_rejected_account
             &json!({"email": email, "password": password}),
         );
         assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["message"],
+            "WEAK_PASSWORD : Password should be at least 6 characters",
+            "{response}"
+        );
         assert!(s.store.lock().unwrap().user_by_email(&email).is_none());
     }
 
@@ -3147,6 +3158,10 @@ fn password_policy_boundaries_apply_to_sign_up_without_creating_rejected_account
         &json!({"email": "signup-malformed@example.com", "password": 42}),
     );
     assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"], "INVALID_ARGUMENT : password must be a string",
+        "{response}"
+    );
     assert!(s
         .store
         .lock()
@@ -3178,6 +3193,12 @@ fn password_policy_boundaries_apply_to_admin_update_before_any_profile_mutation(
             }),
         );
         assert_eq!(status, expected_status, "{response}");
+        if expected_status == 400 {
+            assert_eq!(
+                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                "{response}"
+            );
+        }
         let (_, lookup) = admin(
             &s,
             "POST",
@@ -3211,6 +3232,10 @@ fn password_policy_boundaries_apply_to_admin_update_before_any_profile_mutation(
         &json!({"localId": signed["localId"], "password": "12345\u{0000}", "displayName": "must-not-apply"}),
     );
     assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        "WEAK_PASSWORD : Password should be at least 6 characters"
+    );
     let (_, lookup) = admin(
         &s,
         "POST",
@@ -3218,6 +3243,29 @@ fn password_policy_boundaries_apply_to_admin_update_before_any_profile_mutation(
         &json!({"localId": [signed["localId"]]}),
     );
     assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": signed["localId"], "password": "12345"}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"], "WEAK_PASSWORD : Password should be at least 6 characters",
+        "{response}"
+    );
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": signed["localId"], "password": 42}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"], "INVALID_ARGUMENT : password must be a string",
+        "{response}"
+    );
 }
 
 #[test]
@@ -3265,6 +3313,15 @@ fn password_policy_client_update_rejects_invalid_values_before_profile_mutation(
             }),
         );
         assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["message"],
+            if password.encode_utf16().count() > AuthStore::MAX_PASSWORD_UTF16_UNITS {
+                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+            } else {
+                "WEAK_PASSWORD : Password should be at least 6 characters"
+            },
+            "{response}"
+        );
         let (_, lookup) = post(
             &s,
             &format!("{V1}/accounts:lookup"),
@@ -3292,6 +3349,10 @@ fn password_policy_client_update_rejects_invalid_values_before_profile_mutation(
         &json!({"idToken": signed["idToken"], "password": 42, "displayName": "must-not-apply"}),
     );
     assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        "INVALID_ARGUMENT : password must be a string"
+    );
     let (_, lookup) = post(
         &s,
         &format!("{V1}/accounts:lookup"),
@@ -3301,6 +3362,7 @@ fn password_policy_client_update_rejects_invalid_values_before_profile_mutation(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semantics() {
     let s = state();
     for units in [4095, 4096] {
@@ -3429,6 +3491,118 @@ fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semant
         .unwrap()
         .user_by_id("raw-password-control")
         .is_none());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite() {
+    let s = state();
+    for units in [4095, 4096, 4097] {
+        let local_id = format!("fake-hash-boundary-{units}");
+        let email = format!("fake-hash-boundary-{units}@example.com");
+        let password = password_with_utf16_units(units);
+        let (status, imported) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{
+                "localId": local_id,
+                "email": email,
+                "passwordHash": format!("fakeHash:salt=fakeSalt:password={password}")
+            }]}),
+        );
+        assert_eq!(status, 200, "{imported}");
+        if units == 4097 {
+            assert_eq!(imported["error"].as_array().unwrap().len(), 1, "{imported}");
+            assert_eq!(imported["error"][0]["index"], 0, "{imported}");
+            assert_eq!(
+                imported["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                "{imported}"
+            );
+            assert!(s.store.lock().unwrap().user_by_id(&local_id).is_none());
+        } else {
+            assert!(imported["error"].as_array().unwrap().is_empty());
+            let (status, signed) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": email, "password": password}),
+            );
+            assert_eq!(status, 200, "{signed}");
+        }
+    }
+
+    let (status, existing) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "fake-hash-overwrite@example.com", "password": "original-password"}),
+    );
+    assert_eq!(status, 200, "{existing}");
+    let oversized = password_with_utf16_units(4097);
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"allowOverwrite": true, "users": [{
+            "localId": existing["localId"],
+            "email": "fake-hash-overwrite@example.com",
+            "displayName": "must-not-apply",
+            "passwordHash": format!("fakeHash:salt=fakeSalt:password={oversized}")
+        }]}),
+    );
+    assert_eq!(status, 200, "{refused}");
+    assert_eq!(refused["error"].as_array().unwrap().len(), 1, "{refused}");
+    assert_eq!(
+        refused["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+        "{refused}"
+    );
+    let (status, unchanged) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "fake-hash-overwrite@example.com", "password": "original-password"}),
+    );
+    assert_eq!(status, 200, "{unchanged}");
+    let (_, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [existing["localId"]]}),
+    );
+    assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+
+    let mixed = state();
+    let (status, response) = admin(
+        &mixed,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [
+            {
+                "localId": "fake-hash-mixed-invalid",
+                "email": "fake-hash-mixed-invalid@example.com",
+                "passwordHash": format!("fakeHash:salt=fakeSalt:password={}", password_with_utf16_units(4097))
+            },
+            {
+                "localId": "fake-hash-mixed-valid",
+                "email": "fake-hash-mixed-valid@example.com",
+                "passwordHash": format!("fakeHash:salt=fakeSalt:password={}", password_with_utf16_units(4096))
+            }
+        ]}),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["error"].as_array().unwrap().len(), 1, "{response}");
+    assert_eq!(response["error"][0]["index"], 0, "{response}");
+    assert_eq!(
+        response["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+        "{response}"
+    );
+    let (status, signed) = post(
+        &mixed,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "fake-hash-mixed-valid@example.com",
+            "password": password_with_utf16_units(4096)
+        }),
+    );
+    assert_eq!(status, 200, "{signed}");
 }
 
 #[test]

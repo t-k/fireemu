@@ -116,10 +116,11 @@ def load_saved_candidate(path, *, expected_sha256=PINNED_PRODUCTION_CANDIDATE_SH
     return value, source_sha256
 
 
-def compare_saved(candidate, local, *, candidate_source_sha256):
+def compare_saved(candidate_path, local):
     """Compare a saved normalized production candidate with one current local receipt."""
     from second_production_contract import binding, manifest, observer_digest
 
+    candidate, candidate_source_sha256 = load_saved_candidate(candidate_path)
     errors = []
     state_validation = None
     try:
@@ -145,7 +146,11 @@ def compare_saved(candidate, local, *, candidate_source_sha256):
         errors.append({"side": "production", "reason": str(error)})
 
     try:
-        if local.get("target") != "local" or local.get("mode") != "mapped":
+        if (
+            local.get("target") != "local"
+            or local.get("mode") != "mapped"
+            or local.get("productionExecuted") is not False
+        ):
             raise ValueError("current local mapped target required")
         if (
             local.get("manifestDigest") != digest(manifest())
@@ -160,7 +165,10 @@ def compare_saved(candidate, local, *, candidate_source_sha256):
             not isinstance(identity, dict)
             or set(identity)
             != {"artifactSha256", "executionCommit", "configurationDigest"}
-            or not all(isinstance(v, str) and v for v in identity.values())
+            or re.fullmatch(r"[0-9a-f]{64}", identity["artifactSha256"]) is None
+            or re.fullmatch(r"[0-9a-f]{40}", identity["executionCommit"]) is None
+            or re.fullmatch(r"[0-9a-f]{64}", identity["configurationDigest"])
+            is None
         ):
             raise ValueError("fixed current local runtime identity unavailable")
         validate_rows(local, observed_outcomes=True)
@@ -225,8 +233,10 @@ def compare_saved(candidate, local, *, candidate_source_sha256):
         "localSourceSha256": digest(local),
         "historicalProductionReceiptSha256": candidate.get("productionReceiptFileSha256"),
         "historicalLocalReceiptSha256": candidate.get("localReceiptFileSha256"),
-        "recordingComplete": complete,
-        "cleanupComplete": complete,
+        "recordingComplete": candidate.get("recordingComplete") is True
+        and local.get("recordingComplete") is True,
+        "cleanupComplete": candidate.get("cleanupComplete") is True
+        and local.get("cleanupComplete") is True,
         "stateValidation": False if state_validation is False else state_validation,
         "compatibility": (
             "indeterminate"
@@ -255,11 +265,8 @@ def main():
     if args.mode == "saved":
         if args.saved_production_candidate is None:
             parser.error("--saved-production-candidate is required in saved mode")
-        candidate, source_sha256 = load_saved_candidate(args.saved_production_candidate)
         result = compare_saved(
-            candidate,
-            json.loads(args.local.read_text()),
-            candidate_source_sha256=source_sha256,
+            args.saved_production_candidate, json.loads(args.local.read_text())
         )
     else:
         if args.production is None:

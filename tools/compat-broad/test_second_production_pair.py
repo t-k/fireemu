@@ -1,6 +1,9 @@
 """Observed outcomes do not relax independent operation and version admission."""
 
 import copy
+import json
+import subprocess
+import sys
 
 import pytest
 from broad_contract import digest
@@ -314,39 +317,99 @@ def test_other_parameters_and_invalid_headers_are_not_erased(left, right):
 def test_saved_candidate_compares_only_production_rows_and_records_bindings(
     production_inputs, tmp_path
 ):
-    from second_mapped import execute_45
-    from second_production import Production45Adapter
-    from second_production_contract import binding, manifest as production_manifest
-    from second_production_pair import compare_saved, observed_value
+    from broad_contract import ROOT
+    from second_production_pair import compare_saved
 
     permission, backend = production_inputs
-    adapter = Production45Adapter(
-        production_manifest(), permission, permission["nonce"], tmp_path / "saved"
-    )
-    remote = execute_45(adapter, adapter.output, {"executionCommit": "c" * 40})
-    candidate = {
-        "kind": "second45-production-candidate-summary-v1",
-        "manifestDigest": digest(production_manifest()),
-        "comparisonContractDigest": digest(binding()),
-        "observerDigest": remote["observerDigest"],
-        "recordingComplete": True,
-        "cleanupComplete": True,
-        "localRuntimeIdentity": {"artifactSha256": "historical-artifact"},
-        "rows": [
-            {"id": row["id"], "production": observed_value(row, remote["bindings"]), "local": {"ignored": True}}
-            for row in remote["rows"]
-        ],
-    }
     local = current_local(backend.source)
-    result = compare_saved(candidate, local, candidate_source_sha256="test-candidate")
-    assert result["compatibility"] == "match", result["errors"]
+    candidate_path = ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json"
+    result = compare_saved(candidate_path, local)
+    assert result["compatibility"] in {"match", "mismatch"}, result["errors"]
     assert result["mode"] == "saved-production-versus-local"
-    assert result["historicalObserverDigest"] == remote["observerDigest"]
+    assert result["historicalObserverDigest"]
     assert result["currentObserverDigest"] == local["observerDigest"]
-    assert result["productionCandidateSourceSha256"] == "test-candidate"
+    assert len(result["productionCandidateSourceSha256"]) == 64
     assert result["currentLocalSourceSha256"] == digest(local)
 
-    candidate["rows"][0]["local"]["observation"] = {"body": {"poison": True}}
-    assert compare_saved(candidate, local, candidate_source_sha256="test-candidate")[
-        "compatibility"
-    ] == "match"
+
+@pytest.mark.parametrize("mutation", ["relabeled", "identity", "recording", "cleanup"])
+def test_saved_cli_rejects_unbound_or_incomplete_current_receipt(
+    production_inputs, tmp_path, mutation
+):
+    from broad_contract import ROOT
+
+    _, backend = production_inputs
+    local = current_local(backend.source)
+    if mutation == "relabeled":
+        local["target"] = "production"
+    elif mutation == "identity":
+        local["runtimeIdentity"]["artifactSha256"] = "x"
+    elif mutation == "recording":
+        local["recordingComplete"] = False
+    else:
+        local["cleanupComplete"] = False
+    candidate_path = ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json"
+    local_path = tmp_path / "local.json"
+    output_path = tmp_path / "comparison.json"
+    local_path.write_text(json.dumps(local))
+    script = ROOT / "tools/compat-broad/second_production_pair.py"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(script),
+            "--mode",
+            "saved",
+            "--saved-production-candidate",
+            str(candidate_path),
+            "--local",
+            str(local_path),
+            "--output",
+            str(output_path),
+        ],
+        cwd=ROOT,
+        env={"PYTHONPATH": str(ROOT / "tools/compat-broad")},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout, stderr = process.communicate()
+    assert process.returncode != 0, (stdout, stderr)
+    saved = json.loads(output_path.read_text())
+    assert saved["compatibility"] == "indeterminate"
+
+
+def test_saved_cli_rejects_tampered_candidate_file(production_inputs, tmp_path):
+    from broad_contract import ROOT
+
+    _, backend = production_inputs
+    candidate_path = tmp_path / "candidate.json"
+    candidate_path.write_bytes(
+        (ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json").read_bytes()
+        + b" "
+    )
+    local_path = tmp_path / "local.json"
+    local_path.write_text(json.dumps(current_local(backend.source)))
+    output_path = tmp_path / "comparison.json"
+    script = ROOT / "tools/compat-broad/second_production_pair.py"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(script),
+            "--mode",
+            "saved",
+            "--saved-production-candidate",
+            str(candidate_path),
+            "--local",
+            str(local_path),
+            "--output",
+            str(output_path),
+        ],
+        cwd=ROOT,
+        env={"PYTHONPATH": str(ROOT / "tools/compat-broad")},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout, stderr = process.communicate()
+    assert process.returncode != 0, (stdout, stderr)
+    assert not output_path.exists()

@@ -27,7 +27,8 @@ use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCreden
 use fireemu_core_auth::store::{
     AuthError, AuthStore, CredentialNotice, FederatedIdentity, InboundSamlProviderConfig, LocalId,
     NewUser, OAuthResponseType, OidcProviderConfig, OobRequestType, PendingSignInId, PhoneCodeUse,
-    RoutedStoreInstall, SecondFactorAssertion, VerificationCode, VerificationPurpose,
+    ProjectAuthConfigPatch, RoutedStoreInstall, SecondFactorAssertion, VerificationCode,
+    VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -2101,7 +2102,7 @@ fn handle_with_policy(
     } else {
         None
     };
-    let _routed_operation = match routed_gate.as_ref() {
+    let routed_operation = match routed_gate.as_ref() {
         Some(gate) => match gate.lock() {
             Ok(operation) => Some(operation),
             Err(_) => return error(500, "INTERNAL"),
@@ -2140,19 +2141,6 @@ fn handle_with_policy(
             store.tenant_id().map(str::to_owned),
         )
     };
-    // Project config updates and tenant publication share the namespace gate. This keeps the
-    // registry's parent read/modify/write and inherited-config snapshot in one request order.
-    // Routed compatibility requests already hold this exact project gate above. Reacquiring it
-    // here would deadlock the request before it can publish the routed store.
-    let project_mutation = routed_gate.is_none()
-        && matches!(
-            resolution,
-            routes::Resolution::Matched { route, .. }
-                if matches!(
-                    route.handler,
-                    routes::Handler::AdminUpdateProjectConfig | routes::Handler::TenantCreate
-                )
-        );
     let blocking_auth = state.blocking.as_deref().is_some_and(|blocking| {
         matches!(
             resolution,
@@ -2160,7 +2148,7 @@ fn handle_with_policy(
                 if handler_may_invoke_blocking_auth(blocking, route.handler)
         )
     });
-    let operation_gate = if project_mutation || blocking_auth {
+    let operation_gate = if blocking_auth {
         let gate = match state.registry.as_ref() {
             Some(registry) => {
                 let Some(gate) = registry.operation_gate(&store_project, store_tenant.as_deref())
@@ -2237,7 +2225,20 @@ fn handle_with_policy(
         routes::Handler::AdminGetProjectConfig | routes::Handler::AdminUpdateProjectConfig
     ) {
         drop(store);
-        return project_config_management(state, route.handler, project, query, body);
+        // Existing namespaces commit through the core-owned gate. A pending candidate remains
+        // isolated under the routed gate until a successful write installs it.
+        if pending_routed_project.is_none() {
+            drop(routed_operation);
+        }
+        return project_config_management(
+            state,
+            route.handler,
+            project,
+            &store_arc,
+            pending_routed_project.as_deref(),
+            query,
+            body,
+        );
     }
     if matches!(
         route.handler,
@@ -2247,6 +2248,9 @@ fn handle_with_policy(
             | routes::Handler::ProviderUpdate
             | routes::Handler::ProviderDelete
     ) {
+        if tenant.is_some() && store.tenant_id() != tenant {
+            return error(404, "TENANT_NOT_FOUND");
+        }
         let resource = match resolution {
             routes::Resolution::Matched { resource, .. } => resource,
             _ => None,
@@ -2257,8 +2261,8 @@ fn handle_with_policy(
             ProviderKind::Saml
         };
         drop(store);
-        return provider_config_management(
-            state,
+        let response = provider_config_management(
+            &store_arc,
             route.handler,
             provider_kind,
             project,
@@ -2267,6 +2271,19 @@ fn handle_with_policy(
             query,
             body,
         );
+        if response.status == 200
+            && matches!(
+                route.handler,
+                routes::Handler::ProviderCreate | routes::Handler::ProviderUpdate
+            )
+        {
+            if let Some(project) = pending_routed_project.as_deref() {
+                if let Err(response) = install_routed_candidate(state, project, &store_arc) {
+                    return response;
+                }
+            }
+        }
+        return response;
     }
     if matches!(
         route.handler,
@@ -2280,6 +2297,7 @@ fn handle_with_policy(
         // project's configuration. Release the request's selected store before that registry
         // operation so initialization never attempts to reacquire the same non-reentrant lock.
         drop(store);
+        drop(routed_operation);
         return tenant_management(state, route.handler, project, tenant, query, body);
     }
     if tenant.is_some() && store.tenant_id() != tenant {
@@ -2328,19 +2346,8 @@ fn handle_with_policy(
         drop(store);
         if retain_candidate {
             let project = pending_routed_project.expect("checked above");
-            let Some(registry) = state.registry.as_ref() else {
-                return error(500, "INTERNAL");
-            };
-            match registry.install_routed(&project, store_arc.clone()) {
-                RoutedStoreInstall::Installed(_) => {}
-                RoutedStoreInstall::Existing(_) => {
-                    return error(409, "CONCURRENT_PROJECT_OWNERSHIP");
-                }
-                RoutedStoreInstall::RegisteredConflict => {
-                    return error(400, "INVALID_PROJECT_ID");
-                }
-                RoutedStoreInstall::Capacity => return error(429, "RESOURCE_EXHAUSTED"),
-                RoutedStoreInstall::InvalidStore => return error(500, "INTERNAL"),
+            if let Err(response) = install_routed_candidate(state, &project, &store_arc) {
+                return response;
             }
         }
         let response = if response.status == 200 {
@@ -2567,8 +2574,25 @@ fn dispatch(
     }
 }
 
+fn install_routed_candidate(
+    state: &AuthState,
+    project: &str,
+    store: &Arc<Mutex<AuthStore>>,
+) -> Result<(), JsonResponse> {
+    let Some(registry) = state.registry.as_ref() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    match registry.install_routed(project, store.clone()) {
+        RoutedStoreInstall::Installed(_) => Ok(()),
+        RoutedStoreInstall::Existing(_) => Err(error(409, "CONCURRENT_PROJECT_OWNERSHIP")),
+        RoutedStoreInstall::RegisteredConflict => Err(error(400, "INVALID_PROJECT_ID")),
+        RoutedStoreInstall::Capacity => Err(error(429, "RESOURCE_EXHAUSTED")),
+        RoutedStoreInstall::InvalidStore => Err(error(500, "INTERNAL")),
+    }
+}
+
 fn apply_project_config_fields(
-    config: &mut fireemu_core_auth::store::ProjectAuthConfig,
+    config: &mut ProjectAuthConfigPatch,
     body: &Value,
     fields: &[String],
 ) -> Result<(), JsonResponse> {
@@ -2581,8 +2605,11 @@ fn apply_project_config_fields(
                 &mut config.allow_duplicate_emails,
             )?,
             "signIn.allowDuplicateEmails" => {
-                config.allow_duplicate_emails =
-                    nested_bool_default_false(body, "signIn", "allowDuplicateEmails")?;
+                config.allow_duplicate_emails = Some(nested_bool_default_false(
+                    body,
+                    "signIn",
+                    "allowDuplicateEmails",
+                )?);
             }
             "emailPrivacyConfig" => apply_project_config_parent(
                 body,
@@ -2591,11 +2618,11 @@ fn apply_project_config_fields(
                 &mut config.enable_improved_email_privacy,
             )?,
             "emailPrivacyConfig.enableImprovedEmailPrivacy" => {
-                config.enable_improved_email_privacy = nested_bool_default_false(
+                config.enable_improved_email_privacy = Some(nested_bool_default_false(
                     body,
                     "emailPrivacyConfig",
                     "enableImprovedEmailPrivacy",
-                )?;
+                )?);
             }
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         }
@@ -2607,7 +2634,7 @@ fn apply_project_config_parent(
     body: &Value,
     parent: &str,
     child: &str,
-    current: &mut bool,
+    current: &mut Option<bool>,
 ) -> Result<(), JsonResponse> {
     let Some(value) = body.get(parent) else {
         return Ok(());
@@ -2616,9 +2643,11 @@ fn apply_project_config_parent(
         return Err(error(400, "INVALID_ARGUMENT"));
     };
     if let Some(value) = object.get(child) {
-        *current = value
-            .as_bool()
-            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        *current = Some(
+            value
+                .as_bool()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+        );
     }
     Ok(())
 }
@@ -2645,6 +2674,8 @@ fn project_config_management(
     state: &AuthState,
     handler: routes::Handler,
     project: Option<&str>,
+    selected_store: &Arc<Mutex<AuthStore>>,
+    pending_project: Option<&str>,
     query: Option<&str>,
     body: &Value,
 ) -> JsonResponse {
@@ -2652,24 +2683,13 @@ fn project_config_management(
     let Some(project) = project else {
         return error(400, "INVALID_PROJECT_ID");
     };
-    let store = state
-        .registry
-        .as_ref()
-        .and_then(|registry| registry.store_for(project))
-        .or_else(|| {
-            (project == state.store.lock().ok()?.project_id()).then(|| state.store.clone())
-        });
-    let Some(store) = store else {
-        return error(400, "INVALID_PROJECT_ID");
-    };
-    let Ok(store) = store.lock() else {
-        return error(500, "INTERNAL");
-    };
-    let mut config = store.config();
     if handler == Handler::AdminGetProjectConfig {
+        let Ok(store) = selected_store.lock() else {
+            return error(500, "INTERNAL");
+        };
         return JsonResponse {
             status: 200,
-            body: project_config_json(config),
+            body: project_config_json(store.config()),
         };
     }
     if !body.is_object() {
@@ -2683,24 +2703,35 @@ fn project_config_management(
         ],
         Err(response) => return response,
     };
-    if let Err(response) = apply_project_config_fields(&mut config, body, &fields) {
+    let mut patch = ProjectAuthConfigPatch::default();
+    if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
-    if fields.is_empty() {
-        return JsonResponse {
-            status: 200,
-            body: project_config_json(config),
-        };
-    }
-    drop(store);
-    if let Some(registry) = &state.registry {
-        if !registry.set_project_config(project, config) {
+    let config = if let Some(registry) = state
+        .registry
+        .as_ref()
+        .filter(|_| pending_project.is_none())
+    {
+        let Some(config) = registry.patch_project_config(project, patch) else {
             return error(500, "INTERNAL");
-        }
-    } else if let Ok(mut store) = state.store.lock() {
-        store.set_config(config);
+        };
+        config
     } else {
-        return error(500, "INTERNAL");
+        let Ok(mut store) = selected_store.lock() else {
+            return error(500, "INTERNAL");
+        };
+        let config = patch.apply_to(store.config());
+        if !patch.is_empty() {
+            store.set_config(config);
+        }
+        config
+    };
+    if !patch.is_empty() {
+        if let Some(project) = pending_project {
+            if let Err(response) = install_routed_candidate(state, project, selected_store) {
+                return response;
+            }
+        }
     }
     JsonResponse {
         status: 200,
@@ -2716,7 +2747,7 @@ enum ProviderKind {
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn provider_config_management(
-    state: &AuthState,
+    store: &Arc<Mutex<AuthStore>>,
     handler: routes::Handler,
     kind: ProviderKind,
     project: Option<&str>,
@@ -2728,26 +2759,6 @@ fn provider_config_management(
     use routes::Handler;
     let Some(project) = project else {
         return error(400, "INVALID_PROJECT_ID");
-    };
-    let store = match (tenant, state.registry.as_ref()) {
-        (Some(tenant), Some(registry)) => registry.tenant_store(project, tenant),
-        (Some(_), None) => None,
-        (None, Some(registry)) => registry.store_for(project),
-        (None, None) => state
-            .store
-            .lock()
-            .ok()
-            .and_then(|store| (store.project_id() == project).then(|| state.store.clone())),
-    };
-    let Some(store) = store else {
-        return error(
-            tenant.map_or(400, |_| 404),
-            if tenant.is_some() {
-                "TENANT_NOT_FOUND"
-            } else {
-                "INVALID_PROJECT_ID"
-            },
-        );
     };
     let path_prefix = format!("projects/{project}/");
     let path_prefix = if let Some(tenant) = tenant {

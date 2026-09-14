@@ -6538,3 +6538,190 @@ fn broad_refresh_project_number_is_separate_from_jwt_project_identity() {
         );
     }
 }
+
+#[test]
+fn admin_v2_config_poisoned_registry_or_tenant_refuses_without_partial_propagation() {
+    for poison_membership in [false, true] {
+        let mut state = state();
+        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+            "demo-app",
+            state.store.clone(),
+        ));
+        let sibling = registry.ensure_tenant("demo-app", "alpha").unwrap();
+        let tenant = registry.ensure_tenant("demo-app", "zulu").unwrap();
+        state.registry = Some(registry.clone());
+        let poison = tenant.clone();
+        assert!(std::thread::spawn(move || {
+            if poison_membership {
+                registry.with_existing_tenant_metadata("demo-app", "zulu", |_| {
+                    panic!("poison tenant membership")
+                });
+            } else {
+                let _guard = poison.lock().unwrap();
+                panic!("poison tenant");
+            }
+        })
+        .join()
+        .is_err());
+        let response = handle_with(
+            &state,
+            "PATCH",
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config",
+            &owner(),
+            &json!({"signIn":{"allowDuplicateEmails":true},"emailPrivacyConfig":{"enableImprovedEmailPrivacy":true}}),
+        );
+        assert_eq!(response.status, 500, "{}", response.body);
+        for namespace in [&state.store, &sibling, &tenant] {
+            assert_eq!(
+                namespace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .config(),
+                fireemu_core_auth::store::ProjectAuthConfig::default()
+            );
+        }
+    }
+}
+
+#[test]
+fn routed_project_config_uses_selected_store_and_publishes_only_successful_writes() {
+    for existing in [false, true] {
+        let mut state = state();
+        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+            "demo-app",
+            state.store.clone(),
+        ));
+        state.registry = Some(registry.clone());
+        state.allow_routed_projects = true;
+        let project = "worker-config";
+        if existing {
+            let candidate = Arc::new(Mutex::new(registry.routed_candidate(project).unwrap()));
+            assert!(matches!(
+                registry.install_routed(project, candidate),
+                fireemu_core_auth::store::RoutedStoreInstall::Installed(_)
+            ));
+        }
+        let path = format!("/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config");
+        let read = handle_with(&state, "GET", &path, &owner(), &json!({}));
+        assert_eq!(read.status, 200, "{}", read.body);
+        assert_eq!(registry.routed_store_for(project).is_some(), existing);
+        for (mask, body, status) in [
+            ("", json!({}), 200),
+            ("unknown", json!({}), 400),
+            (
+                "signIn.allowDuplicateEmails",
+                json!({"signIn":{"allowDuplicateEmails":"invalid"}}),
+                400,
+            ),
+        ] {
+            let result = handle_with(
+                &state,
+                "PATCH",
+                &format!("{path}?updateMask={mask}"),
+                &owner(),
+                &body,
+            );
+            assert_eq!(result.status, status, "{}", result.body);
+            assert_eq!(registry.routed_store_for(project).is_some(), existing);
+        }
+        let updated = handle_with(
+            &state,
+            "PATCH",
+            &format!("{path}?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy"),
+            &owner(),
+            &json!({"emailPrivacyConfig":{"enableImprovedEmailPrivacy":true}}),
+        );
+        assert_eq!(updated.status, 200, "{}", updated.body);
+        assert!(
+            registry
+                .routed_store_for(project)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .config()
+                .enable_improved_email_privacy
+        );
+        let read = handle_with(&state, "GET", &path, &owner(), &json!({}));
+        assert_eq!(
+            read.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+            true
+        );
+        assert!(
+            !state
+                .store
+                .lock()
+                .unwrap()
+                .config()
+                .enable_improved_email_privacy
+        );
+    }
+}
+
+#[test]
+fn routed_project_saml_uses_selected_store_for_first_and_existing_requests() {
+    for existing in [false, true] {
+        let mut state = state();
+        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+            "demo-app",
+            state.store.clone(),
+        ));
+        state.registry = Some(registry.clone());
+        state.allow_routed_projects = true;
+        let project = "worker-saml";
+        if existing {
+            let candidate = Arc::new(Mutex::new(registry.routed_candidate(project).unwrap()));
+            assert!(matches!(
+                registry.install_routed(project, candidate),
+                fireemu_core_auth::store::RoutedStoreInstall::Installed(_)
+            ));
+        }
+        let path = format!(
+            "/identitytoolkit.googleapis.com/admin/v2/projects/{project}/inboundSamlConfigs"
+        );
+        let read = handle_with(&state, "GET", &path, &owner(), &json!({}));
+        assert_eq!(read.status, 200, "{}", read.body);
+        assert_eq!(registry.routed_store_for(project).is_some(), existing);
+        let invalid = handle_with(
+            &state,
+            "POST",
+            &format!("{path}?inboundSamlConfigId=saml.test"),
+            &owner(),
+            &json!({}),
+        );
+        assert_eq!(invalid.status, 400, "{}", invalid.body);
+        assert_eq!(registry.routed_store_for(project).is_some(), existing);
+        let created = handle_with(
+            &state,
+            "POST",
+            &format!("{path}?inboundSamlConfigId=saml.test"),
+            &owner(),
+            &json!({"idpConfig":{"idpEntityId":"idp","ssoUrl":"https://idp.example.test/sso","idpCertificates":[{"x509Certificate":"test-certificate"}],"signRequest":true},"spConfig":{"spEntityId":"sp","callbackUri":"https://sp.example.test/callback"}}),
+        );
+        assert_eq!(created.status, 200, "{}", created.body);
+        assert!(registry.routed_store_for(project).is_some());
+        let patched = handle_with(
+            &state,
+            "PATCH",
+            &format!("{path}/saml.test?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({}),
+        );
+        assert_eq!(patched.status, 200, "{}", patched.body);
+        assert_eq!(patched.body["idpConfig"]["signRequest"], false);
+        let read = handle_with(
+            &state,
+            "GET",
+            &format!("{path}/saml.test"),
+            &owner(),
+            &json!({}),
+        );
+        assert_eq!(read.status, 200, "{}", read.body);
+        assert_eq!(read.body["idpConfig"]["signRequest"], false);
+        assert!(state
+            .store
+            .lock()
+            .unwrap()
+            .saml_config("saml.test")
+            .is_none());
+    }
+}

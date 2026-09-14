@@ -403,6 +403,35 @@ pub struct ProjectAuthConfig {
     pub enable_improved_email_privacy: bool,
 }
 
+/// Validated partial update to inherited project Auth settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProjectAuthConfigPatch {
+    /// `None` preserves the current duplicate-email setting.
+    pub allow_duplicate_emails: Option<bool>,
+    /// `None` preserves the current email-privacy setting.
+    pub enable_improved_email_privacy: Option<bool>,
+}
+
+impl ProjectAuthConfigPatch {
+    /// Whether the patch has no selected values and must perform no writes.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.allow_duplicate_emails.is_none() && self.enable_improved_email_privacy.is_none()
+    }
+
+    /// Applies validated selected values to the current configuration.
+    #[must_use]
+    pub fn apply_to(self, mut config: ProjectAuthConfig) -> ProjectAuthConfig {
+        if let Some(value) = self.allow_duplicate_emails {
+            config.allow_duplicate_emails = value;
+        }
+        if let Some(value) = self.enable_improved_email_privacy {
+            config.enable_improved_email_privacy = value;
+        }
+        config
+    }
+}
+
 /// The response mode requested from an OAuth/OIDC provider.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OAuthResponseType {
@@ -4251,8 +4280,12 @@ impl AuthRegistry {
             .flatten()
     }
 
-    fn build_tenant_store(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
-        let parent = self.store_for(project)?;
+    fn build_tenant_store(
+        &self,
+        project: &str,
+        tenant: &str,
+        parent: &SharedAuthStore,
+    ) -> Option<Arc<Mutex<AuthStore>>> {
         let (policy, config, signer, number, lifecycle_enabled) = {
             let parent = parent.lock().ok()?;
             (
@@ -4310,6 +4343,9 @@ impl AuthRegistry {
                 TenantPublication::Unavailable
             };
         }
+        if tenant_metadata.contains_key(&key) {
+            return TenantPublication::Unavailable;
+        }
         tenant_metadata.insert(key.clone(), metadata);
         tenants.insert(key, store.clone());
         self.membership_generation.fetch_add(1, Ordering::Release);
@@ -4335,11 +4371,19 @@ impl AuthRegistry {
         if tenant.is_empty() || tenant.contains(['/', '\\']) {
             return None;
         }
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        let projects = self.projects.lock().ok()?;
+        let parent = if project == self.default_project {
+            &self.default
+        } else {
+            projects.registered.get(project)?
+        };
         let key = (project.to_owned(), tenant.to_owned());
         if let Some(store) = self.existing_tenant_with_metadata(&key) {
             return Some(store);
         }
-        let store = self.build_tenant_store(project, tenant)?;
+        let store = self.build_tenant_store(project, tenant, parent)?;
         match self.publish_tenant(
             key,
             store,
@@ -4361,12 +4405,19 @@ impl AuthRegistry {
 
     /// Creates an explicitly configured tenant and returns its generated ID.
     pub fn create_tenant(&self, project: &str, metadata: TenantMetadata) -> Option<String> {
-        self.store_for(project)?;
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        let projects = self.projects.lock().ok()?;
+        let parent = if project == self.default_project {
+            &self.default
+        } else {
+            projects.registered.get(project)?
+        };
         let mut metadata = metadata;
         loop {
             let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
             let tenant = format!("fireemu-{sequence:020}");
-            let store = self.build_tenant_store(project, &tenant)?;
+            let store = self.build_tenant_store(project, &tenant, parent)?;
             match self.publish_tenant((project.to_owned(), tenant.clone()), store, metadata) {
                 TenantPublication::Published(_) => return Some(tenant),
                 TenantPublication::Existing {
@@ -4466,26 +4517,77 @@ impl AuthRegistry {
             .unwrap_or_default()
     }
 
-    /// Applies project-level Auth configuration and propagates inherited switches to tenants.
+    /// Replaces inherited project settings through the same atomic boundary as partial updates.
     pub fn set_project_config(&self, project: &str, config: ProjectAuthConfig) -> bool {
-        let Some(parent) = self.store_for(project) else {
-            return false;
+        self.patch_project_config(
+            project,
+            ProjectAuthConfigPatch {
+                allow_duplicate_emails: Some(config.allow_duplicate_emails),
+                enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
+            },
+        )
+        .is_some()
+    }
+
+    /// Applies selected settings against the current parent and every tenant atomically.
+    ///
+    /// Publication shares the project gate with every tenant creator. Membership and all
+    /// affected stores are retained until commit, so poison or inconsistent tenant metadata
+    /// refuses the entire update before any namespace changes. An empty patch only reads.
+    pub fn patch_project_config(
+        &self,
+        project: &str,
+        patch: ProjectAuthConfigPatch,
+    ) -> Option<ProjectAuthConfig> {
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        self.patch_project_config_under_gate(project, patch)
+    }
+
+    fn patch_project_config_under_gate(
+        &self,
+        project: &str,
+        patch: ProjectAuthConfigPatch,
+    ) -> Option<ProjectAuthConfig> {
+        let projects = self.projects.lock().ok()?;
+        let parent = if project == self.default_project {
+            &self.default
+        } else {
+            projects
+                .registered
+                .get(project)
+                .or_else(|| projects.routed.get(project))?
         };
-        let Ok(mut parent) = parent.lock() else {
-            return false;
-        };
-        parent.set_config(config);
-        drop(parent);
-        if let Ok(tenants) = self.tenants.lock() {
-            for ((candidate, _), store) in tenants.iter() {
-                if candidate == project {
-                    if let Ok(mut store) = store.lock() {
-                        store.set_config(config);
-                    }
-                }
-            }
+        if patch.is_empty() {
+            return Some(parent.lock().ok()?.config());
         }
-        true
+        let tenants = self.tenants.lock().ok()?;
+        let metadata = self.tenant_metadata.lock().ok()?;
+        if tenants
+            .keys()
+            .filter(|(candidate, _)| candidate == project)
+            .ne(metadata
+                .keys()
+                .filter(|(candidate, _)| candidate == project))
+        {
+            return None;
+        }
+        let tenant_stores = tenants
+            .iter()
+            .filter(|((candidate, _), _)| candidate == project)
+            .map(|(_, store)| store)
+            .collect::<Vec<_>>();
+        let mut parent = parent.lock().ok()?;
+        let mut tenant_guards = Vec::with_capacity(tenant_stores.len());
+        for store in tenant_stores {
+            tenant_guards.push(store.lock().ok()?);
+        }
+        let config = patch.apply_to(parent.config());
+        parent.set_config(config);
+        for tenant in &mut tenant_guards {
+            tenant.set_config(config);
+        }
+        Some(config)
     }
 
     /// Deletes a tenant namespace and its metadata.
@@ -5139,6 +5241,243 @@ mod compatibility_routing_tests {
             SplitMix64::new(seed),
             TotpPolicy::default(),
         )))
+    }
+
+    #[test]
+    fn project_config_poisoned_membership_or_store_preserves_every_namespace() {
+        for target in ["projects", "tenants", "metadata", "parent", "tenant"] {
+            let parent = store("demo-app", 1);
+            let registry = Arc::new(AuthRegistry::new("demo-app", parent.clone()));
+            let sibling = registry.ensure_tenant("demo-app", "alpha").unwrap();
+            let tenant = registry.ensure_tenant("demo-app", "zulu").unwrap();
+            let poison = registry.clone();
+            let poisoned_parent = parent.clone();
+            let poisoned_tenant = tenant.clone();
+            assert!(std::thread::spawn(move || {
+                match target {
+                    "projects" => {
+                        let _guard = poison.projects.lock().unwrap();
+                        panic!("poison projects");
+                    }
+                    "tenants" => {
+                        let _guard = poison.tenants.lock().unwrap();
+                        panic!("poison tenants");
+                    }
+                    "metadata" => {
+                        let _guard = poison.tenant_metadata.lock().unwrap();
+                        panic!("poison metadata");
+                    }
+                    "parent" => {
+                        let _guard = poisoned_parent.lock().unwrap();
+                        panic!("poison parent");
+                    }
+                    _ => {
+                        let _guard = poisoned_tenant.lock().unwrap();
+                        panic!("poison tenant");
+                    }
+                }
+            })
+            .join()
+            .is_err());
+            assert!(
+                !registry.set_project_config(
+                    "demo-app",
+                    super::ProjectAuthConfig {
+                        allow_duplicate_emails: true,
+                        enable_improved_email_privacy: true,
+                    }
+                ),
+                "poisoned {target} must refuse the update"
+            );
+            for namespace in [&parent, &sibling, &tenant] {
+                let guard = namespace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                assert_eq!(
+                    guard.config(),
+                    super::ProjectAuthConfig::default(),
+                    "poisoned {target}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn direct_tenant_publication_obeys_the_project_operation_gate() {
+        for explicit in [false, true] {
+            let registry = Arc::new(AuthRegistry::new("demo-app", store("demo-app", 1)));
+            let gate = registry.operation_gate("demo-app", None).unwrap();
+            let operation = gate.lock().unwrap();
+            let creator_registry = registry.clone();
+            let (started_tx, started_rx) = mpsc::sync_channel(1);
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let creator = std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                let tenant = if explicit {
+                    creator_registry
+                        .create_tenant("demo-app", TenantMetadata::default())
+                        .unwrap()
+                } else {
+                    creator_registry
+                        .ensure_tenant("demo-app", "customer")
+                        .unwrap();
+                    "customer".to_owned()
+                };
+                done_tx.send(tenant).unwrap();
+            });
+            started_rx.recv().unwrap();
+            let early = done_rx.recv_timeout(Duration::from_millis(100));
+            // Model the config commit while publication is excluded by the project gate.
+            registry
+                .default
+                .lock()
+                .unwrap()
+                .set_config(super::ProjectAuthConfig {
+                    allow_duplicate_emails: true,
+                    enable_improved_email_privacy: true,
+                });
+            drop(operation);
+            let tenant = early
+                .as_ref()
+                .ok()
+                .cloned()
+                .unwrap_or_else(|| done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+            creator.join().unwrap();
+            assert!(
+                early.is_err(),
+                "direct tenant publication bypassed the project gate"
+            );
+            assert_eq!(
+                registry
+                    .tenant_store("demo-app", &tenant)
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .config(),
+                registry.default.lock().unwrap().config()
+            );
+        }
+    }
+
+    #[test]
+    fn project_config_patch_waits_for_direct_tenant_publication() {
+        for explicit in [false, true] {
+            let registry = Arc::new(AuthRegistry::new("demo-app", store("demo-app", 1)));
+            let gate = registry.operation_gate("demo-app", None).unwrap();
+            let metadata = registry.tenant_metadata.lock().unwrap();
+            let creator_registry = registry.clone();
+            let creator = std::thread::spawn(move || {
+                if explicit {
+                    creator_registry
+                        .create_tenant("demo-app", TenantMetadata::default())
+                        .unwrap()
+                } else {
+                    creator_registry
+                        .ensure_tenant("demo-app", "customer")
+                        .unwrap();
+                    "customer".to_owned()
+                }
+            });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match registry.tenants.try_lock() {
+                    Err(TryLockError::WouldBlock) => break,
+                    Err(TryLockError::Poisoned(_)) => panic!("tenant registry poisoned"),
+                    Ok(guard) => drop(guard),
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "creator did not reach membership boundary"
+                );
+                std::thread::yield_now();
+            }
+            let patch_registry = registry.clone();
+            let patcher = std::thread::spawn(move || {
+                patch_registry.patch_project_config(
+                    "demo-app",
+                    super::ProjectAuthConfigPatch {
+                        allow_duplicate_emails: Some(true),
+                        enable_improved_email_privacy: Some(true),
+                    },
+                )
+            });
+            while Arc::strong_count(&gate) < 3 {
+                assert!(
+                    Instant::now() < deadline,
+                    "patch did not reach the shared project gate"
+                );
+                std::thread::yield_now();
+            }
+            assert_eq!(
+                registry.default.lock().unwrap().config(),
+                super::ProjectAuthConfig::default()
+            );
+            drop(metadata);
+            let tenant = creator.join().unwrap();
+            let config = patcher.join().unwrap().unwrap();
+            assert!(config.enable_improved_email_privacy && config.allow_duplicate_emails);
+            assert_eq!(
+                registry
+                    .tenant_store("demo-app", &tenant)
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .config(),
+                config
+            );
+        }
+    }
+
+    #[test]
+    fn project_config_patch_rejects_inconsistent_tenant_membership_before_writing() {
+        for missing_store in [false, true] {
+            let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+            let tenant = registry.ensure_tenant("demo-app", "customer").unwrap();
+            let key = ("demo-app".to_owned(), "customer".to_owned());
+            if missing_store {
+                registry.tenants.lock().unwrap().remove(&key);
+            } else {
+                registry.tenant_metadata.lock().unwrap().remove(&key);
+            }
+            assert!(registry
+                .patch_project_config(
+                    "demo-app",
+                    super::ProjectAuthConfigPatch {
+                        enable_improved_email_privacy: Some(true),
+                        ..super::ProjectAuthConfigPatch::default()
+                    }
+                )
+                .is_none());
+            assert_eq!(
+                registry.default.lock().unwrap().config(),
+                super::ProjectAuthConfig::default()
+            );
+            assert_eq!(
+                tenant.lock().unwrap().config(),
+                super::ProjectAuthConfig::default()
+            );
+        }
+    }
+
+    #[test]
+    fn project_config_empty_patch_reads_without_rewriting_tenants() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        let tenant = registry.ensure_tenant("demo-app", "customer").unwrap();
+        tenant.lock().unwrap().set_config(super::ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: true,
+        });
+        assert_eq!(
+            registry.patch_project_config("demo-app", super::ProjectAuthConfigPatch::default()),
+            Some(super::ProjectAuthConfig::default())
+        );
+        assert!(
+            tenant
+                .lock()
+                .unwrap()
+                .config()
+                .enable_improved_email_privacy
+        );
     }
 
     #[test]

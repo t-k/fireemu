@@ -1099,6 +1099,7 @@ impl AuthStore {
     /// target of an email lookup.
     fn activate_email_owner(&mut self, uid: &LocalId) {
         if let Some(email) = self.users.get(uid).and_then(|user| user.email.clone()) {
+            let email = Self::canonicalize_email(&email);
             self.local_id_for_email.insert(email, uid.clone());
         }
     }
@@ -6377,5 +6378,26 @@ mod broad_project_number_tests {
             .unwrap();
         store.record_token_issuance(&token, at);
         assert_eq!(store.user(&replacement).unwrap().last_refresh_at, None);
+    }
+
+    #[test]
+    fn mutable_user_reactivation_keeps_email_index_canonical() {
+        let mut store = AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default());
+        let at = LogicalInstant::from_unix_seconds(100);
+        let uid = store
+            .create_user_with_id(NewUser::email("owner@example.com"), Some("owner"), at)
+            .unwrap();
+        {
+            let user = store.user_mut(&uid).unwrap();
+            user.email = Some("MixedCase@example.com".to_owned());
+        }
+        let _ = store.user_mut(&uid);
+        assert_eq!(
+            store.local_id_for_email.get("mixedcase@example.com"),
+            Some(&uid)
+        );
+        assert!(!store
+            .local_id_for_email
+            .contains_key("MixedCase@example.com"));
     }
 }

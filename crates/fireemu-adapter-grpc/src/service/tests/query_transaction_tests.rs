@@ -61,6 +61,16 @@ fn selection_bytes(backend: &LocalBackend) -> u64 {
 // the stream then exercises cancellation with both a live snapshot and a live selection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_query_multipage_cancellation_preserves_transaction_ownership() {
+    assert_multipage_cancellation_preserves_transaction_ownership(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explain_analyze_multipage_cancellation_preserves_transaction_ownership() {
+    assert_multipage_cancellation_preserves_transaction_ownership(true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn assert_multipage_cancellation_preserves_transaction_ownership(analyze: bool) {
     for count in [33, 65] {
         for field_order in [false, true] {
             for selector in [
@@ -72,6 +82,7 @@ async fn run_query_multipage_cancellation_preserves_transaction_ownership() {
                 let backend = test_backend();
                 let mut service = GatewayService::local(test_gateway(), backend.clone());
                 let mut request = seeded_query(&backend, count, field_order);
+                request.explain_options = analyze.then_some(pb::ExplainOptions { analyze: true });
                 request.consistency_selector = selector;
                 let (ready_tx, mut ready_rx) = tokio::sync::oneshot::channel();
                 let ready_tx = Mutex::new(Some(ready_tx));
@@ -99,6 +110,7 @@ async fn run_query_multipage_cancellation_preserves_transaction_ownership() {
                             result = &mut ready_rx => { result.unwrap(); break; }
                             response = stream.next() => {
                                 let response = response.unwrap().unwrap();
+                                assert!(response.explain_metrics.is_none(), "metrics must wait for completion");
                                 documents += usize::from(response.document.is_some());
                                 if !response.transaction.is_empty() {
                                     transaction = response.transaction;
@@ -131,6 +143,25 @@ async fn run_query_multipage_cancellation_preserves_transaction_ownership() {
                 assert_eq!(selection_bytes(&backend), 0);
                 assert_eq!(transaction_stats(&backend).active, usize::from(!internal));
                 if !internal {
+                    let mut reuse = query_request();
+                    reuse.consistency_selector =
+                        Some(pb::run_query_request::ConsistencySelector::Transaction(
+                            transaction.clone(),
+                        ));
+                    let responses: Vec<_> = Firestore::run_query(&service, Request::new(reuse))
+                        .await
+                        .unwrap()
+                        .into_inner()
+                        .map(Result::unwrap)
+                        .collect()
+                        .await;
+                    assert_eq!(
+                        responses
+                            .iter()
+                            .filter(|response| response.document.is_some())
+                            .count(),
+                        usize::try_from(count).unwrap()
+                    );
                     backend
                         .rollback(&pb::RollbackRequest {
                             database: database_name_from_query_parent(&query_request().parent),

@@ -78,6 +78,9 @@ async fn explain_analyze_counts_emitted_documents_once_after_offset() {
             65
         );
         assert!(responses.last().unwrap().explain_metrics.is_some());
+        assert!(responses
+            .iter()
+            .all(|response| response.read_time.is_some()));
         assert_eq!(transaction_stats(&backend).active, 0);
     }
 }
@@ -136,6 +139,7 @@ async fn explain_aggregation_counts_one_emitted_result() {
         .await;
     assert_eq!(responses.len(), 1);
     assert!(responses[0].result.is_some());
+    assert!(responses[0].read_time.is_some());
     assert_eq!(
         responses[0]
             .explain_metrics
@@ -167,12 +171,23 @@ async fn explain_plan_only_query_preserves_transaction_ownership_without_scannin
                 .into_inner();
             let mut token = Vec::new();
             if consume {
+                if selector.is_some() {
+                    let announcement = stream.next().await.unwrap().unwrap();
+                    token = announcement.transaction.clone();
+                    assert!(!token.is_empty());
+                    assert_eq!(
+                        announcement,
+                        pb::RunQueryResponse {
+                            transaction: token.clone(),
+                            ..Default::default()
+                        }
+                    );
+                }
                 let response = stream.next().await.unwrap().unwrap();
+                assert!(response.transaction.is_empty());
                 assert!(response.document.is_none());
                 assert!(response.read_time.is_none());
                 assert!(response.explain_metrics.unwrap().execution_stats.is_none());
-                token = response.transaction;
-                assert_eq!(token.is_empty(), selector.is_none());
                 assert!(stream.next().await.is_none());
             }
             drop(stream);
@@ -434,6 +449,9 @@ async fn explain_analyze_empty_output_still_returns_final_metrics() {
             .collect()
             .await;
         assert!(responses.iter().all(|response| response.document.is_none()));
+        assert!(responses
+            .iter()
+            .all(|response| response.read_time.is_some()));
         let metrics: Vec<_> = responses
             .iter()
             .filter_map(|response| response.explain_metrics.as_ref())
@@ -456,6 +474,7 @@ async fn explain_analyze_empty_output_still_returns_final_metrics() {
             .unwrap()
             .unwrap();
         assert!(response.result.is_some());
+        assert!(response.read_time.is_some());
         assert_eq!(
             response
                 .explain_metrics

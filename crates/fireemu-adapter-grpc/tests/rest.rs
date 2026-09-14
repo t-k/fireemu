@@ -1439,6 +1439,7 @@ fn explain_rest_plan_and_analyze_return_only_requested_data_and_one_metrics_obje
                 .collect();
             assert_eq!(metrics.len(), 1, "{body}");
             if analyze {
+                assert!(rows.iter().all(|row| row["readTime"].is_string()), "{body}");
                 assert_eq!(
                     metrics[0]["executionStats"]["resultsReturned"],
                     if aggregation { "1" } else { "3" }
@@ -1467,6 +1468,14 @@ fn explain_rest_plan_only_new_and_existing_transactions_can_be_rolled_back() {
             let (status, body) = call(&s, "POST", &path, request);
             assert_eq!(status, 200, "{body}");
             let token = body[0]["transaction"].as_str().unwrap();
+            if !aggregation {
+                assert_eq!(body.as_array().unwrap().len(), 2);
+                assert_eq!(body[0], json!({"transaction": token}));
+                assert_eq!(
+                    body[1],
+                    json!({"explainMetrics": {"planSummary": {"indexesUsed": []}}})
+                );
+            }
             let mut reuse = explain_body(aggregation, false);
             reuse["transaction"] = json!(token);
             let (status, body) = call(&s, "POST", &path, reuse);
@@ -1541,5 +1550,26 @@ fn explain_rest_validates_queries_parents_and_consistency_selectors() {
             );
             assert_eq!(status, 400, "{body}");
         }
+    }
+}
+
+#[test]
+fn explain_rest_empty_analyze_output_preserves_read_time() {
+    let s = state(None);
+    for aggregation in [false, true] {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:{}", explain_method(aggregation)),
+            explain_body(aggregation, true),
+        );
+        assert_eq!(status, 200, "{body}");
+        let rows = body.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0]["readTime"].is_string(), "{body}");
+        assert_eq!(
+            rows[0]["explainMetrics"]["executionStats"]["resultsReturned"],
+            if aggregation { "1" } else { "0" }
+        );
     }
 }

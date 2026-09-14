@@ -3826,15 +3826,11 @@ impl LocalBackend {
                 .as_ref()
                 .is_some_and(|options| !options.analyze)
             {
-                return Ok((
-                    vec![pb::RunQueryResponse {
-                        transaction: access.report().to_vec(),
-                        explain_metrics: Some(crate::service::explain_metrics(None)),
-                        ..Default::default()
-                    }],
-                    authorization.warnings.clone(),
-                    selection,
-                ));
+                let mut responses = query_responses(&[], None, access.report(), 0);
+                if let Some(response) = responses.last_mut() {
+                    response.explain_metrics = Some(crate::service::explain_metrics(None));
+                }
+                return Ok((responses, authorization.warnings.clone(), selection));
             }
             let mut selection_stage = None;
             let selection = match selection {

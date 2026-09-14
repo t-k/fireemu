@@ -15,6 +15,10 @@ from batch_contract import BASE, candidate
 from broad_contract import digest
 from shared_gate import Gate
 
+LEGACY_CAMPAIGN_OBSERVER_SHA256 = (
+    "074ab9bf07e137418a03f39472f77c4ff1b1c85a539d7d80a4c94d2f0b7b028e"
+)
+
 
 def op(path, method="GET", body=None):
     return {
@@ -300,6 +304,7 @@ def campaign_manifest(nonce):
 def campaign_proposal():
     """Return the unaccepted proposal without acquiring owner/environment inputs."""
     plan = campaign_manifest("{freshNonce}")
+    plan["observerSha256"] = LEGACY_CAMPAIGN_OBSERVER_SHA256
     return {
         "kind": "production-campaign-slice-01-v2",
         "status": "proposal-only-unapproved",

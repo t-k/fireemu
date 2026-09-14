@@ -132,21 +132,11 @@ def load_parent_manifest(path):
     return value
 
 
-def compare_saved(
-    candidate_path,
-    local,
-    parent_path,
-    *,
-    local_source_sha256=None,
-    anchor_path=None,
-    candidate_expected_sha256=PINNED_PRODUCTION_CANDIDATE_SHA256,
-):
+def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=None):
     """Compare a saved normalized production candidate with one current local receipt."""
     from second_production_contract import binding, manifest, observer_digest
 
-    candidate, candidate_source_sha256 = load_saved_candidate(
-        candidate_path, expected_sha256=candidate_expected_sha256
-    )
+    candidate, candidate_source_sha256 = load_saved_candidate(candidate_path)
     parent = load_parent_manifest(parent_path)
     errors = []
     state_validation = None
@@ -158,12 +148,8 @@ def compare_saved(
         evaluator_head = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
         ).strip()
-        anchor_raw = (
-            Path(anchor_path).read_bytes()
-            if anchor_path is not None
-            else subprocess.check_output(
-                ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"], cwd=repo_root
-            )
+        anchor_raw = subprocess.check_output(
+            ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"], cwd=repo_root
         )
         anchor_sha256 = hashlib.sha256(anchor_raw).hexdigest()
     except (OSError, subprocess.CalledProcessError):

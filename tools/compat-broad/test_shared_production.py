@@ -180,7 +180,7 @@ class Backend:
                 {"error": {"code": 400, "status": "INVALID_ARGUMENT"}},
                 "application/json",
             )
-        statuses = []
+        statuses, results = [], []
         for write in body["writes"]:
             document = copy.deepcopy(write["update"])
             if (
@@ -188,11 +188,13 @@ class Backend:
                 and document["name"] in self.docs
             ):
                 statuses.append({"code": 6})
+                results.append({})
                 continue
             document["updateTime"] = "2026-09-13T01:00:01Z"
             self.docs[document["name"]] = document
             statuses.append({"code": 0})
-        return 200, {"status": statuses}, "application/json"
+            results.append({"updateTime": document["updateTime"]})
+        return 200, {"status": statuses, "writeResults": results}, "application/json"
 
 
 @pytest.fixture
@@ -261,9 +263,19 @@ def test_management_and_data_share_budget(boundary, tmp_path):
 def test_other_diagnostic_results_are_observations(boundary, tmp_path, variant):
     boundary[1].variant = variant
     result = run(boundary, tmp_path)
-    assert result["completed"] and result["cleanupComplete"]
     assert not all(j["safety"] for j in result["jobs"].values())
-    assert not boundary[1].docs
+    if variant == "unexpected-success":
+        # The invalid transaction write unexpectedly changed the created version.
+        # An observation of that new version cannot grant cleanup ownership.
+        assert not result["completed"] and not result["cleanupComplete"]
+        assert len(boundary[1].docs) == 1
+        assert not any(
+            method == "DELETE" and "transaction-field" in url
+            for url, method, _body, _headers in boundary[1].calls
+        )
+    else:
+        assert result["completed"] and result["cleanupComplete"]
+        assert not boundary[1].docs
 
 
 @pytest.mark.parametrize(

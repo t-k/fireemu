@@ -31,11 +31,15 @@ def op(path, method="GET", body=None):
     }
 
 
-def field(value):
-    return {"a": {"integerValue": str(value)}}
+def field(value, resource=None):
+    return {
+        "a": {"integerValue": str(value)},
+        **({"_sharedOwner": {"referenceValue": resource}} if resource is not None else {}),
+    }
 
 
 def manifest(nonce):
+    """Current unobserved v2 fixtures own the _sharedOwner reference field."""
     if len(nonce) != 32 or any(c not in "0123456789abcdef" for c in nonce):
         raise ValueError("fresh hexadecimal namespace required")
     jobs = {}
@@ -52,19 +56,24 @@ def manifest(nonce):
             op(
                 setup + "?currentDocument.exists=false",
                 "PATCH",
-                {"fields": field(7 if key == "partial" else 3)},
+                {"fields": field(7 if key == "partial" else 3, setup)},
             )
         )
         if key == "partial":
             writes = [
-                {"update": {"name": r, "fields": field(v)}}
+                {
+                    "update": {"name": r, "fields": field(v, r)},
+                    "currentDocument": {"exists": False},
+                }
                 for r, v in zip(resources, [1, 8, 9], strict=True)
             ]
-            writes[1]["currentDocument"] = {"exists": False}
+            # The middle document still conflicts with its conditional setup create.
             body = {"writes": writes}
         else:
             body = {
-                "writes": [{"update": {"name": resources[0], "fields": field(4)}}],
+                "writes": [
+                    {"update": {"name": resources[0], "fields": field(4, resources[0])}}
+                ],
                 "transaction": "AA==",
             }
         operations.append(op(BASE + ":batchWrite", "POST", body))
@@ -79,7 +88,7 @@ def manifest(nonce):
             "recovery": recovery,
         }
     return {
-        "contract": "shared-local-v1",
+        "contract": "shared-local-v2",
         "nonce": nonce,
         "jobs": jobs,
         "wallSeconds": 300,
@@ -95,7 +104,7 @@ def manifest(nonce):
         "metadataRequests": 0,
         "observerSha256": observer_digest(),
         "transport": "local-only",
-        "collector": "existing-batch-adapter-shared-v1",
+        "collector": "existing-batch-adapter-shared-v2",
     }
 
 
@@ -422,13 +431,14 @@ def run_scenario(adapter, plan, key, before_cleanup=None):
             save(adapter.output / "partial.json", rows)
             resources = plan["jobs"][key]["resources"]
             setup_end = 2 * len(resources) if key == "query-explain" else len(resources) + 1
-            if key == "query-explain" and index >= setup_end and index < len(
-                plan["jobs"][key]["observation"]
-            ) - len(resources):
-                if not _explain_collection_valid(body):
-                    collection_failure = collection_failure or (
-                        "Explain transport did not return a JSON result array"
-                    )
+            if (
+                key == "query-explain"
+                and setup_end <= index < len(plan["jobs"][key]["observation"]) - len(resources)
+                and not _explain_collection_valid(body)
+            ):
+                collection_failure = collection_failure or (
+                    "Explain transport did not return a JSON result array"
+                )
             if index < len(resources):
                 if status != 404:
                     raise ValueError("namespace-not-empty")
@@ -440,9 +450,7 @@ def run_scenario(adapter, plan, key, before_cleanup=None):
                     }
                 )
                 adapter.documents.add(resources[index])
-            elif key == "query-explain" and len(resources) <= index < setup_end and status != 200:
-                raise ValueError("setup-refused")
-            elif key != "query-explain" and index == len(resources) and status != 200:
+            elif status != 200 and len(resources) <= index < setup_end:
                 raise ValueError("setup-refused")
     except Exception as error:
         failure = type(error).__name__ + ":" + str(error)
@@ -511,7 +519,11 @@ def run_scenario(adapter, plan, key, before_cleanup=None):
         else:
             expected = [1, 7, 9] if key == "partial" else [3]
             safety = len(rows) == len(plan["jobs"][key]["observation"]) and all(
-                row["status"] == 200 and row["body"].get("fields") == field(value)
+                row["status"] == 200
+                and row["body"].get("fields") == field(
+                    value,
+                    row["body"].get("name") if plan["contract"] == "shared-local-v2" else None,
+                )
                 for row, value in zip(states, expected, strict=True)
             )
             state_validation = len(rows) == len(

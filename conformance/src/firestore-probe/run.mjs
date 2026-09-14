@@ -215,10 +215,15 @@ function canonical(value) {
 
 /** Compare saved production decisions with a current normalized fireemu response. */
 export function compareProductionToFireemu({ production, fireemu, programDefinitions = PROGRAMS }) {
+  const savedPrograms = Array.isArray(production)
+    ? Object.fromEntries(production.map((program) => [program.id, program]))
+    : production.programs
+      ? Object.fromEntries(production.programs.map((program) => [program.id, program]))
+      : production;
   const rows = [];
   for (const program of programDefinitions) {
     for (const step of program.steps) {
-      const saved = production[program.id]?.steps?.[step.id]?.production ?? { missing: true };
+      const saved = savedPrograms[program.id]?.steps?.[step.id]?.production ?? { missing: true };
       const actual = fireemu[program.id]?.steps?.[step.id] ?? { missing: true };
       const savedDecision = decision(saved);
       const localDecision = decision(actual);

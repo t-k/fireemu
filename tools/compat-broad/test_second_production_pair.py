@@ -3,8 +3,10 @@
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from broad_contract import digest
@@ -324,6 +326,31 @@ def test_saved_comparator_uses_current_runtime_anchor_path():
     assert PARENT_RUNTIME_ANCHOR == (
         "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v2.json"
     )
+
+
+def test_saved_mode_accepts_retained_second45_runtime_fixture():
+    from broad_contract import ROOT
+    from second_production_pair import compare_saved
+
+    run = Path(os.environ["FIREEMU_SECOND45_RETAINED_RUN"])
+    parent = run / "parent-manifest.json"
+    local = run / "mapped-receipt.json"
+    candidate = ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json"
+    result = compare_saved(
+        candidate,
+        json.loads(local.read_text()),
+        parent,
+        local_source_sha256=hashlib.sha256(local.read_bytes()).hexdigest(),
+    )
+    assert result["compatibility"] == "match"
+    assert result["errors"] == []
+
+
+def test_saved_mode_rejects_missing_retained_runtime_fixture(tmp_path):
+    from second_production_pair import load_parent_manifest
+
+    with pytest.raises(FileNotFoundError):
+        load_parent_manifest(tmp_path / "missing-parent-manifest.json")
 
 
 def test_saved_candidate_rejects_self_hashed_fabricated_parent(

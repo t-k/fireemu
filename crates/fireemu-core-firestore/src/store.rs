@@ -3610,16 +3610,23 @@ impl FirestoreState {
         }
         for entry in transaction.queries.iter().filter(|entry| entry.complete) {
             let mut current = QueryObservation::default();
-            let required_fields: Vec<&FieldPath> = entry.required_fields.iter().collect();
-            self.select(
-                &entry.query,
-                None,
-                &required_fields,
-                entry.consumption,
-                |document| {
+            if entry.query.find_nearest.is_some() {
+                let (documents, _) = self.run_find_nearest_with_stats(&entry.query, None)?;
+                for document in &documents {
                     current.push(document);
-                },
-            )?;
+                }
+            } else {
+                let required_fields: Vec<&FieldPath> = entry.required_fields.iter().collect();
+                self.select(
+                    &entry.query,
+                    None,
+                    &required_fields,
+                    entry.consumption,
+                    |document| {
+                        current.push(document);
+                    },
+                )?;
+            }
             if current != entry.observation {
                 return Ok(true);
             }
@@ -4134,10 +4141,18 @@ impl FirestoreState {
         let mut ordinary = query.clone();
         ordinary.find_nearest = None;
         ordinary.projection = None;
+        if ordinary.limit.is_none() && ordinary.offset > 0 {
+            let order = ordinary.effective_order_by();
+            if !matches!(order.as_slice(), [clause] if clause.field.is_document_name()) {
+                return Err(FirestoreError::InvalidArgument(
+                    "findNearest with an unbounded offset requires document-name ordering or a top-level limit".into(),
+                ));
+            }
+        }
         let mut candidates = BinaryHeap::new();
         let nearest_limit = usize::try_from(find_nearest.limit).unwrap_or(usize::MAX);
         let nearest_peak_candidates = std::cell::Cell::new(0usize);
-        let consumption = if ordinary.offset == 0 && ordinary.limit.is_none() {
+        let consumption = if ordinary.limit.is_none() {
             Consumption::Unordered
         } else {
             Consumption::Ordered

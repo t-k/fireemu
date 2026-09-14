@@ -388,22 +388,25 @@ fn nearest_vector_query_limit_and_threshold_are_applied() {
 fn nearest_vector_query_retains_only_the_requested_top_k_candidates() {
     let mut state = FirestoreState::new();
     for index in 0..2_000 {
-        let value = f64::from(index);
+        let value = f64::from(i32::try_from(index).unwrap());
         state
             .commit(
                 &[Write {
                     op: WriteOp::Set {
                         path: path(&format!("items/item-{index:04}")),
-                        fields: [("embedding".to_owned(), Value::Vector(vec![value, 0.0]))]
-                            .into_iter()
-                            .collect(),
+                        fields: [
+                            ("embedding".to_owned(), Value::Vector(vec![value, 0.0])),
+                            ("rank".to_owned(), Value::Integer(index)),
+                        ]
+                        .into_iter()
+                        .collect(),
                         update_mask: None,
                     },
                     precondition: None,
                     transforms: vec![],
                 }],
                 None,
-                LogicalInstant::from_unix_seconds(4_000 + i64::from(index)),
+                LogicalInstant::from_unix_seconds(4_000 + index),
             )
             .unwrap();
     }
@@ -413,6 +416,39 @@ fn nearest_vector_query_retains_only_the_requested_top_k_candidates() {
         .unwrap();
     let (documents, query_stats) = state.run_query_with_stats(&query, None).unwrap();
 
+    assert_eq!(documents.len(), 1);
+    assert_eq!(query_stats.nearest_peak_candidates, 1);
+
+    let mut offset_query = nearest(DistanceMeasure::Euclidean, 1);
+    offset_query.offset = 100;
+    let (documents, query_stats) = state
+        .run_query_with_stats(&offset_query.canonicalize().unwrap(), None)
+        .unwrap();
+    assert_eq!(documents[0].path.document_id().as_str(), "item-0100");
+    assert_eq!(query_stats.peak_candidates, 0);
+    assert_eq!(query_stats.nearest_peak_candidates, 1);
+
+    let mut unbounded_explicit_order = nearest(DistanceMeasure::Euclidean, 1);
+    unbounded_explicit_order.offset = 1;
+    unbounded_explicit_order.order_by = vec![OrderClause {
+        field: fp("rank"),
+        direction: Direction::Ascending,
+    }];
+    assert!(matches!(
+        state.run_query(&unbounded_explicit_order.canonicalize().unwrap(), None),
+        Err(fireemu_core_firestore::store::FirestoreError::InvalidArgument(message))
+            if message.contains("unbounded offset")
+    ));
+
+    let mut bounded_explicit_order = nearest(DistanceMeasure::Euclidean, 1);
+    bounded_explicit_order.limit = Some(100);
+    bounded_explicit_order.order_by = vec![OrderClause {
+        field: fp("rank"),
+        direction: Direction::Ascending,
+    }];
+    let (documents, query_stats) = state
+        .run_query_with_stats(&bounded_explicit_order.canonicalize().unwrap(), None)
+        .unwrap();
     assert_eq!(documents.len(), 1);
     assert_eq!(query_stats.nearest_peak_candidates, 1);
 }

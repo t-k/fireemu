@@ -1200,6 +1200,58 @@ fn a_transaction_nearest_query_replays_with_vector_semantics_after_conflict() {
 }
 
 #[test]
+fn an_unrelated_commit_does_not_conflict_with_a_bounded_nearest_observation() {
+    use fireemu_core_firestore::query::{DistanceMeasure, FindNearest, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[
+                set(
+                    "items/near",
+                    &[("embedding", Value::Vector(vec![1.0, 0.0]))],
+                ),
+                set("items/far", &[("embedding", Value::Vector(vec![5.0, 0.0]))]),
+            ],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("items").unwrap(),
+    ))
+    .with_find_nearest(FindNearest {
+        vector_field: FieldPath::parse("embedding").unwrap(),
+        query_vector: vec![1.0, 0.0],
+        distance_measure: DistanceMeasure::Euclidean,
+        limit: 1,
+        distance_result_field: None,
+        distance_threshold: None,
+    })
+    .canonicalize()
+    .unwrap();
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    let nearest = state
+        .run_query_in_transaction(&transaction, &query)
+        .unwrap();
+    assert_eq!(nearest.len(), 1);
+    assert_eq!(nearest[0].path.document_id().as_str(), "near");
+
+    state
+        .commit(&[set("other/unrelated", &[])], None, t(2))
+        .unwrap();
+    state
+        .commit(
+            &[set("other/transaction-write", &[])],
+            Some(&transaction),
+            t(3),
+        )
+        .unwrap();
+}
+
+#[test]
 fn a_maximum_vector_query_is_charged_before_transaction_admission() {
     use fireemu_core_firestore::query::{
         DistanceMeasure, FieldOp, FilterExpr, FindNearest, Query, QueryScope,

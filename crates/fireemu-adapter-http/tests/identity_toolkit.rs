@@ -4645,6 +4645,65 @@ fn strict_admin_password_change_retained_refresh_reports_disabled_then_deleted()
 }
 
 #[test]
+fn strict_admin_credential_removal_keeps_refresh_and_returns_no_replacement_tokens() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "admin-credential-removal@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let refresh = signed["refreshToken"].clone();
+
+    let (status, removed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": signed["localId"], "deleteAttribute": ["PASSWORD"]}),
+    );
+    assert_eq!(status, 200, "{removed}");
+    for field in ["idToken", "refreshToken", "expiresIn"] {
+        assert!(removed.get(field).is_none(), "{field}: {removed}");
+    }
+
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+}
+
+#[test]
+fn strict_self_service_credential_removal_keeps_refresh_and_returns_no_replacement_tokens() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "client-credential-removal@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let refresh = signed["refreshToken"].clone();
+
+    let (status, removed) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": signed["idToken"], "deleteAttribute": ["PASSWORD"]}),
+    );
+    assert_eq!(status, 200, "{removed}");
+    for field in ["idToken", "refreshToken", "expiresIn"] {
+        assert!(removed.get(field).is_none(), "{field}: {removed}");
+    }
+
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+}
+
+#[test]
 fn self_service_password_change_invalidates_an_existing_session_cookie() {
     let s = state();
     let (status, signed_up) = post(

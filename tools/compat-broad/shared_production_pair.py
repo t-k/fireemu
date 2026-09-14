@@ -8,8 +8,8 @@ from urllib.parse import quote
 
 from batch_adapter import observer_digest
 from batch_pair import normalize as batch_normalize
-from broad_contract import digest
-from shared_cases import manifest
+from broad_contract import digest, local_origin
+from shared_cases import campaign_manifest, manifest
 
 G0_PRODUCTION_RESULT_SHA256 = (
     "47672f4e3162b4a0ddfb7baaab622007602aeed6c1fa3d6e5e84034bcbb87772"
@@ -375,6 +375,180 @@ def _compare(production, local, *, g0_recompare=False):
 
 def compare(production, local):
     return _compare(production, local)
+
+
+def compare_campaign_rows(production, local, expected_ids, expected_preflight=None):
+    """Compare a closed shared-adapter receipt while retaining lifecycle status.
+
+    This is the same typed response boundary as the shared comparator, restricted
+    to a campaign's concrete row IDs. A complete semantic mismatch is evidence,
+    whereas missing state or cleanup is indeterminate.
+    """
+    result = {
+        "recordingComplete": production.get("recordingComplete") is True
+        and local.get("recordingComplete") is True,
+        "collectionComplete": production.get("collectionComplete") is True
+        and local.get("collectionComplete") is True,
+        "stateValidation": production.get("stateValidation") is True
+        and local.get("stateValidation") is True,
+        "cleanupComplete": production.get("cleanupComplete") is True
+        and local.get("cleanupComplete") is True,
+        "preflightDrift": False,
+        "rows": [],
+        "compatibility": "indeterminate",
+    }
+    if expected_preflight is not None and (
+        production.get("preflight") != expected_preflight
+        or local.get("preflight") != expected_preflight
+    ):
+        result["preflightDrift"] = True
+        return result
+    if not (result["collectionComplete"] and result["cleanupComplete"]):
+        return result
+    evidences = []
+    for receipt in (production, local):
+        evidence = receipt.get("principalEvidence")
+        if not _campaign_receipt_matches_manifest(receipt, evidence):
+            return result
+        evidences.append(evidence)
+    if _campaign_evidence_binding(evidences[0]) != _campaign_evidence_binding(evidences[1]):
+        return result
+    left, right = production.get("rows", []), local.get("rows", [])
+    if [row.get("id") for row in left] != list(expected_ids) or [
+        row.get("id") for row in right
+    ] != list(expected_ids):
+        return result
+    for a, b in zip(left, right, strict=True):
+        result["rows"].append(
+            {
+                "id": a["id"],
+                "production": {"status": a.get("status"), "body": a.get("body")},
+                "local": {"status": b.get("status"), "body": b.get("body")},
+                "verdict": "match"
+                if digest([a.get("status"), a.get("body")])
+                == digest([b.get("status"), b.get("body")])
+                else "mismatch",
+            }
+        )
+    result["compatibility"] = (
+        "match" if all(row["verdict"] == "match" for row in result["rows"]) else "mismatch"
+    )
+    return result
+
+
+def _campaign_receipt_matches_manifest(receipt, evidence):
+    if not isinstance(evidence, dict):
+        return False
+    if evidence.get("job") != "query-explain" or not isinstance(evidence.get("nonce"), str):
+        return False
+    try:
+        expected = campaign_manifest(evidence["nonce"])
+    except ValueError:
+        return False
+    origins = evidence.get("localOrigins")
+    if not isinstance(origins, dict) or set(origins) != {"auth", "firestore"}:
+        return False
+    try:
+        local_origin(origins["auth"])
+        local_origin(origins["firestore"])
+    except (TypeError, ValueError):
+        return False
+    expected["localOrigins"] = origins
+    if evidence.get("planDigest") != digest(expected):
+        return False
+    job = expected["jobs"]["query-explain"]
+    rows = receipt.get("rows", [])
+    if [row.get("id") for row in rows] != job["stepIds"]:
+        return False
+    if [row.get("request") for row in rows] != job["observation"]:
+        return False
+    dispatch = evidence.get("dispatch")
+    if not isinstance(dispatch, dict):
+        return False
+    observation_events = dispatch.get("observation", [])
+    if len(observation_events) != len(rows):
+        return False
+    for index, (event, row, operation) in enumerate(
+        zip(observation_events, rows, job["observation"], strict=True)
+    ):
+        if (
+            event.get("index") != index
+            or event.get("requestDigest") != digest(operation)
+            or event.get("requestDigest") != digest(row.get("request"))
+            or event.get("completed") is not True
+            or event.get("status") != row.get("status")
+            or event.get("responseDigest") != digest(row.get("body"))
+        ):
+            return False
+    cleanup = receipt.get("cleanup", [])
+    declared_cleanup = job["recovery"]
+    if len(cleanup) != len(declared_cleanup):
+        return False
+    recovery_events = dispatch.get("recovery", [])
+    verified_events = 0
+    for index, (row, declared) in enumerate(zip(cleanup, declared_cleanup, strict=True)):
+        operation = dict(declared)
+        source = operation.pop("versionFrom", None)
+        valid_version = False
+        if source is not None:
+            prior = cleanup[source]
+            if prior.get("status") == 200 and isinstance(prior.get("body"), dict):
+                version = prior["body"].get("updateTime")
+                if isinstance(version, str) and version:
+                    valid_version = True
+                    operation["path"] += "?currentDocument.updateTime=" + quote(version, safe="")
+        if row.get("index") != index or row.get("request") != operation:
+            return False
+        matching = [event for event in recovery_events if event.get("index") == index]
+        if source is not None and not valid_version:
+            skipped = {
+                "index": index,
+                "request": operation,
+                "status": None,
+                "body": {"skipped": "absent-or-unavailable-cleanup-read"},
+            }
+            if operation.get("method") != "DELETE" or digest(row) != digest(skipped) or matching:
+                return False
+            continue
+        if row.get("status") is None or len(matching) != 1:
+            return False
+        event = matching[0]
+        if (
+            event.get("index") != index
+            or event.get("requestDigest") != digest(operation)
+            or event.get("completed") is not True
+            or event.get("status") != row.get("status")
+            or event.get("responseDigest") != digest(row.get("body"))
+        ):
+            return False
+        verified_events += 1
+    if len(recovery_events) != verified_events:
+        return False
+    for resource in job["resources"]:
+        reads = [
+            row for row in cleanup
+            if row["request"]["method"] == "GET"
+            and row["request"]["path"] == "/v1/" + resource
+        ]
+        if not reads or reads[-1].get("status") != 404:
+            return False
+    return True
+
+
+def _campaign_evidence_binding(evidence):
+    return {
+        "planDigest": evidence["planDigest"],
+        "job": evidence["job"],
+        "nonce": evidence["nonce"],
+        "localOrigins": evidence["localOrigins"],
+        "dispatchRequestDigests": {
+            phase: [
+                (event.get("index"), event.get("requestDigest"))
+                for event in evidence["dispatch"][phase]
+            ]
+            for phase in ("observation", "recovery")
+        },
+    }
 
 
 def compare_g0_runtime_recompare(production_path, local):

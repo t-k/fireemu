@@ -2140,13 +2140,24 @@ fn handle_with_policy(
             store.tenant_id().map(str::to_owned),
         )
     };
-    let operation_gate = if state.blocking.as_deref().is_some_and(|blocking| {
+    // Project config updates and tenant publication share the namespace gate. This keeps the
+    // registry's parent read/modify/write and inherited-config snapshot in one request order.
+    let project_mutation = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if matches!(
+                route.handler,
+                routes::Handler::AdminUpdateProjectConfig | routes::Handler::TenantCreate
+            )
+    );
+    let blocking_auth = state.blocking.as_deref().is_some_and(|blocking| {
         matches!(
             resolution,
             routes::Resolution::Matched { route, .. }
                 if handler_may_invoke_blocking_auth(blocking, route.handler)
         )
-    }) {
+    });
+    let operation_gate = if project_mutation || blocking_auth {
         let gate = match state.registry.as_ref() {
             Some(registry) => {
                 let Some(gate) = registry.operation_gate(&store_project, store_tenant.as_deref())
@@ -2553,25 +2564,6 @@ fn dispatch(
     }
 }
 
-fn inferred_project_config_fields(body: &Value) -> Result<Vec<String>, JsonResponse> {
-    let mut fields = Vec::new();
-    for (parent, child) in [
-        ("signIn", "allowDuplicateEmails"),
-        ("emailPrivacyConfig", "enableImprovedEmailPrivacy"),
-    ] {
-        let Some(value) = body.get(parent) else {
-            continue;
-        };
-        let Some(object) = value.as_object() else {
-            return Err(error(400, "INVALID_ARGUMENT"));
-        };
-        if object.contains_key(child) {
-            fields.push(format!("{parent}.{child}"));
-        }
-    }
-    Ok(fields)
-}
-
 fn apply_project_config_fields(
     config: &mut fireemu_core_auth::store::ProjectAuthConfig,
     body: &Value,
@@ -2677,16 +2669,25 @@ fn project_config_management(
             body: project_config_json(config),
         };
     }
+    if !body.is_object() {
+        return error(400, "INVALID_ARGUMENT");
+    }
     let fields = match update_mask(query) {
         Ok(Some(fields)) => fields,
-        Ok(None) => match inferred_project_config_fields(body) {
-            Ok(fields) => fields,
-            Err(response) => return response,
-        },
+        Ok(None) => vec![
+            "signIn.allowDuplicateEmails".to_owned(),
+            "emailPrivacyConfig.enableImprovedEmailPrivacy".to_owned(),
+        ],
         Err(response) => return response,
     };
     if let Err(response) = apply_project_config_fields(&mut config, body, &fields) {
         return response;
+    }
+    if fields.is_empty() {
+        return JsonResponse {
+            status: 200,
+            body: project_config_json(config),
+        };
     }
     drop(store);
     if let Some(registry) = &state.registry {
@@ -3146,7 +3147,11 @@ fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse>
         .filter(|pair| !pair.is_empty())
     {
         let (key, candidate) = pair.split_once('=').unwrap_or((pair, ""));
-        if decode_query_component(key) != "updateMask" {
+        if malformed_query_component(key) || malformed_query_component(candidate) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        let decoded_key = decode_query_component(key);
+        if decoded_key != "updateMask" {
             continue;
         }
         if value.is_some() {
@@ -3181,6 +3186,25 @@ fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse>
         fields.push(field.to_owned());
     }
     Ok(Some(fields))
+}
+
+fn malformed_query_component(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+            {
+                return true;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    false
 }
 
 fn selected_fields(query: Option<&str>) -> Vec<String> {
@@ -3240,6 +3264,9 @@ fn patch_saml(
     body: &Value,
     query: Option<&str>,
 ) -> Result<InboundSamlProviderConfig, JsonResponse> {
+    if !body.is_object() {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
     let fields = update_mask(query)?.unwrap_or_default();
     for field in fields {
         match field.as_str() {

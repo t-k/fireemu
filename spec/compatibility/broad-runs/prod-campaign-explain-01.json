@@ -16,7 +16,7 @@
     "database": "(default)",
     "edition": "STANDARD",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
-    "observerSha256": "7570a78edb5cd67dbb00474c0406b55ac9551f56ecc95b750c7455ca98c38864",
+    "observerSha256": "f3f5ae0e5dc690fa1038d824a61908ca05c96daae31e212cd41092ef17e80d48",
     "configurationDigest": "3c4373d176fa6f939bbba0b3c9cb7b682abdef0365ce086b59d8198028867b6f"
   },
   "template": {

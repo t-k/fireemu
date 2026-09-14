@@ -178,7 +178,7 @@ def production_preflight_requirements(permission: dict) -> dict:
         "kind": "production-campaign-explain-01-permission-v1",
         "manifestSha256": digest(manifest()),
         "comparisonContractDigest": digest(binding()),
-        "observerSha256": observer_digest(),
+        "observerSha256": campaign_observer_digest(),
         "project": PROJECT,
         "projectNumber": NUMBER,
         "quotaProject": PROJECT,
@@ -246,8 +246,14 @@ def compare_production_local(production: dict, local: dict) -> dict:
         if value.get("manifestDigest") != digest(manifest()):
             result["reason"] = "manifest drift"
             return result
-        if value.get("observerSha256") not in (None, campaign_observer_digest()):
+        if value.get("observerSha256") != campaign_observer_digest():
             result["reason"] = "observer drift"
+            return result
+        if value.get("configurationDigest") != digest(configuration()):
+            result["reason"] = "configuration drift"
+            return result
+        if not isinstance(value.get("nonce"), str) or not re.fullmatch(r"[a-f0-9]{32}", value["nonce"]):
+            result["reason"] = "nonce evidence missing"
             return result
     production_job = production.get("jobs", {}).get("query-explain", production)
     local_job = local.get("jobs", {}).get("query-explain", local)
@@ -327,6 +333,10 @@ def execute(permission: dict, nonce: str, output: Path, api_key: str, local: Pat
             "permissionDigest": digest(permission),
             "manifestDigest": digest(manifest()),
             "comparisonContractDigest": digest(binding()),
+            "localRecordSha256": local_digest,
+            "observerSha256": campaign_observer_digest(),
+            "nonce": nonce,
+            "configurationDigest": digest(configuration()),
             "metadataEvidence": coordinator.metadata_evidence,
             "databaseObservations": coordinator.database_observations,
             "jobs": jobs,

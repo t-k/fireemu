@@ -70,7 +70,10 @@ def run(output: Path, nonce: str = "a" * 32) -> dict:
         batch_adapter.wire = original
     result["manifestDigest"] = __import__("campaign_explain").manifest_digest()
     result["observerSha256"] = __import__("campaign_explain").campaign_observer_digest()
-    result["configurationUnchanged"] = True
+    result["configurationDigest"] = __import__("campaign_explain").digest(__import__("campaign_explain").configuration())
+    result["configurationEvidence"] = {"source": "fixed-local-config", "configurationDigest": result["configurationDigest"]}
+    result["configurationUnchanged"] = result["configurationDigest"] == __import__("campaign_explain").digest(__import__("campaign_explain").configuration())
+    result["nonce"] = nonce
     save(output / "artifact.json", {"kind": "built-current-artifact", "path": str(binary), "artifactSha256": build["artifactSha256"], "collectorDigest": batch_adapter.observer_digest()})
     save(output / "process.json", {"pid": os.getpid(), "argv": sys.argv})
     (output / "batch").mkdir(mode=0o700, exist_ok=True)

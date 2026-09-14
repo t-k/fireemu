@@ -1,10 +1,10 @@
 {
   "kind": "query-explain-reference-evaluator-anchor-v3",
-  "evaluatorSourceCommit": "c94cce0fc861640296f4ffccf3ab374626925fba",
+  "evaluatorSourceCommit": "33dd069ea9590727164c45381f8b427247ecd56b",
   "sourceFiles": {
-    "tools/compat-explain-reference-v3/evaluate.py": "6e5055888d53db7686f90574438c3f0ef7abcd6caeeacb7aab8d324dfe80b406",
-    "tools/compat-explain-reference-v3/test_evaluate_v3.py": "8bfeccc1a8966c4ee17df6c0e77402203104632f2a38fb2f290db930dbdaaea4",
-    "docs/compatibility/query-explain-saved-reference-v3.md": "524b333bff88776f46a191b7918b0f2bc640d51eda378addd49e1db07d445747",
+    "tools/compat-explain-reference-v3/evaluate.py": "a99735c06df1d5497dfc90e33b01b5318db613e8df3efe06657eee0e3174ab02",
+    "tools/compat-explain-reference-v3/test_evaluate_v3.py": "e8518b62ab6b49f31a2522bae7e99fb6ead3b51ebaee39d779732c14647dff07",
+    "docs/compatibility/query-explain-saved-reference-v3.md": "30619c6ae3ae29a291a006499eddf7d4b7619b65958581116b8613d96d61d382",
     "spec/compatibility/broad-runs/query-explain-reference-inputs-v3.json": "31a4d48199a2ba35ab7e1ec1861fdbdeb7cda4ed4f9f6f170a9c03de8567b476",
     "tools/compat-explain-reference/evaluate.py": "298f4084f3d1318c038c77cf24ef4de8b79c90f67535d2d2bfbb90212ae13742",
     "tools/compat-explain-reference/test_evaluate.py": "6f0b4345d45501af75335fa0dc94372a7adcd259387292f540fbd8d3880382b9",
@@ -15,5 +15,5 @@
     "tools/compat-inventory/pyproject.toml": "2cd843edbfa0d2603121113cadd8c02a825c48dd11c95e54edb243507128d6a7",
     "tools/compat-inventory/uv.lock": "0a2374a0081466d557ee5d4fdc14f99f00b1b8aacf983705d80ade5246f8ed55"
   },
-  "contractDigest": "55185e80f489131b0ef8f97f2c5d4997bd2f5d365c41def8790baa21b73622fa"
+  "contractDigest": "dafe4b80196a357ceaf448ed642de69c5cfa54dc0e3a2b57e5a8cb7403ccde14"
 }

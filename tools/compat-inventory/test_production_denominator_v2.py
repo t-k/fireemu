@@ -14,6 +14,10 @@ def load(path: str):
     return json.loads((ROOT / path).read_text())
 
 
+def load_mapping():
+    return load(v2.MAPPING_PATH)
+
+
 def test_generated_v2_has_complete_parent_targets_and_sparse_provider_binding():
     value = load(v2.OUTPUT_PATH)
     assert value["schemaVersion"] == 2
@@ -87,6 +91,79 @@ def test_v2_validator_rejects_target_binding_index_mutation():
     target["bindingIds"] = []
     with pytest.raises(v2.ValidationError, match="target binding index"):
         v2.validate_document(ROOT, mutated)
+
+
+def test_mapping_requires_the_approved_comparison_subject_and_decision():
+    mapping = load_mapping()
+    parent = load(v2.PARENT_PATH)
+    parent_targets = {target["id"]: target for target in parent["targets"]}
+    mutated = copy.deepcopy(mapping)
+    mutated["comparisonApproval"] = mutated["receipt"]
+    with pytest.raises(v2.ValidationError, match="approval"):
+        v2.validate_mapping(ROOT, mutated, parent_targets)
+
+    approval = load("spec/compatibility/evidence/auth-pending-trigger-provider-unlink/comparison-approval.json")
+    approval["decision"] = "reject"
+    with pytest.raises(v2.ValidationError, match="approval"):
+        v2.validate_approval(ROOT, approval, load("spec/compatibility/evidence/auth-pending-trigger-provider-unlink/local-comparison.json"), mapping["corpus"])
+
+
+def test_mapping_rejects_sibling_target_and_wrong_case_pointer():
+    mapping = load_mapping()
+    parent = load(v2.PARENT_PATH)
+    parent_targets = {target["id"]: target for target in parent["targets"]}
+    sibling = copy.deepcopy(mapping)
+    sibling["bindings"][0]["surfaces"][1]["targetId"] += "/items"
+    with pytest.raises(v2.ValidationError, match="provider-unlink mapping"):
+        v2.validate_mapping(ROOT, sibling, parent_targets)
+
+    wrong_case = copy.deepcopy(mapping)
+    wrong_case["bindings"][0]["caseId"] = "held-start"
+    with pytest.raises(v2.ValidationError, match="provider-unlink mapping"):
+        v2.validate_mapping(ROOT, wrong_case, parent_targets)
+
+
+def test_mapping_rejects_unrelated_assertion_pointer():
+    mapping = load_mapping()
+    parent = load(v2.PARENT_PATH)
+    parent_targets = {target["id"]: target for target in parent["targets"]}
+    mutated = copy.deepcopy(mapping)
+    mutated["bindings"][0]["surfaces"][0]["assertionPointers"] = ["/production/target"]
+    with pytest.raises(v2.ValidationError, match="provider-unlink mapping"):
+        v2.validate_mapping(ROOT, mutated, parent_targets)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "message"),
+    [
+        (("evidence", 0, "local", "runtimeArtifact", "sha256"), "0" * 64, "runtime artifact"),
+        (("evidence", 0, "local", "runtimeSourceCommit"), "0" * 40, "runtime source"),
+        (("evidence", 0, "comparator", "contract", "sha256"), "0" * 64, "contract"),
+    ],
+)
+def test_exported_document_rejects_forged_nested_identity(path, replacement, message):
+    value = load(v2.OUTPUT_PATH)
+    mutated = copy.deepcopy(value)
+    target = mutated
+    for component in path[:-1]:
+        target = target[component]
+    target[path[-1]] = replacement
+    with pytest.raises(v2.ValidationError, match=message):
+        v2.validate_document(ROOT, mutated)
+
+
+def test_exported_document_rejects_unsafe_corpus_reference_and_unbound_partial_coverage():
+    value = load(v2.OUTPUT_PATH)
+    unsafe = copy.deepcopy(value)
+    unsafe["evidence"][0]["corpus"]["inputs"] = [{"path": "../../outside", "sha256": "0" * 64, "unknown": True}]
+    with pytest.raises(v2.ValidationError, match="corpus input"):
+        v2.validate_document(ROOT, unsafe)
+
+    partial = copy.deepcopy(value)
+    target = next(item for item in partial["targets"] if item["coverage"] == "none")
+    target["coverage"] = "partial"
+    with pytest.raises(v2.ValidationError, match="coverage"):
+        v2.validate_document(ROOT, partial)
 
 
 def test_v2_json_parser_rejects_duplicate_keys(tmp_path):

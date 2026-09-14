@@ -20,6 +20,21 @@ DOCUMENT_PATH = "docs/compatibility/production-denominator-v2.md"
 PARENT_PATH = v1.OUTPUT_PATH
 PARENT_SHA256 = "189b614707fd0cbf7090146679c14a9d27184340cecf67d934c3ffe7fdca038b"
 ADAPTER_ID = "auth-pending-trigger-provider-unlink.v1"
+PROVIDER_CASE_ID = "trigger"
+PROVIDER_METHOD_TARGET = "identitytoolkit-v1:method:REST:identitytoolkit.accounts.update"
+PROVIDER_FIELD_TARGET = "identitytoolkit-v1:field:REST:schemas/GoogleCloudIdentitytoolkitV1SetAccountInfoRequest/properties/deleteProvider"
+PROVIDER_FACTS = {
+    "trigger": "provider-unlink",
+    "transport": "REST",
+    "tenant": False,
+    "providerLinkedBeforeTransition": True,
+    "providerAbsentAfterTransition": True,
+    "heldCredentialAndSmsSessionCreatedBeforeTransition": True,
+}
+PROVIDER_CORPUS_INPUTS = [
+    "tools/auth-pending-triggers/triggers_contract.py",
+    "tools/auth-pending-triggers/triggers_recorder.py",
+]
 EVIDENCE_LEVELS = {"historical-reference", "local-verified", "production-observed", "oracle-compared"}
 COMPARISON_RESULTS = {"not-compared", "match", "mismatch", "indeterminate"}
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -73,6 +88,17 @@ def git_blob_digest(root: Path, commit: str, relative: str) -> str:
     except subprocess.CalledProcessError as error:
         raise ValidationError(f"collector input is missing at bound commit: {relative}") from error
     return hashlib.sha256(content).hexdigest()
+
+
+def validate_commit_exists(root: Path, commit: str, context: str) -> None:
+    if not isinstance(commit, str) or not HEX40.fullmatch(commit):
+        raise ValidationError(f"{context}: commit is not a full commit SHA")
+    try:
+        subprocess.check_call(
+            ["git", "cat-file", "-e", f"{commit}^{{commit}}"], cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+    except subprocess.CalledProcessError as error:
+        raise ValidationError(f"{context}: commit does not exist") from error
 
 
 def validate_bound_inputs(root: Path, commit: str, inputs: dict[str, Any], context: str) -> None:
@@ -188,6 +214,8 @@ def validate_mapping(root: Path, mapping: dict[str, Any], parent_targets: dict[s
         raise ValidationError("mapping corpus does not equal receipt corpus")
     if len(set(corpus["caseIds"])) != len(corpus["caseIds"]) or not corpus["caseIds"]:
         raise ValidationError("mapping corpus has duplicate or missing cases")
+    if sorted(corpus["inputPaths"]) != PROVIDER_CORPUS_INPUTS:
+        raise ValidationError("provider-unlink corpus inputs are not allowlisted")
     for path in corpus["inputPaths"]:
         if not isinstance(path, str):
             raise ValidationError("mapping corpus input path is invalid")
@@ -216,9 +244,10 @@ def validate_mapping(root: Path, mapping: dict[str, Any], parent_targets: dict[s
         expected_match = semantic_row(prod_by_id[case_id]) == semantic_row(local_by_id[case_id])
         if comparison_rows[case_id].get("sameSemanticProjection") is not expected_match:
             raise ValidationError("stored comparison does not match recomputed projection")
+    validate_approval(root, approval, comparison, corpus)
     bindings = mapping["bindings"]
-    if not isinstance(bindings, list) or not bindings:
-        raise ValidationError("mapping has no bindings")
+    if not isinstance(bindings, list) or len(bindings) != 1:
+        raise ValidationError("provider-unlink mapping must contain exactly one binding")
     binding_ids: set[str] = set()
     seen: set[tuple[str, str]] = set()
     for binding in bindings:
@@ -230,6 +259,8 @@ def validate_mapping(root: Path, mapping: dict[str, Any], parent_targets: dict[s
         binding_ids.add(bid)
         if case_id not in corpus["caseIds"]:
             raise ValidationError("binding case selector is not in corpus")
+        if case_id != PROVIDER_CASE_ID:
+            raise ValidationError("provider-unlink mapping case must be trigger")
         if binding["evidenceLevel"] not in EVIDENCE_LEVELS or binding["comparisonResult"] not in COMPARISON_RESULTS:
             raise ValidationError("invalid binding evidence level")
         if binding["comparisonResult"] == "match" and comparison_rows[binding["caseId"]].get("sameSemanticProjection") is not True:
@@ -237,11 +268,13 @@ def validate_mapping(root: Path, mapping: dict[str, Any], parent_targets: dict[s
         if binding["comparisonResult"] == "mismatch" and comparison_rows[binding["caseId"]].get("sameSemanticProjection") is True:
             raise ValidationError("binding comparison result is forged")
         exact(binding["conditions"], {"facts", "evidencePointers"}, "binding conditions")
+        if binding["conditions"]["facts"] != PROVIDER_FACTS or binding["conditions"]["evidencePointers"] != ["/production/trigger", "/production/providerLinked", "/production/cases/1/checks/providerAbsentAfter"]:
+            raise ValidationError("provider-unlink mapping conditions are not allowlisted")
         for p in binding["conditions"]["evidencePointers"]:
             pointer({"production": receipt["production"], "local": comparison["local"]}, p, "condition")
         surfaces = binding["surfaces"]
-        if not isinstance(surfaces, list) or not surfaces:
-            raise ValidationError("binding has no surfaces")
+        if not isinstance(surfaces, list) or len(surfaces) != 2 or {surface.get("targetId") for surface in surfaces} != {PROVIDER_METHOD_TARGET, PROVIDER_FIELD_TARGET}:
+            raise ValidationError("provider-unlink mapping surfaces are not allowlisted")
         for surface in surfaces:
             exact(surface, {"targetId", "observationPointers", "assertionPointers", "coverage", "reason"}, "binding surface")
             target_id = surface["targetId"]
@@ -249,8 +282,19 @@ def validate_mapping(root: Path, mapping: dict[str, Any], parent_targets: dict[s
                 raise ValidationError("target selector is not an in-scope parent target")
             if surface["coverage"] != "partial" or not surface["reason"]:
                 raise ValidationError("surface coverage must remain partial")
+            expected_assertions = {
+                PROVIDER_METHOD_TARGET: ["/production/cases/1/checks/noError", "/local/cases/1/checks/noError"],
+                PROVIDER_FIELD_TARGET: ["/production/cases/1/checks/providerAbsentAfter", "/local/cases/1/checks/providerAbsentAfter"],
+            }[target_id]
+            if surface["observationPointers"] != ["/production/cases/1", "/local/cases/1"] or surface["assertionPointers"] != expected_assertions:
+                raise ValidationError("provider-unlink mapping assertion pointers are not allowlisted")
             for p in surface["observationPointers"] + surface["assertionPointers"]:
                 pointer({"production": receipt["production"], "local": comparison["local"]}, p, "surface")
+            observations = [pointer({"production": receipt["production"], "local": comparison["local"]}, p, "surface") for p in surface["observationPointers"]]
+            if any(observation.get("id") != PROVIDER_CASE_ID for observation in observations):
+                raise ValidationError("provider-unlink mapping observation case mismatch")
+            if any(pointer({"production": receipt["production"], "local": comparison["local"]}, p, "surface") is not True for p in surface["assertionPointers"]):
+                raise ValidationError("provider-unlink mapping assertions must be true")
             key = (case_id, target_id)
             if key in seen:
                 raise ValidationError("duplicate mapping assertion")
@@ -260,6 +304,19 @@ def validate_mapping(root: Path, mapping: dict[str, Any], parent_targets: dict[s
 
 def semantic_row(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key != "elapsedMs"}
+
+
+def validate_approval(root: Path, approval: dict[str, Any], comparison: dict[str, Any], corpus: dict[str, Any]) -> None:
+    exact(approval, {"schemaVersion", "subjectSha256", "sourceCommit", "scope", "cases", "reviewer", "reviewedAt", "decision"}, "approval")
+    if approval["schemaVersion"] != 1 or approval["decision"] != "approve":
+        raise ValidationError("approval decision is not approve")
+    if approval["subjectSha256"] != digest(comparison):
+        raise ValidationError("approval subject digest does not match comparison")
+    if approval["cases"] != corpus["caseIds"]:
+        raise ValidationError("approval cases do not match corpus")
+    if not isinstance(approval["sourceCommit"], str) or not HEX40.fullmatch(approval["sourceCommit"]):
+        raise ValidationError("approval source commit is invalid")
+    validate_commit_exists(root, approval["sourceCommit"], "approval source")
 
 
 def evidence_document(root: Path, mapping: dict[str, Any], parent: dict[str, Any], source_sha: str, receipt: dict[str, Any], comparison: dict[str, Any]) -> dict[str, Any]:
@@ -319,7 +376,7 @@ def evidence_document(root: Path, mapping: dict[str, Any], parent: dict[str, Any
             "comparison representation is normalized and excludes elapsedMs; it does not prove wire bytes, headers or timing",
             "one non-tenant REST provider-unlink transition is partial evidence and does not cover sibling, item, tenant, SDK or Rules surfaces",
         ],
-        "approval": {"path": mapping["comparisonApproval"]["path"], "sha256": mapping["comparisonApproval"]["sha256"], "subjectDigest": comparison.get("productionSubjectSha256")},
+        "approval": {"path": mapping["comparisonApproval"]["path"], "sha256": mapping["comparisonApproval"]["sha256"], "subjectDigest": digest(comparison)},
     }
     bindings = []
     for binding in mapping["bindings"]:
@@ -391,7 +448,12 @@ def validate_document(root: Path, value: dict[str, Any]) -> None:
     exact(evidence["approval"], {"path", "sha256", "subjectDigest"}, "evidence approval")
     if evidence["corpus"]["id"] != receipt["corpus"]["slice"] or evidence["corpus"]["revision"] != mapping["corpus"]["revision"] or evidence["corpus"]["caseIds"] != mapping["corpus"]["caseIds"] or evidence["corpus"]["sha256"] != digest(receipt["corpus"]):
         raise ValidationError("evidence corpus selector or digest mismatch")
-    if evidence["approval"] != {"path": mapping["comparisonApproval"]["path"], "sha256": mapping["comparisonApproval"]["sha256"], "subjectDigest": comparison.get("productionSubjectSha256")}:
+    expected_corpus_inputs = [{"path": path, "sha256": file_digest(root, path)} for path in sorted(mapping["corpus"]["inputPaths"])]
+    for input_ref in evidence["corpus"]["inputs"]:
+        exact(input_ref, {"path", "sha256"}, "corpus input")
+    if evidence["corpus"]["inputs"] != expected_corpus_inputs:
+        raise ValidationError("corpus input references do not match supported paths")
+    if evidence["approval"] != {"path": mapping["comparisonApproval"]["path"], "sha256": mapping["comparisonApproval"]["sha256"], "subjectDigest": digest(comparison)}:
         raise ValidationError("evidence approval selector mismatch")
     for binding in value["bindings"]:
         for surface in binding.get("surfaces", []):
@@ -432,9 +494,17 @@ def validate_document(root: Path, value: dict[str, Any]) -> None:
         raise ValidationError("local receipt selector mismatch")
     checked_reference(root, local["receipt"], "local comparison")
     exact(local, {"receipt", "runtimeArtifact", "runtimeSourceCommit", "runtimeInputs", "collector", "configuration"}, "local evidence")
+    exact(local["runtimeArtifact"], {"kind", "sha256", "version"}, "local runtime artifact")
+    if local["runtimeArtifact"] != comparison["local"]["artifact"]:
+        raise ValidationError("runtime artifact identity mismatch")
+    if local["runtimeSourceCommit"] != comparison["local"]["runtimeSourceCommit"]:
+        raise ValidationError("runtime source commit mismatch")
     exact(local["runtimeInputs"], {"commit", "digestAlgorithm", "sha256", "evidencePointer"}, "local runtime inputs")
-    if not HEX40.fullmatch(local["runtimeSourceCommit"]) or not HEX40.fullmatch(local["runtimeInputs"]["commit"]):
+    if not HEX64.fullmatch(local["runtimeArtifact"]["sha256"]) or not HEX40.fullmatch(local["runtimeSourceCommit"]) or not HEX40.fullmatch(local["runtimeInputs"]["commit"]):
         raise ValidationError("local runtime commit is invalid")
+    validate_commit_exists(root, local["runtimeSourceCommit"], "runtime source")
+    if local["runtimeInputs"]["commit"] != comparison["local"]["runtimeInputsCommit"]:
+        raise ValidationError("runtime input commit mismatch")
     if local["runtimeInputs"]["sha256"] != digest(comparison["local"]["build"]["inputs"]):
         raise ValidationError("local runtime inputs digest mismatch")
     exact(local["collector"], {"commit", "inputs"}, "local collector")
@@ -453,7 +523,20 @@ def validate_document(root: Path, value: dict[str, Any]) -> None:
     expected_comparison_result = "match" if all(row["sameSemanticProjection"] is True for row in comparison["comparison"]) else "mismatch"
     if comparator["result"] != expected_comparison_result:
         raise ValidationError("comparator result is forged")
-    validate_bound_inputs(root, receipt["production"]["reevaluatedWith"]["commit"], {item["path"]: item["sha256"] for item in comparator["inputs"]}, "comparator")
+    exact(comparator["contract"], {"digestAlgorithm", "sha256"}, "comparator contract")
+    if comparator["contract"] != {"digestAlgorithm": "sha256", "sha256": receipt["production"]["reevaluatedWith"]["contractSha256"]}:
+        raise ValidationError("comparator contract digest mismatch")
+    comparator_inputs = []
+    for item in comparator["inputs"]:
+        exact(item, {"path", "sha256"}, "comparator input")
+        comparator_inputs.append(item)
+    if len(comparator_inputs) != 1 or comparator_inputs[0]["path"] != "tools/publish-auth-pending-triggers-comparison.py":
+        raise ValidationError("comparator input path is not supported")
+    reevaluation_commit = receipt["production"]["reevaluatedWith"]["commit"]
+    expected_contract_hash = git_blob_digest(root, reevaluation_commit, "tools/auth-pending-triggers/triggers_contract.py")
+    if expected_contract_hash != comparator["contract"]["sha256"]:
+        raise ValidationError("comparator contract is not bound to contract bytes")
+    validate_bound_inputs(root, reevaluation_commit, {item["path"]: item["sha256"] for item in comparator_inputs}, "comparator")
     if comparator.get("productionSubjectDigest") != digest(receipt) or comparator.get("localSubjectDigest") != digest(comparison["local"]["cases"]):
         raise ValidationError("comparison subject digest mismatch")
     if evidence["comparator"]["result"] == "match" and not all(row["sameSemanticProjection"] is True for row in comparison["comparison"]):
@@ -478,8 +561,12 @@ def validate_document(root: Path, value: dict[str, Any]) -> None:
     for target in value["targets"]:
         if set(target["bindingIds"]) - binding_ids:
             raise ValidationError("target references unknown binding")
-        if target["bindingIds"] != sorted(set(expected_target_bindings.get(target["id"], []))):
+        expected_ids = sorted(set(expected_target_bindings.get(target["id"], [])))
+        if target["bindingIds"] != expected_ids:
             raise ValidationError("target binding index mismatch")
+        expected_coverage = "partial" if expected_ids else "none"
+        if target["coverage"] != expected_coverage:
+            raise ValidationError("target coverage does not match binding index")
 
 
 def serialized(value: dict[str, Any]) -> bytes:

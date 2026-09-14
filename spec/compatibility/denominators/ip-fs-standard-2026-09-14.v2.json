@@ -39,7 +39,7 @@
   },
   "generator": {
     "path": "tools/compat-inventory/production_denominator_v2.py",
-    "sha256": "0ebcdedbe08b4f3f59c370caaf31f3c826ff39ed77a4443a659a682accb7cb1d"
+    "sha256": "14bbf75b0861a2b8cc3eaf2ba7516c545e8d45790cc0f6946adaa47c1b4465fc"
   },
   "targets": [
     {
@@ -32609,7 +32609,7 @@
       "adapterId": "auth-pending-trigger-provider-unlink.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2.py",
-        "sha256": "0ebcdedbe08b4f3f59c370caaf31f3c826ff39ed77a4443a659a682accb7cb1d"
+        "sha256": "14bbf75b0861a2b8cc3eaf2ba7516c545e8d45790cc0f6946adaa47c1b4465fc"
       },
       "production": {
         "receipt": {
@@ -32777,7 +32777,7 @@
       "approval": {
         "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/comparison-approval.json",
         "sha256": "65507b1a64717c6b520dd12242c41e97b230a9bf4a4113471d4d2281c12ffdc1",
-        "subjectDigest": "8628018a57979e03f35c49950dbd7114e50c8e0b97d0b2f9063f09aa100c2f24"
+        "subjectDigest": "767e115915759a2969b22c82908130aa2a7bf26349cc6ea09dfbb18c7e0db253"
       }
     }
   ],

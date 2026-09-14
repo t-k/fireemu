@@ -56,6 +56,8 @@ The current feature candidate is `c55fe8f1180466bd2c4cac4a8d755b730bbbefcd`. Its
 
 These checks do not promote local-only or saved-reference evidence to current production compatibility. No new production operation was performed for this candidate verification, and the existing campaign package remains subject to its fixed configuration and API-key admission baseline. PR #1 is Draft and currently clean against `main`; the remaining parent groups and production-only evidence below remain open.
 
+On 2026-09-15, a read-only ADC preflight using `x-goog-user-project: fireemu-35fe6` confirmed the expected project identity, Database `database-settings-v2` projection and Auth configuration digest. The existing API-key resource is still owned by the expected project, but its current key string does not match the digest bound to the frozen Explain campaign. Admission stopped before any campaign data request; the accepted baseline and prior receipts remain unchanged.
+
 ## Completion rule
 
 This goal reaches `READY_FOR_COMPATIBILITY_REVIEW` only when every target parent group is `COMPAT_VERIFIED`, all required CI and final-artifact checks pass, saved and new production evidence remains reproducible, independent reviews have no blocker, and owned resources and processes are reclaimed. Until then the repository reports `IN_PROGRESS`, `BLOCKED_OWNER` for the specific owner-dependent production actions, or `BLOCKED_TECHNICAL` for a concrete technical blocker.

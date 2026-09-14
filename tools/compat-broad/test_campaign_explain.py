@@ -8,9 +8,96 @@ from broad_contract import digest
 from campaign_explain import (
     binding,
     campaign_manifest,
+    explain_response_valid,
     manifest,
     validate_manifest,
 )
+
+
+def explain_operation(*, analyze=True, empty=True):
+    return {
+        "method": "POST",
+        "path": "/v1/projects/p/databases/(default)/documents/c:runQuery",
+        "body": {
+            "structuredQuery": {"from": [{"collectionId": "items"}], "limit": 0 if empty else 1},
+            "explainOptions": {"analyze": analyze},
+        },
+    }
+
+
+def new_empty_analyze_body():
+    return [
+        {
+            "readTime": "2026-09-14T11:58:21.463876Z",
+            "explainMetrics": {
+                "planSummary": {},
+                "executionStats": {
+                    "executionDuration": "0.011995s",
+                    "readOperations": "1",
+                    "debugStats": {
+                        "documents_scanned": "0",
+                        "index_entries_scanned": "0",
+                        "billing_details": {
+                            "documents_billable": "0",
+                            "index_entries_billable": "0",
+                            "small_ops": "0",
+                            "min_query_cost": "0",
+                        },
+                    },
+                },
+            },
+        }
+    ]
+
+
+def test_explain_validator_accepts_new_empty_analyze_protojson_shape():
+    assert explain_response_valid(explain_operation(), 200, new_empty_analyze_body())
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-plan",
+        "missing-stats",
+        "wrong-index-entry",
+        "missing-read-operations",
+        "wrong-duration",
+        "negative-duration",
+        "wrong-debug-stat",
+        "wrong-billing-detail",
+        "omitted-default-nonempty",
+        "invalid-media",
+        "wrong-error-status",
+    ],
+)
+def test_explain_validator_rejects_invalid_metric_and_error_shapes(mutation):
+    body = new_empty_analyze_body()
+    status = 200
+    operation = explain_operation()
+    if mutation == "missing-plan":
+        body[0]["explainMetrics"].pop("planSummary")
+    elif mutation == "missing-stats":
+        body[0]["explainMetrics"].pop("executionStats")
+    elif mutation == "wrong-index-entry":
+        body[0]["explainMetrics"]["planSummary"]["indexesUsed"] = [1]
+    elif mutation == "missing-read-operations":
+        body[0]["explainMetrics"]["executionStats"].pop("readOperations")
+    elif mutation == "wrong-duration":
+        body[0]["explainMetrics"]["executionStats"]["executionDuration"] = 1
+    elif mutation == "negative-duration":
+        body[0]["explainMetrics"]["executionStats"]["executionDuration"] = "-1s"
+    elif mutation == "wrong-debug-stat":
+        body[0]["explainMetrics"]["executionStats"]["debugStats"]["documents_scanned"] = 0
+    elif mutation == "wrong-billing-detail":
+        body[0]["explainMetrics"]["executionStats"]["debugStats"]["billing_details"] = []
+    elif mutation == "omitted-default-nonempty":
+        operation = explain_operation(empty=False)
+    elif mutation == "invalid-media":
+        operation["contentType"] = "text/html"
+    else:
+        status = 400
+        body = [{"error": {"status": "bad status"}}]
+    assert not explain_response_valid(operation, status, body)
 
 
 def test_manifest_is_exactly_six_owned_explain_cases():

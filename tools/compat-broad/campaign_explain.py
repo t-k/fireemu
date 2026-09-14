@@ -544,6 +544,54 @@ def bind_receipt(receipt, state, adapter):
 def explain_response_valid(operation, status, value):
     """Validate REST wire shape while retaining well-formed semantic differences."""
 
+    def decimal_string(value):
+        return isinstance(value, str) and bool(re.fullmatch(r"\d+", value))
+
+    def duration_valid(value):
+        if not isinstance(value, str):
+            return False
+        match = re.fullmatch(r"(0|[1-9]\d*)(?:\.(\d{1,9}))?s", value)
+        if match is None:
+            return False
+        seconds = int(match.group(1))
+        fraction = match.group(2) or ""
+        return seconds < 315_576_000_000 or (
+            seconds == 315_576_000_000 and (not fraction or int(fraction) == 0)
+        )
+
+    def int64_string(value):
+        if not isinstance(value, str) or not re.fullmatch(r"-?\d+", value):
+            return False
+        try:
+            return -(2**63) <= int(value) <= 2**63 - 1
+        except ValueError:
+            return False
+
+    if not isinstance(operation, dict) or not isinstance(operation.get("body"), dict):
+        return False
+    content_type = operation.get("contentType", "application/json")
+    explain_options = operation["body"].get("explainOptions")
+    if (
+        not isinstance(explain_options, dict)
+        or type(explain_options.get("analyze")) is not bool
+        or operation.get("method") != "POST"
+        or not isinstance(operation.get("path"), str)
+        or not operation["path"].endswith((":runQuery", ":runAggregationQuery"))
+        or operation.get("form", False) is not False
+        or not isinstance(content_type, str)
+        or content_type.split(";", 1)[0].strip().lower() != "application/json"
+    ):
+        return False
+    analyze = explain_options["analyze"]
+    query = operation["body"].get("structuredQuery")
+    empty_analyze = (
+        analyze
+        and operation["path"].endswith(":runQuery")
+        and isinstance(query, dict)
+        and type(query.get("limit")) is int
+        and query["limit"] == 0
+    )
+
     def error_valid(row):
         error = row.get("error") if isinstance(row, dict) else None
         return (
@@ -563,7 +611,9 @@ def explain_response_valid(operation, status, value):
     ):
         return False
     if any("error" in row for row in value):
-        return all(set(row) == {"error"} and error_valid(row) for row in value)
+        return status >= 400 and all(
+            set(row) == {"error"} and error_valid(row) for row in value
+        )
     if status != 200:
         return False
     metrics_rows = [row["explainMetrics"] for row in value if "explainMetrics" in row]
@@ -571,21 +621,46 @@ def explain_response_valid(operation, status, value):
         return False
     metrics = metrics_rows[0]
     plan = metrics.get("planSummary")
-    if (
-        not isinstance(plan, dict)
-        or not isinstance(plan.get("indexesUsed"), list)
-        or not all(isinstance(index, dict) for index in plan["indexesUsed"])
+    if not isinstance(plan, dict):
+        return False
+    if "indexesUsed" not in plan and not empty_analyze:
+        return False
+    indexes_used = plan.get("indexesUsed", [])
+    if not isinstance(indexes_used, list) or not all(
+        isinstance(index, dict)
+        and all(
+            isinstance(key, str) and isinstance(item, str)
+            for key, item in index.items()
+        )
+        for index in indexes_used
     ):
         return False
-    analyze = operation["body"]["explainOptions"]["analyze"]
     if analyze:
         stats = metrics.get("executionStats")
-        if (
-            not isinstance(stats, dict)
-            or not isinstance(stats.get("resultsReturned"), str)
-            or not re.fullmatch(r"\d+", stats["resultsReturned"])
-        ):
+        if not isinstance(stats, dict):
             return False
+        if "resultsReturned" not in stats and not empty_analyze:
+            return False
+        if "resultsReturned" not in stats:
+            stats = {**stats, "resultsReturned": "0"}
+        if not decimal_string(stats["resultsReturned"]):
+            return False
+        if not int64_string(stats.get("readOperations")):
+            return False
+        if not duration_valid(stats.get("executionDuration")):
+            return False
+        debug_stats = stats.get("debugStats")
+        if not isinstance(debug_stats, dict):
+            return False
+        for key, item in debug_stats.items():
+            if key == "billing_details":
+                if not isinstance(item, dict) or not all(
+                    isinstance(name, str) and decimal_string(value)
+                    for name, value in item.items()
+                ):
+                    return False
+            elif not decimal_string(item):
+                return False
     for row in value:
         if not any(key in row for key in ("document", "result", "explainMetrics")):
             return False

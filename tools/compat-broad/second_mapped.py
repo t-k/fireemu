@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import os
 import signal
@@ -15,7 +14,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-from batch_adapter import Adapter, observer_digest, request_headers
+from batch_adapter import Adapter, request_headers
 from batch_contract import NUMBER, PROJECT, candidate
 from broad import run, save
 from broad_contract import digest
@@ -416,6 +415,7 @@ def execute_45(a, output, runtime_identity):
     users, rows, documents = {}, [], {}
     a.users = users
     from second_production_contract import binding as comparison_binding
+    from second_production_contract import observer_digest as comparison_observer_digest
 
     result = {
         "kind": "second45-local-run-v1",
@@ -426,17 +426,7 @@ def execute_45(a, output, runtime_identity):
         "nonce": nonce,
         "manifestDigest": digest(manifest()),
         "comparisonContractDigest": digest(comparison_binding()),
-        "observerDigest": digest(
-            {
-                "python": observer_digest(),
-                "wire": {
-                    name: hashlib.sha256(
-                        Path(__file__).with_name(name).read_bytes()
-                    ).hexdigest()
-                    for name in ("second_wire.mjs", "record-http.mjs")
-                },
-            }
-        ),
+        "observerDigest": comparison_observer_digest(),
         "bindings": users,
         "documents": documents,
         "rows": rows,

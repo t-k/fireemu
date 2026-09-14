@@ -90,28 +90,6 @@ WRONG_CODE = "246801"
 CLAIM_SENTINEL_KEY = "fireemuPrecedence"
 PHOTO_SENTINEL_PREFIX = "https://example.test/precedence-"
 
-# Local-only safety coverage. These observations deliberately stay outside CASES and
-# CORPUS: production revision 1 records only the tampered-token overlap, while the
-# valid-token authorization answers are checked against the local policy and API spec.
-LOCAL_VALID_ACTIVE_FIELDS = (
-    "customAttributes",
-    "emailVerified",
-    "mfa",
-    "linkProviderUserInfo",
-    "disableUser",
-)
-LOCAL_VALID_ACTIVE_REFUSED_FIELDS = (
-    "customAttributes",
-    "mfa",
-    "linkProviderUserInfo",
-)
-LOCAL_VALID_ACTIVE_ERRORS = {
-    "customAttributes": "INSUFFICIENT_PERMISSION",
-    "mfa": "OPERATION_NOT_ALLOWED",
-    "linkProviderUserInfo": "OPERATION_NOT_ALLOWED",
-    "disableUser": "OPERATION_NOT_ALLOWED",
-}
-
 
 def error_code(value):
     error = value.get("error") if isinstance(value, dict) else None
@@ -174,58 +152,6 @@ def classified(row):
     )
 
 
-def validate_local_active_token(extension):
-    fields = (
-        *LOCAL_VALID_ACTIVE_REFUSED_FIELDS,
-        "emailVerified",
-        "disableUser:true",
-        "disableUser:null",
-    )
-    require(
-        [(row["account"], row["field"]) for row in extension["fields"]]
-        == [(account, field) for account in ("a", "b") for field in fields]
-    )
-
-    def continuity(checks):
-        require(isinstance(checks, dict))
-        require(set(checks) == FINALIZE_CHECKS)
-        require(all(value is True for value in checks.values()))
-
-    for row in extension["fields"]:
-        field = row["field"]
-        if field in (*LOCAL_VALID_ACTIVE_REFUSED_FIELDS, "disableUser:true"):
-            expected_error = LOCAL_VALID_ACTIVE_ERRORS[field.split(":")[0]]
-            require(row["httpStatus"] == 400 and row["outcome"] == "refused")
-            require(row["observedError"] == expected_error)
-            require(row["allAccountStateUnchanged"] is True)
-        else:
-            require(row["httpStatus"] == 200 and row["outcome"] == "accepted")
-            require(row["observedError"] is None)
-            for check in (
-                "displayNameApplied",
-                "ownerOtherStateUnchanged",
-                "otherAccountUnchanged",
-                "allAccountStateRestored",
-                "emailVerifiedUnchanged"
-                if field == "emailVerified"
-                else "disableStateUnchanged",
-            ):
-                require(row[check] is True)
-        if field.startswith("disableUser:"):
-            continuity(row["heldMfaContinuity"])
-    require(
-        [row["account"] for row in extension["ordinaryFieldControls"]] == ["a", "b"]
-    )
-    for row in extension["ordinaryFieldControls"]:
-        require(row["field"] == "displayName")
-        require(row["httpStatus"] == 200 and row["outcome"] == "accepted")
-        require(row["observedError"] is None and row["accountStateRestored"] is True)
-    require(isinstance(extension["heldCredentialsAndSessions"], dict))
-    require(set(extension["heldCredentialsAndSessions"]) == {"a", "b"})
-    for checks in extension["heldCredentialsAndSessions"].values():
-        continuity(checks)
-
-
 def complete(report):
     try:
         require(
@@ -245,8 +171,6 @@ def complete(report):
         require(report["held"] == {"a": True, "b": True})
         if report["target"] == "production":
             require(report["committedCheckout"] is True)
-        elif report["target"] == "local":
-            validate_local_active_token(report["localValidActiveToken"])
         # The tampered-token row is followed by an administrative readback of A; whether
         # the privileged field or the sentinel was applied is an observation, so only the
         # presence of the projection is required, and it must agree with the row.

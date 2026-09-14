@@ -22,8 +22,6 @@ from precedence_contract import (
     CLAIM_SENTINEL_KEY,
     CORPUS,
     DIAGNOSTIC_FINALIZES,
-    LOCAL_VALID_ACTIVE_ERRORS,
-    LOCAL_VALID_ACTIVE_REFUSED_FIELDS,
     PHOTO_SENTINEL_PREFIX,
     TEST_CODE,
     TEST_PHONES,
@@ -32,6 +30,11 @@ from precedence_contract import (
     error_code,
     require,
     validate_row,
+)
+from precedence_local_contract_v1 import (
+    LOCAL_VALID_ACTIVE_ERRORS,
+    LOCAL_VALID_ACTIVE_REFUSED_FIELDS,
+    complete_local_v1,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -951,6 +954,8 @@ def observe(output, origin=None):
             report["cleanup"] = {"uidAbsent": True, "emailAbsent": True}
         for signum, handler in previous.items():
             signal.signal(signum, handler)
+        if not production and not complete_local_v1(report):
+            report["status"] = "incomplete"
         save(output / "observation.json", report)
     return report
 

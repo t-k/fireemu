@@ -14,10 +14,10 @@ import time
 import uuid
 from pathlib import Path
 
+from precedence_local_contract_v1 import complete_local_v1
 from precedence_recorder import (
     PROJECT,
     ROOT,
-    complete,
     inputs,
     observe,
     require,
@@ -43,7 +43,7 @@ def owned_complete(report):
     """An owned local run is complete only when the corpus contract is satisfied and
     the owned child process was confirmed stopped; a child cleanup failure is a failure
     of the run, not a footnote."""
-    return complete(report) and "childCleanupFailure" not in report
+    return complete_local_v1(report) and "childCleanupFailure" not in report
 
 
 def child(directory, nonce):

@@ -13,6 +13,7 @@ import signal
 import urllib.parse
 
 import precedence_contract as contract
+import precedence_local_contract_v1 as local_contract
 import precedence_recorder as recorder
 import pytest
 from precedence_contract import (
@@ -25,6 +26,7 @@ from precedence_contract import (
     error_code,
     validate_row,
 )
+from precedence_local_contract_v1 import complete_local_v1
 
 ORIGINAL_CONFIG = {
     "mfa": {"state": "DISABLED"},
@@ -275,11 +277,11 @@ class World:
                 if self.ignore_compound_display != "disableUser:null":
                     user["displayName"] = body["displayName"]
                 return 200, {"localId": user["localId"], "email": user["email"]}
-            admin_fields = set(body) & set(contract.LOCAL_VALID_ACTIVE_FIELDS)
+            admin_fields = set(body) & set(local_contract.LOCAL_VALID_ACTIVE_FIELDS)
             if admin_fields:
                 assert len(admin_fields) == 1 and "displayName" in body
                 field = next(iter(admin_fields))
-                return self.error(contract.LOCAL_VALID_ACTIVE_ERRORS[field])
+                return self.error(local_contract.LOCAL_VALID_ACTIVE_ERRORS[field])
             assert set(body) == {"idToken", "displayName"}
             user["displayName"] = body["displayName"]
             return 200, {"localId": user["localId"], "email": user["email"]}
@@ -450,7 +452,7 @@ def test_local_accepted_compound_update_without_display_name_is_incomplete(
 ):
     w = world(tmp_path, local=True, ignore_compound_display=field)
     report, saved = run(tmp_path, monkeypatch, w)
-    assert not complete(saved)
+    assert not complete_local_v1(saved)
     assert report["status"] == "incomplete"
     assert saved["cleanup"] == {"uidAbsent": True, "emailAbsent": True}
     assert w.users == {} and w.patches == []
@@ -460,7 +462,7 @@ def test_local_complete_requires_all_field_state_and_continuity_projections(
     tmp_path, monkeypatch
 ):
     _, saved = run(tmp_path, monkeypatch, world(tmp_path, local=True))
-    assert complete(saved), saved.get("failure")
+    assert complete_local_v1(saved), saved.get("failure")
     extension = saved["localValidActiveToken"]
     for index, row in enumerate(extension["fields"]):
         if row["outcome"] == "accepted":
@@ -473,36 +475,40 @@ def test_local_complete_requires_all_field_state_and_continuity_projections(
                 for replacement in (False, "true", None):
                     changed = copy.deepcopy(saved)
                     changed["localValidActiveToken"]["fields"][index][key] = replacement
-                    assert not complete(changed), (row["account"], row["field"], key)
+                    assert not complete_local_v1(changed), (
+                        row["account"],
+                        row["field"],
+                        key,
+                    )
                 changed = copy.deepcopy(saved)
                 del changed["localValidActiveToken"]["fields"][index][key]
-                assert not complete(changed), key
+                assert not complete_local_v1(changed), key
             if key == "heldMfaContinuity":
                 for check in FINALIZE_CHECKS:
                     changed = copy.deepcopy(saved)
                     changed["localValidActiveToken"]["fields"][index][key][check] = (
                         False
                     )
-                    assert not complete(changed), check
+                    assert not complete_local_v1(changed), check
     for key in extension:
         changed = copy.deepcopy(saved)
         del changed["localValidActiveToken"][key]
-        assert not complete(changed), key
+        assert not complete_local_v1(changed), key
     for account in ("a", "b"):
         for check in FINALIZE_CHECKS:
             changed = copy.deepcopy(saved)
             changed["localValidActiveToken"]["heldCredentialsAndSessions"][account][
                 check
             ] = False
-            assert not complete(changed), (account, check)
+            assert not complete_local_v1(changed), (account, check)
     changed = copy.deepcopy(saved)
     changed["localValidActiveToken"]["fields"].pop()
-    assert not complete(changed)
+    assert not complete_local_v1(changed)
     changed = copy.deepcopy(saved)
     changed["localValidActiveToken"]["ordinaryFieldControls"][0][
         "accountStateRestored"
     ] = False
-    assert not complete(changed)
+    assert not complete_local_v1(changed)
 
 
 def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
@@ -535,7 +541,7 @@ def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
                 "rawId": f"raw-{label}",
             },
         }
-        for field in contract.LOCAL_VALID_ACTIVE_REFUSED_FIELDS:
+        for field in local_contract.LOCAL_VALID_ACTIVE_REFUSED_FIELDS:
             status, response = w.update(
                 {
                     "idToken": token,
@@ -544,7 +550,9 @@ def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
                 }
             )
             assert status == 400
-            assert error_code(response) == contract.LOCAL_VALID_ACTIVE_ERRORS[field]
+            assert (
+                error_code(response) == local_contract.LOCAL_VALID_ACTIVE_ERRORS[field]
+            )
             assert w.users == before_accounts
         status, response = w.update(
             {"idToken": token, "displayName": "must-not-apply", "disableUser": True}
@@ -1000,8 +1008,8 @@ def test_complete_rejects_missing_or_inconsistent_projections():
     report = complete_report()
     del report["committedCheckout"]
     assert complete(report) is False
-    # Local completion additionally requires its valid-token authorization matrix.
-    assert complete({**report, "target": "local"}) is False
+    assert complete({**report, "target": "local"})
+    assert complete_local_v1({**report, "target": "local"}) is False
     assert complete({**complete_report(), "cleanup": {}}) is False
     assert complete({**complete_report(), "setup": {"a": True}}) is False
     assert complete({**complete_report(), "held": {"a": True}}) is False

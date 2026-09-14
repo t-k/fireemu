@@ -35,6 +35,13 @@ fn state(rules: Option<&str>) -> RestState {
 }
 
 fn state_with(rules: Option<&str>, acceptance: TokenAcceptance) -> RestState {
+    state_with_clock(rules, acceptance).0
+}
+
+fn state_with_clock(
+    rules: Option<&str>,
+    acceptance: TokenAcceptance,
+) -> (RestState, Arc<Mutex<VirtualClock>>) {
     let gateway = Gateway {
         enforce_limits: true,
         ctx: PlanningContext {
@@ -55,14 +62,15 @@ fn state_with(rules: Option<&str>, acceptance: TokenAcceptance) -> RestState {
             TotpPolicy::default(),
         )));
         let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(src).unwrap()));
-        Arc::new(RulesEnforcer::new(loaded, auth, clock).with_token_acceptance(acceptance))
+        Arc::new(RulesEnforcer::new(loaded, auth, clock.clone()).with_token_acceptance(acceptance))
     });
-    RestState {
+    let state = RestState {
         local,
         gateway: Arc::new(gateway),
         rules,
         app_check: None,
-    }
+    };
+    (state, clock)
 }
 
 fn call(s: &RestState, method: &str, path_and_query: &str, body: Value) -> (u16, Value) {
@@ -1390,6 +1398,77 @@ fn rest_accepts_an_empty_document_mask_object() {
         response[0]["found"]["name"],
         "projects/demo-app/databases/(default)/documents/masked/doc"
     );
+    assert!(response[0]["found"].get("fields").is_none());
+}
+
+#[test]
+fn rest_rejects_non_object_and_unknown_document_masks() {
+    let s = state(None);
+    let name = "projects/demo-app/databases/(default)/documents/masked/strict";
+    let (status, created) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/masked/strict"),
+        json!({"fields": {"kept": {"stringValue": "value"}}}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    for mask in [
+        json!([]),
+        json!("invalid"),
+        json!(true),
+        json!(null),
+        json!({"fieldPath": []}),
+    ] {
+        let (status, _) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchGet"),
+            json!({"documents": [name], "mask": mask}),
+        );
+        assert_eq!(status, 400, "mask={mask}");
+    }
+
+    for update_mask in [
+        json!([]),
+        json!("invalid"),
+        json!(true),
+        json!(null),
+        json!({"fieldPath": []}),
+    ] {
+        let (status, _) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({
+                "writes": [{
+                    "update": {"name": name, "fields": {"kept": {"stringValue": "changed"}}},
+                    "updateMask": update_mask
+                }]
+            }),
+        );
+        assert_eq!(status, 400, "updateMask={update_mask}");
+    }
+
+    let (status, unchanged) = call(&s, "GET", &format!("{DOCS}/masked/strict"), json!({}));
+    assert_eq!(status, 200, "{unchanged}");
+    assert_eq!(unchanged["fields"]["kept"]["stringValue"], "value");
+
+    let (status, empty_mask_write) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({
+            "writes": [{
+                "update": {"name": name, "fields": {"kept": {"stringValue": "changed"}}},
+                "updateMask": {}
+            }]
+        }),
+    );
+    assert_eq!(status, 200, "{empty_mask_write}");
+    let (status, after_empty_mask) = call(&s, "GET", &format!("{DOCS}/masked/strict"), json!({}));
+    assert_eq!(status, 200, "{after_empty_mask}");
+    assert_eq!(after_empty_mask["fields"]["kept"]["stringValue"], "value");
 }
 
 #[test]
@@ -1428,8 +1507,10 @@ fn rest_list_rejects_invalid_page_size_and_show_missing_encodings() {
     for query in [
         "pageSize=0",
         "pageSize=1",
+        "pageSize=2147483647",
         "showMissing=false",
         "showMissing=false&orderBy=__name__",
+        "showMissing=true&orderBy=",
     ] {
         let (status, body) = call(&s, "GET", &format!("{DOCS}/listed?{query}"), json!({}));
         assert_eq!(status, 200, "{query}: {body}");
@@ -1440,6 +1521,83 @@ fn rest_list_rejects_invalid_page_size_and_show_missing_encodings() {
         after, baseline,
         "refused requests must not change listed data"
     );
+}
+
+#[test]
+fn rest_list_rejects_duplicate_scalar_parameters() {
+    let s = state(None);
+    let (status, created) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/duplicates/doc"),
+        json!({"fields": {"value": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    for query in [
+        "pageSize=1&pageSize=invalid",
+        "showMissing=false&showMissing=TRUE",
+        "orderBy=&orderBy=__name__",
+        "showMissing=true&orderBy=&orderBy=__name__",
+        "transaction=one&transaction=two",
+        "readTime=one&readTime=two",
+    ] {
+        let (status, _) = call(&s, "GET", &format!("{DOCS}/duplicates?{query}"), json!({}));
+        assert_eq!(status, 400, "{query}");
+    }
+
+    let (status, valid) = call(&s, "GET", &format!("{DOCS}/duplicates"), json!({}));
+    assert_eq!(status, 200, "{valid}");
+    assert_eq!(valid["documents"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
+fn rest_negative_page_size_refusal_does_not_move_clock_or_change_state() {
+    use fireemu_core_session::fault::{
+        FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+    };
+
+    for page_size in ["invalid", "-1", "2147483648"] {
+        let (s, clock) = state_with_clock(None, TokenAcceptance::Verified);
+        let (status, created) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/negative/doc"),
+            json!({"fields": {"value": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (status, before) = call(&s, "GET", &format!("{DOCS}/negative"), json!({}));
+        assert_eq!(status, 200, "{before}");
+
+        let registry = Arc::new(FaultRegistry::new());
+        registry.default_state().lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.read".into(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::Delay { seconds: 90 },
+            }],
+        });
+        s.local.set_faults(registry);
+        let clock_before = clock.lock().unwrap().now_for_test();
+        let (status, _) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/negative?pageSize={page_size}"),
+            json!({}),
+        );
+        assert_eq!(status, 400, "pageSize={page_size}");
+        assert_eq!(clock.lock().unwrap().now_for_test(), clock_before);
+
+        s.local.set_faults(Arc::new(FaultRegistry::new()));
+        let (status, after) = call(&s, "GET", &format!("{DOCS}/negative"), json!({}));
+        assert_eq!(status, 200, "{after}");
+        assert_eq!(after["documents"], before["documents"]);
+    }
 }
 
 #[test]

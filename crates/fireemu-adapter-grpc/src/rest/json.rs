@@ -487,6 +487,7 @@ pub fn document_from_json(v: &Value) -> Result<pb::Document, JsonError> {
 /// `{"fieldPaths": [...]}` → mask.
 pub fn mask_from_json(v: Option<&Value>) -> Result<Option<pb::DocumentMask>, JsonError> {
     let Some(v) = v else { return Ok(None) };
+    strict_keys(v, &["fieldPaths"])?;
     let field_paths = match v.get("fieldPaths") {
         None => Vec::new(),
         Some(paths) => paths

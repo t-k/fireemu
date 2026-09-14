@@ -237,6 +237,21 @@ fn first<'a>(params: &'a BTreeMap<String, Vec<String>>, key: &str) -> Option<&'a
     params.get(key).and_then(|v| v.first()).map(String::as_str)
 }
 
+fn single<'a>(
+    params: &'a BTreeMap<String, Vec<String>>,
+    key: &str,
+) -> Result<Option<&'a str>, Status> {
+    let Some(values) = params.get(key) else {
+        return Ok(None);
+    };
+    if values.len() != 1 {
+        return Err(Status::invalid_argument(format!(
+            "{key} must be specified at most once"
+        )));
+    }
+    Ok(values.first().map(String::as_str))
+}
+
 /// What a REST path names.
 enum Target {
     /// `.../documents` (database root) or a document path.
@@ -634,12 +649,15 @@ impl RestState {
         collection_id: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
-        let page_size = first(params, "pageSize").map_or(Ok(0), |value| {
+        let page_size = single(params, "pageSize")?.map_or(Ok(0), |value| {
             value
                 .parse::<i32>()
                 .map_err(|_| Status::invalid_argument("pageSize must be an int32"))
         })?;
-        let show_missing = match first(params, "showMissing") {
+        if page_size < 0 {
+            return Err(Status::invalid_argument("pageSize must not be negative"));
+        }
+        let show_missing = match single(params, "showMissing")? {
             None | Some("false") => false,
             Some("true") => true,
             Some(_) => {
@@ -648,7 +666,9 @@ impl RestState {
                 ))
             }
         };
-        let order_by = first(params, "orderBy").unwrap_or("");
+        let order_by = single(params, "orderBy")?.unwrap_or("");
+        let transaction = single(params, "transaction")?;
+        let read_time = single(params, "readTime")?;
         if show_missing && !order_by.is_empty() {
             return Err(Status::invalid_argument(
                 "showMissing cannot be used with orderBy",
@@ -662,7 +682,7 @@ impl RestState {
             order_by: order_by.to_owned(),
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
             show_missing,
-            consistency_selector: match (first(params, "transaction"), first(params, "readTime")) {
+            consistency_selector: match (transaction, read_time) {
                 (Some(_), Some(_)) => {
                     return Err(Status::invalid_argument(
                         "transaction and readTime are mutually exclusive",

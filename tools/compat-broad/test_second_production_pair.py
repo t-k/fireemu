@@ -341,6 +341,9 @@ def test_saved_mode_accepts_retained_second45_runtime_fixture(tmp_path):
         anchor = None
     else:
         local_value = current_local(receipt("mapped"))
+        local_value["runtimeIdentity"]["executionCommit"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
         local = tmp_path / "mapped-receipt.json"
         local.write_text(json.dumps(local_value))
         parent_value = {

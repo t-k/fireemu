@@ -17,6 +17,9 @@ from second_mapping import comparable, expected_ids, validate_rows, validate_tra
 PINNED_PRODUCTION_CANDIDATE_SHA256 = (
     "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73"
 )
+PARENT_RUNTIME_ANCHOR = (
+    "spec/compatibility/broad-runs/af1d2bc3-parent-runtime-anchor.json"
+)
 
 
 def observed_value(row, bindings):
@@ -171,21 +174,33 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
             raise ValueError("parent manifest integrity binding is invalid")
         evaluator_commit = parent.get("executionCommit")
         repo_root = Path(__file__).parents[2]
-        if (
-            not isinstance(evaluator_commit, str)
-            or not re.fullmatch(r"[0-9a-f]{40}", evaluator_commit)
-            or subprocess.run(
-                ["git", "cat-file", "-e", f"{evaluator_commit}^{{commit}}"],
+        def git_ok(arguments):
+            process = subprocess.Popen(
+                arguments,
                 cwd=repo_root,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-            ).returncode
-            or subprocess.run(
-                ["git", "diff", "--quiet", evaluator_commit, "--", "tools/compat-broad"],
-                cwd=repo_root,
-            ).returncode
+            )
+            return process.wait() == 0
+
+        if (
+            not isinstance(evaluator_commit, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", evaluator_commit)
+            or not git_ok(["git", "cat-file", "-e", f"{evaluator_commit}^{{commit}}"])
+            or not git_ok(["git", "diff", "--quiet", evaluator_commit, "--", "tools/compat-broad"])
         ):
             raise ValueError("parent execution commit does not bind evaluator source")
+        anchor_raw = subprocess.check_output(
+            ["git", "show", f"{evaluator_commit}:{PARENT_RUNTIME_ANCHOR}"],
+            cwd=repo_root,
+        )
+        anchor = json.loads(anchor_raw)
+        if (
+            not isinstance(anchor, dict)
+            or anchor.get("artifactSha256") != parent.get("artifactSha256")
+            or anchor.get("configurationDigest") != parent.get("configurationDigest")
+        ):
+            raise ValueError("parent runtime identity is not bound to immutable source")
         if parent.get("status") != "completed":
             raise ValueError("parent execution manifest is incomplete")
         if parent.get("productionExecuted") is not False:

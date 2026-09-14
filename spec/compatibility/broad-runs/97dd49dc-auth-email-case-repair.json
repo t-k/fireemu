@@ -16,34 +16,78 @@
   "rows": [
     {
       "id": "sign-up-mixed",
-      "production": {"httpStatus": 200, "code": "OK", "email": "<canonical-email>"},
-      "local": {"httpStatus": 200, "code": "OK", "email": "<canonical-email>"}
+      "production": {
+        "httpStatus": 200,
+        "code": "OK",
+        "email": "<canonical-email>"
+      },
+      "local": {
+        "httpStatus": 200,
+        "code": "OK",
+        "email": "<canonical-email>"
+      }
     },
     {
       "id": "sign-in-lower",
-      "production": {"httpStatus": 200, "code": "OK", "sameLocalId": true, "email": "<canonical-email>"},
-      "local": {"httpStatus": 200, "code": "OK", "sameLocalId": true, "email": "<canonical-email>"}
+      "production": {
+        "httpStatus": 200,
+        "code": "OK",
+        "sameLocalId": true,
+        "email": "<canonical-email>"
+      },
+      "local": {
+        "httpStatus": 200,
+        "code": "OK",
+        "sameLocalId": true,
+        "email": "<canonical-email>"
+      }
     },
     {
       "id": "duplicate-lower",
-      "production": {"httpStatus": 400, "code": "EMAIL_EXISTS"},
-      "local": {"httpStatus": 400, "code": "EMAIL_EXISTS"}
+      "production": {
+        "httpStatus": 400,
+        "code": "EMAIL_EXISTS"
+      },
+      "local": {
+        "httpStatus": 400,
+        "code": "EMAIL_EXISTS"
+      }
     },
     {
       "id": "delete-original",
-      "production": {"httpStatus": 200, "code": "OK"},
-      "local": {"httpStatus": 200, "code": "OK"}
+      "production": {
+        "httpStatus": 200,
+        "code": "OK"
+      },
+      "local": {
+        "httpStatus": 200,
+        "code": "OK"
+      }
     }
   ],
   "preFixLocalMismatch": {
     "sourceCommit": "b69eab245308a0e82e945c0d85e1da0ae14e47ea",
-    "signUpMixed": {"httpStatus": 200, "storedEmail": "<mixed-case-email>"},
-    "signInLower": {"httpStatus": 400, "code": "INVALID_LOGIN_CREDENTIALS"},
-    "duplicateLower": {"httpStatus": 200},
-    "deleteOriginal": {"httpStatus": 200}
+    "signUpMixed": {
+      "httpStatus": 200,
+      "storedEmail": "<mixed-case-email>"
+    },
+    "signInLower": {
+      "httpStatus": 400,
+      "code": "INVALID_LOGIN_CREDENTIALS"
+    },
+    "duplicateLower": {
+      "httpStatus": 200
+    },
+    "deleteOriginal": {
+      "httpStatus": 200
+    }
   },
   "limitations": [
     "The probe covers password email ownership and does not establish the complete Auth account, OOB, MFA, tenant or federation parent groups.",
     "The production result is immutable candidate evidence; no invoice amount was measured."
-  ]
+  ],
+  "securityFollowupCommit": "7d50ad959c076cce1c00a158b73599af67c5997a",
+  "finalLocalSourceCommit": "7d50ad959c076cce1c00a158b73599af67c5997a",
+  "finalLocalArtifactSha256": "d88adb0f86b8b6e9687d586bf10f5bf69d90dcbfbc64e6acf3143fd2df8a078c",
+  "finalLocalReceiptSha256": "fc0903858547a3be787ef6eae71708e6c8d263fa3a8c9ecbd72fa477979c7673"
 }

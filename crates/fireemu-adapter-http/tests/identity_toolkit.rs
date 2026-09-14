@@ -1791,6 +1791,7 @@ fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_projec
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
     use fireemu_core_auth::store::AuthRegistry;
 
@@ -1812,26 +1813,32 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
     let created = handle_with(
         &s,
         "POST",
-        &format!("{project_collection}?oauthIdpConfigId=shared"),
+        &format!("{project_collection}?oauthIdpConfigId=oidc.shared"),
         &owner(),
         &config,
     );
     assert_eq!(created.status, 200, "{}", created.body);
     assert_eq!(
         created.body["name"],
-        "projects/demo-app/oauthIdpConfigs/shared"
+        "projects/demo-app/oauthIdpConfigs/oidc.shared"
     );
     assert_eq!(created.body["enabled"], true);
 
     let refused = handle_with(
         &s,
         "PATCH",
-        &format!("{}?updateMask=responseType", project_item("shared")),
+        &format!("{}?updateMask=responseType", project_item("oidc.shared")),
         &owner(),
         &json!({"responseType": {"idToken": true, "code": true}}),
     );
     assert_eq!(refused.status, 400, "{}", refused.body);
-    let unchanged = handle_with(&s, "GET", &project_item("shared"), &owner(), &json!({}));
+    let unchanged = handle_with(
+        &s,
+        "GET",
+        &project_item("oidc.shared"),
+        &owner(),
+        &json!({}),
+    );
     assert_eq!(unchanged.status, 200, "{}", unchanged.body);
     assert_eq!(unchanged.body["responseType"]["idToken"], true);
     assert_eq!(unchanged.body["responseType"]["code"], false);
@@ -1841,7 +1848,7 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
     let tenant_created = handle_with(
         &s,
         "POST",
-        &format!("{tenant_collection}?oauthIdpConfigId=shared"),
+        &format!("{tenant_collection}?oauthIdpConfigId=oidc.shared"),
         &owner(),
         &json!({
             "clientId": "tenant-client",
@@ -1852,35 +1859,90 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
     assert_eq!(tenant_created.status, 200, "{}", tenant_created.body);
     assert_eq!(
         tenant_created.body["name"],
-        "projects/demo-app/tenants/customer/oauthIdpConfigs/shared"
+        "projects/demo-app/tenants/customer/oauthIdpConfigs/oidc.shared"
     );
     let tenant_read = handle_with(
         &s,
         "GET",
-        &format!("{tenant_collection}/shared"),
+        &format!("{tenant_collection}/oidc.shared"),
         &owner(),
         &json!({}),
     );
     assert_eq!(tenant_read.status, 200, "{}", tenant_read.body);
     assert_eq!(tenant_read.body["clientId"], "tenant-client");
+    let second = handle_with(
+        &s,
+        "POST",
+        &format!("{project_collection}?oauthIdpConfigId=oidc.second"),
+        &owner(),
+        &json!({"clientId": "second", "issuer": "https://issuer.second.example"}),
+    );
+    assert_eq!(second.status, 200, "{}", second.body);
     let listed = handle_with(&s, "GET", project_collection, &owner(), &json!({}));
     assert_eq!(listed.status, 200, "{}", listed.body);
-    assert_eq!(listed.body["oauthIdpConfigs"].as_array().unwrap().len(), 1);
-    let deleted = handle_with(&s, "DELETE", &project_item("shared"), &owner(), &json!({}));
+    assert_eq!(listed.body["oauthIdpConfigs"].as_array().unwrap().len(), 2);
+    let first_page = handle_with(
+        &s,
+        "GET",
+        &format!("{project_collection}?pageSize=1"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(first_page.status, 200, "{}", first_page.body);
+    assert_eq!(
+        first_page.body["oauthIdpConfigs"].as_array().unwrap().len(),
+        1
+    );
+    let next_page = handle_with(
+        &s,
+        "GET",
+        &format!(
+            "{project_collection}?pageSize=1&pageToken={}",
+            first_page.body["nextPageToken"]
+        ),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(next_page.status, 200, "{}", next_page.body);
+    assert_eq!(
+        next_page.body["oauthIdpConfigs"].as_array().unwrap().len(),
+        1
+    );
+    let deleted = handle_with(
+        &s,
+        "DELETE",
+        &project_item("oidc.shared"),
+        &owner(),
+        &json!({}),
+    );
     assert_eq!(deleted.status, 200, "{}", deleted.body);
     assert_eq!(
-        handle_with(&s, "GET", &project_item("shared"), &owner(), &json!({})).status,
-        404
-    );
-    assert_eq!(
-        handle_with(&s, "GET", &project_item("missing"), &owner(), &json!({})).status,
+        handle_with(
+            &s,
+            "GET",
+            &project_item("oidc.shared"),
+            &owner(),
+            &json!({})
+        )
+        .status,
         404
     );
     assert_eq!(
         handle_with(
             &s,
             "GET",
-            &format!("{tenant_collection}/missing"),
+            &project_item("oidc.missing"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        404
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{tenant_collection}/oidc.missing"),
             &owner(),
             &json!({})
         )
@@ -1898,7 +1960,7 @@ fn inbound_saml_provider_config_crud_preserves_configuration_and_rejects_bad_ids
     let created = handle_with(
         &s,
         "POST",
-        &format!("{collection}?inboundSamlConfigId=corp"),
+        &format!("{collection}?inboundSamlConfigId=saml.corp"),
         &owner(),
         &json!({
             "displayName": "Corporate SAML",
@@ -1918,7 +1980,7 @@ fn inbound_saml_provider_config_crud_preserves_configuration_and_rejects_bad_ids
     assert_eq!(created.status, 200, "{}", created.body);
     assert_eq!(
         created.body["name"],
-        "projects/demo-app/inboundSamlConfigs/corp"
+        "projects/demo-app/inboundSamlConfigs/saml.corp"
     );
     assert_eq!(
         created.body["idpConfig"]["idpEntityId"],
@@ -1937,8 +1999,140 @@ fn inbound_saml_provider_config_crud_preserves_configuration_and_rejects_bad_ids
         &json!({}),
     );
     assert_eq!(malformed.status, 404);
-    let still_there = handle_with(&s, "GET", &item("corp"), &owner(), &json!({}));
+    let still_there = handle_with(&s, "GET", &item("saml.corp"), &owner(), &json!({}));
     assert_eq!(still_there.status, 200, "{}", still_there.body);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn provider_ids_and_semantic_validation_are_kind_specific_and_atomic() {
+    let s = state();
+    let oidc = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/oauthIdpConfigs";
+    let saml = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/inboundSamlConfigs";
+    assert_eq!(
+        handle_with(&s, "GET", oidc, &RequestHeaders::default(), &json!({})).status,
+        401
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &oidc.replace("demo-app", "other-project"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        400
+    );
+    let invalid_ids = [
+        (
+            "oauthIdpConfigId=shared",
+            json!({"clientId": "c", "issuer": "https://idp.example"}),
+        ),
+        (
+            "oauthIdpConfigId=saml.wrong",
+            json!({"clientId": "c", "issuer": "https://idp.example"}),
+        ),
+        ("inboundSamlConfigId=oidc.wrong", json!({})),
+    ];
+    for (query, body) in invalid_ids {
+        let path = if query.starts_with("inbound") {
+            saml
+        } else {
+            oidc
+        };
+        assert_eq!(
+            handle_with(&s, "POST", &format!("{path}?{query}"), &owner(), &body).status,
+            400
+        );
+    }
+    let valid = handle_with(
+        &s,
+        "POST",
+        &format!("{oidc}?oauthIdpConfigId=oidc.defaults"),
+        &owner(),
+        &json!({"clientId": "c", "issuer": "https://idp.example", "clientSecret": "secret-value"}),
+    );
+    assert_eq!(valid.status, 200, "{}", valid.body);
+    assert_eq!(valid.body["responseType"]["idToken"], true);
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{oidc}/saml.wrong"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        400
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{oidc}/oidc.%2Fencoded"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        400
+    );
+
+    let no_mask = handle_with(
+        &s,
+        "PATCH",
+        &format!("{oidc}/oidc.defaults"),
+        &owner(),
+        &json!({"issuer": "not-a-url"}),
+    );
+    assert_eq!(no_mask.status, 200, "{}", no_mask.body);
+    for (mask, body) in [
+        ("responseType", json!({"responseType": {"token": true}})),
+        (
+            "responseType",
+            json!({"responseType": {"idToken": false, "code": false}}),
+        ),
+        (
+            "responseType",
+            json!({"responseType": {"idToken": true, "code": true}}),
+        ),
+        (
+            "responseType,clientSecret",
+            json!({"responseType": {"code": true}, "clientSecret": ""}),
+        ),
+        ("issuer", json!({"issuer": "not-a-url"})),
+    ] {
+        let refused = handle_with(
+            &s,
+            "PATCH",
+            &format!("{oidc}/oidc.defaults?updateMask={mask}"),
+            &owner(),
+            &body,
+        );
+        assert_eq!(refused.status, 400, "{}", refused.body);
+    }
+    let unchanged = handle_with(
+        &s,
+        "GET",
+        &format!("{oidc}/oidc.defaults"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+    assert_eq!(unchanged.body["issuer"], "https://idp.example");
+    assert!(!format!("{:?}", s.store.lock().unwrap()).contains("secret-value"));
+
+    let saml_refused = handle_with(
+        &s,
+        "POST",
+        &format!("{saml}?inboundSamlConfigId=saml.empty"),
+        &owner(),
+        &json!({
+            "idpConfig": {"idpEntityId": "entity", "ssoUrl": "not-a-url", "idpCertificates": []},
+            "spConfig": {"spEntityId": "sp", "callbackUri": "not-a-url"}
+        }),
+    );
+    assert_eq!(saml_refused.status, 400, "{}", saml_refused.body);
 }
 
 #[test]

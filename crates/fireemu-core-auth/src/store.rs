@@ -415,7 +415,7 @@ pub struct OAuthResponseType {
 }
 
 /// A project or tenant OAuth/OIDC provider configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OidcProviderConfig {
     /// Provider configuration ID.
     pub id: String,
@@ -431,6 +431,23 @@ pub struct OidcProviderConfig {
     pub client_secret: Option<String>,
     /// OAuth response mode.
     pub response_type: OAuthResponseType,
+}
+
+impl fmt::Debug for OidcProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OidcProviderConfig")
+            .field("id", &self.id)
+            .field("display_name", &self.display_name)
+            .field("enabled", &self.enabled)
+            .field("client_id", &self.client_id)
+            .field("issuer", &self.issuer)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("response_type", &self.response_type)
+            .finish()
+    }
 }
 
 /// A project or tenant inbound SAML provider configuration.
@@ -3086,6 +3103,10 @@ impl AuthSnapshot {
     #[must_use]
     pub fn capture(store: &AuthStore) -> Self {
         let mut copy = store.clone();
+        // Provider configurations are process-local control-plane state. In particular,
+        // OIDC client secrets must never become transferable snapshot material.
+        copy.oidc_configs.clear();
+        copy.saml_configs.clear();
         for user in copy.users.values_mut() {
             if user.mfa.holds_no_totp_secret() && user.mfa.holds_no_inbound_credentials() {
                 continue;
@@ -3132,6 +3153,10 @@ impl AuthSnapshot {
     /// Replaces `live` with the snapshot, rebinding TOTP secrets from what `live` held.
     pub fn restore_into(&self, live: &mut AuthStore) -> RestoreReport {
         let mut restored = self.0.clone();
+        // A snapshot intentionally has no provider configurations. Preserve the destination's
+        // control-plane state instead of allowing a cross-project restore to transfer it.
+        restored.oidc_configs = live.oidc_configs.clone();
+        restored.saml_configs = live.saml_configs.clone();
         let namespace_matches =
             restored.project_id == live.project_id && restored.tenant_id == live.tenant_id;
         if !namespace_matches {
@@ -3980,7 +4005,7 @@ mod snapshot_cow_tests {
     //! snapshot stays exactly as it was captured. These tests reach the private `users` map so
     //! they can assert `Arc` identity directly.
 
-    use super::{AuthSnapshot, AuthStore, LocalId, NewUser};
+    use super::{AuthSnapshot, AuthStore, LocalId, NewUser, OAuthResponseType, OidcProviderConfig};
     use crate::mfa::TotpPolicy;
     use crate::totp::totp_at;
     use fireemu_core_types::determinism::SplitMix64;
@@ -4112,6 +4137,41 @@ mod snapshot_cow_tests {
             destination.redeem_refresh_token(&token),
             Err(super::AuthError::InvalidRefreshToken)
         ));
+    }
+
+    #[test]
+    fn provider_config_credentials_are_never_captured_or_restored_across_namespaces() {
+        let mut source = AuthStore::new("source", SplitMix64::new(1), TotpPolicy::default());
+        assert!(source.create_oidc_config(OidcProviderConfig {
+            id: "oidc.source".to_owned(),
+            display_name: Some("Source".to_owned()),
+            enabled: true,
+            client_id: "client".to_owned(),
+            issuer: "https://issuer.example".to_owned(),
+            client_secret: Some("raw-secret-must-not-travel".to_owned()),
+            response_type: OAuthResponseType {
+                code: true,
+                ..OAuthResponseType::default()
+            },
+        }));
+        let mut destination =
+            AuthStore::new("destination", SplitMix64::new(2), TotpPolicy::default());
+        assert!(destination.create_oidc_config(OidcProviderConfig {
+            id: "oidc.destination".to_owned(),
+            display_name: None,
+            enabled: false,
+            client_id: "destination-client".to_owned(),
+            issuer: "https://destination.example".to_owned(),
+            client_secret: None,
+            response_type: OAuthResponseType::default(),
+        }));
+
+        let snapshot = AuthSnapshot::capture(&source);
+        assert!(snapshot.0.oidc_configs.is_empty());
+        assert!(!format!("{source:?}").contains("raw-secret-must-not-travel"));
+        snapshot.restore_into(&mut destination);
+        assert!(destination.oidc_config("oidc.source").is_none());
+        assert!(destination.oidc_config("oidc.destination").is_some());
     }
 }
 

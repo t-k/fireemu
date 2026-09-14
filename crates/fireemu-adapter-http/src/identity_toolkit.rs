@@ -2625,7 +2625,7 @@ fn provider_config_management(
         (ProviderKind::Oidc, Handler::ProviderCreate) => {
             let Some(id) = query_params(query)
                 .get("oauthIdpConfigId")
-                .filter(|id| valid_provider_id(id))
+                .filter(|id| valid_provider_id(id, ProviderKind::Oidc))
                 .cloned()
             else {
                 return error(400, "INVALID_ARGUMENT");
@@ -2648,7 +2648,7 @@ fn provider_config_management(
         (ProviderKind::Saml, Handler::ProviderCreate) => {
             let Some(id) = query_params(query)
                 .get("inboundSamlConfigId")
-                .filter(|id| valid_provider_id(id))
+                .filter(|id| valid_provider_id(id, ProviderKind::Saml))
                 .cloned()
             else {
                 return error(400, "INVALID_ARGUMENT");
@@ -2672,31 +2672,73 @@ fn provider_config_management(
             let Ok(store) = store.lock() else {
                 return error(500, "INTERNAL");
             };
-            let configs = store
+            let params = query_params(query);
+            let page_size = params
+                .get("pageSize")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(20)
+                .clamp(1, 1_000);
+            let page_token = params.get("pageToken").map(String::as_str);
+            let mut configs = store
                 .oidc_configs()
+                .filter(|config| page_token.is_none_or(|token| config.id.as_str() > token))
                 .map(|config| oidc_json(&name(&config.id), config))
                 .collect::<Vec<_>>();
+            let next = (configs.len() > page_size)
+                .then(|| {
+                    configs
+                        .get(page_size - 1)
+                        .and_then(|config| config["name"].as_str())
+                        .and_then(|name| name.rsplit('/').next())
+                        .map(str::to_owned)
+                })
+                .flatten();
+            configs.truncate(page_size);
             let mut body = json!({});
             body[collection_key] = json!(configs);
+            if let Some(next) = next {
+                body["nextPageToken"] = json!(next);
+            }
             JsonResponse { status: 200, body }
         }
         (ProviderKind::Saml, Handler::ProviderList) => {
             let Ok(store) = store.lock() else {
                 return error(500, "INTERNAL");
             };
-            let configs = store
+            let params = query_params(query);
+            let page_size = params
+                .get("pageSize")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(20)
+                .clamp(1, 1_000);
+            let page_token = params.get("pageToken").map(String::as_str);
+            let mut configs = store
                 .saml_configs()
+                .filter(|config| page_token.is_none_or(|token| config.id.as_str() > token))
                 .map(|config| saml_json(&name(&config.id), config))
                 .collect::<Vec<_>>();
+            let next = (configs.len() > page_size)
+                .then(|| {
+                    configs
+                        .get(page_size - 1)
+                        .and_then(|config| config["name"].as_str())
+                        .and_then(|name| name.rsplit('/').next())
+                        .map(str::to_owned)
+                })
+                .flatten();
+            configs.truncate(page_size);
             let mut body = json!({});
             body[collection_key] = json!(configs);
+            if let Some(next) = next {
+                body["nextPageToken"] = json!(next);
+            }
             JsonResponse { status: 200, body }
         }
         (
             ProviderKind::Oidc,
             Handler::ProviderGet | Handler::ProviderUpdate | Handler::ProviderDelete,
         ) => {
-            let Some(id) = resource.filter(|id| valid_provider_id(id)) else {
+            let Some(id) = resource.filter(|id| valid_provider_id(id, ProviderKind::Oidc)) else {
                 return error(400, "INVALID_ARGUMENT");
             };
             let Ok(mut store) = store.lock() else {
@@ -2735,7 +2777,7 @@ fn provider_config_management(
             ProviderKind::Saml,
             Handler::ProviderGet | Handler::ProviderUpdate | Handler::ProviderDelete,
         ) => {
-            let Some(id) = resource.filter(|id| valid_provider_id(id)) else {
+            let Some(id) = resource.filter(|id| valid_provider_id(id, ProviderKind::Saml)) else {
                 return error(400, "INVALID_ARGUMENT");
             };
             let Ok(mut store) = store.lock() else {
@@ -2775,8 +2817,16 @@ fn provider_config_management(
     response
 }
 
-fn valid_provider_id(id: &str) -> bool {
-    !id.is_empty() && !id.contains('/') && !id.chars().any(char::is_control)
+fn valid_provider_id(id: &str, kind: ProviderKind) -> bool {
+    let prefix = match kind {
+        ProviderKind::Oidc => "oidc.",
+        ProviderKind::Saml => "saml.",
+    };
+    id.starts_with(prefix)
+        && (prefix.len()..=128).contains(&id.len())
+        && id[prefix.len()..].chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
 }
 
 fn required_string(body: &Value, field: &str) -> Result<String, JsonResponse> {
@@ -2805,7 +2855,10 @@ fn optional_bool(body: &Value, field: &str, default: bool) -> Result<bool, JsonR
 
 fn parse_response_type(value: Option<&Value>) -> Result<OAuthResponseType, JsonResponse> {
     let Some(value) = value else {
-        return Ok(OAuthResponseType::default());
+        return Ok(OAuthResponseType {
+            id_token: true,
+            ..OAuthResponseType::default()
+        });
     };
     let Some(object) = value.as_object() else {
         return Err(error(400, "INVALID_ARGUMENT"));
@@ -2820,14 +2873,17 @@ fn parse_response_type(value: Option<&Value>) -> Result<OAuthResponseType, JsonR
         code: read("code")?,
         token: read("token")?,
     };
-    if response.id_token && response.code {
+    if response.token
+        || (!response.id_token && !response.code)
+        || (response.id_token && response.code)
+    {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
     Ok(response)
 }
 
 fn parse_oidc(body: &Value, id: String) -> Result<OidcProviderConfig, JsonResponse> {
-    Ok(OidcProviderConfig {
+    let config = OidcProviderConfig {
         id,
         display_name: optional_string(body, "displayName")?,
         enabled: optional_bool(body, "enabled", false)?,
@@ -2835,7 +2891,29 @@ fn parse_oidc(body: &Value, id: String) -> Result<OidcProviderConfig, JsonRespon
         issuer: required_string(body, "issuer")?,
         client_secret: optional_string(body, "clientSecret")?,
         response_type: parse_response_type(body.get("responseType"))?,
-    })
+    };
+    validate_oidc(&config)?;
+    Ok(config)
+}
+
+fn valid_url(value: &str) -> bool {
+    let Some((scheme, host)) = value.split_once("://") else {
+        return false;
+    };
+    matches!(scheme, "http" | "https")
+        && !host.is_empty()
+        && !host
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+}
+
+fn validate_oidc(config: &OidcProviderConfig) -> Result<(), JsonResponse> {
+    if !valid_url(&config.issuer)
+        || (config.response_type.code && config.client_secret.as_deref().is_none_or(str::is_empty))
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(())
 }
 
 fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, JsonResponse> {
@@ -2868,7 +2946,10 @@ fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, Jso
             .collect::<Result<Vec<_>, _>>()?,
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
     };
-    Ok(InboundSamlProviderConfig {
+    if certificates.is_empty() {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let config = InboundSamlProviderConfig {
         id,
         display_name: optional_string(body, "displayName")?,
         enabled: optional_bool(body, "enabled", false)?,
@@ -2882,22 +2963,22 @@ fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, Jso
         }?,
         sp_entity_id: required_object_string(sp, "spEntityId")?,
         callback_uri: required_object_string(sp, "callbackUri")?,
-    })
+    };
+    if !valid_url(&config.sso_url) || !valid_url(&config.callback_uri) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(config)
 }
 
-fn selected_fields(body: &Value, query: Option<&str>) -> Vec<String> {
-    query_params(query).get("updateMask").map_or_else(
-        || {
-            body.as_object()
-                .map_or_else(Vec::new, |body| body.keys().cloned().collect())
-        },
-        |mask| {
+fn selected_fields(query: Option<&str>) -> Vec<String> {
+    query_params(query)
+        .get("updateMask")
+        .map_or_else(Vec::new, |mask| {
             mask.split(',')
                 .filter(|field| !field.is_empty())
                 .map(str::to_owned)
                 .collect()
-        },
-    )
+        })
 }
 
 fn patch_oidc(
@@ -2905,7 +2986,7 @@ fn patch_oidc(
     body: &Value,
     query: Option<&str>,
 ) -> Result<OidcProviderConfig, JsonResponse> {
-    for field in selected_fields(body, query) {
+    for field in selected_fields(query) {
         match field.as_str() {
             "displayName" => current.display_name = optional_string(body, "displayName")?,
             "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
@@ -2931,6 +3012,7 @@ fn patch_oidc(
     if current.response_type.id_token && current.response_type.code {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
+    validate_oidc(&current)?;
     Ok(current)
 }
 
@@ -2947,7 +3029,7 @@ fn patch_saml(
     body: &Value,
     query: Option<&str>,
 ) -> Result<InboundSamlProviderConfig, JsonResponse> {
-    for field in selected_fields(body, query) {
+    for field in selected_fields(query) {
         match field.as_str() {
             "displayName" => current.display_name = optional_string(body, "displayName")?,
             "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
@@ -3016,6 +3098,12 @@ fn patch_saml(
             "name" => {}
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         }
+    }
+    if current.idp_certificates.is_empty()
+        || !valid_url(&current.sso_url)
+        || !valid_url(&current.callback_uri)
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
     }
     Ok(current)
 }

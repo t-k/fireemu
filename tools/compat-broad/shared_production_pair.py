@@ -191,9 +191,13 @@ def _validate_v2_creation_proofs(job, state, declared):
             ):
                 raise ValueError("creation acknowledgement write results unavailable")
             for write, status, result in zip(writes, statuses, results, strict=True):
-                if not isinstance(status, dict) or type(status.get("code")) is not int:
+                # Only absence receives the protobuf default; explicit values stay typed.
+                if (
+                    not isinstance(status, dict)
+                    or type(status.get("code", 0)) is not int
+                ):
                     raise ValueError("creation acknowledgement status is not typed")
-                if status["code"] != 0 or digest(
+                if status.get("code", 0) != 0 or digest(
                     write.get("currentDocument")
                 ) != digest({"exists": False}):
                     continue
@@ -275,6 +279,8 @@ def validate_record(record, *, local=False, historical_observer=False):
     if batch.get("completed") is not True:
         raise ValueError("incomplete execution")
     events = batch["gate"]["events"]
+    expected_receipts = 0
+    expected_skips = []
     for key, job in batch["jobs"].items():
         observed = [
             e for e in events if e["job"] == key and e["phase"] == "observation"
@@ -348,6 +354,13 @@ def validate_record(record, *, local=False, historical_observer=False):
                 [index, operation]
             ):
                 raise ValueError("cleanup recipe/version relation differs")
+            if proofs is not None and row.get("status") is None:
+                reason = "absent-or-unavailable-cleanup-read"
+                if source is None or digest(row.get("body")) != digest(
+                    {"skipped": reason}
+                ):
+                    raise ValueError("skipped cleanup representation mismatch")
+                expected_skips.append({"job": key, "index": index, "reason": reason})
         for resource in expected["jobs"][key]["resources"]:
             last = [
                 r
@@ -358,10 +371,15 @@ def validate_record(record, *, local=False, historical_observer=False):
             if not last or last[-1].get("status") != 404:
                 raise ValueError("final absence receipt missing")
         recovery = [e for e in events if e["job"] == key and e["phase"] == "recovery"]
+        expected_receipts += len(job["rows"]) + sum(
+            row.get("status") is not None for row in job["cleanup"]
+        )
         for row in job["cleanup"]:
-            if row.get("status") is None:
-                continue
             matching = [e for e in recovery if e["index"] == row["index"]]
+            if row.get("status") is None:
+                if not historical_observer and matching:
+                    raise ValueError("skipped cleanup has a recovery receipt")
+                continue
             if (
                 len(matching) != 1
                 or matching[0].get("requestDigest") != digest(row["request"])
@@ -370,13 +388,20 @@ def validate_record(record, *, local=False, historical_observer=False):
                 or (
                     not historical_observer
                     and (
-                        matching[0].get("completed") is not True
+                        type(matching[0].get("index")) is not int
+                        or matching[0].get("completed") is not True
                         or type(matching[0].get("status")) is not int
                     )
                 )
             ):
                 raise ValueError("recovery receipt mismatch")
+    if not historical_observer and len(events) != expected_receipts:
+        raise ValueError("unconsumed observation/recovery receipt")
     state = batch["gate"]
+    if not historical_observer and sorted(
+        map(digest, state.get("skips", []))
+    ) != sorted(map(digest, expected_skips)):
+        raise ValueError("skipped cleanup journal mismatch")
     management = state.get("managementEvents", [])
     if (
         state["total"] != len(events) + len(management) + plan["coordinatorRequests"]

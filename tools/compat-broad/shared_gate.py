@@ -149,13 +149,14 @@ def _creation_proofs(operation, status, body, job, plan):
         ):
             raise ValueError("conditional batch creation acknowledgement incomplete")
         for write, result, entry in zip(writes, results, statuses, strict=True):
-            if not isinstance(entry, dict) or type(entry.get("code")) is not int:
+            # google.rpc.Status omits its protobuf-default zero on production success.
+            if not isinstance(entry, dict) or type(entry.get("code", 0)) is not int:
                 raise ValueError("typed conditional batch status required")
             if (
                 not isinstance(write, dict)
                 or write.get("currentDocument", {}).get("exists") is not False
                 or digest(write.get("currentDocument")) != digest({"exists": False})
-                or entry["code"] != 0
+                or entry.get("code", 0) != 0
             ):
                 continue
             update = write.get("update", {})

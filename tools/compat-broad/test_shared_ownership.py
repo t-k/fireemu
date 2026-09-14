@@ -321,7 +321,21 @@ def test_real_scenario_retains_uncertain_document_and_recovers_unrelated_job(
 
 @pytest.mark.parametrize(
     "variant",
-    ["success", "bool-code", "missing-results", "invalid-version", "wrong-length"],
+    [
+        "success",
+        "protobuf-default",
+        "bool-code",
+        "null-code",
+        "string-code",
+        "list-code",
+        "object-code",
+        "missing-status",
+        "array-status",
+        "nonzero-code",
+        "missing-results",
+        "invalid-version",
+        "wrong-length",
+    ],
 )
 def test_batch_conditional_creation_requires_typed_per_write_acknowledgements(
     tmp_path, variant
@@ -350,22 +364,37 @@ def test_batch_conditional_creation_requires_typed_per_write_acknowledgements(
         "status": [{"code": 0}, {"code": 6}, {"code": 0}],
         "writeResults": [{"updateTime": VERSION}, {}, {"updateTime": VERSION}],
     }
-    if variant == "bool-code":
+    if variant == "protobuf-default":
+        body["status"][0] = body["status"][2] = {}
+    elif variant == "bool-code":
         body["status"][0]["code"] = False
+    elif variant in {"null-code", "string-code", "list-code", "object-code"}:
+        body["status"][0]["code"] = {
+            "null-code": None,
+            "string-code": "0",
+            "list-code": [],
+            "object-code": {},
+        }[variant]
+    elif variant in {"missing-status", "array-status"}:
+        body["status"][0] = None if variant == "missing-status" else []
+    elif variant == "nonzero-code":
+        body["status"][0] = body["status"][2] = {"code": 6}
     elif variant == "missing-results":
         del body["writeResults"]
     elif variant == "invalid-version":
         body["writeResults"][2]["updateTime"] = "invalid"
     elif variant == "wrong-length":
         body["status"].pop()
-    if variant == "success":
+    if variant in {"success", "protobuf-default", "nonzero-code"}:
         partial.dispatch(job["observation"][4], False, lambda: (200, body))
     else:
         with pytest.raises(ValueError):
             partial.dispatch(job["observation"][4], False, lambda: (200, body))
     owned = partial.snapshot()["jobs"][key]["owned"]
     assert set(owned) == set(
-        job["resources"] if variant == "success" else [job["resources"][1]]
+        job["resources"]
+        if variant in {"success", "protobuf-default"}
+        else [job["resources"][1]]
     )
 
 

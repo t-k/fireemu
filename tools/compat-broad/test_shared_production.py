@@ -933,3 +933,112 @@ def test_current_v2_cleanup_chain_requires_typed_completed_receipts(variant):
         )["completed"] = False
     with pytest.raises(ValueError):
         validate_record(record, local=True)
+
+@pytest.mark.parametrize("status", [{}, {"code": 0}])
+def test_v2_batch_creation_accepts_archived_protobuf_default_status(status):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    row = record["jobs"]["partial"]["rows"][4]
+    # Frozen G0 production successes have {}, unlike the explicit local default 0.
+    row["body"]["status"][0] = row["body"]["status"][2] = status
+    for index in (0, 2):
+        resource = record["gate"]["plan"]["jobs"]["partial"]["resources"][index]
+        record["gate"]["jobs"]["partial"]["creationProofs"][resource][
+            "responseDigest"
+        ] = digest(row["body"])
+    rebind_fixture_events(record)
+    assert validate_record(record, local=True) == record
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"code": False},
+        {"code": "0"},
+        {"code": None},
+        {"code": 6},
+        {"code": []},
+        {"code": {}},
+        None,
+        [],
+    ],
+)
+def test_v2_batch_creation_rejects_explicit_nonsuccess_or_malformed_status(status):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    row = record["jobs"]["partial"]["rows"][4]
+    row["body"]["status"][0] = row["body"]["status"][2] = status
+    for index in (0, 2):
+        resource = record["gate"]["plan"]["jobs"]["partial"]["resources"][index]
+        record["gate"]["jobs"]["partial"]["creationProofs"][resource][
+            "responseDigest"
+        ] = digest(row["body"])
+    rebind_fixture_events(record)
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize(
+    "target", ["skipped", "unknown-index", "unknown-job", "unknown-phase"]
+)
+def test_skipped_cleanup_rejects_foreign_dispatch_receipt(boundary, tmp_path, target):
+    from shared_production_pair import validate_record
+
+    boundary[1].variant = "whole-refusal"
+    record = run(boundary, tmp_path)
+    assert validate_record(record) == record
+    skipped = record["gate"]["skips"][0]
+    row = record["jobs"][skipped["job"]]["cleanup"][skipped["index"]]
+    assert row["status"] is None
+    foreign = copy.deepcopy(row["request"])
+    foreign["path"] = "/v1/projects/foreign/databases/(default)/documents/foreign/doc"
+    record["gate"]["events"].append(
+        {
+            "job": skipped["job"],
+            "phase": "recovery",
+            "index": skipped["index"],
+            "completed": True,
+            "status": 200,
+            "requestDigest": digest(foreign),
+            "responseDigest": digest({}),
+        }
+    )
+    event = record["gate"]["events"][-1]
+    if target == "unknown-index":
+        event["index"] = -1
+    elif target == "unknown-job":
+        event["job"] = "unrelated"
+    elif target == "unknown-phase":
+        event["phase"] = "unrelated"
+    record["gate"]["total"] += 1
+    record["gate"]["recovery"] += 1
+    record["gate"]["costMicrousd"] += record["gate"]["plan"]["requestCostMicrousd"]
+    with pytest.raises(ValueError, match="recovery receipt"):
+        validate_record(record)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["body", "missing-journal", "duplicate-journal", "foreign-journal"]
+)
+def test_skipped_cleanup_requires_exact_nondispatch_evidence(
+    boundary, tmp_path, mutation
+):
+    from shared_production_pair import validate_record
+
+    boundary[1].variant = "whole-refusal"
+    record = run(boundary, tmp_path)
+    assert validate_record(record) == record
+    skipped = record["gate"]["skips"][0]
+    row = record["jobs"][skipped["job"]]["cleanup"][skipped["index"]]
+    if mutation == "body":
+        row["body"] = {}
+    elif mutation == "missing-journal":
+        record["gate"]["skips"].pop(0)
+    elif mutation == "duplicate-journal":
+        record["gate"]["skips"].append(copy.deepcopy(skipped))
+    else:
+        skipped["job"] = "unrelated"
+    with pytest.raises(ValueError, match="skipped cleanup"):
+        validate_record(record)

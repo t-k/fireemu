@@ -141,11 +141,11 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
     errors = []
     state_validation = None
     repo_root = Path(__file__).parents[2]
-    evaluator_commit = ""
+    evaluator_head = ""
     anchor_sha256 = ""
     parent_hash = parent.get("parentManifestSha256")
     try:
-        evaluator_commit = subprocess.check_output(
+        evaluator_head = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
         ).strip()
         anchor_sha256 = hashlib.sha256(
@@ -343,7 +343,7 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
         "historicalProductionReceiptSha256": candidate.get("productionReceiptFileSha256"),
         "historicalLocalReceiptSha256": candidate.get("localReceiptFileSha256"),
         "runtimeSourceCommit": parent.get("executionCommit"),
-        "evaluatorCommit": evaluator_commit,
+        "evaluatorCommit": evaluator_head,
         "evaluatorAnchorSha256": anchor_sha256,
         "parentManifestSha256": parent_hash,
         "mappedReceiptFileSha256": parent.get("mappedReceiptFileSha256"),

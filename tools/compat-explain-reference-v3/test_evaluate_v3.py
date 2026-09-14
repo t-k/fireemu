@@ -394,3 +394,182 @@ def test_analyze_requires_exactly_one_duration_parent(change):
         body.append(copy.deepcopy(body[0]))
     with pytest.raises(ValueError, match="duration"):
         e.canonical_body(operation, 200, body)
+
+
+@pytest.fixture(scope="module")
+def isolated_collector(saved, tmp_path_factory):
+    import subprocess
+
+    e, _roots, _old, repaired = saved
+    target = tmp_path_factory.mktemp("collector") / "checkout"
+    subprocess.run(
+        ["git", "clone", "--shared", "--quiet", str(repaired), str(target)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "--quiet", "--detach", e.REPAIRED_COMMIT],
+        cwd=target,
+        check=True,
+        capture_output=True,
+    )
+    return target
+
+
+def forge_cache(source, marker):
+    import marshal
+    import struct
+
+    code = compile(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\nraise RuntimeError('FORGED_BYTECODE_EXECUTED')\n",
+        str(source),
+        "exec",
+    )
+    stat = source.stat()
+    raw = (
+        importlib.util.MAGIC_NUMBER
+        + struct.pack(
+            "<III", 0, int(stat.st_mtime) & 0xFFFFFFFF, stat.st_size & 0xFFFFFFFF
+        )
+        + marshal.dumps(code)
+    )
+    cache = Path(importlib.util.cache_from_source(str(source)))
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_bytes(raw)
+    return cache
+
+
+def prove_forged_cache_is_loadable(source, marker):
+    import subprocess
+    import sys
+
+    program = "import importlib.util,sys; s=importlib.util.spec_from_file_location('forged',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)"
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", program, str(source)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert "FORGED_BYTECODE_EXECUTED" in result.stderr
+    assert marker.read_text() == "executed"
+    marker.unlink()
+
+
+def test_initial_v2_import_ignores_forged_valid_cache(committed_source):
+    import subprocess
+    import sys
+
+    _e, root, _git = committed_source
+    marker = root / "forged-marker"
+    source = root / "tools/compat-explain-reference/evaluate.py"
+    forge_cache(source, marker)
+    prove_forged_cache_is_loadable(source, marker)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(root / "tools/compat-explain-reference-v3/evaluate.py"),
+            "--help",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "compat-broad/campaign_explain.py",
+        "compat-broad/shared_cases.py",
+        "compat-broad/batch_contract.py",
+        "compat-broad/broad.py",
+        "compat-inventory/owned_runner.py",
+        "compat-inventory/evidence_common.py",
+    ],
+)
+def test_worker_ignores_forged_cache_and_still_rejects_invalid_receipt(
+    saved, isolated_collector, tmp_path, module
+):
+    e, roots, _old, _repaired = saved
+    marker = tmp_path / "forged-marker"
+    source = isolated_collector / "tools" / module
+    cache = forge_cache(source, marker)
+    try:
+        prove_forged_cache_is_loadable(source, marker)
+        accepted = e.run_validator("repaired", isolated_collector, roots)
+        assert accepted["collectionComplete"] is True
+        record = json.loads((roots["repairedLocal"] / "result.json").read_bytes())
+        record["cleanupComplete"] = False
+        (tmp_path / "result.json").write_text(json.dumps(record))
+        with pytest.raises(ValueError, match="cleanupComplete incomplete"):
+            e.run_validator(
+                "repaired", isolated_collector, {**roots, "repairedLocal": tmp_path}
+            )
+        assert not marker.exists()
+    finally:
+        cache.unlink()
+
+
+def published_comparison():
+    e = evaluator()
+    summary_path = (
+        e.ROOT / "spec/compatibility/broad-runs/query-explain-reference-summary-v3.json"
+    )
+    summary = json.loads(summary_path.read_bytes())
+    directory = Path("/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-14")
+    for candidate in directory.glob("query-explain-reevaluation-v3-*.json"):
+        if e.sha(candidate.read_bytes()) == summary["comparisonArtifactSha256"]:
+            return e, candidate, summary_path
+    pytest.skip("published comparison's private artifact unavailable")
+
+
+def test_regenerates_published_summary_from_actual_comparison():
+    e, comparison, summary = published_comparison()
+    assert e.summary_bytes(comparison.read_bytes()) == summary.read_bytes()
+    e.check_summary(comparison, summary)
+
+
+@pytest.mark.parametrize("change", ["summary", "comparison"])
+def test_summary_check_rejects_tampering(tmp_path, change):
+    e, comparison, summary = published_comparison()
+    copied_comparison = tmp_path / "comparison.json"
+    copied_summary = tmp_path / "summary.json"
+    copied_comparison.write_bytes(comparison.read_bytes())
+    copied_summary.write_bytes(summary.read_bytes())
+    target = copied_summary if change == "summary" else copied_comparison
+    value = json.loads(target.read_bytes())
+    value["rows"][0]["compatibility"] = "mismatch"
+    target.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="summary"):
+        e.check_summary(copied_comparison, copied_summary)
+
+
+def test_public_summary_cli_regenerates_checks_and_refuses_tampering(committed_source):
+    import subprocess
+    import sys
+
+    _e, root, _git = committed_source
+    _e, comparison, published = published_comparison()
+    output = root / "projected-summary.json"
+    command = [
+        sys.executable,
+        "-I",
+        str(root / "tools/compat-explain-reference-v3/evaluate.py"),
+    ]
+    projected = subprocess.run(
+        [*command, "--project-summary", str(comparison), "--output", str(output)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert projected.returncode == 0, projected.stderr
+    assert output.read_bytes() == published.read_bytes()
+    check = [*command, "--check-summary", str(comparison), "--summary", str(output)]
+    checked = subprocess.run(check, check=False, capture_output=True, text=True)
+    assert checked.returncode == 0, checked.stderr
+    assert json.loads(checked.stdout)["summaryValid"] is True
+    output.write_bytes(output.read_bytes() + b"\n")
+    assert subprocess.run(check, check=False, capture_output=True).returncode != 0

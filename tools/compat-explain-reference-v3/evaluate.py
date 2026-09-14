@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib.abc
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -33,8 +35,43 @@ SOURCE_FILES = (
     "tools/compat-inventory/pyproject.toml",
     "tools/compat-inventory/uv.lock",
 )
+
+
+class SourceOnlyLoader(importlib.machinery.SourceFileLoader):
+    """Compile source bytes directly; never consult or generate a bytecode cache."""
+
+    def get_code(self, fullname):
+        return compile(self.get_data(self.path), self.path, "exec", dont_inherit=True)
+
+
+class RepositorySourceFinder(importlib.abc.MetaPathFinder):
+    """Apply source-only loading to all imports located inside a verified checkout."""
+
+    def __init__(self):
+        self.roots = {ROOT}
+
+    def find_spec(self, fullname, path=None, target=None):
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+        if spec is None or spec.origin is None:
+            return None
+        origin = Path(spec.origin).absolute()
+        if not any(origin.is_relative_to(root) for root in self.roots):
+            return None
+        if origin.suffix != ".py":
+            raise ImportError(
+                "repository import requires Python source: " + str(origin)
+            )
+        spec.loader = SourceOnlyLoader(fullname, str(origin))
+        return spec
+
+
+_source_finder = RepositorySourceFinder()
+sys.meta_path.insert(0, _source_finder)
+_v2_path = ROOT / "tools/compat-explain-reference/evaluate.py"
 _spec = importlib.util.spec_from_file_location(
-    "saved_reference_v2", ROOT / "tools/compat-explain-reference/evaluate.py"
+    "saved_reference_v2",
+    _v2_path,
+    loader=SourceOnlyLoader("saved_reference_v2", str(_v2_path)),
 )
 assert _spec is not None and _spec.loader is not None
 v2 = importlib.util.module_from_spec(_spec)
@@ -47,6 +84,7 @@ def contract():
         "kind": "query-explain-saved-reference-comparison-v3",
         "historicalCollectorCommit": OLD_COMMIT,
         "repairedCollectorCommit": REPAIRED_COMMIT,
+        "repositoryImports": "Compile source bytes directly for v2 and every repository-local collector dependency; ignore bytecode caches and refuse sourceless repository imports.",
         "historicalValidation": "Unchanged v2 frozen-input verification, default projection and exact completion bridge; exact historical collector validates original production and original local.",
         "repairedValidation": "Unmodified exact repaired collector validates its own local envelope, source/runtime/build/artifact/configuration/observer/manifest/principal/operation/state/cleanup bindings and saved files.",
         "normalization": [
@@ -266,6 +304,7 @@ def load_collector(root, commit):
     require(
         not git("diff", commit, "--", root=root).strip(), "collector source differs"
     )
+    _source_finder.roots.add(root)
     sys.dont_write_bytecode = True
     sys.path.insert(0, str(root / "tools/compat-broad"))
     collector = importlib.import_module("campaign_explain")
@@ -428,7 +467,106 @@ def evaluate(roots, old_root, repaired_root):
     return result
 
 
+def summary_bytes(comparison_raw):
+    """Reproduce the public projection while binding the complete private artifact."""
+    result = json.loads(comparison_raw)
+    require(
+        result["kind"] == "query-explain-saved-reference-comparison-v3",
+        "summary input kind differs",
+    )
+    require(
+        result["compatibility"] in {"match", "mismatch"} and len(result["rows"]) == 12,
+        "summary requires a determinate twelve-row comparison",
+    )
+    summary = {
+        key: result[key]
+        for key in (
+            "productionExecuted",
+            "evaluator",
+            "comparisonContract",
+            "frozenInputDirectories",
+            "historical",
+            "repaired",
+            "collectionComplete",
+            "cleanupComplete",
+            "stateVerified",
+            "compatibility",
+        )
+    }
+    summary["kind"] = "query-explain-saved-reference-summary-v3"
+    summary["comparisonArtifactSha256"] = sha(comparison_raw)
+    summary["rows"] = [
+        {
+            **{
+                key: row[key]
+                for key in (
+                    "id",
+                    "compatibility",
+                    "rawProductionBodyDigest",
+                    "rawLocalBodyDigest",
+                    "equivalencesApplied",
+                )
+            },
+            "productionStatus": row["production"]["status"],
+            "localStatus": row["local"]["status"],
+            "normalizedProductionBodyDigest": digest(row["production"]["body"]),
+            "normalizedLocalBodyDigest": digest(row["local"]["body"]),
+        }
+        for row in result["rows"]
+    ]
+    summary["scope"] = [
+        "Offline reuse of immutable production collection; no new Cloud execution.",
+        "Six Explain cases, four setup observations, two post-state readbacks; independently validated six-operation cleanup.",
+        "Original indeterminate and v2 mismatch retained; repaired match uses validated duration nondeterminism and established v2 projections.",
+        "Recorded build artifact digest is bound; owned temporary executable was removed during collection cleanup.",
+        "No claim for other query/index shapes, IAM users or subsequent production changes.",
+    ]
+    return (json.dumps(summary, indent=2, allow_nan=False) + "\n").encode()
+
+
+def check_summary(comparison, summary):
+    require(
+        summary_bytes(comparison.read_bytes()) == summary.read_bytes(),
+        "published summary differs from comparison projection",
+    )
+
+
+def summary_command():
+    mode = sys.argv[1]
+    parser = argparse.ArgumentParser(
+        description="Generate or check a deterministic public comparison projection."
+    )
+    parser.add_argument(mode, required=True, type=Path)
+    parser.add_argument(
+        "--summary" if mode == "--check-summary" else "--output",
+        required=True,
+        type=Path,
+    )
+    args = parser.parse_args()
+    source_identity()
+    comparison = getattr(args, mode[2:].replace("-", "_"))
+    if mode == "--check-summary":
+        check_summary(comparison, args.summary)
+        print(
+            json.dumps(
+                {
+                    "summaryValid": True,
+                    "comparisonArtifactSha256": sha(comparison.read_bytes()),
+                }
+            )
+        )
+    else:
+        projected = summary_bytes(comparison.read_bytes())
+        # Exclusive creation also prevents replacing either comparison or an earlier summary.
+        with args.output.open("xb") as stream:
+            stream.write(projected)
+        print(json.dumps({"summarySha256": sha(projected)}))
+    return 0
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in {"--project-summary", "--check-summary"}:
+        return summary_command()
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         try:
             print(

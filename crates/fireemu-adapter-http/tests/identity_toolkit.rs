@@ -4487,7 +4487,7 @@ fn strict_password_change_distinguishes_revoked_refresh() {
 }
 
 #[test]
-fn strict_profile_admin_password_change_revokes_refresh_tokens() {
+fn strict_profile_admin_password_change_rejects_older_refresh_tokens() {
     let s = strict_state();
     let (status, signed) = post(
         &s,
@@ -4495,6 +4495,8 @@ fn strict_profile_admin_password_change_revokes_refresh_tokens() {
         &json!({"email": "strict@example.com", "password": "password1", "returnSecureToken": true}),
     );
     assert_eq!(status, 200, "{signed}");
+    let refresh = signed["refreshToken"].clone();
+    advance(&s, 1);
     let (status, changed) = admin(
         &s,
         "POST",
@@ -4502,17 +4504,16 @@ fn strict_profile_admin_password_change_revokes_refresh_tokens() {
         &json!({"localId": signed["localId"], "password": "password2"}),
     );
     assert_eq!(status, 200, "{changed}");
+    assert!(changed.get("idToken").is_none(), "{changed}");
+    assert!(changed.get("refreshToken").is_none(), "{changed}");
 
-    let (status, refreshed) = post(
+    let (status, expired) = post(
         &s,
         "/securetoken.googleapis.com/v1/token",
-        &json!({
-            "grant_type": "refresh_token",
-            "refresh_token": signed["refreshToken"]
-        }),
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
-    assert_eq!(status, 400, "{refreshed}");
-    assert_eq!(refreshed["error"]["message"], "INVALID_REFRESH_TOKEN");
+    assert_eq!(status, 400, "{expired}");
+    assert_eq!(expired["error"]["message"], "TOKEN_EXPIRED");
 }
 
 #[test]
@@ -4541,6 +4542,106 @@ fn strict_admin_password_change_keeps_a_same_second_refresh_usable() {
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
     assert_eq!(status, 200, "{refreshed}");
+}
+
+#[test]
+fn strict_admin_password_change_preserves_account_and_credential_side_effects() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "admin-password-side-effects@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let uid = signed["localId"].as_str().unwrap().to_owned();
+
+    let (status, changed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "password": "password2"}),
+    );
+    assert_eq!(status, 200, "{changed}");
+    assert!(changed.get("idToken").is_none(), "{changed}");
+    assert!(changed.get("refreshToken").is_none(), "{changed}");
+
+    let (status, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [&uid]}),
+    );
+    assert_eq!(status, 200, "{looked}");
+    let user = &looked["users"][0];
+    assert_eq!(user["localId"], uid);
+    assert_eq!(user["passwordHash"], "UkVEQUNURUQ=");
+    assert!(user["passwordUpdatedAt"].is_u64(), "{user}");
+    assert_eq!(user["validSince"], "1788004860");
+
+    let (status, old_password) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "admin-password-side-effects@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 400, "{old_password}");
+    let (status, new_password) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "admin-password-side-effects@example.com", "password": "password2", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{new_password}");
+    assert_eq!(new_password["localId"], uid);
+}
+
+#[test]
+fn strict_admin_password_change_retained_refresh_reports_disabled_then_deleted() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "admin-password-terminal@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let uid = signed["localId"].as_str().unwrap().to_owned();
+    let refresh = signed["refreshToken"].clone();
+
+    let (status, changed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "password": "password2"}),
+    );
+    assert_eq!(status, 200, "{changed}");
+
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "disableUser": true}),
+    );
+    assert_eq!(status, 200);
+    let (status, disabled) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 400, "{disabled}");
+    assert_eq!(disabled["error"]["message"], "USER_DISABLED");
+
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:delete"),
+        &json!({"localId": uid}),
+    );
+    assert_eq!(status, 200);
+    let (status, deleted) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"]}),
+    );
+    assert_eq!(status, 400, "{deleted}");
+    assert_eq!(deleted["error"]["message"], "USER_NOT_FOUND");
 }
 
 #[test]

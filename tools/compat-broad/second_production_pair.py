@@ -18,7 +18,7 @@ PINNED_PRODUCTION_CANDIDATE_SHA256 = (
     "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73"
 )
 PARENT_RUNTIME_ANCHOR = (
-    "spec/compatibility/broad-runs/af1d2bc3-parent-runtime-anchor.json"
+    "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v3.json"
 )
 
 
@@ -148,11 +148,10 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
         evaluator_head = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
         ).strip()
-        anchor_sha256 = hashlib.sha256(
-            subprocess.check_output(
-                ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"], cwd=repo_root
-            )
-        ).hexdigest()
+        anchor_raw = subprocess.check_output(
+            ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"], cwd=repo_root
+        )
+        anchor_sha256 = hashlib.sha256(anchor_raw).hexdigest()
     except (OSError, subprocess.CalledProcessError):
         errors.append({"side": "evaluator", "reason": "evaluator source identity unavailable"})
     try:
@@ -203,10 +202,6 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
             or not git_ok(["git", "diff", "--quiet", evaluator_commit, "--", "tools/compat-broad"])
         ):
             raise ValueError("parent execution commit does not bind evaluator source")
-        anchor_raw = subprocess.check_output(
-            ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"],
-            cwd=repo_root,
-        )
         anchor = json.loads(anchor_raw)
         if (
             not isinstance(anchor, dict)

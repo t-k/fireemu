@@ -540,6 +540,8 @@ fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
 
     let (status, before) = call(&s, "GET", &format!("{DOCS}/agg/a"), json!({}));
     assert_eq!(status, 200, "{before}");
+    let (status, before_missing_field) = call(&s, "GET", &format!("{DOCS}/agg/d"), json!({}));
+    assert_eq!(status, 200, "{before_missing_field}");
     let (status, aggregate) = call(
         &s,
         "POST",
@@ -590,6 +592,12 @@ fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
         after, before,
         "a refused commit must preserve fields and timestamps"
     );
+    let (status, after_missing_field) = call(&s, "GET", &format!("{DOCS}/agg/d"), json!({}));
+    assert_eq!(status, 200, "{after_missing_field}");
+    assert_eq!(
+        after_missing_field, before_missing_field,
+        "d refused commit must preserve fields and timestamps"
+    );
 
     let (status, aggregate_after) = call(
         &s,
@@ -630,6 +638,7 @@ fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
         .as_str()
         .expect("REST aggregation announces new transaction")
         .to_owned();
+    assert!(!transaction.is_empty());
     let (status, committed) = call(
         &s,
         "POST",
@@ -637,6 +646,14 @@ fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
         json!({"transaction": transaction, "writes": []}),
     );
     assert_eq!(status, 200, "{committed}");
+    let (status, reused) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"transaction": transaction, "writes": []}),
+    );
+    assert_eq!(status, 409, "{reused}");
+    assert_eq!(reused["error"]["status"], "ABORTED");
 }
 
 #[test]

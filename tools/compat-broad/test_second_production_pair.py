@@ -1,6 +1,7 @@
 """Observed outcomes do not relax independent operation and version admission."""
 
 import copy
+import hashlib
 import json
 import subprocess
 import sys
@@ -317,7 +318,7 @@ def test_other_parameters_and_invalid_headers_are_not_erased(left, right):
     )
 
 
-def test_saved_candidate_compares_only_production_rows_and_records_bindings(
+def test_saved_candidate_rejects_self_hashed_fabricated_parent(
     production_inputs, tmp_path
 ):
     from broad_contract import ROOT
@@ -350,12 +351,69 @@ def test_saved_candidate_compares_only_production_rows_and_records_bindings(
     result = compare_saved(
         candidate_path, local, parent_path, local_source_sha256=digest(local)
     )
-    assert result["compatibility"] in {"match", "mismatch"}, result["errors"]
+    assert result["compatibility"] == "indeterminate"
     assert result["mode"] == "saved-production-versus-local"
     assert result["historicalObserverDigest"]
     assert result["currentObserverDigest"] == local["observerDigest"]
     assert len(result["productionCandidateSourceSha256"]) == 64
     assert result["currentLocalSourceSha256"] == digest(local)
+
+
+def test_saved_cli_rejects_reauthored_parent_with_recomputed_self_hash(
+    production_inputs, tmp_path
+):
+    from broad_contract import ROOT
+
+    _, backend = production_inputs
+    local = current_local(backend.source)
+    local["runtimeIdentity"] = {
+        "artifactSha256": "a" * 64,
+        "executionCommit": "b" * 40,
+        "configurationDigest": "c" * 64,
+    }
+    local_path = tmp_path / "local.json"
+    local_path.write_text(json.dumps(local))
+    parent = {
+        "status": "completed",
+        "productionExecuted": False,
+        "artifactSha256": local["runtimeIdentity"]["artifactSha256"],
+        "executionCommit": local["runtimeIdentity"]["executionCommit"],
+        "configurationDigest": local["runtimeIdentity"]["configurationDigest"],
+        "mappedReceiptFileSha256": hashlib.sha256(local_path.read_bytes()).hexdigest(),
+        "mappedReceiptKind": local["kind"],
+        "mappedReceiptRuntimeIdentity": local["runtimeIdentity"],
+        "mappedReceiptRecordingComplete": True,
+        "mappedReceiptCleanupComplete": True,
+    }
+    parent["parentManifestSha256"] = digest(parent)
+    parent_path = tmp_path / "manifest.json"
+    parent_path.write_text(json.dumps(parent))
+    output_path = tmp_path / "comparison.json"
+    script = ROOT / "tools/compat-broad/second_production_pair.py"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(script),
+            "--mode",
+            "saved",
+            "--saved-production-candidate",
+            str(ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json"),
+            "--local",
+            str(local_path),
+            "--parent-manifest",
+            str(parent_path),
+            "--output",
+            str(output_path),
+        ],
+        cwd=ROOT,
+        env={"PYTHONPATH": str(ROOT / "tools/compat-broad")},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    process.communicate()
+    assert process.returncode != 0
+    assert json.loads(output_path.read_text())["compatibility"] == "indeterminate"
 
 
 @pytest.mark.parametrize("field", ["kind", "manifestDigest", "admissionDigest", "comparisonManifestDigest"])

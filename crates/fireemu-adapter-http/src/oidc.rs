@@ -49,6 +49,13 @@ impl LocalOidcTrust {
         {
             return false;
         }
+        // This bounded mode authenticates only an ID token; no access-token binding is implemented.
+        if params
+            .get("access_token")
+            .is_some_and(|token| !token.is_empty())
+        {
+            return false;
+        }
         let Some(token) = params.get("id_token") else {
             return false;
         };

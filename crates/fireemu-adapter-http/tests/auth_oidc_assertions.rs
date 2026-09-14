@@ -317,3 +317,261 @@ fn signed_oidc_email_collision_requires_confirmation_without_tokens_or_mutation(
         format!("{:?}", s.store.lock().unwrap().users_by_creation())
     );
 }
+
+struct CredentialObserver {
+    contexts: Arc<Mutex<Vec<fireemu_adapter_http::identity_toolkit::AuthBlockingContext>>>,
+}
+
+impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for CredentialObserver {
+    fn forward_inbound_credentials(&self) -> bool {
+        true
+    }
+
+    fn invoke(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+        Ok(json!({}))
+    }
+
+    fn invoke_for_with_context(
+        &self,
+        _project: &str,
+        _tenant: Option<&str>,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+        context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    ) -> Result<Option<Value>, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure>
+    {
+        self.contexts.lock().unwrap().push(context.clone());
+        Ok(Some(json!({})))
+    }
+}
+
+#[test]
+fn signed_oidc_mixed_access_token_is_refused_before_mutation_or_credential_forwarding() {
+    let mut s = state();
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    s.blocking = Some(Arc::new(CredentialObserver {
+        contexts: contexts.clone(),
+    }));
+    let mut body = request(&token(&claims()));
+    body["postBody"] = json!(format!(
+        "{}&access_token=unverified-access-sentinel",
+        body["postBody"].as_str().unwrap()
+    ));
+    let response = signed_post(&s, &trust(), &body);
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert!(response.body.get("oauthAccessToken").is_none());
+    assert!(response.body.get("idToken").is_none());
+    assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    assert!(contexts.lock().unwrap().is_empty());
+    // The observer is active and receives genuine ID-token credentials on the allowed path.
+    let mut allowed = request(&token(&claims()));
+    allowed["postBody"] = json!(format!(
+        "{}&access_token=",
+        allowed["postBody"].as_str().unwrap()
+    ));
+    assert_eq!(signed_post(&s, &trust(), &allowed).status, 200);
+    let recorded = contexts.lock().unwrap();
+    assert!(!recorded.is_empty());
+    for context in recorded.iter() {
+        let credential = context.credential.as_ref().unwrap();
+        assert!(credential.access_token.is_none());
+        assert!(credential.id_token.is_some());
+    }
+}
+
+#[test]
+fn signed_oidc_tenant_routing_succeeds_only_with_the_selected_namespace_pin() {
+    use fireemu_core_auth::store::AuthRegistry;
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    let config = s
+        .store
+        .lock()
+        .unwrap()
+        .oidc_config("oidc.local")
+        .unwrap()
+        .clone();
+    for tenant in ["customer-a", "customer-b"] {
+        let store = registry.ensure_tenant("demo-app", tenant).unwrap();
+        assert!(store.lock().unwrap().create_oidc_config(config.clone()));
+    }
+    s.registry = Some(registry.clone());
+    let mut body = request(&token(&claims()));
+    body["tenantId"] = json!("customer-a");
+    let mut tenant_pin = trust();
+    tenant_pin.tenant_id = Some("customer-a".into());
+    let mut other_pin = trust();
+    other_pin.tenant_id = Some("customer-b".into());
+    for pin in [&trust(), &other_pin] {
+        assert_eq!(signed_post(&s, pin, &body).status, 400);
+    }
+    let signed = signed_post(&s, &tenant_pin, &body);
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    let jwt =
+        fireemu_core_auth::jwt::decode_unsigned(signed.body["idToken"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&jwt.payload_json).unwrap()["firebase"]["tenant"],
+        "customer-a"
+    );
+    assert_eq!(
+        registry
+            .tenant_store("demo-app", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .users_by_creation()
+            .len(),
+        1
+    );
+    assert!(registry
+        .tenant_store("demo-app", "customer-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .users_by_creation()
+        .is_empty());
+    assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    // The same valid assertion cannot use A's pin against either B or the parent namespace.
+    body["tenantId"] = json!("customer-b");
+    assert_eq!(signed_post(&s, &tenant_pin, &body).status, 400);
+    body.as_object_mut().unwrap().remove("tenantId");
+    assert_eq!(signed_post(&s, &tenant_pin, &body).status, 400);
+    assert!(registry
+        .tenant_store("demo-app", "customer-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .users_by_creation()
+        .is_empty());
+    assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Keep the populated refusal and its post-state observations together.
+fn signed_oidc_bad_signature_preserves_populated_sessions_transients_and_allocation() {
+    use fireemu_core_auth::store::{NewUser, OobRequestType, VerificationPurpose};
+    let mut s = state();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let event_log = events.clone();
+    let notice_log = notices.clone();
+    s.events = Some(Arc::new(move |event| {
+        event_log.lock().unwrap().push(event.clone());
+    }));
+    s.notices = Some(Arc::new(move |notice| {
+        notice_log.lock().unwrap().push(notice.clone());
+    }));
+    let mut initial = claims();
+    initial["name"] = json!("Original profile");
+    initial["email"] = json!("owner@example.test");
+    let signed = signed_post(&s, &trust(), &request(&token(&initial)));
+    assert_eq!(signed.status, 200);
+    let sms = fireemu_adapter_http::identity_toolkit::handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber":"+15555550123"}),
+    );
+    assert_eq!(sms.status, 200);
+    assert!(!events.lock().unwrap().is_empty());
+    assert!(!notices.lock().unwrap().is_empty());
+    let at = LogicalInstant::from_unix_seconds(NOW);
+    let (uid, pending, oob, mut baseline) = {
+        let mut store = s.store.lock().unwrap();
+        let uid = store
+            .user_by_id(signed.body["localId"].as_str().unwrap())
+            .unwrap()
+            .local_id
+            .clone();
+        store
+            .enroll_phone_factor(&uid, "+15555550124", Some("Saved factor".into()), at)
+            .unwrap();
+        let pending = store.start_mfa_sign_in(&uid, at).unwrap();
+        let oob = store
+            .create_oob_code(
+                OobRequestType::VerifyEmail,
+                "owner@example.test",
+                Some(uid.clone()),
+                None,
+                at,
+            )
+            .unwrap();
+        assert_eq!(store.pending_sign_in_count(), 1);
+        assert_eq!(store.oob_codes().len(), 1);
+        assert_eq!(store.verification_codes().len(), 1);
+        (uid, pending, oob, store.clone())
+    };
+    let event_count = events.lock().unwrap().len();
+    let notice_count = notices.lock().unwrap().len();
+    // All old transient credentials are now sweepable. Only the bad signature must cause refusal.
+    let later = LogicalInstant::from_unix_seconds(NOW + 7200);
+    s.clock.lock().unwrap().advance_to(later).unwrap();
+    let mut c = initial;
+    c["iat"] = json!(NOW + 7200);
+    c["exp"] = json!(NOW + 7260);
+    c["name"] = json!("Untrusted replacement");
+    let mut jwt = token(&c);
+    let start = jwt.rfind('.').unwrap() + 1;
+    jwt.replace_range(
+        start..=start,
+        if &jwt[start..=start] == "A" { "B" } else { "A" },
+    );
+    let response = signed_post(&s, &trust(), &request(&jwt));
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert!(response.body.get("idToken").is_none());
+    assert!(response.body.get("refreshToken").is_none());
+    assert_eq!(events.lock().unwrap().len(), event_count);
+    assert_eq!(notices.lock().unwrap().len(), notice_count);
+    let mut store = s.store.lock().unwrap();
+    assert_eq!(
+        store.users_shared_with(&baseline),
+        baseline.retained_user_bytes()
+    );
+    assert_eq!(
+        format!("{:?}", store.users_by_creation()),
+        format!("{:?}", baseline.users_by_creation())
+    );
+    assert_eq!(store.transient_registries_shared_with(&baseline), 6);
+    assert_eq!(store.transient_bytes(), baseline.transient_bytes());
+    assert_eq!(
+        store.pending_sign_in_count(),
+        baseline.pending_sign_in_count()
+    );
+    assert_eq!(store.pending_sign_in_user(&pending), Some(uid.clone()));
+    assert_eq!(
+        format!("{:?}", store.pending_sign_in_context(&pending)),
+        format!("{:?}", baseline.pending_sign_in_context(&pending))
+    );
+    assert!(store.oob_code(&oob).is_some());
+    assert_eq!(store.verification_codes(), baseline.verification_codes());
+    let refresh = signed.body["refreshToken"].as_str().unwrap();
+    assert_eq!(
+        format!("{:?}", store.refresh_session(refresh).unwrap()),
+        format!("{:?}", baseline.refresh_session(refresh).unwrap())
+    );
+    assert_eq!(store.redeem_refresh_token(refresh).unwrap(), uid);
+    assert!(store.take_user_events().is_empty());
+    assert!(store.take_credential_notices().is_empty());
+    // Equal subsequent public outputs constrain the RNG, UID sequence and refresh allocation.
+    let allocated = store.create_user(NewUser::anonymous(), later).unwrap();
+    let expected = baseline.create_user(NewUser::anonymous(), later).unwrap();
+    assert_eq!(allocated, expected);
+    assert_eq!(
+        store.issue_refresh_token(&allocated, later).unwrap(),
+        baseline.issue_refresh_token(&expected, later).unwrap()
+    );
+    assert_eq!(
+        store
+            .send_verification_code("+15555550125", VerificationPurpose::SignIn, later)
+            .unwrap(),
+        baseline
+            .send_verification_code("+15555550125", VerificationPurpose::SignIn, later)
+            .unwrap()
+    );
+}

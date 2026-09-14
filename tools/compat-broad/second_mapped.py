@@ -415,12 +415,17 @@ def execute_45(a, output, runtime_identity):
     mode, nonce = a.mode, a.second_nonce
     users, rows, documents = {}, [], {}
     a.users = users
+    from second_production_contract import binding as comparison_binding
+
     result = {
         "kind": "second45-local-run-v1",
+        "target": "local",
         "mode": mode,
+        "productionExecuted": False,
         "runtimeIdentity": runtime_identity,
         "nonce": nonce,
         "manifestDigest": digest(manifest()),
+        "comparisonContractDigest": digest(comparison_binding()),
         "observerDigest": digest(
             {
                 "python": observer_digest(),

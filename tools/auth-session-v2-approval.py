@@ -37,7 +37,7 @@ def render(approval, receipt):
         raise ValueError(
             "Approval does not match the recorded human decision and subject"
         )
-    publisher.validate(receipt)
+    publisher.validate_frozen(receipt)
     for local, production in zip(
         receipt["local"]["cases"], receipt["production"]["cases"], strict=True
     ):

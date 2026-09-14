@@ -28,7 +28,7 @@ def test_approval_page_is_current_and_bounded():
     assert "not a guarantee of universal immediate revocation" in page
     assert "historical integrity" in page
     assert len(approval["cases"]) == 34
-    assert t.publisher.PAGE.read_text() == t.publisher.render(receipt)
+    assert t.publisher.PAGE.read_text() == t.publisher.render_frozen(receipt)
 
 
 @pytest.mark.parametrize(

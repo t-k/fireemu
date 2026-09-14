@@ -4,13 +4,14 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/auth-session-v2"))
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
-from evidence_common import runtime_inputs
+from evidence_common import runtime_inputs, runtime_inputs_for_receipt
 from session_v2_contract import (
     CASES,
     CORPUS,
@@ -26,6 +27,9 @@ BUNDLE = ROOT / "spec/compatibility/evidence/auth-session-v2/receipt.json"
 REVIEW = ROOT / "spec/compatibility/evidence/auth-session-v2/source-review.json"
 PAGE = ROOT / "docs/compatibility/auth-session-v2.md"
 SCOPE = "Diagnostic REST observation of frozen pre-change A/B ID and refresh tokens after session A changes the password, with changed-response token controls. No tenant; strict owned local artifact; recorded production authentication/password policy; auth-session-v2 revision 2. Includes fixed malformed and unknown refresh-input controls. Target offsets 0/10/30 seconds, request-start deadline 45 seconds. No universal immediate-revocation oracle, SDK checkRevoked, Rules, elapsed expiry, same-second boundary, whole-session lineage, physical-device or public npm claim."
+FROZEN_PUBLICATION_CONTRACTS = {
+    "2fac3394ab1b5b523eb7e41a4faa53eed47047fa2131a929f35942126ce5c749",
+}
 
 
 def hex_value(value, length=64):
@@ -101,7 +105,73 @@ def project(report, target):
     return out
 
 
-def validate(value):
+def _validate_probe_inputs(value, expected):
+    require(isinstance(value, dict) and bool(value))
+    for path, digest_value in value.items():
+        require(
+            isinstance(path, str)
+            and (
+                path.startswith("tools/auth-session-v2/")
+                or path.startswith("tools/compat-inventory/")
+            )
+            and path.endswith(".py")
+            and ".." not in Path(path).parts
+        )
+        require(
+            isinstance(digest_value, str)
+            and re.fullmatch(r"[0-9a-f]{64}", digest_value)
+        )
+    if expected is not None:
+        require(value == expected)
+
+
+def _probe_inputs_at_commit(commit):
+    require(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit))
+    try:
+        names = subprocess.check_output(
+            [
+                "git",
+                "ls-tree",
+                "-r",
+                "-z",
+                "--name-only",
+                commit,
+                "--",
+                "tools/auth-session-v2",
+                "tools/compat-inventory",
+            ],
+            cwd=ROOT,
+        ).decode().split("\0")
+    except subprocess.CalledProcessError as error:
+        raise ValueError("recorded probe source commit is unavailable") from error
+    directories = {
+        Path("tools/auth-session-v2"),
+        Path("tools/compat-inventory"),
+    }
+    names = sorted(
+        name
+        for name in names
+        if name
+        and Path(name).parent in directories
+        and Path(name).suffix == ".py"
+        and not Path(name).name.startswith("test_")
+    )
+    require(bool(names))
+    result = {}
+    for name in names:
+        try:
+            content = subprocess.check_output(
+                ["git", "show", f"{commit}:{name}"],
+                cwd=ROOT,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError as error:
+            raise ValueError("recorded probe source closure is incomplete") from error
+        result[name] = hashlib.sha256(content).hexdigest()
+    return result
+
+
+def _validate(value, expected_inputs):
     require(
         set(value)
         == {
@@ -122,11 +192,21 @@ def validate(value):
         and value["acceptance"] == "candidate"
         and value["scope"] == SCOPE
     )
-    require(
-        digest(value["corpus"]) == digest(CORPUS) and value["probeInputs"] == inputs()
-    )
+    require(digest(value["corpus"]) == digest(CORPUS))
+    if expected_inputs is None:
+        probe_commits = {
+            value[target]["probeSourceCommit"] for target in ["local", "production"]
+        }
+        require(len(probe_commits) == 1)
+        expected_probe_inputs = _probe_inputs_at_commit(probe_commits.pop())
+    else:
+        expected_probe_inputs = expected_inputs
+    _validate_probe_inputs(value["probeInputs"], expected_probe_inputs)
     review = json.loads(REVIEW.read_bytes())
-    require(value["publicationContractSha256"] == publication_contract_sha())
+    if expected_inputs is None:
+        require(value["publicationContractSha256"] in FROZEN_PUBLICATION_CONTRACTS)
+    else:
+        require(value["publicationContractSha256"] == publication_contract_sha())
     require(value["sourceReviewSha256"] == digest(review))
     require([row["case"] for row in review["obligations"]] == list(CASES))
     require(review["executionApproval"] == "not-granted")
@@ -232,9 +312,14 @@ def validate(value):
             and type(build["exitCode"]) is int
             and build["exitCode"] == 0
         )
+        expected_runtime_inputs = (
+            runtime_inputs(ROOT)
+            if expected_inputs is not None
+            else runtime_inputs_for_receipt(report["runtimeSourceCommit"], ROOT)
+        )
         require(
             build["artifactSha256"] == artifact["sha256"]
-            and build["inputs"] == runtime_inputs(ROOT)
+            and build["inputs"] == expected_runtime_inputs
         )
         process, instance = report["ownedProcess"], report["instance"]
         require(set(process) == {"pid", "exitCode", "stopped", "listenersClosed"})
@@ -273,6 +358,15 @@ def validate(value):
             and instance["version"] == artifact["version"]
         )
         hex_value(instance["nonce"], 32)
+
+
+def validate(value):
+    _validate(value, inputs())
+
+
+def validate_frozen(value):
+    """Validate an immutable receipt against its recorded source snapshot."""
+    _validate(value, None)
 
 
 def validate_timing(report):
@@ -377,8 +471,8 @@ def result_text(row):
     return label
 
 
-def render(value):
-    validate(value)
+def render(value, *, frozen=False):
+    (validate_frozen if frozen else validate)(value)
     lines = [
         "# Auth session token revision 2 observations",
         "",
@@ -418,6 +512,11 @@ def render(value):
     return "\n".join(lines)
 
 
+def render_frozen(value):
+    """Render an immutable receipt without rebinding it to the current source tree."""
+    return render(value, frozen=True)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--local", type=Path)
@@ -447,7 +546,10 @@ if __name__ == "__main__":
         BUNDLE.parent.mkdir(parents=True, exist_ok=True)
         BUNDLE.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
     value = json.loads(BUNDLE.read_bytes())
-    page = render(value)
+    # Newly generated records are bound to the current source tree.  The
+    # checked-in bundle is an immutable historical receipt and must use the
+    # frozen validation path instead.
+    page = render(value, frozen=not (args.local or args.production))
     if args.check:
         require(PAGE.read_text() == page)
     else:

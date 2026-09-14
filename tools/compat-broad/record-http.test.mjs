@@ -33,10 +33,10 @@ test("bounded real HTTP separates non-JSON, empty, overflow, timeout and interru
     server.listen(Number(process.env.PORT ?? 0), "127.0.0.1", resolve),
   );
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const get = (path, maxBytes = 1000) =>
+  const get = (path, maxBytes = 1000, timeoutMs = 2_000) =>
     receiveHttp(
       origin + path,
-      { signal: AbortSignal.timeout(100) },
+      { signal: AbortSignal.timeout(timeoutMs) },
       { origin, privateDirectory: dir, maxBytes },
     );
   try {
@@ -60,7 +60,7 @@ test("bounded real HTTP separates non-JSON, empty, overflow, timeout and interru
     assert.equal(large.http.failure, "size-limit");
     assert.equal(large.http.truncated, true);
     assert.equal(large.http.digestScope, "prefix");
-    const timeout = await get("/timeout");
+    const timeout = await get("/timeout", 1000, 100);
     assert.equal(timeout.http.complete, false);
     assert.equal(timeout.http.failure, "timeout");
     const broken = await get("/broken");

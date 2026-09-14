@@ -4516,6 +4516,34 @@ fn strict_profile_admin_password_change_revokes_refresh_tokens() {
 }
 
 #[test]
+fn strict_admin_password_change_keeps_a_same_second_refresh_usable() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "same-second@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let uid = signed["localId"].as_str().unwrap();
+    let refresh = signed["refreshToken"].clone();
+
+    let (status, changed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "password": "password2"}),
+    );
+    assert_eq!(status, 200, "{changed}");
+
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+}
+
+#[test]
 fn self_service_password_change_invalidates_an_existing_session_cookie() {
     let s = state();
     let (status, signed_up) = post(

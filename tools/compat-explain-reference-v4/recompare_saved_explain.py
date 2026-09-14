@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -128,6 +129,23 @@ def _normalized_body(nonce: str, row: dict) -> object:
     )
 
 
+def _write_output_exclusively(output: Path, result: dict, input_paths: tuple[Path, ...]) -> None:
+    output_resolved = output.resolve(strict=False)
+    if any(output_resolved == input_path.resolve() for input_path in input_paths):
+        raise ValueError(f"output must be a new regular file: {output}")
+    if os.path.lexists(output):
+        raise ValueError(f"output must be a new regular file: {output}")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(result, indent=2) + "\n"
+    try:
+        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    except FileExistsError as error:
+        raise ValueError(f"output must be a new regular file: {output}") from error
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(payload)
+
+
 def recompare(
     production_path: Path,
     original_local_path: Path,
@@ -241,8 +259,11 @@ def main() -> int:
         args.current_local.resolve(),
         args.historical_commit,
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, indent=2) + "\n")
+    _write_output_exclusively(
+        args.output,
+        result,
+        (args.production, args.original_local, args.current_local),
+    )
     print(
         json.dumps(
             {"compatibility": result["compatibility"], "rows": len(result["rows"])}

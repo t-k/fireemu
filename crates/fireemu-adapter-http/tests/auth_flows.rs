@@ -599,6 +599,62 @@ fn email_verification_and_email_change_apply_action_codes() {
 }
 
 #[test]
+fn rejected_email_change_preserves_oob_code_and_account_state() {
+    let s = state();
+    let owner = sign_up(&s, "oob-change-owner@example.com");
+    let other = sign_up(&s, "oob-change-other@example.com");
+    let target = "oob-change-target@example.com";
+    let (status, verified) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": owner["localId"], "emailVerified": true}),
+    );
+    assert_eq!(status, 200, "{verified}");
+
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({
+            "requestType": "VERIFY_AND_CHANGE_EMAIL",
+            "idToken": owner["idToken"],
+            "newEmail": target,
+        }),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"][0]["oobCode"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let (status, claimed) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": other["localId"], "email": target}),
+    );
+    assert_eq!(status, 200, "{claimed}");
+
+    let (status, rejected) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": code}),
+    );
+    assert_eq!(status, 400, "{rejected}");
+    assert_eq!(rejected["error"]["message"], "EMAIL_EXISTS");
+    assert_eq!(issued_code(&s, "VERIFY_AND_CHANGE_EMAIL"), code);
+
+    let (_, owner_lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": owner["idToken"]}),
+    );
+    assert_eq!(
+        owner_lookup["users"][0]["email"],
+        "oob-change-owner@example.com"
+    );
+    assert_eq!(owner_lookup["users"][0]["emailVerified"], true);
+}
+
+#[test]
 fn email_link_sign_in_creates_a_verified_passwordless_user() {
     let s = state();
     let (status, body) = post(

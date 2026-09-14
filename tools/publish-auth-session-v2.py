@@ -195,7 +195,10 @@ def _validate(value, expected_inputs):
     require(digest(value["corpus"]) == digest(CORPUS))
     if expected_inputs is None:
         probe_commits = {
-            value[target]["probeSourceCommit"] for target in ["local", "production"]
+            report.get("probeSourceCommit")
+            if isinstance(report, dict)
+            else None
+            for report in (value.get("local"), value.get("production"))
         }
         require(len(probe_commits) == 1)
         expected_probe_inputs = _probe_inputs_at_commit(probe_commits.pop())

@@ -2681,9 +2681,23 @@ fn provider_config_management(
             let page_token = params.get("pageToken").map(String::as_str);
             let mut configs = store
                 .oidc_configs()
-                .filter(|config| page_token.is_none_or(|token| config.id.as_str() > token))
                 .map(|config| oidc_json(&name(&config.id), config))
                 .collect::<Vec<_>>();
+            if let Some(token) = page_token {
+                let Some(index) = configs.iter().position(|config| {
+                    config["name"]
+                        .as_str()
+                        .and_then(|value| value.rsplit('/').next())
+                        == Some(token)
+                }) else {
+                    configs.clear();
+                    return JsonResponse {
+                        status: 400,
+                        body: json!({"error": "INVALID_ARGUMENT"}),
+                    };
+                };
+                configs = configs.into_iter().skip(index + 1).collect();
+            }
             let next = (configs.len() > page_size)
                 .then(|| {
                     configs
@@ -2714,9 +2728,23 @@ fn provider_config_management(
             let page_token = params.get("pageToken").map(String::as_str);
             let mut configs = store
                 .saml_configs()
-                .filter(|config| page_token.is_none_or(|token| config.id.as_str() > token))
                 .map(|config| saml_json(&name(&config.id), config))
                 .collect::<Vec<_>>();
+            if let Some(token) = page_token {
+                let Some(index) = configs.iter().position(|config| {
+                    config["name"]
+                        .as_str()
+                        .and_then(|value| value.rsplit('/').next())
+                        == Some(token)
+                }) else {
+                    configs.clear();
+                    return JsonResponse {
+                        status: 400,
+                        body: json!({"error": "INVALID_ARGUMENT"}),
+                    };
+                };
+                configs = configs.into_iter().skip(index + 1).collect();
+            }
             let next = (configs.len() > page_size)
                 .then(|| {
                     configs

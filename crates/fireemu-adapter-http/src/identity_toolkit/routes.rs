@@ -445,6 +445,24 @@ const fn admin_resource(
     }
 }
 
+const fn project_v2_resource(
+    method: &'static str,
+    collection: &'static str,
+    operation: &'static str,
+    handler: Handler,
+) -> Route {
+    Route {
+        method,
+        pattern: Pattern::ProjectResource {
+            prefix: ADMIN_V2,
+            collection,
+        },
+        class: RouteClass::Admin,
+        operation,
+        handler,
+    }
+}
+
 const fn admin_collection(
     method: &'static str,
     collection: &'static str,
@@ -807,6 +825,36 @@ pub(crate) const ROUTES: &[Route] = &[
         "oauthIdpConfigs:delete",
         Handler::ProviderDelete,
     ),
+    admin_v2(
+        "POST",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:create",
+        Handler::ProviderCreate,
+    ),
+    admin_v2(
+        "GET",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:list",
+        Handler::ProviderList,
+    ),
+    project_v2_resource(
+        "GET",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:get",
+        Handler::ProviderGet,
+    ),
+    project_v2_resource(
+        "PATCH",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:update",
+        Handler::ProviderUpdate,
+    ),
+    project_v2_resource(
+        "DELETE",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:delete",
+        Handler::ProviderDelete,
+    ),
     admin_collection(
         "POST",
         "/inboundSamlConfigs",
@@ -832,6 +880,36 @@ pub(crate) const ROUTES: &[Route] = &[
         Handler::ProviderUpdate,
     ),
     admin_resource(
+        "DELETE",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:delete",
+        Handler::ProviderDelete,
+    ),
+    admin_v2(
+        "POST",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:create",
+        Handler::ProviderCreate,
+    ),
+    admin_v2(
+        "GET",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:list",
+        Handler::ProviderList,
+    ),
+    project_v2_resource(
+        "GET",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:get",
+        Handler::ProviderGet,
+    ),
+    project_v2_resource(
+        "PATCH",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:update",
+        Handler::ProviderUpdate,
+    ),
+    project_v2_resource(
         "DELETE",
         "/inboundSamlConfigs",
         "inboundSamlConfigs:delete",

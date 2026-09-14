@@ -1910,11 +1910,11 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
     );
     assert_eq!(
         first_page.body["oauthIdpConfigs"][0]["name"],
-        "projects/demo-app/oauthIdpConfigs/oidc.second"
+        "projects/demo-app/oauthIdpConfigs/oidc.shared"
     );
     assert_eq!(
         next_page.body["oauthIdpConfigs"][0]["name"],
-        "projects/demo-app/oauthIdpConfigs/oidc.shared"
+        "projects/demo-app/oauthIdpConfigs/oidc.second"
     );
     assert_ne!(
         first_page.body["oauthIdpConfigs"][0]["name"],
@@ -1971,6 +1971,68 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
         )
         .status,
         404
+    );
+}
+
+#[test]
+fn project_provider_configs_accept_client_v2_paths() {
+    let s = state();
+    let oidc = "/identitytoolkit.googleapis.com/v2/projects/demo-app/oauthIdpConfigs";
+    let saml = "/identitytoolkit.googleapis.com/v2/projects/demo-app/inboundSamlConfigs";
+    let created_oidc = handle_with(
+        &s,
+        "POST",
+        &format!("{oidc}?oauthIdpConfigId=oidc.client"),
+        &owner(),
+        &json!({"clientId": "client", "issuer": "https://issuer.example"}),
+    );
+    assert_eq!(created_oidc.status, 200, "{}", created_oidc.body);
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{oidc}/oidc.client"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        200
+    );
+    assert_eq!(
+        handle_with(&s, "GET", oidc, &owner(), &json!({})).body["oauthIdpConfigs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let created_saml = handle_with(
+        &s,
+        "POST",
+        &format!("{saml}?inboundSamlConfigId=saml.client"),
+        &owner(),
+        &json!({
+            "idpConfig": {
+                "idpEntityId": "entity",
+                "ssoUrl": "https://idp.example/sso",
+                "idpCertificates": [{"x509Certificate": "CERT"}]
+            },
+            "spConfig": {
+                "spEntityId": "sp",
+                "callbackUri": "https://sp.example/callback"
+            }
+        }),
+    );
+    assert_eq!(created_saml.status, 200, "{}", created_saml.body);
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{saml}/saml.client"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        200
     );
 }
 

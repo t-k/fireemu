@@ -702,8 +702,12 @@ pub struct AuthStore {
     config: ProjectAuthConfig,
     /// OAuth/OIDC provider configurations in this namespace.
     oidc_configs: BTreeMap<String, OidcProviderConfig>,
+    /// OAuth/OIDC configuration IDs in creation order.
+    oidc_order: Vec<String>,
     /// Inbound SAML provider configurations in this namespace.
     saml_configs: BTreeMap<String, InboundSamlProviderConfig>,
+    /// Inbound SAML configuration IDs in creation order.
+    saml_order: Vec<String>,
 }
 
 /// What a phone verification code was issued for, as the official emulator names it in
@@ -888,7 +892,9 @@ impl AuthStore {
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
             oidc_configs: BTreeMap::new(),
+            oidc_order: Vec::new(),
             saml_configs: BTreeMap::new(),
+            saml_order: Vec::new(),
         }
     }
 
@@ -1236,9 +1242,11 @@ impl AuthStore {
         self.config = config;
     }
 
-    /// Lists OAuth/OIDC configurations in stable ID order.
+    /// Lists OAuth/OIDC configurations in creation order.
     pub fn oidc_configs(&self) -> impl Iterator<Item = &OidcProviderConfig> {
-        self.oidc_configs.values()
+        self.oidc_order
+            .iter()
+            .filter_map(|id| self.oidc_configs.get(id))
     }
 
     /// Gets one OAuth/OIDC configuration by ID.
@@ -1252,6 +1260,7 @@ impl AuthStore {
         if self.oidc_configs.contains_key(&config.id) {
             return false;
         }
+        self.oidc_order.push(config.id.clone());
         self.oidc_configs.insert(config.id.clone(), config);
         true
     }
@@ -1267,12 +1276,18 @@ impl AuthStore {
 
     /// Deletes an OAuth/OIDC configuration. Returns `false` when its ID is unknown.
     pub fn delete_oidc_config(&mut self, id: &str) -> bool {
-        self.oidc_configs.remove(id).is_some()
+        if self.oidc_configs.remove(id).is_none() {
+            return false;
+        }
+        self.oidc_order.retain(|candidate| candidate != id);
+        true
     }
 
-    /// Lists inbound SAML configurations in stable ID order.
+    /// Lists inbound SAML configurations in creation order.
     pub fn saml_configs(&self) -> impl Iterator<Item = &InboundSamlProviderConfig> {
-        self.saml_configs.values()
+        self.saml_order
+            .iter()
+            .filter_map(|id| self.saml_configs.get(id))
     }
 
     /// Gets one inbound SAML configuration by ID.
@@ -1286,6 +1301,7 @@ impl AuthStore {
         if self.saml_configs.contains_key(&config.id) {
             return false;
         }
+        self.saml_order.push(config.id.clone());
         self.saml_configs.insert(config.id.clone(), config);
         true
     }
@@ -1301,7 +1317,11 @@ impl AuthStore {
 
     /// Deletes an inbound SAML configuration. Returns `false` when its ID is unknown.
     pub fn delete_saml_config(&mut self, id: &str) -> bool {
-        self.saml_configs.remove(id).is_some()
+        if self.saml_configs.remove(id).is_none() {
+            return false;
+        }
+        self.saml_order.retain(|candidate| candidate != id);
+        true
     }
 
     /// The password credential of a user, when it has one. An export reads it to write the
@@ -3106,7 +3126,9 @@ impl AuthSnapshot {
         // Provider configurations are process-local control-plane state. In particular,
         // OIDC client secrets must never become transferable snapshot material.
         copy.oidc_configs.clear();
+        copy.oidc_order.clear();
         copy.saml_configs.clear();
+        copy.saml_order.clear();
         for user in copy.users.values_mut() {
             if user.mfa.holds_no_totp_secret() && user.mfa.holds_no_inbound_credentials() {
                 continue;
@@ -3156,7 +3178,9 @@ impl AuthSnapshot {
         // A snapshot intentionally has no provider configurations. Preserve the destination's
         // control-plane state instead of allowing a cross-project restore to transfer it.
         restored.oidc_configs = live.oidc_configs.clone();
+        restored.oidc_order.clone_from(&live.oidc_order);
         restored.saml_configs = live.saml_configs.clone();
+        restored.saml_order.clone_from(&live.saml_order);
         let namespace_matches =
             restored.project_id == live.project_id && restored.tenant_id == live.tenant_id;
         if !namespace_matches {

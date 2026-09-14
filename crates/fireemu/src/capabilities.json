@@ -172,6 +172,7 @@
       "GET /v1/projects and /v1/recaptchaParams (the fixed documents the official emulator serves)",
       "securetoken token (JSON and form)",
       "Admin: projects/{p}/accounts create/lookup/update/delete/batchGet/batchCreate/batchDelete/query/sendOobCode and projects/{p}:createSessionCookie; mfaInfo / mfa.enrollments (phone), linkProviderUserInfo / deleteProvider",
+      "Admin provider configuration: project and tenant OAuth IdP and inbound SAML create/get/list/update/delete under the public v2 namespaces, with project/tenant and OIDC/SAML isolation, bounded creation-order pagination, validation and atomic refusal; no external IdP traffic",
       "GET /emulator/action: the printed email action link acts on its code like the official emulator (verifyEmail, verifyAndChangeEmail, resetPassword with newPassword, signIn forwarding to continueUrl) and answers authEmulator JSON or a 303 to continueUrl",
       "Emulator routes: /emulator/v1/projects/{p}/oobCodes, verificationCodes, accounts (DELETE), their tenant-scoped forms under /tenants/{t}, config (GET and PATCH: signIn.allowDuplicateEmails changes password-account uniqueness and lookup/sign-in selection, emailPrivacyConfig.enableImprovedEmailPrivacy changes what signInWithPassword, sendOobCode PASSWORD_RESET and createAuthUri reveal)"
     ],
@@ -232,6 +233,19 @@
       }
     ],
     "precision": "fixture-idp",
+    "status": "implemented"
+  },
+  "AUTH-PROVIDER-CONFIG-1": {
+    "implemented": [
+      "project and tenant OAuth IdP and inbound SAML provider configuration create/get/list/update/delete under the public v2 namespaces",
+      "project, tenant, OIDC and SAML stores are isolated; validation completes before mutation and snapshots never export provider configuration or OIDC client secrets",
+      "bounded creation-order pagination uses a namespace-local provider cursor and rejects unknown cursors"
+    ],
+    "notes": [
+      "this is a production-oriented local API implementation; it has no production or external-IdP round trip yet",
+      "the pinned official emulator does not serve these configuration resources, so official-emulator fixture assertions cannot establish this capability"
+    ],
+    "precision": "boundary-conformance",
     "status": "implemented"
   },
   "AUTH-RULES-1": {

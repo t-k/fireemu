@@ -1022,6 +1022,31 @@
           "preview": []
         },
         {
+          "id": "AUTH-CLAIM-PROVIDER-CONFIG",
+          "statement": "Project and tenant OAuth IdP and inbound SAML provider configuration resources implement create, get, list, update and delete under the public v2 Identity Platform paths, with owner-only access, namespace and provider-kind isolation, creation-order pagination, validation before mutation and secret-safe snapshots. This is a local implementation contract; production response parity and external identity-provider exchanges are not attested.",
+          "capabilities": [
+            {
+              "id": "AUTH-PROVIDER-CONFIG-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the pinned official Auth emulator does not serve project or tenant OAuth IdP and inbound SAML configuration resources"
+          ],
+          "fireemuOnly": [],
+          "productionOnly": [
+            "live provider discovery, redirects, assertion exchange and production configuration parity"
+          ],
+          "preview": []
+        },
+        {
           "id": "AUTH-CLAIM-BLOCKING-FUNCTIONS",
           "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit for Auth stores in the Functions runtime's project; tenantId and the tenant resource are forwarded for tenant stores, registered projects without that runtime are isolated, explicit SDK error classes retain their canonical status, unhandled and seven-second transport failures return production-compatible 503 responses, every failure rolls the speculative operation back, and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens.",
           "capabilities": [

@@ -130,23 +130,28 @@
     },
     {
       "id": "AUTH-IDP",
-      "title": "Federated identity-provider fixtures",
+      "title": "Federated provider configuration and fixture assertions",
       "goal": "AUTH-IP-MAIN",
-      "appliesTo": "Local fixture assertion handling; OAuth/OIDC/SAML protocol and real provider verification are distinct",
+      "appliesTo": "Project/tenant OAuth IdP and inbound SAML configuration CRUD plus local fixture assertion handling; live OAuth/OIDC/SAML protocol and provider verification are distinct",
       "sources": [
         "AUTH-REST",
-        "AUTH-EMULATOR"
+        "AUTH-EMULATOR",
+        "AUTH-V2",
+        "AUTH-DISCOVERY-V2"
       ],
       "surfaces": [],
       "requirements": [],
       "capabilities": [
-        "AUTH-OAUTH-0"
+        "AUTH-OAUTH-0",
+        "AUTH-PROVIDER-CONFIG-1"
       ],
       "claims": [
-        "AUTH-CLAIM-IDENTITY-TOOLKIT"
+        "AUTH-CLAIM-IDENTITY-TOOLKIT",
+        "AUTH-CLAIM-PROVIDER-CONFIG"
       ],
       "limitations": [
-        "A fake JWT or JSON SAML assertion is not a real provider credential exchange."
+        "A fake JWT or JSON SAML assertion is not a real provider credential exchange.",
+        "Local provider configuration CRUD does not establish a live external-provider flow or production response parity."
       ]
     },
     {

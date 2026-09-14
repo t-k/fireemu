@@ -13,6 +13,7 @@ import batch_adapter
 from campaign_explain import campaign_manifest, shadow_hashes
 from shared_cases import run_scenario, save
 from shared_gate import Gate, create
+from owned_runner import build_artifact
 
 
 class FixtureWire:
@@ -64,7 +65,8 @@ def run(output: Path, nonce: str = "a" * 32) -> dict:
         result = run_scenario(adapter, plan, "query-explain")
     finally:
         batch_adapter.wire = original
-    save(output / "artifact.json", {"kind": "fixed-current-artifact", "sourceCommit": "be595c8b"})
+    binary, build = build_artifact()
+    save(output / "artifact.json", {"kind": "built-current-artifact", "path": str(binary), "artifactSha256": build["artifactSha256"], "collectorDigest": batch_adapter.observer_digest()})
     save(output / "process.json", {"pid": os.getpid(), "argv": sys.argv})
     (output / "batch").mkdir(mode=0o700, exist_ok=True)
     save(output / "batch/result.json", result)

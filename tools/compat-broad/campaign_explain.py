@@ -229,6 +229,36 @@ def shadow_hashes(output: Path) -> dict:
     return {key: artifact_hash(path) for key, path in names.items() if path.exists()}
 
 
+def compare_production_local(production: dict, local: dict) -> dict:
+    """Compare campaign rows while preserving lifecycle incompleteness."""
+    result = {"compatibility": "indeterminate", "rows": [], "cleanupComplete": False}
+    if any(
+        value.get("configurationUnchanged") is not True
+        for value in (production, local)
+    ):
+        result["reason"] = "configuration drift"
+        return result
+    production_job = production.get("jobs", {}).get("query-explain", production)
+    local_job = local.get("jobs", {}).get("query-explain", local)
+    if not all(
+        value.get("recordingComplete") is True
+        and value.get("cleanupComplete") is True
+        for value in (production_job, local_job)
+    ):
+        result["reason"] = "incomplete recording or cleanup"
+        return result
+    left, right = production_job.get("rows", []), local_job.get("rows", [])
+    expected = campaign_manifest(production.get("nonce", "a" * 32))["jobs"]["query-explain"]["stepIds"]
+    if [row.get("id") for row in left] != expected or [row.get("id") for row in right] != expected:
+        result["reason"] = "campaign row identity drift"
+        return result
+    for before, after in zip(left, right, strict=True):
+        result["rows"].append({"id": before["id"], "production": {"status": before.get("status"), "body": before.get("body")}, "local": {"status": after.get("status"), "body": after.get("body")}, "verdict": "match" if digest([before.get("status"), before.get("body")]) == digest([after.get("status"), after.get("body")]) else "mismatch"})
+    result["cleanupComplete"] = True
+    result["compatibility"] = "match" if all(row["verdict"] == "match" for row in result["rows"]) else "mismatch"
+    return result
+
+
 def execute(permission: dict, nonce: str, output: Path, api_key: str, local: Path) -> dict:
     """Execute after all permission and current-environment gates pass."""
     local_digest = hashlib.sha256(local.read_bytes()).hexdigest()
@@ -306,7 +336,15 @@ def main() -> int:
     parser.add_argument("--permission", type=Path)
     parser.add_argument("--local", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--production", type=Path)
+    parser.add_argument("--compare", action="store_true")
     args = parser.parse_args()
+    if args.compare:
+        if not args.production or not args.local or not args.output:
+            parser.error("--compare requires --production, --local and --output")
+        result = compare_production_local(json.loads(args.production.read_bytes()), json.loads(args.local.read_bytes()))
+        save(args.output, result)
+        return 0 if result["compatibility"] in {"match", "mismatch"} else 2
     if args.manifest:
         print(json.dumps(manifest(), indent=2))
         return 0

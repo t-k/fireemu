@@ -1083,7 +1083,7 @@ impl GatewayService {
             let original_offset = req.query_type.as_ref().map_or(0, |query| match query {
                 pb::run_query_request::QueryType::StructuredQuery(query) => query.offset,
             });
-            let internal_transaction = req.consistency_selector.is_none();
+            let internal_transaction = req.consistency_selector.is_none() && !plan_only;
             let mut first_request = req.clone();
             set_run_query_page(&mut first_request, original_offset, original_limit);
             if plan_only {

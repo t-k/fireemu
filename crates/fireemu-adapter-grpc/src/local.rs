@@ -3826,10 +3826,9 @@ impl LocalBackend {
                 .as_ref()
                 .is_some_and(|options| !options.analyze)
             {
-                let read_time = Some(encode_instant(access.read_time(now)?));
                 return Ok((
                     vec![pb::RunQueryResponse {
-                        read_time,
+                        transaction: access.report().to_vec(),
                         explain_metrics: Some(crate::service::explain_metrics(None, false)),
                         ..Default::default()
                     }],
@@ -3900,11 +3899,27 @@ impl LocalBackend {
                 });
                 i32::try_from(u64::from(accepted.query.offset).min(available)).unwrap_or(i32::MAX)
             };
-            Ok((
-                query_responses(&docs, read_time, access.report(), skipped),
-                authorization.warnings.clone(),
-                selection,
-            ))
+            let mut responses = query_responses(&docs, read_time, access.report(), skipped);
+            if req
+                .explain_options
+                .as_ref()
+                .is_some_and(|options| options.analyze)
+            {
+                let metrics = crate::service::explain_metrics(
+                    Some(crate::local::QueryExecutionStats {
+                        pages: QueryStats {
+                            matched: u64::try_from(docs.len()).unwrap_or(u64::MAX),
+                            ..stats
+                        },
+                        ..Default::default()
+                    }),
+                    true,
+                );
+                if let Some(response) = responses.last_mut() {
+                    response.explain_metrics = Some(metrics);
+                }
+            }
+            Ok((responses, authorization.warnings.clone(), selection))
         })
     }
 
@@ -3976,6 +3991,7 @@ impl LocalBackend {
             if plan_only {
                 return Ok((
                     pb::RunAggregationQueryResponse {
+                        transaction: access.report().to_vec(),
                         explain_metrics: Some(crate::service::explain_metrics(None, false)),
                         ..Default::default()
                     },

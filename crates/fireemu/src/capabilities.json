@@ -831,7 +831,7 @@
     "precision": "boundary-conformance",
     "implemented": [
       "the pinned firebase-export-metadata.json manifest of firebase-tools 15.28.2: the version, the per-product sections with their version, path and (Firestore) metadata_file, in the official product order",
-      "the Firestore managed export the emulator jar writes: the LevelDB log framing with its masked CRC-32C, and the apphosting.datastore.v3 EntityProto encoding of a document, covering null, boolean, integer (two's complement), double (exact bits, so NaN and negative zero survive), string, bytes, microsecond timestamps, geo points, references, maps, arrays, the empty array as an indexed EMPTY_LIST property, the empty map as a nested EntityProto, and paths of any subcollection depth",
+      "the Firestore managed export the emulator jar writes: every output partition named by overall_export_metadata is preflighted and imported exactly once, with a 10,000-partition safety bound, strict LevelDB record framing and masked CRC-32C validation, and the apphosting.datastore.v3 EntityProto encoding of a document, covering null, boolean, integer (two's complement), double (exact bits, so NaN and negative zero survive), string, bytes, microsecond timestamps, geo points, references, maps, arrays, the empty array as an indexed EMPTY_LIST property, the empty map as a nested EntityProto, and paths of any subcollection depth",
       "auth_export/accounts.json as the identitytoolkit#DownloadAccountResponse the CLI streams to disk, with providers, custom claims, phone second factors, the reversible fakeHash:salt=<salt>:password=<plaintext> convention and auth_export/config.json",
       "Identity Platform tenant accounts in auth_export/accounts-<tenant>.json, imported and exported in isolated namespaces without mixing them into accounts.json",
       "storage_export/buckets.json, blobs/<id> and metadata/<id>.json, with the object bytes byte for byte and the recorded generation, metageneration, times, hashes, download tokens and custom metadata",
@@ -853,7 +853,7 @@
     "status": "implemented",
     "precision": "boundary-conformance",
     "implemented": [
-      "--import <dir> reads every section of the products --only selected into memory and installs them together under the exclusive admission barrier, so a failure in any product leaves the empty start state and exits 1 naming the product and the path",
+      "--import <dir> reads every section of the products --only selected into memory, including every distinct Firestore output partition referenced by overall_export_metadata, and installs them together under the exclusive admission barrier, so a corrupt record, duplicate or aliased output reference, missing partition, partition-count overflow or failure in any product leaves the empty start state and exits 1 naming the product and the path",
       "a section of a product --only did not select is skipped with a notice rather than refused",
       "--export-on-exit [dir] writes the export on a clean exit, on the command's failure and on SIGINT or SIGTERM; an omitted directory resolves to the --import one, and the working directory or a parent is refused",
       "emulators:export <dir> finds the running suite through its Emulator Hub locator file and drives POST /_admin/export, whose body is the official {\"path\", \"initiatedBy\"} and which refuses a request carrying an Origin header",

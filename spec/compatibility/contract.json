@@ -1957,7 +1957,7 @@
         },
         {
           "id": "CLI-CLAIM-IMPORT-EXPORT",
-          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, the Firestore managed export, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and a section of a deferred product is refused rather than silently dropped.",
+          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, every Firestore managed-export output partition referenced by overall_export_metadata, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and corrupt metadata, duplicate or aliased partition outputs, a partition-count overflow, and a section of a deferred product are refused before any imported state is published rather than silently dropped.",
           "capabilities": [
             {
               "id": "DATA-1",

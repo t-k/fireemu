@@ -18,6 +18,42 @@ def load_mapping():
     return load(v2.MAPPING_PATH)
 
 
+def load_auth_time_overlay():
+    return load(v2.AUTH_TIME_OUTPUT_PATH)
+
+
+def test_auth_time_list_collection_ids_overlay_maps_only_observed_surfaces():
+    value = load_auth_time_overlay()
+    assert value["schemaVersion"] == 2
+    assert value["denominatorVersion"] == v2.AUTH_TIME_VERSION
+    partial = {target["id"] for target in value["targets"] if target["coverage"] == "partial"}
+    assert partial == set(v2.AUTH_TIME_TARGETS) | set(v2.LIST_COLLECTION_IDS_TARGETS) | {
+        "identitytoolkit-v1:method:REST:identitytoolkit.accounts.update",
+        "identitytoolkit-v1:field:REST:schemas/GoogleCloudIdentitytoolkitV1SetAccountInfoRequest/properties/deleteProvider",
+    }
+    assert not partial & {
+        "firestore-v1:field:REST:schemas/ListCollectionIdsRequest/properties/pageToken",
+        "firestore-v1:field:REST:schemas/ListCollectionIdsRequest/properties/readTime",
+    }
+    assert all(target["coverage"] != "complete" for target in value["targets"])
+    assert len(value["evidence"]) == 3
+    assert len(value["bindings"]) == 3
+
+
+def test_auth_time_overlay_validation_rejects_unmapped_continuation_surface():
+    value = load_auth_time_overlay()
+    mutated = copy.deepcopy(value)
+    target = next(
+        target
+        for target in mutated["targets"]
+        if target["id"] == "firestore-v1:field:REST:schemas/ListCollectionIdsRequest/properties/readTime"
+    )
+    target["coverage"] = "partial"
+    target["bindingIds"] = ["firestore-list-collection-ids"]
+    with pytest.raises(v2.ValidationError, match="unmapped|coverage|binding"):
+        v2.validate_auth_time_overlay(ROOT, mutated)
+
+
 def test_generated_v2_has_complete_parent_targets_and_sparse_provider_binding():
     value = load(v2.OUTPUT_PATH)
     assert value["schemaVersion"] == 2

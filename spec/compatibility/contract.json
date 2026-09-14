@@ -1103,6 +1103,34 @@
           "preview": []
         },
         {
+          "id": "AUTH-CLAIM-FEDERATION-ASSERTION-LOCAL",
+          "statement": "An opt-in local adapter path verifies one caller-pinned RS256 OIDC key and binds issuer, subject, audience, authorized party, tenant, provider, expiry, issued-at, not-before and nonce before account mutation. Mixed bearer access or refresh credentials are refused before mutation. This is finite local trust-boundary evidence and does not attest production federation parity, provider discovery, hosted redirects, authorization-code exchange, SAML or external identity-provider behavior.",
+          "capabilities": [
+            {
+              "id": "AUTH-FEDERATION-ASSERTION-LOCAL",
+              "status": "partial"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/auth_oidc_assertions.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "the opt-in test boundary accepts one explicitly pinned local RS256 JWK and performs no discovery or external identity-provider traffic",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [
+            "production provider configuration and discovery, hosted redirects, authorization-code exchange, SAML, key rotation and external identity-provider behavior"
+          ],
+          "preview": []
+        },
+        {
           "id": "AUTH-CLAIM-BLOCKING-FUNCTIONS",
           "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit for Auth stores in the Functions runtime's project; tenantId and the tenant resource are forwarded for tenant stores, registered projects without that runtime are isolated, explicit SDK error classes retain their canonical status, unhandled and seven-second transport failures return production-compatible 503 responses, every failure rolls the speculative operation back, and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens.",
           "capabilities": [

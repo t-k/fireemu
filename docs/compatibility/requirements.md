@@ -138,6 +138,7 @@ These declarations remain visible even when outside the seed scope. Their source
 | APPCHECK-PROVIDER-ATTESTATION-0 | unsupported |
 | APPCHECK-REPLAY-1 | unsupported |
 | APPCHECK-SDK-WEB-1 | implemented |
+| AUTH-FEDERATION-ASSERTION-LOCAL | partial |
 | CLI-01 | partial |
 | CLI-02 | implemented |
 | CLI-03 | implemented |

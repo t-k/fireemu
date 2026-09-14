@@ -41,7 +41,9 @@
 
 use std::collections::BTreeMap;
 
+use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
+use fireemu_core_types::ids::DatabaseId;
 
 use crate::leveldb::{for_each_record, read_log, write_log, LogError, LogWriter};
 use crate::wire::{Reader, WireError, WireType, Writer};
@@ -103,6 +105,8 @@ const MEANING_GEORSS_POINT: u64 = 9;
 const MEANING_BLOB: u64 = 14;
 const MEANING_ENTITY_PROTO: u64 = 19;
 const MEANING_EMPTY_LIST: u64 = 24;
+
+type ReferenceParts = (String, String, Vec<(String, String)>);
 
 /// One document of a Firestore export.
 #[derive(Debug, Clone, PartialEq)]
@@ -432,6 +436,9 @@ pub fn write_entity(document: &ExportDocument) -> Result<Vec<u8>, FirestoreExpor
             "an exported value is nested more than {MAX_VALUE_DEPTH} levels deep, which no Firestore document can be"
         ));
     }
+    for value in document.fields.values() {
+        validate_references(value)?;
+    }
     let mut w = Writer::new();
     w.write_message(ENTITY_KEY, |key| {
         key.write_string(REFERENCE_APP, &format!("{APP_PREFIX}{}", document.project));
@@ -463,6 +470,26 @@ pub fn write_entity(document: &ExportDocument) -> Result<Vec<u8>, FirestoreExpor
         write_path(group, &document.path[..document.path.len().min(1)]);
     });
     Ok(w.finish())
+}
+
+fn validate_references(value: &Value) -> Result<(), FirestoreExportError> {
+    match value {
+        Value::Reference(name) => {
+            split_reference(name)?;
+        }
+        Value::Map(fields) => {
+            for value in fields.values() {
+                validate_references(value)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                validate_references(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn write_path(w: &mut Writer, path: &[(String, String)]) {
@@ -512,8 +539,13 @@ fn write_value(w: &mut Writer, value: &Value) {
             p.write_double(POINT_Y, g.longitude());
         }),
         Value::Reference(name) => w.write_group(VALUE_REFERENCE, |r| {
-            let (project, path) = split_reference(name);
+            let (project, database, path) = split_reference(name).expect("validated reference");
             r.write_string(REFERENCE_VALUE_APP, &format!("{APP_PREFIX}{project}"));
+            // The official format leaves namespace empty for the default database. The
+            // fireemu extension reuses this existing field for a named database id.
+            if database != DatabaseId::DEFAULT {
+                r.write_string(REFERENCE_VALUE_NAMESPACE, &database);
+            }
             for (collection, document) in path {
                 r.write_group(REFERENCE_VALUE_ELEMENT, |e| {
                     e.write_string(REFERENCE_ELEMENT_TYPE, &collection);
@@ -575,25 +607,23 @@ fn micros_of(t: Timestamp) -> i64 {
         .saturating_add(i64::from(t.nanos() / 1_000))
 }
 
-/// Splits `projects/p/databases/(default)/documents/a/b` into the project and the path.
-fn split_reference(name: &str) -> (String, Vec<(String, String)>) {
-    let mut segments = name.split('/');
-    let mut project = String::new();
-    if segments.next() == Some("projects") {
-        segments.next().unwrap_or_default().clone_into(&mut project);
-        // databases/{db}/documents
-        let _ = segments.next();
-        let _ = segments.next();
-        let _ = segments.next();
-    }
-    let rest: Vec<&str> = segments.collect();
-    let mut path = Vec::new();
-    for pair in rest.chunks(2) {
-        if pair.len() == 2 {
-            path.push((pair[0].to_owned(), pair[1].to_owned()));
-        }
-    }
-    (project, path)
+/// Splits a full document resource name into the project, database and path.
+fn split_reference(name: &str) -> Result<ReferenceParts, FirestoreExportError> {
+    let Some(path) = DocumentPath::from_resource_name(name) else {
+        return shape(format!(
+            "reference value {name:?} is not a valid Firestore document resource name"
+        ));
+    };
+    Ok((
+        path.project().as_str().to_owned(),
+        path.database().as_str().to_owned(),
+        path.pairs()
+            .iter()
+            .map(|(collection, document)| {
+                (collection.as_str().to_owned(), document.as_str().to_owned())
+            })
+            .collect(),
+    ))
 }
 
 /// Decodes one `EntityProto` record into a document.
@@ -829,12 +859,22 @@ fn read_point(bytes: &[u8]) -> Result<GeoPoint, FirestoreExportError> {
 fn read_reference_value(bytes: &[u8]) -> Result<String, FirestoreExportError> {
     let mut reader = Reader::new(bytes);
     let mut app = String::new();
+    let mut database = DatabaseId::DEFAULT.to_owned();
     let mut path = Vec::new();
     while let Some((field, wire)) = reader.field()? {
         match (field, wire) {
             (REFERENCE_VALUE_APP, WireType::Delimited) => app = reader.string()?,
             (REFERENCE_VALUE_NAMESPACE, WireType::Delimited) => {
-                reader.string()?;
+                let namespace = reader.string()?;
+                if namespace.is_empty() {
+                    continue;
+                }
+                DatabaseId::try_new(namespace.clone()).map_err(|error| {
+                    FirestoreExportError::Shape(format!(
+                        "the exported reference has an invalid database id {namespace:?}: {error}"
+                    ))
+                })?;
+                database = namespace;
             }
             (REFERENCE_VALUE_ELEMENT, WireType::StartGroup) => {
                 let body = reader.group(REFERENCE_VALUE_ELEMENT)?;
@@ -848,8 +888,11 @@ fn read_reference_value(bytes: &[u8]) -> Result<String, FirestoreExportError> {
             _ => reader.skip(field, wire)?,
         }
     }
+    if app.is_empty() || path.is_empty() {
+        return shape("the exported reference has no application or document path");
+    }
     let project = app.strip_prefix(APP_PREFIX).unwrap_or(&app);
-    let mut name = format!("projects/{project}/databases/(default)/documents");
+    let mut name = format!("projects/{project}/databases/{database}/documents");
     for (collection, document) in path {
         name.push('/');
         name.push_str(&collection);
@@ -1009,6 +1052,61 @@ mod tests {
         assert_eq!(
             round_trip(Value::Reference(name.clone())),
             Value::Reference(name)
+        );
+    }
+
+    #[test]
+    fn references_preserve_default_named_and_cross_database_ids() {
+        let references = [
+            "projects/demo-export/databases/(default)/documents/cities/default",
+            "projects/demo-export/databases/analytics/documents/cities/analytics",
+            "projects/demo-export/databases/analytics/documents/cities/default",
+            "projects/demo-export/databases/(default)/documents/cities/analytics",
+        ];
+        for expected in references {
+            assert_eq!(
+                round_trip(Value::Reference(expected.to_owned())),
+                Value::Reference(expected.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_reference_is_rejected_before_writing() {
+        let malformed = Value::Reference("projects/demo-export/documents/cities/LA".to_owned());
+        let error = write_entity(&document(field("ref", malformed)))
+            .expect_err("a reference without a database must be rejected");
+        assert!(error.to_string().contains("reference"), "{error}");
+    }
+
+    #[test]
+    fn a_reference_with_a_malformed_database_id_is_rejected_when_reading() {
+        let mut bytes = super::Writer::new();
+        bytes.write_string(super::REFERENCE_VALUE_APP, "dev~demo-export");
+        bytes.write_string(super::REFERENCE_VALUE_NAMESPACE, "analytics/invalid");
+        bytes.write_group(super::REFERENCE_VALUE_ELEMENT, |element| {
+            element.write_string(super::REFERENCE_ELEMENT_TYPE, "cities");
+            element.write_string(super::REFERENCE_ELEMENT_NAME, "LA");
+        });
+
+        let error = super::read_reference_value(&bytes.finish())
+            .expect_err("an invalid database id must be rejected");
+        assert!(error.to_string().contains("invalid database id"), "{error}");
+    }
+
+    #[test]
+    fn an_empty_reference_namespace_keeps_the_official_default_database() {
+        let mut bytes = super::Writer::new();
+        bytes.write_string(super::REFERENCE_VALUE_APP, "dev~demo-export");
+        bytes.write_string(super::REFERENCE_VALUE_NAMESPACE, "");
+        bytes.write_group(super::REFERENCE_VALUE_ELEMENT, |element| {
+            element.write_string(super::REFERENCE_ELEMENT_TYPE, "cities");
+            element.write_string(super::REFERENCE_ELEMENT_NAME, "LA");
+        });
+
+        assert_eq!(
+            super::read_reference_value(&bytes.finish()).expect("the official reference decodes"),
+            "projects/demo-export/databases/(default)/documents/cities/LA"
         );
     }
 

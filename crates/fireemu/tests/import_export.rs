@@ -6,6 +6,8 @@
 
 mod census;
 
+use fireemu_core_export::firestore::{read_output, write_output, OverallMetadata};
+use fireemu_core_firestore::value::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -57,6 +59,68 @@ fn copy_tree(from: &Path, to: &Path) {
             std::fs::copy(entry.path(), &target).unwrap();
         }
     }
+}
+
+fn add_named_database_references(section: &Path) {
+    let partition = section.join("all_namespaces/all_kinds");
+    let output_path = partition.join("output-0");
+    let mut documents = read_output(&std::fs::read(&output_path).unwrap()).unwrap();
+    let document = documents
+        .iter_mut()
+        .find(|document| document.relative_path() == "cities/SF")
+        .expect("the fixture has a cities/SF document");
+    document.fields.insert(
+        "default_ref".to_owned(),
+        Value::Reference(
+            "projects/demo-export/databases/(default)/documents/cities/default".to_owned(),
+        ),
+    );
+    document.fields.insert(
+        "named_ref".to_owned(),
+        Value::Reference(
+            "projects/demo-export/databases/analytics/documents/cities/analytics".to_owned(),
+        ),
+    );
+    document.fields.insert(
+        "cross_ref".to_owned(),
+        Value::Reference(
+            "projects/demo-export/databases/(default)/documents/cities/cross".to_owned(),
+        ),
+    );
+    let bytes = write_output(&documents).unwrap();
+    std::fs::write(&output_path, &bytes).unwrap();
+
+    let overall_path = section.join("firestore_export.overall_export_metadata");
+    let mut overall = OverallMetadata::parse(&std::fs::read(&overall_path).unwrap()).unwrap();
+    overall.byte_count = bytes.len() as u64;
+    std::fs::write(overall_path, overall.to_bytes()).unwrap();
+}
+
+fn assert_named_database_references(section: &Path) {
+    let output = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(output).unwrap()).unwrap();
+    let document = documents
+        .iter()
+        .find(|document| document.relative_path() == "cities/SF")
+        .expect("the exported section has a cities/SF document");
+    assert_eq!(
+        document.fields.get("default_ref"),
+        Some(&Value::Reference(
+            "projects/demo-export/databases/(default)/documents/cities/default".to_owned()
+        ))
+    );
+    assert_eq!(
+        document.fields.get("named_ref"),
+        Some(&Value::Reference(
+            "projects/demo-export/databases/analytics/documents/cities/analytics".to_owned()
+        ))
+    );
+    assert_eq!(
+        document.fields.get("cross_ref"),
+        Some(&Value::Reference(
+            "projects/demo-export/databases/(default)/documents/cities/cross".to_owned()
+        ))
+    );
 }
 
 fn free_port() -> u16 {
@@ -358,6 +422,7 @@ fn a_section_of_an_unselected_product_is_skipped_with_a_notice() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
     let dir = scratch("named-database");
     let export = copy_fixture("official-multiproduct", &dir);
@@ -368,6 +433,7 @@ fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
         &export.join("firestore_export"),
         &export.join("firestore_export_analytics"),
     );
+    add_named_database_references(&export.join("firestore_export_analytics"));
     let manifest = export.join("firebase-export-metadata.json");
     let manifest_text = std::fs::read_to_string(&manifest).unwrap();
     let with_extension = manifest_text.trim_end().trim_end_matches('}').to_owned()
@@ -455,6 +521,7 @@ fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
             .unwrap()
             .contains("second.appspot.com")
     );
+    assert_named_database_references(&out.join("firestore_export_analytics"));
 
     // And it imports again with the same shape.
     let second = exec()

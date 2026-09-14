@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import production_denominator_v2 as v2
+import production_denominator_v2_auth_time as overlay
 
 
 ROOT = Path(__file__).parents[2]
@@ -19,15 +20,15 @@ def load_mapping():
 
 
 def load_auth_time_overlay():
-    return load(v2.AUTH_TIME_OUTPUT_PATH)
+    return load(overlay.OUTPUT_PATH)
 
 
 def test_auth_time_list_collection_ids_overlay_maps_only_observed_surfaces():
     value = load_auth_time_overlay()
     assert value["schemaVersion"] == 2
-    assert value["denominatorVersion"] == v2.AUTH_TIME_VERSION
+    assert value["denominatorVersion"] == overlay.VERSION
     partial = {target["id"] for target in value["targets"] if target["coverage"] == "partial"}
-    assert partial == set(v2.AUTH_TIME_TARGETS) | set(v2.LIST_COLLECTION_IDS_TARGETS) | {
+    assert partial == set(overlay.AUTH_TIME_TARGETS) | set(overlay.LIST_COLLECTION_IDS_TARGETS) | {
         "identitytoolkit-v1:method:REST:identitytoolkit.accounts.update",
         "identitytoolkit-v1:field:REST:schemas/GoogleCloudIdentitytoolkitV1SetAccountInfoRequest/properties/deleteProvider",
     }
@@ -50,8 +51,35 @@ def test_auth_time_overlay_validation_rejects_unmapped_continuation_surface():
     )
     target["coverage"] = "partial"
     target["bindingIds"] = ["firestore-list-collection-ids"]
-    with pytest.raises(v2.ValidationError, match="unmapped|coverage|binding"):
-        v2.validate_auth_time_overlay(ROOT, mutated)
+    with pytest.raises(overlay.ValidationError, match="unmapped|coverage|binding"):
+        overlay.validate_document(ROOT, mutated)
+
+
+def test_auth_time_overlay_rejects_provenance_and_report_mutations(tmp_path):
+    value = load_auth_time_overlay()
+    for field in ("goal", "definitions", "sourceSnapshot", "generator", "evidence"):
+        mutated = copy.deepcopy(value)
+        if field == "evidence":
+            mutated[field][0]["limitations"] = []
+        elif field == "generator":
+            mutated[field]["sha256"] = "0" * 64
+        elif field == "sourceSnapshot":
+            mutated[field]["sha256"] = "0" * 64
+        elif field == "definitions":
+            mutated[field] = {}
+        else:
+            mutated[field] = "forged"
+        with pytest.raises(overlay.ValidationError):
+            overlay.validate_document(ROOT, mutated)
+
+    report = tmp_path / "report.md"
+    output = tmp_path / "overlay.json"
+    overlay.generate(ROOT, output, report)
+    original = output.read_bytes(), report.read_bytes()
+    overlay.generate(ROOT, output, report)
+    assert (output.read_bytes(), report.read_bytes()) == original
+    report.write_text(report.read_text() + "drift")
+    assert report.read_bytes() != original[1]
 
 
 def test_generated_v2_has_complete_parent_targets_and_sparse_provider_binding():

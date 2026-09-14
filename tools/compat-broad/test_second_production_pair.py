@@ -3,10 +3,8 @@
 import copy
 import hashlib
 import json
-import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 from broad_contract import digest
@@ -333,72 +331,64 @@ def test_saved_mode_accepts_retained_second45_runtime_fixture(tmp_path):
     from second_production_pair import compare_saved, observed_value
 
     candidate = ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json"
-    retained = os.environ.get("FIREEMU_SECOND45_RETAINED_RUN")
-    if retained:
-        run = Path(retained)
-        parent = run / "parent-manifest.json"
-        local = run / "mapped-receipt.json"
-        anchor = None
-        candidate_expected_sha256 = "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73"
-    else:
-        local_value = current_local(receipt("mapped"))
-        local_value["runtimeIdentity"]["executionCommit"] = subprocess.check_output(
+    local_value = current_local(receipt("mapped"))
+    local_value["runtimeIdentity"]["executionCommit"] = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], text=True
+    ).strip()
+    local = tmp_path / "mapped-receipt.json"
+    local.write_text(json.dumps(local_value))
+    candidate_value = {
+        "kind": "second45-production-candidate-summary-v1",
+        "manifestDigest": local_value["comparisonManifestDigest"],
+        "comparisonContractDigest": local_value["comparisonContractDigest"],
+        "observerDigest": local_value["observerDigest"],
+        "recordingComplete": True,
+        "cleanupComplete": True,
+        "rows": [
+            {
+                "id": row["id"],
+                "production": observed_value(row, local_value["bindings"]),
+            }
+            for row in local_value["rows"]
+        ],
+    }
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(json.dumps(candidate_value))
+    candidate_expected_sha256 = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    parent_value = {
+        "status": "completed",
+        "productionExecuted": False,
+        "artifactSha256": local_value["runtimeIdentity"]["artifactSha256"],
+        "executionCommit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
-        ).strip()
-        local = tmp_path / "mapped-receipt.json"
-        local.write_text(json.dumps(local_value))
-        candidate_value = {
-            "kind": "second45-production-candidate-summary-v1",
-            "manifestDigest": local_value["comparisonManifestDigest"],
-            "comparisonContractDigest": local_value["comparisonContractDigest"],
-            "observerDigest": local_value["observerDigest"],
-            "recordingComplete": True,
-            "cleanupComplete": True,
-            "rows": [
-                {
-                    "id": row["id"],
-                    "production": observed_value(row, local_value["bindings"]),
-                }
-                for row in local_value["rows"]
-            ],
-        }
-        candidate = tmp_path / "candidate.json"
-        candidate.write_text(json.dumps(candidate_value))
-        candidate_expected_sha256 = hashlib.sha256(candidate.read_bytes()).hexdigest()
-        parent_value = {
-            "status": "completed",
-            "productionExecuted": False,
-            "artifactSha256": local_value["runtimeIdentity"]["artifactSha256"],
-            "executionCommit": subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True
-            ).strip(),
-            "configurationDigest": local_value["runtimeIdentity"]["configurationDigest"],
-            "mappedReceiptFileSha256": hashlib.sha256(local.read_bytes()).hexdigest(),
-            "mappedReceiptKind": local_value["kind"],
-            "mappedReceiptRuntimeIdentity": local_value["runtimeIdentity"],
-            "mappedReceiptRecordingComplete": True,
-            "mappedReceiptCleanupComplete": True,
-            "localObservations": {"mapped": local_value},
-        }
-        parent_value["parentManifestSha256"] = digest(parent_value)
-        parent = tmp_path / "parent-manifest.json"
-        parent.write_text(json.dumps(parent_value))
-        anchor_value = {
-            "parentManifestSha256": parent_value["parentManifestSha256"],
-            "mappedReceiptFileSha256": parent_value["mappedReceiptFileSha256"],
-            "runtimeIdentity": {
-                "artifactSha256": parent_value["artifactSha256"],
-                "executionCommit": parent_value["executionCommit"],
-                "configurationDigest": parent_value["configurationDigest"],
-            },
-        }
-        anchor = tmp_path / "anchor.json"
-        anchor.write_text(json.dumps(anchor_value))
+        ).strip(),
+        "configurationDigest": local_value["runtimeIdentity"]["configurationDigest"],
+        "mappedReceiptFileSha256": hashlib.sha256(local.read_bytes()).hexdigest(),
+        "mappedReceiptKind": local_value["kind"],
+        "mappedReceiptRuntimeIdentity": local_value["runtimeIdentity"],
+        "mappedReceiptRecordingComplete": True,
+        "mappedReceiptCleanupComplete": True,
+        "localObservations": {"mapped": local_value},
+    }
+    parent_value["parentManifestSha256"] = digest(parent_value)
+    parent = tmp_path / "parent-manifest.json"
+    parent.write_text(json.dumps(parent_value))
+    anchor_value = {
+        "parentManifestSha256": parent_value["parentManifestSha256"],
+        "mappedReceiptFileSha256": parent_value["mappedReceiptFileSha256"],
+        "runtimeIdentity": {
+            "artifactSha256": parent_value["artifactSha256"],
+            "executionCommit": parent_value["executionCommit"],
+            "configurationDigest": parent_value["configurationDigest"],
+        },
+    }
+    anchor = tmp_path / "anchor.json"
+    anchor.write_text(json.dumps(anchor_value))
     result = compare_saved(
         candidate,
-            json.loads(local.read_text()),
-            parent,
-            local_source_sha256=hashlib.sha256(local.read_bytes()).hexdigest(),
+        json.loads(local.read_text()),
+        parent,
+        local_source_sha256=hashlib.sha256(local.read_bytes()).hexdigest(),
         anchor_path=anchor,
         candidate_expected_sha256=candidate_expected_sha256,
     )

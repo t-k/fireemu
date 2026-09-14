@@ -248,6 +248,13 @@ class World:
                 assert set(body) == {"idToken", "emailVerified", "displayName"}
                 user["displayName"] = body["displayName"]
                 return 200, {"localId": user["localId"], "email": user["email"]}
+            if "disableUser" in body:
+                assert set(body) == {"idToken", "disableUser", "displayName"}
+                if body["disableUser"] is True:
+                    return self.error("OPERATION_NOT_ALLOWED")
+                assert body["disableUser"] is None
+                user["displayName"] = body["displayName"]
+                return 200, {"localId": user["localId"], "email": user["email"]}
             admin_fields = set(body) & set(contract.LOCAL_VALID_ACTIVE_FIELDS)
             if admin_fields:
                 assert len(admin_fields) == 1 and "displayName" in body
@@ -447,6 +454,23 @@ def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
             assert status == 400
             assert error_code(response) == contract.LOCAL_VALID_ACTIVE_ERRORS[field]
             assert w.users == before_accounts
+        status, response = w.update(
+            {"idToken": token, "displayName": "must-not-apply", "disableUser": True}
+        )
+        assert status == 400
+        assert error_code(response) == "OPERATION_NOT_ALLOWED"
+        assert w.users == before_accounts
+        status, _ = w.update(
+            {"idToken": token, "displayName": "disable-null", "disableUser": None}
+        )
+        assert status == 200
+        assert user["displayName"] == "disable-null"
+        assert user.get("disabled", False) is before_accounts[uid].get("disabled", False)
+        assert w.users["uid-a" if label == "b" else "uid-b"] == before_accounts[
+            "uid-a" if label == "b" else "uid-b"
+        ]
+        status, _ = w.update({"idToken": token, "displayName": before_accounts[uid]["displayName"]})
+        assert status == 200 and w.users == before_accounts
         status, _ = w.update(
             {"idToken": token, "emailVerified": False, "displayName": "ignored-email-verified"}
         )

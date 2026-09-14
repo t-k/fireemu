@@ -98,6 +98,7 @@ LOCAL_VALID_ACTIVE_FIELDS = (
     "emailVerified",
     "mfa",
     "linkProviderUserInfo",
+    "disableUser",
 )
 LOCAL_VALID_ACTIVE_REFUSED_FIELDS = (
     "customAttributes",
@@ -108,6 +109,7 @@ LOCAL_VALID_ACTIVE_ERRORS = {
     "customAttributes": "INSUFFICIENT_PERMISSION",
     "mfa": "OPERATION_NOT_ALLOWED",
     "linkProviderUserInfo": "OPERATION_NOT_ALLOWED",
+    "disableUser": "OPERATION_NOT_ALLOWED",
 }
 
 

@@ -579,6 +579,118 @@ def observe(output, origin=None):
                     == before_accounts["b" if label == "a" else "a"]
                 )
 
+                # `disableUser:true` is administrator-only. Verify atomic refusal and
+                # that a held MFA credential/session remains usable afterward.
+                continuity_credential = pending(account)
+                continuity_session = start(account, continuity_credential)
+                continuity_code = code_for(continuity_session)
+                before_disable_true = {
+                    name: lookup(candidate) for name, candidate in accounts.items()
+                }
+                status, response = client(
+                    "update",
+                    {
+                        "idToken": token,
+                        "disableUser": True,
+                        "displayName": "auth-u13-disable-must-not-apply",
+                    },
+                )
+                after_disable_true = {
+                    name: lookup(candidate) for name, candidate in accounts.items()
+                }
+                require(
+                    status == 400
+                    and error_code(response) == "OPERATION_NOT_ALLOWED"
+                    and after_disable_true == before_disable_true
+                )
+                status, signed = finalize(
+                    continuity_credential, continuity_session, continuity_code
+                )
+                require(status == 200)
+                continuity_checks = token_checks(account, signed)
+                require(all(continuity_checks.values()))
+                observations.append(
+                    {
+                        "account": label,
+                        "field": "disableUser:true",
+                        "httpStatus": 400,
+                        "outcome": "refused",
+                        "observedError": error_code(response),
+                        "allAccountStateUnchanged": after_disable_true
+                        == before_disable_true,
+                        "heldMfaContinuity": continuity_checks,
+                    }
+                )
+
+                # `disableUser:null` is ignored while displayName remains permitted.
+                null_continuity_credential = pending(account)
+                null_continuity_session = start(account, null_continuity_credential)
+                null_continuity_code = code_for(null_continuity_session)
+                status, signed = finalize(
+                    null_continuity_credential,
+                    null_continuity_session,
+                    null_continuity_code,
+                )
+                require(status == 200)
+                null_continuity_checks = token_checks(account, signed)
+                require(all(null_continuity_checks.values()))
+                before_disable_null = {
+                    name: lookup(candidate) for name, candidate in accounts.items()
+                }
+                status, response = client(
+                    "update",
+                    {
+                        "idToken": token,
+                        "disableUser": None,
+                        "displayName": "auth-u13-disable-null",
+                    },
+                )
+                after_disable_null = {
+                    name: lookup(candidate) for name, candidate in accounts.items()
+                }
+                owner_without_display = without_display_name(after_disable_null[label])
+                owner_before_without_display = without_display_name(
+                    before_disable_null[label]
+                )
+                other = "b" if label == "a" else "a"
+                require(
+                    status == 200
+                    and "error" not in response
+                    and owner_without_display == owner_before_without_display
+                    and after_disable_null[label].get("disabled", False)
+                    == before_disable_null[label].get("disabled", False)
+                    and after_disable_null[other] == before_disable_null[other]
+                )
+                status, response = client(
+                    "update", {"idToken": token, "displayName": account["marker"]}
+                )
+                restored_disable_null = {
+                    name: lookup(candidate) for name, candidate in accounts.items()
+                }
+                require(
+                    status == 200
+                    and "error" not in response
+                    and restored_disable_null == before_disable_null
+                )
+                observations.append(
+                    {
+                        "account": label,
+                        "field": "disableUser:null",
+                        "httpStatus": 200,
+                        "outcome": "accepted",
+                        "observedError": None,
+                        "disableStateUnchanged": after_disable_null[label].get(
+                            "disabled", False
+                        )
+                        == before_disable_null[label].get("disabled", False),
+                        "displayNameApplied": after_disable_null[label].get("displayName")
+                        == "auth-u13-disable-null",
+                        "allAccountStateRestored": restored_disable_null
+                        == before_disable_null,
+                        "heldMfaContinuity": null_continuity_checks,
+                    }
+                )
+
             # A permitted ordinary field controls that the active token itself remains
             # usable and that the preceding refusals did not poison either session.
             controls = []

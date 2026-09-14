@@ -107,6 +107,18 @@ def _normalization_names(nonce: str) -> dict:
     }
 
 
+def _canonicalize_nonce(value, nonce: str):
+    if isinstance(value, str):
+        return value.replace(nonce, "<campaign-nonce>")
+    if isinstance(value, list):
+        return [_canonicalize_nonce(item, nonce) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _canonicalize_nonce(item, nonce) for key, item in value.items()
+        }
+    return value
+
+
 def _normalized_body(nonce: str, row: dict) -> object:
     return normalize_response(
         row["body"],
@@ -138,6 +150,10 @@ def recompare(
     for production_row, local_row in zip(production_rows, local_rows, strict=True):
         if production_row.get("id") != local_row.get("id"):
             raise ValueError("observation row identity differs")
+        if _canonicalize_nonce(
+            production_row["request"], production["nonce"]
+        ) != _canonicalize_nonce(local_row["request"], current_local["nonce"]):
+            raise ValueError("observation operation differs")
         production_body = _normalized_body(production["nonce"], production_row)
         local_body = _normalized_body(current_local["nonce"], local_row)
         # The current normalizer projects only the explicitly documented duration.

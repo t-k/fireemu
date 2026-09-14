@@ -475,6 +475,9 @@ def test_local_null_update_continuity_is_checked_after_the_update(
         if row["field"] == "disableUser:null" and row["account"] == "a"
     )
     assert report["status"] == "incomplete"
+    assert row["displayNameApplied"] is True
+    assert row["disableStateUnchanged"] is True
+    assert row["allAccountStateRestored"] is True
     assert row["heldMfaContinuity"]["idTokenPresent"] is False
     assert not complete_local_v1(saved)
 

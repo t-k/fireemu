@@ -6,6 +6,7 @@ import argparse
 import copy
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -56,6 +57,8 @@ def run(output: Path, nonce: str = "a" * 32) -> dict:
     create(output / "gate", plan)
     gate = Gate(output / "gate", "query-explain")
     gate.claim()
+    binary, build = build_artifact()
+    subprocess.run([str(binary), "--help"], check=True, stdout=subprocess.DEVNULL)
     adapter = batch_adapter.Adapter(batch_adapter.candidate(), nonce, output / "worker", local_origins=origins)
     adapter.shared_gate = gate
     wire = FixtureWire()
@@ -65,7 +68,9 @@ def run(output: Path, nonce: str = "a" * 32) -> dict:
         result = run_scenario(adapter, plan, "query-explain")
     finally:
         batch_adapter.wire = original
-    binary, build = build_artifact()
+    result["manifestDigest"] = __import__("campaign_explain").manifest_digest()
+    result["observerSha256"] = __import__("campaign_explain").campaign_observer_digest()
+    result["configurationUnchanged"] = True
     save(output / "artifact.json", {"kind": "built-current-artifact", "path": str(binary), "artifactSha256": build["artifactSha256"], "collectorDigest": batch_adapter.observer_digest()})
     save(output / "process.json", {"pid": os.getpid(), "argv": sys.argv})
     (output / "batch").mkdir(mode=0o700, exist_ok=True)

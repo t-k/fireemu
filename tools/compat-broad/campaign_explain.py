@@ -133,6 +133,10 @@ def binding() -> dict:
     }
 
 
+def manifest_digest() -> str:
+    return digest(manifest())
+
+
 def validate_manifest(value: dict) -> bool:
     if value != manifest():
         baseline = manifest()["environment"]
@@ -238,6 +242,13 @@ def compare_production_local(production: dict, local: dict) -> dict:
     ):
         result["reason"] = "configuration drift"
         return result
+    for value in (production, local):
+        if value.get("manifestDigest") != digest(manifest()):
+            result["reason"] = "manifest drift"
+            return result
+        if value.get("observerSha256") not in (None, campaign_observer_digest()):
+            result["reason"] = "observer drift"
+            return result
     production_job = production.get("jobs", {}).get("query-explain", production)
     local_job = local.get("jobs", {}).get("query-explain", local)
     if not all(
@@ -261,7 +272,11 @@ def compare_production_local(production: dict, local: dict) -> dict:
 
 def execute(permission: dict, nonce: str, output: Path, api_key: str, local: Path) -> dict:
     """Execute after all permission and current-environment gates pass."""
-    local_digest = hashlib.sha256(local.read_bytes()).hexdigest()
+    local_bytes = local.read_bytes()
+    local_digest = hashlib.sha256(local_bytes).hexdigest()
+    local_evidence = json.loads(local_bytes)
+    if not isinstance(local_evidence, dict) or local_evidence.get("cleanupComplete") is not True:
+        raise ValueError("validated local evidence required")
     approve(permission, nonce, local_digest, time.time())
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     if head != permission.get("frozenCommit") or subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():

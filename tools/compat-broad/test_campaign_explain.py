@@ -718,7 +718,7 @@ def test_fully_bound_mismatch_is_valid_collection(real_shadow):
     production = production_fixture(local)
     assert validate_envelope(production, local=False)
     assert compare_production_local(production, local)["compatibility"] == "match"
-    production["receipt"]["rows"][4]["body"][0]["explainMetrics"][
+    production["receipt"]["rows"][5]["body"][-1]["explainMetrics"][
         "executionStats"
     ]["resultsReturned"] = "1"
     assert production["receipt"]["stateValidation"] is True
@@ -732,7 +732,7 @@ def test_fully_bound_envelope_rejects_out_of_range_results_returned(real_shadow)
 
     local, _ = real_shadow
     production = production_fixture(local)
-    production["receipt"]["rows"][4]["body"][0]["explainMetrics"][
+    production["receipt"]["rows"][5]["body"][-1]["explainMetrics"][
         "executionStats"
     ]["resultsReturned"] = str(2**63)
     rebind_responses(production)

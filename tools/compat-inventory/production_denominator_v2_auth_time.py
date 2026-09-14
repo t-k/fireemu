@@ -33,6 +33,49 @@ LIST_COLLECTION_IDS_TARGETS = {
     "firestore-v1:field:REST:schemas/ListCollectionIdsResponse/properties/collectionIds",
 }
 ALL_NEW_TARGETS = AUTH_TIME_TARGETS | LIST_COLLECTION_IDS_TARGETS
+AUTH_CASE_IDS = {
+    "auth-session-v2-refresh-auth-time": "changed-refresh@0",
+    "auth-session-continuity-refresh-auth-time": "reference-refresh",
+}
+AUTH_ASSERTION_PATHS = {
+    "securetoken-v1:method:REST:securetoken.token": "response/checks/idTokenPresent",
+    "securetoken-v1:request:REST:securetoken.token/request": "response/checks/refreshTokenPresent",
+    "securetoken-v1:response:REST:securetoken.token/response": "response/checks/noError",
+    "securetoken-v1:field:REST:schemas/GrantTokenResponse/properties/id_token": "response/checks/idTokenPresent",
+}
+FIRESTORE_CASE_IDS = [
+    "firestore:queries/projection-and-listing#list-collection-ids-root",
+    "firestore:queries/projection-and-listing#list-collection-ids-of-a-missing-document",
+    "firestore:queries/projection-and-listing#list-collection-ids-paged",
+]
+FIRESTORE_OBSERVATION_PATHS = {
+    target: ["/cases/54", "/cases/55", "/cases/56"]
+    for target in {
+        "firestore-v1:method:REST:firestore.projects.databases.documents.listCollectionIds",
+        "firestore-v1:request:REST:firestore.projects.databases.documents.listCollectionIds/request",
+        "firestore-v1:response:REST:firestore.projects.databases.documents.listCollectionIds/response",
+        "firestore-v1:schema:REST:schemas/ListCollectionIdsRequest",
+        "firestore-v1:schema:REST:schemas/ListCollectionIdsResponse",
+        "firestore-v1:field:REST:firestore.projects.databases.documents.listCollectionIds/parameters/parent",
+        "firestore-v1:field:REST:schemas/ListCollectionIdsResponse/properties/collectionIds",
+    }
+}
+FIRESTORE_OBSERVATION_PATHS["firestore-v1:field:REST:schemas/ListCollectionIdsRequest/properties/pageSize"] = ["/cases/56"]
+FIRESTORE_ASSERTION_PATHS = {
+    target: ["/cases/54/status", "/cases/55/status"]
+    for target in {
+        "firestore-v1:method:REST:firestore.projects.databases.documents.listCollectionIds",
+        "firestore-v1:request:REST:firestore.projects.databases.documents.listCollectionIds/request",
+    }
+}
+FIRESTORE_ASSERTION_PATHS.update({
+    "firestore-v1:schema:REST:schemas/ListCollectionIdsRequest": ["/cases/54/status"],
+    "firestore-v1:field:REST:firestore.projects.databases.documents.listCollectionIds/parameters/parent": ["/cases/54/status"],
+    "firestore-v1:field:REST:schemas/ListCollectionIdsRequest/properties/pageSize": ["/cases/56/status"],
+    "firestore-v1:response:REST:firestore.projects.databases.documents.listCollectionIds/response": ["/cases/54/expected/body/collectionIds", "/cases/55/expected/body/collectionIds"],
+    "firestore-v1:schema:REST:schemas/ListCollectionIdsResponse": ["/cases/54/expected/body/collectionIds"],
+    "firestore-v1:field:REST:schemas/ListCollectionIdsResponse/properties/collectionIds": ["/cases/54/expected/body/collectionIds", "/cases/55/expected/body/collectionIds"],
+})
 class ValidationError(parent.ValidationError):
     pass
 
@@ -103,14 +146,33 @@ def validate_pointers(root: Path, mapping: dict[str, Any]) -> None:
             local_selected = {row["id"]: i for i, row in enumerate(receipt["local"]["cases"])}
             if binding["caseId"] not in selected:
                 raise ValidationError("auth binding case is absent")
+            expected_case = AUTH_CASE_IDS[binding["evidenceId"]]
+            if binding["caseId"] != expected_case:
+                raise ValidationError("auth binding case is not allowlisted")
+            expected_condition_pointers = [
+                f"/production/cases/{selected[binding['caseId']]}",
+                f"/local/cases/{local_selected[binding['caseId']]}",
+            ]
+            condition_pointers = binding.get("conditions", {}).get("evidencePointers")
+            if condition_pointers != expected_condition_pointers:
+                raise ValidationError("auth condition pointers are not allowlisted")
+            for condition_path in condition_pointers:
+                parent.pointer({"production": receipt["production"], "local": receipt["local"]}, condition_path, "auth condition")
             for surface in binding["surfaces"]:
+                expected_observations = [
+                    f"/production/cases/{selected[binding['caseId']]}",
+                    f"/local/cases/{local_selected[binding['caseId']]}",
+                ]
+                if surface["observationPointers"] != expected_observations:
+                    raise ValidationError("auth observation pointers are not allowlisted")
+                expected_assertions = [
+                    f"/production/cases/{selected[binding['caseId']]}/{AUTH_ASSERTION_PATHS.get(surface['targetId'], '')}",
+                    f"/local/cases/{local_selected[binding['caseId']]}/{AUTH_ASSERTION_PATHS.get(surface['targetId'], '')}",
+                ]
+                if surface["assertionPointers"] != expected_assertions:
+                    raise ValidationError("auth assertion pointers are not allowlisted")
                 for pointer_path in surface["observationPointers"] + surface["assertionPointers"]:
-                    value = parent.pointer({"production": receipt["production"], "local": receipt["local"]}, pointer_path, "auth evidence pointer")
-                    side, _, rest = pointer_path[1:].partition("/")
-                    index = int(rest.split("/", 2)[1])
-                    expected_index = selected[binding["caseId"]] if side == "production" else local_selected[binding["caseId"]]
-                    if index != expected_index:
-                        raise ValidationError("auth evidence pointer selects the wrong case")
+                    parent.pointer({"production": receipt["production"], "local": receipt["local"]}, pointer_path, "auth evidence pointer")
                 for assertion_path in surface["assertionPointers"]:
                     if parent.pointer({"production": receipt["production"], "local": receipt["local"]}, assertion_path, "auth assertion") is not True:
                         raise ValidationError("auth assertion pointer is not true")
@@ -118,13 +180,26 @@ def validate_pointers(root: Path, mapping: dict[str, Any]) -> None:
             selected = {row["id"]: i for i, row in enumerate(artifact["cases"])}
             if binding["caseId"] not in selected:
                 raise ValidationError("Firestore binding case is absent")
-            expected_indices = {selected[c] for c in mapping["firestore"]["caseIds"]}
+            if binding["caseId"] != FIRESTORE_CASE_IDS[0] or mapping["firestore"]["caseIds"] != FIRESTORE_CASE_IDS:
+                raise ValidationError("Firestore case selection is not allowlisted")
+            expected_case_by_index = {index: row["id"] for index, row in enumerate(artifact["cases"])}
+            condition_pointers = binding.get("conditions", {}).get("evidencePointers")
+            expected_condition_pointers = [f"/cases/{i}" for i in (54, 55, 56)]
+            if condition_pointers != expected_condition_pointers:
+                raise ValidationError("Firestore condition pointers are not allowlisted")
+            for condition_path in condition_pointers:
+                condition_row = parent.pointer(artifact, condition_path, "Firestore condition")
+                index = int(condition_path.split("/")[2])
+                if not isinstance(condition_row, dict) or condition_row.get("id") != expected_case_by_index.get(index):
+                    raise ValidationError("Firestore condition selects the wrong case")
             for surface in binding["surfaces"]:
+                target_id = surface["targetId"]
+                if surface["observationPointers"] != FIRESTORE_OBSERVATION_PATHS.get(target_id) or surface["assertionPointers"] != FIRESTORE_ASSERTION_PATHS.get(target_id):
+                    raise ValidationError("Firestore pointers are not allowlisted")
                 for pointer_path in surface["observationPointers"] + surface["assertionPointers"]:
                     value = parent.pointer(artifact, pointer_path, "Firestore evidence pointer")
-                    index = int(pointer_path.split("/")[2])
-                    if index not in expected_indices:
-                        raise ValidationError("Firestore evidence pointer selects an unrelated case")
+                    if pointer_path in surface["observationPointers"] and (not isinstance(value, dict) or value.get("id") != expected_case_by_index.get(int(pointer_path.split("/")[2]))):
+                        raise ValidationError("Firestore observation does not select a complete case row")
                     if pointer_path.endswith("/status") and value != "match":
                         raise ValidationError("Firestore status assertion is not match")
                     if "/expected/body/collectionIds" in pointer_path and not isinstance(value, list):

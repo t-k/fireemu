@@ -19,6 +19,10 @@ def load_mapping():
     return load(v2.MAPPING_PATH)
 
 
+def load_overlay_mapping():
+    return load(overlay.MAPPING_PATH)
+
+
 def load_auth_time_overlay():
     return load(overlay.OUTPUT_PATH)
 
@@ -87,6 +91,34 @@ def test_auth_time_overlay_rejects_provenance_and_report_mutations(tmp_path):
     output.write_text(json.dumps(document))
     with pytest.raises(overlay.ValidationError):
         overlay.check(ROOT, output, report)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(
+            lambda mapping: mapping["bindings"][2]["surfaces"][0]["assertionPointers"].__setitem__(0, "/cases/54/reason"),
+            id="resolving-irrelevant-assertion",
+        ),
+        pytest.param(
+            lambda mapping: mapping["bindings"][2]["surfaces"][0]["observationPointers"].__setitem__(0, "/cases/54/actual"),
+            id="nested-observation",
+        ),
+        pytest.param(
+            lambda mapping: mapping["bindings"][2]["surfaces"][0]["observationPointers"].__setitem__(0, "/cases/55"),
+            id="wrong-selected-case",
+        ),
+        pytest.param(
+            lambda mapping: mapping["bindings"][2]["conditions"]["evidencePointers"].__setitem__(0, "/cases/54/reason"),
+            id="invalid-condition-pointer",
+        ),
+    ],
+)
+def test_overlay_pointer_validation_rejects_semantically_irrelevant_resolving_pointers(mutation):
+    mapping = load_overlay_mapping()
+    mutation(mapping)
+    with pytest.raises(overlay.ValidationError):
+        overlay.validate_pointers(ROOT, mapping)
 
 
 def test_generated_v2_has_complete_parent_targets_and_sparse_provider_binding():

@@ -39,7 +39,7 @@
   },
   "generator": {
     "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-    "sha256": "7f2b5be04f28e1ec48e23b0d73d7f18744bc098f4bd08297de4d17aaa31fe923"
+    "sha256": "0c39dca9cb52ecd7bef5f14aacd53021972110a821a1c6a501afd88fea9c296e"
   },
   "targets": [
     {
@@ -32637,7 +32637,7 @@
       "adapterId": "auth-refresh-auth-time.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-        "sha256": "7f2b5be04f28e1ec48e23b0d73d7f18744bc098f4bd08297de4d17aaa31fe923"
+        "sha256": "0c39dca9cb52ecd7bef5f14aacd53021972110a821a1c6a501afd88fea9c296e"
       },
       "production": {
         "receipt": {
@@ -32676,7 +32676,7 @@
       "adapterId": "auth-refresh-auth-time.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-        "sha256": "7f2b5be04f28e1ec48e23b0d73d7f18744bc098f4bd08297de4d17aaa31fe923"
+        "sha256": "0c39dca9cb52ecd7bef5f14aacd53021972110a821a1c6a501afd88fea9c296e"
       },
       "production": {
         "receipt": {
@@ -32716,7 +32716,7 @@
       "adapterId": "firestore-list-collection-ids.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-        "sha256": "7f2b5be04f28e1ec48e23b0d73d7f18744bc098f4bd08297de4d17aaa31fe923"
+        "sha256": "0c39dca9cb52ecd7bef5f14aacd53021972110a821a1c6a501afd88fea9c296e"
       },
       "production": {
         "receipt": {

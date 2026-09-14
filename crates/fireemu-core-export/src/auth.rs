@@ -115,6 +115,8 @@ pub struct UserRecord {
     pub phone_number: Option<String>,
     /// Whether the account is disabled.
     pub disabled: bool,
+    /// Whether this password-shaped provider is an email-link sign-in account.
+    pub email_link_signin: bool,
     /// The stored password hash.
     pub password_hash: Option<String>,
     /// The salt the hash was produced with.
@@ -201,7 +203,7 @@ impl AuthConfig {
 }
 
 /// The members [`UserRecord`] models; anything else lands in [`UserRecord::extra`].
-const KNOWN_USER_MEMBERS: [&str; 18] = [
+const KNOWN_USER_MEMBERS: [&str; 19] = [
     "localId",
     "email",
     "emailVerified",
@@ -209,6 +211,7 @@ const KNOWN_USER_MEMBERS: [&str; 18] = [
     "photoUrl",
     "phoneNumber",
     "disabled",
+    "emailLinkSignin",
     "passwordHash",
     "salt",
     "passwordUpdatedAt",
@@ -294,6 +297,10 @@ fn parse_user(value: &JsonValue) -> Result<UserRecord, AuthExportError> {
         phone_number: string_member(value, "phoneNumber"),
         disabled: value
             .get("disabled")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        email_link_signin: value
+            .get("emailLinkSignin")
             .and_then(JsonValue::as_bool)
             .unwrap_or(false),
         password_hash: string_member(value, "passwordHash"),
@@ -386,6 +393,9 @@ fn write_user(user: &UserRecord) -> Json {
     doc.insert_some("photoUrl", user.photo_url.as_ref().map(Json::string));
     doc.insert_some("phoneNumber", user.phone_number.as_ref().map(Json::string));
     doc.insert("disabled", Json::Bool(user.disabled));
+    if user.email_link_signin {
+        doc.insert("emailLinkSignin", Json::Bool(true));
+    }
     doc.insert_some(
         "passwordHash",
         user.password_hash.as_ref().map(Json::string),
@@ -648,6 +658,33 @@ mod tests {
         };
         let again = AccountsFile::parse(&file.to_json()).expect("the written file parses");
         assert_eq!(again, file);
+    }
+
+    #[test]
+    fn an_email_link_account_preserves_the_explicit_signin_marker() {
+        let input = r#"{
+          "kind": "identitytoolkit#DownloadAccountResponse",
+          "users": [{
+            "localId": "user-email-link",
+            "email": "link@example.com",
+            "emailVerified": true,
+            "emailLinkSignin": true,
+            "providerUserInfo": [{
+              "providerId": "password",
+              "rawId": "link@example.com",
+              "federatedId": "link@example.com",
+              "email": "link@example.com"
+            }]
+          }]
+        }"#;
+        let file = AccountsFile::parse(input).expect("the email-link account parses");
+        assert!(file.users[0].email_link_signin);
+        let written = file.to_json();
+        assert!(written.contains("\"emailLinkSignin\": true"));
+        assert_eq!(
+            AccountsFile::parse(&written).expect("the written file parses"),
+            file
+        );
     }
 
     #[test]

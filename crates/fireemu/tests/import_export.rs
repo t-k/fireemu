@@ -1240,6 +1240,89 @@ fn tenant_accounts_import_and_export_in_isolated_files() {
 }
 
 #[test]
+fn federated_only_account_export_does_not_invent_an_email_link_provider() {
+    let dir = scratch("federated-only-auth-export");
+    let source = copy_fixture("official-multiproduct", &dir);
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = accounts["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["localId"] == "user-federated")
+        .expect("the federated account is exported");
+    let providers = user["providerUserInfo"]
+        .as_array()
+        .expect("the federated provider is exported");
+    assert_eq!(providers.len(), 1, "{user}");
+    assert_eq!(providers[0]["providerId"], "google.com");
+    assert!(user.get("emailLinkSignin").is_none(), "{user}");
+}
+
+#[test]
+fn email_link_account_import_preserves_provider_and_export_marker() {
+    let dir = scratch("email-link-auth-round-trip");
+    let source = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        source.join("auth_export/accounts.json"),
+        r#"{
+          "kind": "identitytoolkit#DownloadAccountResponse",
+          "users": [{
+            "localId": "email-link-user",
+            "email": "link@example.com",
+            "emailVerified": true,
+            "emailLinkSignin": true,
+            "providerUserInfo": [{
+              "providerId": "password",
+              "rawId": "link@example.com",
+              "federatedId": "link@example.com",
+              "email": "link@example.com"
+            }]
+          }]
+        }"#,
+    )
+    .unwrap();
+    let out = dir.join("out");
+    let probe = r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=fake-api-key" -H 'Content-Type: application/json' -d '{"identifier":"link@example.com","continueUri":"http://localhost/continue"}'"#;
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(probe)
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(
+        log.contains(r#""signinMethods":["emailLink"]"#),
+        "email-link provider was not restored: {log}"
+    );
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = &accounts["users"][0];
+    assert_eq!(user["providerUserInfo"][0]["providerId"], "password");
+    assert_eq!(user["emailLinkSignin"], true);
+    assert!(user.get("passwordHash").is_none(), "{user}");
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
     let dir = scratch("auth-rich-round-trip");

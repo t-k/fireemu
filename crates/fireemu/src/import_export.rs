@@ -1314,7 +1314,13 @@ fn provider_of(record: &UserRecord) -> Provider {
             .iter()
             .any(|p| p.provider_id == id)
     };
+    if record.email_link_signin && record.password_hash.is_none() {
+        return Provider::EmailLink;
+    }
     if record.password_hash.is_some() || has("password") {
+        if record.email.is_some() && record.password_hash.is_none() {
+            return Provider::EmailLink;
+        }
         return Provider::Password;
     }
     if has("emailLink") {
@@ -1879,43 +1885,10 @@ fn exported_account(
         ),
         None => (None, None),
     };
-    let mut providers = Vec::new();
-    if let Some(email) = &user.email {
-        providers.push(ProviderUserInfo {
-            provider_id: if password_hash.is_some() || store.has_password(&user.local_id) {
-                "password".to_owned()
-            } else {
-                "emailLink".to_owned()
-            },
-            raw_id: email.clone(),
-            federated_id: Some(email.clone()),
-            email: Some(email.clone()),
-            display_name: user.display_name.clone(),
-            photo_url: user.photo_url.clone(),
-            phone_number: None,
-            screen_name: None,
-        });
-    }
-    if let Some(phone) = &user.phone_number {
-        providers.push(ProviderUserInfo {
-            provider_id: "phone".to_owned(),
-            raw_id: phone.clone(),
-            phone_number: Some(phone.clone()),
-            ..ProviderUserInfo::default()
-        });
-    }
-    for identity in &user.federated {
-        providers.push(ProviderUserInfo {
-            provider_id: identity.provider_id.clone(),
-            raw_id: identity.raw_id.clone(),
-            federated_id: Some(identity.raw_id.clone()),
-            email: identity.email.clone(),
-            display_name: identity.display_name.clone(),
-            photo_url: identity.photo_url.clone(),
-            phone_number: None,
-            screen_name: None,
-        });
-    }
+    let has_password = password_hash.is_some() || store.has_password(&user.local_id);
+    let email_link_signin =
+        user.provider == fireemu_core_auth::store::Provider::EmailLink && !has_password;
+    let providers = exported_providers(user, has_password, email_link_signin);
     let mut mfa_info = Vec::new();
     for factor in user.mfa.phone_factors() {
         mfa_info.push(MfaEnrollment {
@@ -1948,6 +1921,7 @@ fn exported_account(
         photo_url: user.photo_url.clone(),
         phone_number: user.phone_number.clone(),
         disabled: user.disabled,
+        email_link_signin,
         password_hash,
         salt,
         #[allow(clippy::cast_precision_loss)]
@@ -1968,6 +1942,49 @@ fn exported_account(
         mfa_info,
         extra: Vec::new(),
     }
+}
+
+fn exported_providers(
+    user: &fireemu_core_auth::store::UserRecord,
+    has_password: bool,
+    email_link_signin: bool,
+) -> Vec<ProviderUserInfo> {
+    let mut providers = Vec::new();
+    if let Some(email) = user
+        .email
+        .as_ref()
+        .filter(|_| has_password || email_link_signin)
+    {
+        providers.push(ProviderUserInfo {
+            provider_id: "password".to_owned(),
+            raw_id: email.clone(),
+            federated_id: Some(email.clone()),
+            email: Some(email.clone()),
+            display_name: user.display_name.clone(),
+            photo_url: user.photo_url.clone(),
+            phone_number: None,
+            screen_name: None,
+        });
+    }
+    if let Some(phone) = &user.phone_number {
+        providers.push(ProviderUserInfo {
+            provider_id: "phone".to_owned(),
+            raw_id: phone.clone(),
+            phone_number: Some(phone.clone()),
+            ..ProviderUserInfo::default()
+        });
+    }
+    providers.extend(user.federated.iter().map(|identity| ProviderUserInfo {
+        provider_id: identity.provider_id.clone(),
+        raw_id: identity.raw_id.clone(),
+        federated_id: Some(identity.raw_id.clone()),
+        email: identity.email.clone(),
+        display_name: identity.display_name.clone(),
+        photo_url: identity.photo_url.clone(),
+        phone_number: None,
+        screen_name: None,
+    }));
+    providers
 }
 
 fn export_storage(
@@ -2937,6 +2954,48 @@ mod tests {
             super::exported_account(&restored, restored.user_by_id(uid.as_str()).unwrap(), None)
                 .last_refresh_at,
             exported.last_refresh_at
+        );
+    }
+
+    #[test]
+    fn a_hashless_password_provider_with_an_email_is_email_link_signin() {
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
+
+        let record = UserRecord {
+            email: Some("link@example.com".to_owned()),
+            provider_user_info: vec![ProviderUserInfo {
+                provider_id: "password".to_owned(),
+                raw_id: "link@example.com".to_owned(),
+                ..ProviderUserInfo::default()
+            }],
+            ..UserRecord::default()
+        };
+
+        assert_eq!(
+            super::provider_of(&record),
+            fireemu_core_auth::store::Provider::EmailLink
+        );
+    }
+
+    #[test]
+    fn an_email_link_marker_cannot_relabel_a_password_account() {
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
+
+        let record = UserRecord {
+            email: Some("password@example.com".to_owned()),
+            email_link_signin: true,
+            password_hash: Some("fakeHash:salt=s:password=p".to_owned()),
+            provider_user_info: vec![ProviderUserInfo {
+                provider_id: "password".to_owned(),
+                raw_id: "password@example.com".to_owned(),
+                ..ProviderUserInfo::default()
+            }],
+            ..UserRecord::default()
+        };
+
+        assert_eq!(
+            super::provider_of(&record),
+            fireemu_core_auth::store::Provider::Password
         );
     }
 }

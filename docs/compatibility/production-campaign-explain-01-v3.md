@@ -21,9 +21,10 @@ behavior or erase the raw response and its digest.
 ## Current local shadow
 
 The current local shadow is recorded in
-[1d4dd0af-explain-local-shadow-v3.json](../../spec/compatibility/broad-runs/1d4dd0af-explain-local-shadow-v3.json).
-It completed the six bounded Explain cases, setup/readback, owned cleanup and
-process shutdown from commit `1d4dd0af48dfca1643386b771d7e1f283c9ba45c`. The
+[2cee4f0e-explain-local-shadow-v3.json](../../spec/compatibility/broad-runs/2cee4f0e-explain-local-shadow-v3.json).
+The earlier `1d4dd0af` shadow summary remains preserved. This run completed the
+six bounded Explain cases, setup/readback, owned cleanup and process shutdown
+from commit `2cee4f0e424c3701575d8084e525fc3bccd801dc`. The
 artifact, observer, comparison binding and lifecycle hashes are recorded in the
 summary. No production request is implied by this record.
 
@@ -35,7 +36,8 @@ with the historical collector at commit
 recorded as a mismatch because four Analyze rows differed only in measured
 execution duration. The current local shadow was validated independently under
 the v3 contract. The saved re-evaluation is recorded in
-[1d4dd0af-explain-saved-recomparison-v1.json](../../spec/compatibility/broad-runs/1d4dd0af-explain-saved-recomparison-v1.json).
+[2cee4f0e-explain-saved-recomparison-v1.json](../../spec/compatibility/broad-runs/2cee4f0e-explain-saved-recomparison-v1.json).
+The earlier `1d4dd0af` re-evaluation summary remains preserved.
 
 That record reports twelve matching observation rows. Four rows are classified
 as expected nondeterminism under the duration projection; the remaining rows

@@ -11,12 +11,12 @@ use crate::decode::parse_parent;
 use crate::gateway::Gateway;
 use crate::local::LocalBackend;
 
-fn state() -> RestState {
+fn state_with(edition: FirestoreEdition, api_mode: FirestoreApiMode) -> RestState {
     let gateway = Gateway {
         enforce_limits: true,
         ctx: PlanningContext {
-            edition: FirestoreEdition::Standard,
-            api_mode: FirestoreApiMode::Native,
+            edition,
+            api_mode,
             policy: IndexValidationPolicy::Production,
         },
         indexes: IndexSet::default(),
@@ -31,6 +31,10 @@ fn state() -> RestState {
         rules: None,
         app_check: None,
     }
+}
+
+fn state() -> RestState {
+    state_with(FirestoreEdition::Standard, FirestoreApiMode::Native)
 }
 
 fn call(state: &RestState, authorization: Option<&str>, path: &str) -> (u16, Value) {
@@ -62,19 +66,19 @@ fn create_database(state: &RestState, project: &str, database: &str) {
 fn admin_requires_owner_before_lookup_and_rejects_foreign_names() {
     let state = state();
     let (status, body) = call(&state, None, "/v1/projects/foreign/databases/(default)");
-    assert_eq!(status, 401);
-    assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+    assert_eq!(status, 403);
+    assert_eq!(body["error"]["status"], "PERMISSION_DENIED");
     let (status, body) = call(
         &state,
         Some("Bearer user"),
         "/v1/projects/foreign/databases",
     );
-    assert_eq!(status, 401);
-    assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+    assert_eq!(status, 403);
+    assert_eq!(body["error"]["status"], "PERMISSION_DENIED");
 }
 
 #[test]
-fn admin_lists_sorted_databases_with_bound_page_tokens() {
+fn admin_lists_sorted_databases_and_validates_discovery_query() {
     let state = state();
     create_database(&state, "demo", "zeta");
     create_database(&state, "demo", "(default)");
@@ -82,26 +86,24 @@ fn admin_lists_sorted_databases_with_bound_page_tokens() {
     let (status, body) = call(
         &state,
         Some("Bearer owner"),
-        "/v1/projects/demo/databases?pageSize=2",
+        "/v1/projects/demo/databases?showDeleted=true",
     );
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["databases"].as_array().unwrap().len(), 2);
+    assert_eq!(body["databases"].as_array().unwrap().len(), 3);
     assert_eq!(
         body["databases"][0]["name"],
         "projects/demo/databases/(default)"
     );
-    let token = body["nextPageToken"].as_str().unwrap();
-    let (status, next) = call(
-        &state,
-        Some("Bearer owner"),
-        &format!("/v1/projects/demo/databases?pageSize=2&pageToken={token}"),
-    );
-    assert_eq!(status, 200, "{next}");
-    assert_eq!(next["databases"][0]["name"], "projects/demo/databases/zeta");
     let (status, _) = call(
         &state,
         Some("Bearer owner"),
-        "/v1/projects/other/databases?pageSize=2&pageToken=fireemu-admin-v1%7Cdemo%7C2%7C2",
+        "/v1/projects/demo/databases?pageSize=2",
+    );
+    assert_eq!(status, 400);
+    let (status, _) = call(
+        &state,
+        Some("Bearer owner"),
+        "/v1/projects/demo/databases?showDeleted=true&showDeleted=false",
     );
     assert_eq!(status, 400);
 }
@@ -119,6 +121,7 @@ fn admin_get_is_read_only_and_unknown_database_is_not_found() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["type"], "FIRESTORE_NATIVE");
     assert_eq!(body["databaseEdition"], "STANDARD");
+    assert!(body.get("uid").is_none());
     assert_eq!(state.local.database_catalog().unwrap(), before);
     let (status, body) = call(
         &state,
@@ -136,7 +139,30 @@ fn admin_rejects_malformed_and_unsupported_routes() {
     let (status, _) = call(
         &state,
         Some("Bearer owner"),
-        "/v1/projects/demo/databases?pageSize=0",
+        "/v1/projects/demo/databases?pageToken=forged",
     );
     assert_eq!(status, 400);
+}
+
+#[test]
+fn admin_refuses_enterprise_and_mongodb_configurations() {
+    for (edition, api_mode) in [
+        (FirestoreEdition::Enterprise, FirestoreApiMode::Native),
+        (
+            FirestoreEdition::Enterprise,
+            FirestoreApiMode::MongoDbCompatible,
+        ),
+    ] {
+        let state = state_with(edition, api_mode);
+        create_database(&state, "demo", "(default)");
+        let (status, body) = call(&state, Some("Bearer owner"), "/v1/projects/demo/databases");
+        assert_eq!(status, 501, "{body}");
+        assert_eq!(body["error"]["status"], "UNIMPLEMENTED");
+        let (status, body) = call(
+            &state,
+            Some("Bearer owner"),
+            "/v1/projects/demo/databases/(default)",
+        );
+        assert_eq!(status, 501, "{body}");
+    }
 }

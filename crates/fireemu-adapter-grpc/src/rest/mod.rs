@@ -240,13 +240,9 @@ fn first<'a>(params: &'a BTreeMap<String, Vec<String>>, key: &str) -> Option<&'a
     params.get(key).and_then(|v| v.first()).map(String::as_str)
 }
 
-const ADMIN_PAGE_SIZE: usize = 20;
-const ADMIN_MAX_PAGE_SIZE: usize = 1000;
-
-fn admin_database_json(project: &str, database: &str, incarnation: u64) -> Value {
+fn admin_database_json(project: &str, database: &str) -> Value {
     json!({
         "name": format!("projects/{project}/databases/{database}"),
-        "uid": format!("fireemu-{incarnation:016x}"),
         "locationId": "us-central1",
         "type": "FIRESTORE_NATIVE",
         "concurrencyMode": "PESSIMISTIC",
@@ -255,7 +251,6 @@ fn admin_database_json(project: &str, database: &str, incarnation: u64) -> Value
         "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
         "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
         "databaseEdition": "STANDARD",
-        "freeTier": true,
         "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
         "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
     })
@@ -574,8 +569,15 @@ impl RestState {
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
         if !rules::is_owner_credential(req.authorization.as_deref()) {
-            return Err(Status::unauthenticated(
+            return Err(Status::permission_denied(
                 "Admin database inventory requires owner credentials",
+            ));
+        }
+        if self.gateway.ctx.edition != fireemu_core_types::edition::FirestoreEdition::Standard
+            || self.gateway.ctx.api_mode != fireemu_core_types::edition::FirestoreApiMode::Native
+        {
+            return Err(Status::unimplemented(
+                "database inventory is supported only for Standard Native databases",
             ));
         }
         let segments: Vec<&str> = path.split('/').collect();
@@ -591,52 +593,30 @@ impl RestState {
             ));
         }
         let project = segments[1];
+        let barrier = self.local.barrier();
+        let _admitted = barrier.admit();
         let catalog = self.local.database_catalog()?;
         match (req.method.as_str(), segments.as_slice()) {
             ("GET", ["projects", project_name, "databases"]) if *project_name == project => {
-                let page_size = match first(params, "pageSize") {
-                    None => ADMIN_PAGE_SIZE,
-                    Some(value) => value
-                        .parse::<usize>()
-                        .ok()
-                        .filter(|n| *n > 0 && *n <= ADMIN_MAX_PAGE_SIZE)
-                        .ok_or_else(|| {
-                            Status::invalid_argument("pageSize must be between 1 and 1000")
-                        })?,
-                };
-                let offset = match first(params, "pageToken") {
-                    None => 0,
-                    Some(token) => {
-                        let mut parts = token.split('|');
-                        if parts.next() != Some("fireemu-admin-v1")
-                            || parts.next() != Some(project)
-                            || parts.next().and_then(|v| v.parse().ok()) != Some(page_size)
-                        {
-                            return Err(Status::invalid_argument("invalid pageToken"));
-                        }
-                        parts
-                            .next()
-                            .and_then(|v| v.parse().ok())
-                            .filter(|_| parts.next().is_none())
-                            .ok_or_else(|| Status::invalid_argument("invalid pageToken"))?
+                match single(params, "showDeleted")? {
+                    None | Some("false" | "true") => (),
+                    Some(_) => {
+                        return Err(Status::invalid_argument(
+                            "showDeleted must be true or false",
+                        ))
                     }
-                };
+                }
+                if params.contains_key("pageSize") || params.contains_key("pageToken") {
+                    return Err(Status::invalid_argument(
+                        "pageSize and pageToken are not supported",
+                    ));
+                }
                 let databases: Vec<Value> = catalog
                     .into_iter()
                     .filter(|((p, _), _)| p == project)
-                    .map(|((_, d), incarnation)| admin_database_json(project, &d, incarnation))
+                    .map(|((_, d), _incarnation)| admin_database_json(project, &d))
                     .collect();
-                if offset > databases.len() {
-                    return Err(Status::invalid_argument("invalid pageToken"));
-                }
-                let end = offset.saturating_add(page_size).min(databases.len());
-                let mut body =
-                    json!({"databases": databases[offset..end].to_vec(), "unreachable": []});
-                if end < databases.len() {
-                    body["nextPageToken"] =
-                        json!(format!("fireemu-admin-v1|{project}|{page_size}|{end}"));
-                }
-                Ok(ok(body))
+                Ok(ok(json!({"databases": databases, "unreachable": []})))
             }
             ("GET", ["projects", project_name, "databases", database])
                 if *project_name == project && !database.is_empty() && !database.contains('/') =>
@@ -647,7 +627,8 @@ impl RestState {
                 else {
                     return Err(Status::not_found("database not found"));
                 };
-                Ok(ok(admin_database_json(project, database, incarnation)))
+                let _ = incarnation;
+                Ok(ok(admin_database_json(project, database)))
             }
             _ => Ok(not_found_text()),
         }

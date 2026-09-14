@@ -427,9 +427,15 @@
       "surfaces": [
         "FS-DATABASES"
       ],
-      "requirements": [],
-      "capabilities": [],
-      "claims": [],
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ],
+      "capabilities": [
+        "FS-ADMIN-INVENTORY-1"
+      ],
+      "claims": [
+        "FS-CLAIM-REST"
+      ],
       "limitations": [
         "Admin discovery fields and long-running operation semantics remain unclassified; configuration acceptance does not imply managed-service execution."
       ]

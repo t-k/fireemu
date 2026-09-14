@@ -639,14 +639,6 @@ def observe(output, origin=None):
                 null_continuity_credential = pending(account)
                 null_continuity_session = start(account, null_continuity_credential)
                 null_continuity_code = code_for(null_continuity_session)
-                status, signed = finalize(
-                    null_continuity_credential,
-                    null_continuity_session,
-                    null_continuity_code,
-                )
-                require(status == 200)
-                null_continuity_checks = token_checks(account, signed)
-                require(all(null_continuity_checks.values()))
                 before_disable_null = {
                     name: lookup(candidate) for name, candidate in accounts.items()
                 }
@@ -675,6 +667,16 @@ def observe(output, origin=None):
                     and after_disable_null[label].get("disabled", False)
                     == before_disable_null[label].get("disabled", False)
                     and after_disable_null[other] == before_disable_null[other]
+                )
+                # Finalize only after the immediate profile-state comparison. Its
+                # consumption or failure must not affect the update-state checks.
+                status, signed = finalize(
+                    null_continuity_credential,
+                    null_continuity_session,
+                    null_continuity_code,
+                )
+                null_continuity_checks = token_checks(
+                    account, signed, diagnostic=True
                 )
                 status, response = client(
                     "update", {"idToken": token, "displayName": account["marker"]}

@@ -545,7 +545,12 @@ def explain_response_valid(operation, status, value):
     """Validate REST wire shape while retaining well-formed semantic differences."""
 
     def decimal_string(value):
-        return isinstance(value, str) and bool(re.fullmatch(r"\d+", value))
+        if not isinstance(value, str) or not re.fullmatch(r"\d+", value):
+            return False
+        try:
+            return int(value) <= 2**63 - 1
+        except ValueError:
+            return False
 
     def duration_valid(value):
         if not isinstance(value, str):
@@ -560,6 +565,14 @@ def explain_response_valid(operation, status, value):
         )
 
     def int64_string(value):
+        if not isinstance(value, str) or not re.fullmatch(r"\d+", value):
+            return False
+        try:
+            return int(value) <= 2**63 - 1
+        except ValueError:
+            return False
+
+    def signed_int64_string(value):
         if not isinstance(value, str) or not re.fullmatch(r"-?\d+", value):
             return False
         try:
@@ -693,8 +706,7 @@ def explain_response_valid(operation, status, value):
                 if (
                     not isinstance(field, dict)
                     or set(field) != {"integerValue"}
-                    or not isinstance(field["integerValue"], str)
-                    or not re.fullmatch(r"-?\d+", field["integerValue"])
+                    or not signed_int64_string(field["integerValue"])
                 ):
                     return False
     return True

@@ -64,7 +64,9 @@ def test_explain_validator_accepts_new_empty_analyze_protojson_shape():
         "wrong-duration",
         "negative-duration",
         "wrong-debug-stat",
+        "huge-debug-stat",
         "wrong-billing-detail",
+        "huge-results",
         "omitted-default-nonempty",
         "invalid-media",
         "wrong-error-status",
@@ -88,8 +90,14 @@ def test_explain_validator_rejects_invalid_metric_and_error_shapes(mutation):
         body[0]["explainMetrics"]["executionStats"]["executionDuration"] = "-1s"
     elif mutation == "wrong-debug-stat":
         body[0]["explainMetrics"]["executionStats"]["debugStats"]["documents_scanned"] = 0
+    elif mutation == "huge-debug-stat":
+        body[0]["explainMetrics"]["executionStats"]["debugStats"][
+            "documents_scanned"
+        ] = str(2**63)
     elif mutation == "wrong-billing-detail":
         body[0]["explainMetrics"]["executionStats"]["debugStats"]["billing_details"] = []
+    elif mutation == "huge-results":
+        body[0]["explainMetrics"]["executionStats"]["resultsReturned"] = str(2**63)
     elif mutation == "omitted-default-nonempty":
         operation = explain_operation(empty=False)
     elif mutation == "invalid-media":
@@ -679,13 +687,26 @@ def test_fully_bound_mismatch_is_valid_collection(real_shadow):
     production = production_fixture(local)
     assert validate_envelope(production, local=False)
     assert compare_production_local(production, local)["compatibility"] == "match"
-    production["receipt"]["rows"][4]["body"] = [
-        {"error": {"status": "FAILED_PRECONDITION"}}
-    ]
+    production["receipt"]["rows"][4]["body"][0]["explainMetrics"][
+        "executionStats"
+    ]["resultsReturned"] = "1"
     assert production["receipt"]["stateValidation"] is True
     rebind_responses(production)
     assert validate_envelope(production, local=False)
     assert compare_production_local(production, local)["compatibility"] == "mismatch"
+
+
+def test_fully_bound_envelope_rejects_out_of_range_results_returned(real_shadow):
+    from campaign_explain import validate_envelope
+
+    local, _ = real_shadow
+    production = production_fixture(local)
+    production["receipt"]["rows"][4]["body"][0]["explainMetrics"][
+        "executionStats"
+    ]["resultsReturned"] = str(2**63)
+    rebind_responses(production)
+    with pytest.raises(ValueError, match="typed Explain response incomplete"):
+        validate_envelope(production, local=False)
 
 
 def test_both_sides_same_rebound_wrong_request_is_indeterminate(real_shadow):

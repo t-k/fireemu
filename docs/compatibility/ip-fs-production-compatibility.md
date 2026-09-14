@@ -60,7 +60,7 @@ The previously recorded full workspace verification at `c55fe8f1180466bd2c4cac4a
 
 These checks do not promote local-only or saved-reference evidence to current production compatibility. No new production operation was performed for this candidate verification, and the existing campaign package remains subject to its fixed configuration and API-key admission baseline. PR #1 is Draft and currently clean against `main`; the remaining parent groups and production-only evidence below remain open.
 
-On 2026-09-15, a read-only ADC preflight using `x-goog-user-project: fireemu-35fe6` confirmed the expected project identity, Database `database-settings-v2` projection and Auth configuration digest. The existing API-key resource is still owned by the expected project, but its current key string does not match the digest bound to the frozen Explain campaign. Admission stopped before any campaign data request; the accepted baseline and prior receipts remain unchanged.
+On 2026-09-15, a read-only ADC preflight using `x-goog-user-project: fireemu-35fe6` confirmed the expected project identity, Database `database-settings-v2` projection and Auth configuration digest. The existing API-key resource is still owned by the expected project, but its current key string does not match the digest bound to the frozen Explain campaign. Admission stopped before any campaign data request; the accepted baseline and prior receipts remain unchanged. A subsequent read-only Firebase SDK-config lookup was used only to verify the current web-app API-key binding; it created or mutated no data and changed no configuration. Its digest matched the preflight result and still differs from the frozen campaign baseline, so no campaign was started or rebased.
 
 ## Completion rule
 

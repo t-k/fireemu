@@ -4758,12 +4758,9 @@ fn update(
     // A privileged password replacement advances `validSince` but keeps the refresh-session
     // record. This preserves the same-second boundary: a session issued in the replacement
     // second is not older than the floored revocation instant. Older sessions fail as
-    // TOKEN_EXPIRED. Explicit revocation and credential removal still retire the session
-    // immediately, and deletion records its digest for the terminal USER_NOT_FOUND result.
-    let removes_refresh_credential = plan.revoke_at.is_some()
-        || plan.clear_password
-        || plan.clear_email
-        || (email_changed && !self_service);
+    // TOKEN_EXPIRED. Explicit revocation and administrative email changes still retire the
+    // session immediately. Credential-removal flags retain their existing session behavior.
+    let removes_refresh_credential = plan.revoke_at.is_some() || (email_changed && !self_service);
     if !stateless_refresh_tokens && removes_refresh_credential {
         store.revoke_refresh_tokens(&uid);
     }

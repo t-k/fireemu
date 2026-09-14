@@ -346,6 +346,25 @@ def test_saved_mode_accepts_retained_second45_runtime_fixture(tmp_path):
         ).strip()
         local = tmp_path / "mapped-receipt.json"
         local.write_text(json.dumps(local_value))
+        from second_production_pair import observed_value
+
+        candidate_value = {
+            "kind": "second45-production-candidate-summary-v1",
+            "manifestDigest": local_value["comparisonManifestDigest"],
+            "comparisonContractDigest": local_value["comparisonContractDigest"],
+            "observerDigest": local_value["observerDigest"],
+            "recordingComplete": True,
+            "cleanupComplete": True,
+            "rows": [
+                {
+                    "id": row["id"],
+                    "production": observed_value(row, local_value["bindings"]),
+                }
+                for row in local_value["rows"]
+            ],
+        }
+        candidate = tmp_path / "candidate.json"
+        candidate.write_text(json.dumps(candidate_value))
         parent_value = {
             "status": "completed",
             "productionExecuted": False,
@@ -375,13 +394,19 @@ def test_saved_mode_accepts_retained_second45_runtime_fixture(tmp_path):
         }
         anchor = tmp_path / "anchor.json"
         anchor.write_text(json.dumps(anchor_value))
-    result = compare_saved(
-        candidate,
+        candidate_expected_sha256 = None
+        if not retained:
+            candidate_expected_sha256 = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        result = compare_saved(
+            candidate,
         json.loads(local.read_text()),
         parent,
         local_source_sha256=hashlib.sha256(local.read_bytes()).hexdigest(),
-        anchor_path=anchor,
-    )
+            anchor_path=anchor,
+            candidate_expected_sha256=candidate_expected_sha256
+            if candidate_expected_sha256 is not None
+            else "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73",
+        )
     assert result["compatibility"] == "match"
     assert result["errors"] == []
 

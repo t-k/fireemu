@@ -133,12 +133,20 @@ def load_parent_manifest(path):
 
 
 def compare_saved(
-    candidate_path, local, parent_path, *, local_source_sha256=None, anchor_path=None
+    candidate_path,
+    local,
+    parent_path,
+    *,
+    local_source_sha256=None,
+    anchor_path=None,
+    candidate_expected_sha256=PINNED_PRODUCTION_CANDIDATE_SHA256,
 ):
     """Compare a saved normalized production candidate with one current local receipt."""
     from second_production_contract import binding, manifest, observer_digest
 
-    candidate, candidate_source_sha256 = load_saved_candidate(candidate_path)
+    candidate, candidate_source_sha256 = load_saved_candidate(
+        candidate_path, expected_sha256=candidate_expected_sha256
+    )
     parent = load_parent_manifest(parent_path)
     errors = []
     state_validation = None

@@ -760,6 +760,10 @@ def test_fully_bound_mismatch_is_valid_collection(real_shadow):
     ("status", "error_status"),
     [
         (400, "INVALID_ARGUMENT"),
+        (400, "FAILED_PRECONDITION"),
+        (400, "OUT_OF_RANGE"),
+        (404, "NOT_FOUND"),
+        (409, "ALREADY_EXISTS"),
         (501, "UNIMPLEMENTED"),
     ],
 )

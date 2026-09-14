@@ -795,6 +795,32 @@ pub fn int32(v: Option<&Value>, what: &str) -> Result<Option<i32>, JsonError> {
     }
 }
 
+/// Parses the optional server request options object. Tags are currently accepted for wire
+/// compatibility and intentionally have no local execution effect.
+pub fn request_options_from_json(
+    v: Option<&Value>,
+) -> Result<Option<pb::RequestOptions>, JsonError> {
+    let Some(v) = v else { return Ok(None) };
+    if v.is_null() {
+        return Ok(None);
+    }
+    strict_keys(v, &["requestTags"])?;
+    let request_tags = match v.get("requestTags") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| JsonError("requestOptions.requestTags must be strings".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return err("requestOptions.requestTags must be an array"),
+    };
+    Ok(Some(pb::RequestOptions { request_tags }))
+}
+
 fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNearest, JsonError> {
     strict_keys(
         raw,

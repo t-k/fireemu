@@ -783,6 +783,28 @@ def test_fully_bound_success_vs_structured_api_rejection_is_mismatch(
     assert compare_production_local(production, local)["compatibility"] == "mismatch"
 
 
+def test_duration_only_difference_is_expected_nondeterminism(real_shadow):
+    from campaign_explain import compare_production_local
+
+    original, _ = real_shadow
+    local = copy.deepcopy(original)
+    production = production_fixture(local)
+    durations = {
+        "production": ["12.000001s", "0.000002s", "9.5s", "0.25s"],
+        "local": ["0.000001s", "0.000003s", "0.75s", "0.01s"],
+    }
+    indexes = [5, 6, 8, 9]
+    for index, duration in zip(indexes, durations["production"], strict=True):
+        production["receipt"]["rows"][index]["body"][-1]["explainMetrics"][
+            "executionStats"
+        ]["executionDuration"] = duration
+    rebind_responses(production)
+
+    comparison = compare_production_local(production, local)
+    assert comparison["compatibility"] == "match"
+    assert all(row["verdict"] == "match" for row in comparison["rows"])
+
+
 @pytest.mark.parametrize(
     ("status", "error_status"),
     [

@@ -2490,13 +2490,27 @@ impl LocalBackend {
     /// Returns the attached database catalog without creating entries or touching database
     /// state. The adapter uses this for the read-only Admin inventory surface.
     pub fn database_catalog(&self) -> Result<Vec<DatabaseCatalogEntry>, Status> {
+        self.database_catalog_with_hook(|| {})
+    }
+
+    fn database_catalog_with_hook(
+        &self,
+        after_catalog_lock: impl FnOnce(),
+    ) -> Result<Vec<DatabaseCatalogEntry>, Status> {
         let dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
-        dbs.iter()
+        after_catalog_lock();
+        let entries: Vec<_> = dbs
+            .iter()
+            .map(|(key, entry)| (key.clone(), Arc::clone(entry)))
+            .collect();
+        drop(dbs);
+        entries
+            .into_iter()
             .map(|(key, entry)| {
                 if entry.cell.read().map_err(|_| lock_poisoned())?.detached {
                     return Err(Status::unavailable("database catalog entry is detached"));
                 }
-                Ok((key.clone(), entry.incarnation))
+                Ok((key, entry.incarnation))
             })
             .collect()
     }
@@ -5508,6 +5522,49 @@ mod lock_tests {
         assert!(first_thread.join().unwrap().is_some());
         assert!(second_thread.join().unwrap().is_some());
         assert!(concurrent.is_ok(), "the second reader waited for the first");
+    }
+
+    #[test]
+    fn catalog_does_not_hold_catalog_lock_while_reading_database() {
+        let backend = backend();
+        let parent = parse_parent("projects/demo-app/databases/(default)/documents").unwrap();
+        let handle = backend.database_handle(&parent).unwrap();
+        let (writer_ready_tx, writer_ready_rx) = mpsc::channel();
+        let (start_lookup_tx, start_lookup_rx) = mpsc::channel();
+        let writer_backend = Arc::clone(&backend);
+        let writer = std::thread::spawn(move || {
+            handle.with(|_| {
+                writer_ready_tx.send(()).unwrap();
+                start_lookup_rx.recv().unwrap();
+                let lookup_backend = Arc::clone(&writer_backend);
+                let lookup_parent = parent;
+                let lookup =
+                    std::thread::spawn(move || lookup_backend.database_handle(&lookup_parent));
+                assert!(lookup.join().unwrap().is_ok());
+                Ok(())
+            })
+        });
+        writer_ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let (catalog_locked_tx, catalog_locked_rx) = mpsc::channel();
+        let (continue_catalog_tx, continue_catalog_rx) = mpsc::channel();
+        let catalog_backend = Arc::clone(&backend);
+        let catalog = std::thread::spawn(move || {
+            catalog_backend.database_catalog_with_hook(|| {
+                catalog_locked_tx.send(()).unwrap();
+                continue_catalog_rx.recv().unwrap();
+            })
+        });
+        catalog_locked_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        start_lookup_tx.send(()).unwrap();
+        continue_catalog_tx.send(()).unwrap();
+
+        assert!(writer.join().unwrap().is_ok());
+        assert_eq!(catalog.join().unwrap().unwrap().len(), 1);
     }
 
     #[test]

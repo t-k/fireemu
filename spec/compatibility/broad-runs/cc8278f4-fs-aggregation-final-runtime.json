@@ -3,7 +3,7 @@
   "kind": "firestore-aggregation-final-runtime-local-result",
   "status": "local-comparison-complete",
   "capturedOn": "2026-09-14",
-  "executionCommit": "cc8278f4d7160dcd39065ebfa131fa186c937a32",
+  "executionCommit": "bb1fb61783f781f4c8a44ba3cf4d82a01f713159",
   "baseCommit": "984ecfd3",
   "target": "owned-local-artifact",
   "project": "demo-firestore-probe",

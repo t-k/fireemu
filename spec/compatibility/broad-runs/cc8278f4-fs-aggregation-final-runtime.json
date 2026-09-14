@@ -3,7 +3,7 @@
   "kind": "firestore-aggregation-final-runtime-local-result",
   "status": "local-production-reference-complete",
   "capturedOn": "2026-09-14",
-  "executionCommit": "abd24ced6a00639aab2d4411a629bf89004c8101",
+  "executionCommit": "516154bfd1b2ce478d982eee9e14c3534ec4bddc",
   "baseCommit": "984ecfd3",
   "target": "owned-local-artifact",
   "project": "demo-firestore-probe",
@@ -147,18 +147,19 @@
   },
   "comparator": {
     "source": "conformance/src/firestore-probe/run.mjs",
-    "sourceSha256": "sha256-a04a63a7fa022dae9eafe220f88f3cdcf4a10c9f535677f835b078812f85668b",
+    "sourceSha256": "sha256-ec442fb4595b8306a4b158ae523b956d1dbb8bf189db9e8c7b0ef0b8f1c4b58f",
     "normalizer": "conformance/src/firestore-probe/session.mjs",
     "normalizerSha256": "sha256-af4e664ac4d1efe9cfa5de445c2ee8833ee91d1c0c515283133e8e0a8c5b4823",
     "normalizationSupportSource": "conformance/src/normalize.mjs",
     "normalizationSupportSha256": "sha256-9d6891b2c1ab79d4ef202f55730fd34ee341620d8feecf7cae05da047324d952",
+    "entryPoint": "compareProductionToFireemu({ production, fireemu, programDefinitions: [selected program] })",
     "contract": {
       "expected": "conformance/firestore-production-matrix.json#programs[queries/aggregations].steps[*].production",
       "actual": "conformance/.runs/firestore-probe/fireemu.json#queries/aggregations",
       "success": "compare status, code and normalized body with recursively sorted object keys",
       "error": "compare status and canonical code; retain message for diagnostics only",
       "missing": "missing actual rows never match a saved production row",
-      "implementation": "same decision/canonical comparison used by firestore-probe/run.mjs; no firestore-matrix divergence or official-emulator value is used"
+      "implementation": "compareProductionToFireemu applies decision and recursively-key-sorted canonical equality to each saved production row and current local response; firestore-matrix divergence/oracle fields are never read"
     }
   },
   "executionConfiguration": {

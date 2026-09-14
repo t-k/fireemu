@@ -1273,6 +1273,62 @@ fn federated_only_account_export_does_not_invent_an_email_link_provider() {
 }
 
 #[test]
+fn api_created_password_account_keeps_password_provider_without_hash() {
+    let dir = scratch("api-password-auth-round-trip");
+    let source = copy_fixture("official-multiproduct", &dir);
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key" -H 'Content-Type: application/json' -d '{"email":"api-password@example.com","password":"hunter22"}'"#)
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = accounts["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["email"] == "api-password@example.com")
+        .expect("the API-created password account is exported");
+    assert!(user.get("passwordHash").is_none(), "{user}");
+    assert_eq!(user["providerUserInfo"][0]["providerId"], "password");
+    assert!(user.get("emailLinkSignin").is_none(), "{user}");
+
+    let again = dir.join("again");
+    let second = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .arg("--export-on-exit")
+        .arg(&again)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let second_log = text(&second);
+    assert!(second.status.success(), "{second_log}");
+    let reexport: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(again.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = reexport["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["email"] == "api-password@example.com")
+        .expect("the password account is re-exported");
+    assert_eq!(user["providerUserInfo"][0]["providerId"], "password");
+    assert!(user.get("emailLinkSignin").is_none(), "{user}");
+}
+
+#[test]
 fn email_link_account_import_preserves_provider_and_export_marker() {
     let dir = scratch("email-link-auth-round-trip");
     let source = copy_fixture("official-multiproduct", &dir);

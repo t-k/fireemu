@@ -1318,9 +1318,6 @@ fn provider_of(record: &UserRecord) -> Provider {
         return Provider::EmailLink;
     }
     if record.password_hash.is_some() || has("password") {
-        if record.email.is_some() && record.password_hash.is_none() {
-            return Provider::EmailLink;
-        }
         return Provider::Password;
     }
     if has("emailLink") {
@@ -1950,11 +1947,9 @@ fn exported_providers(
     email_link_signin: bool,
 ) -> Vec<ProviderUserInfo> {
     let mut providers = Vec::new();
-    if let Some(email) = user
-        .email
-        .as_ref()
-        .filter(|_| has_password || email_link_signin)
-    {
+    if let Some(email) = user.email.as_ref().filter(|_| {
+        matches!(&user.provider, Provider::Password) || has_password || email_link_signin
+    }) {
         providers.push(ProviderUserInfo {
             provider_id: "password".to_owned(),
             raw_id: email.clone(),
@@ -2958,7 +2953,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hashless_password_provider_with_an_email_is_email_link_signin() {
+    fn a_hashless_password_provider_with_an_email_stays_password() {
         use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
 
         let record = UserRecord {
@@ -2973,7 +2968,7 @@ mod tests {
 
         assert_eq!(
             super::provider_of(&record),
-            fireemu_core_auth::store::Provider::EmailLink
+            fireemu_core_auth::store::Provider::Password
         );
     }
 

@@ -373,6 +373,76 @@ fn password_reset_goes_through_an_oob_code_the_test_can_read() {
     assert_eq!(status, 200, "{refreshed}");
 }
 
+fn password_with_utf16_units(units: usize) -> String {
+    assert!(units >= 2);
+    let mut password = "a".repeat(units - 2);
+    password.push('\u{10400}');
+    assert_eq!(password.encode_utf16().count(), units);
+    password
+}
+
+#[test]
+fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob_code() {
+    for (new_password, expected_status) in [
+        (password_with_utf16_units(4095), 200),
+        (password_with_utf16_units(4096), 200),
+        (password_with_utf16_units(4097), 400),
+        ("12345".to_owned(), 400),
+        ("12345\u{0000}".to_owned(), 400),
+    ] {
+        let s = state();
+        let user = sign_up(
+            &s,
+            &format!("reset-policy-{}@example.com", new_password.len()),
+        );
+        let (status, sent) = post(
+            &s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"requestType": "PASSWORD_RESET", "email": user["email"]}),
+        );
+        assert_eq!(status, 200, "{sent}");
+        let code = issued_code(&s, "PASSWORD_RESET");
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:resetPassword"),
+            &json!({"oobCode": code, "newPassword": new_password}),
+        );
+        assert_eq!(status, expected_status, "{response}");
+        if expected_status == 400 {
+            let (status, unchanged) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": user["email"], "password": "hunter22"}),
+            );
+            assert_eq!(status, 200, "{unchanged}");
+            assert_eq!(issued_code(&s, "PASSWORD_RESET"), code);
+        }
+    }
+
+    let s = state();
+    let user = sign_up(&s, "reset-policy-malformed@example.com");
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": user["email"]}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "PASSWORD_RESET");
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code, "newPassword": 42}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(issued_code(&s, "PASSWORD_RESET"), code);
+    let (status, unchanged) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": user["email"], "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{unchanged}");
+}
+
 #[test]
 fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     let s = AuthState {

@@ -160,6 +160,7 @@
   "AUTH-CORE-1": {
     "implemented": [
       "accounts:signUp (email, anonymous)",
+      "password policy validation across accounts:signUp, client and Admin accounts:update, accounts:resetPassword, and Admin batchCreate rawPassword/fakeHash imports: minimum 6 scalar characters, maximum 4096 UTF-16 units, and control-character rejection happen before account or credential mutation",
       "accounts:signInWithPassword",
       "accounts:signInWithCustomToken (unsigned JWT or strict JSON fake token, uid or user_id)",
       "accounts:lookup",

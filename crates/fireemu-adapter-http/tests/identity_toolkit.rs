@@ -3102,6 +3102,335 @@ fn password_maximum_update_preserves_credentials_and_full_suffix() {
     assert_eq!(status, 200, "{response}");
 }
 
+fn password_with_utf16_units(units: usize) -> String {
+    assert!(units >= 2);
+    let mut password = "a".repeat(units - 2);
+    password.push('\u{10400}');
+    assert_eq!(password.encode_utf16().count(), units);
+    password
+}
+
+#[test]
+fn password_policy_boundaries_apply_to_sign_up_without_creating_rejected_accounts() {
+    for (units, expected_status) in [(4095, 200), (4096, 200), (4097, 400)] {
+        let s = state();
+        let email = format!("signup-password-{units}@example.com");
+        let password = password_with_utf16_units(units);
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": password, "returnSecureToken": true}),
+        );
+        assert_eq!(status, expected_status, "{response}");
+        assert_eq!(
+            s.store.lock().unwrap().user_by_email(&email).is_some(),
+            expected_status == 200
+        );
+    }
+
+    for password in ["12345\u{0000}".to_owned(), "12345".to_owned()] {
+        let s = state();
+        let email = format!("signup-invalid-{}@example.com", password.len());
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": password}),
+        );
+        assert_eq!(status, 400, "{response}");
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_none());
+    }
+
+    let s = state();
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "signup-malformed@example.com", "password": 42}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("signup-malformed@example.com")
+        .is_none());
+}
+
+#[test]
+fn password_policy_boundaries_apply_to_admin_update_before_any_profile_mutation() {
+    for (units, expected_status) in [(4095, 200), (4096, 200), (4097, 400)] {
+        let s = state();
+        let email = format!("admin-password-{units}@example.com");
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "original-password"}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        let password = password_with_utf16_units(units);
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": signed["localId"],
+                "password": password,
+                "displayName": "must-not-apply"
+            }),
+        );
+        assert_eq!(status, expected_status, "{response}");
+        let (_, lookup) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [signed["localId"]]}),
+        );
+        if expected_status == 400 {
+            assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+            let (status, _) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": email, "password": "original-password"}),
+            );
+            assert_eq!(status, 200);
+        } else {
+            assert_eq!(lookup["users"][0]["displayName"], "must-not-apply");
+        }
+    }
+
+    let s = state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "admin-control@example.com", "password": "original-password"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": signed["localId"], "password": "12345\u{0000}", "displayName": "must-not-apply"}),
+    );
+    assert_eq!(status, 400, "{response}");
+    let (_, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [signed["localId"]]}),
+    );
+    assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+}
+
+#[test]
+fn password_policy_client_update_rejects_invalid_values_before_profile_mutation() {
+    for units in [4095, 4096] {
+        let s = state();
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "client-password-boundary@example.com", "password": "original-password"}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"],
+                "password": password_with_utf16_units(units),
+                "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200, "{response}");
+    }
+
+    for password in [
+        password_with_utf16_units(4097),
+        "12345".to_owned(),
+        "12345\u{0000}".to_owned(),
+    ] {
+        let s = state();
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "client-password-policy@example.com", "password": "original-password"}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"],
+                "password": password,
+                "displayName": "must-not-apply",
+                "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 400, "{response}");
+        let (_, lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+        let (status, unchanged) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "client-password-policy@example.com", "password": "original-password"}),
+        );
+        assert_eq!(status, 200, "{unchanged}");
+    }
+
+    let s = state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "client-password-malformed@example.com", "password": "original-password"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": signed["idToken"], "password": 42, "displayName": "must-not-apply"}),
+    );
+    assert_eq!(status, 400, "{response}");
+    let (_, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+}
+
+#[test]
+fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semantics() {
+    let s = state();
+    for units in [4095, 4096] {
+        let local_id = format!("raw-password-{units}");
+        let email = format!("raw-password-{units}@example.com");
+        let (status, imported) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{
+                "localId": local_id,
+                "email": email,
+                "rawPassword": password_with_utf16_units(units)
+            }]}),
+        );
+        assert_eq!(status, 200, "{imported}");
+        assert!(imported["error"].as_array().unwrap().is_empty());
+    }
+    for units in [4095, 4096] {
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({
+                "email": format!("raw-password-{units}@example.com"),
+                "password": password_with_utf16_units(units)
+            }),
+        );
+        assert_eq!(status, 200, "{signed}");
+    }
+
+    let (status, rejected) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "raw-password-too-long",
+            "email": "raw-password-too-long@example.com",
+            "rawPassword": password_with_utf16_units(4097)
+        }]}),
+    );
+    assert_eq!(status, 200, "{rejected}");
+    assert_eq!(rejected["error"].as_array().unwrap().len(), 1, "{rejected}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("raw-password-too-long")
+        .is_none());
+
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "fake-hash-user",
+            "email": "fake-hash-user@example.com",
+            "passwordHash": "fakeHash:salt=fakeSalt:password=imported-password"
+        }]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert!(imported["error"].as_array().unwrap().is_empty());
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "fake-hash-user@example.com", "password": "imported-password"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+
+    let (status, unsupported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "unsupported-hash-user",
+            "email": "unsupported-hash-user@example.com",
+            "passwordHash": "scrypt$unreadable"
+        }]}),
+    );
+    assert_eq!(status, 200, "{unsupported}");
+    assert!(unsupported["error"].as_array().unwrap().is_empty());
+    let (status, sign_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "unsupported-hash-user@example.com", "password": "anything-valid"}),
+    );
+    assert_eq!(status, 400, "{sign_in}");
+
+    let (status, malformed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "raw-password-malformed",
+            "email": "raw-password-malformed@example.com",
+            "rawPassword": 42
+        }]}),
+    );
+    assert_eq!(status, 200, "{malformed}");
+    assert_eq!(
+        malformed["error"].as_array().unwrap().len(),
+        1,
+        "{malformed}"
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("raw-password-malformed")
+        .is_none());
+
+    let (status, control) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "raw-password-control",
+            "email": "raw-password-control@example.com",
+            "rawPassword": "12345\u{0000}"
+        }]}),
+    );
+    assert_eq!(status, 200, "{control}");
+    assert_eq!(control["error"].as_array().unwrap().len(), 1, "{control}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("raw-password-control")
+        .is_none());
+}
+
 #[test]
 fn end_user_update_cannot_select_an_account_by_local_id() {
     let s = strict_state();

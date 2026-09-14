@@ -738,6 +738,9 @@ def validate_local_runtime(value, directory):
         ).strip(),
         "execution source differs",
     )
+    _require(
+        type(report["build"].get("exitCode")) is int, "build exit code type differs"
+    )
     validate_build(report["build"], report["artifactSha256"], report["runtimeInputs"])
     _require(
         instance.get("artifactSha256") == report["artifactSha256"],

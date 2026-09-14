@@ -317,7 +317,7 @@ def real_shadow(tmp_path_factory):
 
 def test_documented_shadow_runs_real_server_and_closes_listeners(real_shadow):
     import campaign_explain as campaign
-    from owned_runner import socket_closed
+    from broad import socket_closed
 
     local, directory = real_shadow
     assert campaign.validate_envelope(local, local=True, directory=directory)
@@ -424,4 +424,197 @@ def test_real_envelope_rejects_adversarial_bindings(real_shadow, mutation):
     assert (
         campaign.compare_production_local(changed, changed)["compatibility"]
         == "indeterminate"
+    )
+
+
+def production_fixture(local):
+    """Synthetic production-side binding for offline comparator boundary tests."""
+    import time
+
+    import campaign_explain as campaign
+
+    config = campaign.configuration()
+    now = time.time()
+    permission = {
+        **config["permissionBaseline"],
+        **{
+            key: config[key]
+            for key in (
+                "project",
+                "projectNumber",
+                "quotaProject",
+                "databaseProjectionContractDigest",
+                "authConfigDigest",
+                "apiKeyDigest",
+                "apiKeyOwnership",
+                "pricingLocation",
+                "pricingCheckedAt",
+                "pricingSource",
+                "pricingQueryExplainSource",
+                "tariffInputs",
+            )
+        },
+        "kind": "production-campaign-explain-01-permission-v1",
+        "configurationDigest": digest(config),
+        "manifestSha256": digest(campaign.manifest()),
+        "observerSha256": campaign.campaign_observer_digest(),
+        "comparisonContractDigest": digest(campaign.binding()),
+        "databaseProjection": config["databaseEvidence"]["projection"],
+        "databaseProjectionDigest": config["databaseEvidence"]["projectionDigest"],
+        "databaseResponseDigest": config["databaseEvidence"]["responseDigest"],
+        "nonce": local["nonce"],
+        "frozenCommit": local["executionCommit"],
+        "localRecordSha256": digest(local),
+        "issuedAt": now,
+        "expiresAt": now + 1800,
+    }
+    campaign.approve(permission, permission["nonce"], digest(local), now)
+    production = {
+        key: copy.deepcopy(local[key])
+        for key in (
+            "executionCommit",
+            "manifestDigest",
+            "observerSha256",
+            "comparisonContractDigest",
+            "configuration",
+            "configurationDigest",
+            "configurationUnchanged",
+            "nonce",
+            "gate",
+            "receipt",
+        )
+    }
+    production.update(
+        kind="production-campaign-explain-01-result-v2",
+        productionExecuted=True,
+        permission=permission,
+        permissionDigest=digest(permission),
+        localRecordSha256=digest(local),
+    )
+    plan = {
+        **campaign.campaign_manifest(local["nonce"]),
+        "permissionDigest": digest(permission),
+    }
+    production["gate"]["plan"] = plan
+    production["gate"]["planDigest"] = digest(plan)
+    evidence = production["receipt"]["principalEvidence"]
+    evidence.update(
+        localOrigins={}, planDigest=digest(plan), permissionDigest=digest(permission)
+    )
+    for auth in evidence["authentication"]:
+        auth.update(basis="tokeninfo", verifiedRemainingSeconds=1500)
+    metadata = []
+    for phase in ("observation", "recovery"):
+        for name in ("project", "database", "auth", "key"):
+            body = {
+                "project": {
+                    "projectId": config["project"],
+                    "projectNumber": config["projectNumber"],
+                },
+                "database": config["databaseEvidence"],
+                "auth": {},
+                "key": config["apiKeyOwnership"],
+            }[name]
+            metadata.append(
+                {
+                    "id": phase + ":" + name,
+                    "status": 200,
+                    "value": copy.deepcopy(body),
+                    "responseDigest": config["authConfigDigest"]
+                    if name == "auth"
+                    else config["databaseEvidence"]["responseDigest"]
+                    if name == "database"
+                    else digest(body),
+                }
+            )
+    production["metadataEvidence"] = metadata
+    production["databaseObservations"] = [
+        {**copy.deepcopy(config["databaseEvidence"]), "phase": phase}
+        for phase in ("observation", "recovery")
+    ]
+    return production
+
+
+def rebind_responses(value):
+    for phase, rows in [
+        ("observation", value["receipt"]["rows"]),
+        ("recovery", value["receipt"]["cleanup"]),
+    ]:
+        events = value["receipt"]["principalEvidence"]["dispatch"][phase]
+        gate_events = [
+            event for event in value["gate"]["events"] if event["phase"] == phase
+        ]
+        for row, event, gate_event in zip(rows, events, gate_events, strict=True):
+            for target in (event, gate_event):
+                target.update(
+                    requestDigest=digest(row["request"]),
+                    responseDigest=digest(row["body"]),
+                    status=row["status"],
+                )
+    if not value["productionExecuted"]:
+        value["fileDigests"]["gate/state.json"] = digest(value["gate"])
+        value["fileDigests"]["worker/result.json"] = digest(value["receipt"])
+
+
+def test_fully_bound_mismatch_is_valid_collection(real_shadow):
+    from campaign_explain import compare_production_local, validate_envelope
+
+    local, _ = real_shadow
+    production = production_fixture(local)
+    assert validate_envelope(production, local=False)
+    assert compare_production_local(production, local)["compatibility"] == "match"
+    production["receipt"]["rows"][4]["body"] = [
+        {"error": {"status": "FAILED_PRECONDITION"}}
+    ]
+    production["receipt"]["stateValidation"] = False
+    rebind_responses(production)
+    assert validate_envelope(production, local=False)
+    assert compare_production_local(production, local)["compatibility"] == "mismatch"
+
+
+def test_both_sides_same_rebound_wrong_request_is_indeterminate(real_shadow):
+    from campaign_explain import compare_production_local
+
+    original, _ = real_shadow
+    local = copy.deepcopy(original)
+    production = production_fixture(local)
+    for value in (production, local):
+        value["receipt"]["rows"][4]["request"]["body"] = {
+            "structuredQuery": {"from": [{"collectionId": "wrong"}]}
+        }
+        rebind_responses(value)
+    production["localRecordSha256"] = digest(local)
+    production["permission"]["localRecordSha256"] = digest(local)
+    assert (
+        compare_production_local(production, local)["compatibility"] == "indeterminate"
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "nonce",
+        "observerSha256",
+        "comparisonContractDigest",
+        "frozenCommit",
+        "apiKeyDigest",
+        "authConfigDigest",
+        "databaseProjectionDigest",
+        "databaseResponseDigest",
+        "pricingLocation",
+        "pricingCheckedAt",
+        "ownerIdentity",
+        "issuedAt",
+        "expiresAt",
+    ],
+)
+def test_production_permission_drift_is_indeterminate(real_shadow, field):
+    from campaign_explain import compare_production_local
+
+    local, _ = real_shadow
+    production = production_fixture(local)
+    production["permission"][field] = "drift"
+    production["permissionDigest"] = digest(production["permission"])
+    assert (
+        compare_production_local(production, local)["compatibility"] == "indeterminate"
     )

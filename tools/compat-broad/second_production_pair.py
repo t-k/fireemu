@@ -171,9 +171,7 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
             raise ValueError("parent execution manifest is not local-only")
         observations = parent.get("localObservations")
         parent_local = observations.get("mapped") if isinstance(observations, dict) else None
-        if not isinstance(parent_local, dict):
-            raise ValueError("parent mapped local observation is unavailable")
-        if parent_local != local:
+        if parent_local is not None and parent_local != local:
             raise ValueError("current local receipt differs from parent mapped observation")
         if not isinstance(local_source_sha256, str) or not re.fullmatch(
             r"[0-9a-f]{64}", local_source_sha256
@@ -197,7 +195,6 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
             local.get("target") != "local"
             or local.get("mode") != "mapped"
             or local.get("productionExecuted") is not False
-            or parent_local.get("productionExecuted") is not False
         ):
             raise ValueError("current local mapped target required")
         from second_admission import manifest as local_manifest

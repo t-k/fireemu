@@ -1,16 +1,17 @@
 {
   "productionExecuted": false,
   "evaluator": {
-    "executionCommit": "0813cf50e76cf27804a7ebc35cd6bc980e5178e5",
-    "sourceCommit": "c94cce0fc861640296f4ffccf3ab374626925fba",
-    "sourceDigest": "f43efe21c4fb4226f582c815912046658a97541d9358ccce506c6640b28b6126",
-    "anchorFileSha256": "4e54c35241533d05b332bbc0dca262afeef6b30b78c3c6fe39272f8f17f26b5e",
-    "contractDigest": "55185e80f489131b0ef8f97f2c5d4997bd2f5d365c41def8790baa21b73622fa"
+    "executionCommit": "6f3d27a068933fe7f90270f7dc29ccbaaffda05b",
+    "sourceCommit": "33dd069ea9590727164c45381f8b427247ecd56b",
+    "sourceDigest": "5a34deafc320c52f7cb0037ccae1d7ec20d96b93fbf9e98dbaa0fb1a7670a2d3",
+    "anchorFileSha256": "37eccdb4ba38f84a73e8d45eb77ab84134bdc56b1a2950a55def3ccf173d5a94",
+    "contractDigest": "dafe4b80196a357ceaf448ed642de69c5cfa54dc0e3a2b57e5a8cb7403ccde14"
   },
   "comparisonContract": {
     "kind": "query-explain-saved-reference-comparison-v3",
     "historicalCollectorCommit": "109a9b459b94d59eec541be579e305437cdfaa30",
     "repairedCollectorCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
+    "repositoryImports": "Compile source bytes directly for v2 and every repository-local collector dependency; ignore bytecode caches and refuse sourceless repository imports.",
     "historicalValidation": "Unchanged v2 frozen-input verification, default projection and exact completion bridge; exact historical collector validates original production and original local.",
     "repairedValidation": "Unmodified exact repaired collector validates its own local envelope, source/runtime/build/artifact/configuration/observer/manifest/principal/operation/state/cleanup bindings and saved files.",
     "normalization": [
@@ -250,7 +251,7 @@
   "stateVerified": true,
   "compatibility": "match",
   "kind": "query-explain-saved-reference-summary-v3",
-  "comparisonArtifactSha256": "0be4c10ee3cb1df6eda0a7e052e8b34cf80fd05d77f7df6fc664247a24fb8ca2",
+  "comparisonArtifactSha256": "7f5c0db5bdbb8406f1d7604f4e4d6c791675a4e9bccef3b23b180e9290f6dcc6",
   "rows": [
     {
       "id": "setup/absence/item-a",

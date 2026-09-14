@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from broad_contract import digest
@@ -15,6 +16,9 @@ from second_mapping import comparable, expected_ids, validate_rows, validate_tra
 
 PINNED_PRODUCTION_CANDIDATE_SHA256 = (
     "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73"
+)
+PARENT_RUNTIME_ANCHOR = (
+    "spec/compatibility/broad-runs/af1d2bc3-parent-runtime-anchor.json"
 )
 
 
@@ -50,8 +54,13 @@ def compare(production, local):
         try:
             if result.get("target") != target or result.get("mode") != "mapped":
                 raise ValueError("distinct production/local mapped targets required")
+            manifest_digest = (
+                result.get("manifestDigest")
+                if target == "production"
+                else result.get("comparisonManifestDigest")
+            )
             if (
-                result.get("manifestDigest") != digest(manifest())
+                manifest_digest != digest(manifest())
                 or result.get("comparisonContractDigest") != digest(binding())
                 or result.get("observerDigest") != observer_digest()
             ):
@@ -123,7 +132,7 @@ def load_parent_manifest(path):
     return value
 
 
-def compare_saved(candidate_path, local, parent_path):
+def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=None):
     """Compare a saved normalized production candidate with one current local receipt."""
     from second_production_contract import binding, manifest, observer_digest
 
@@ -131,6 +140,21 @@ def compare_saved(candidate_path, local, parent_path):
     parent = load_parent_manifest(parent_path)
     errors = []
     state_validation = None
+    repo_root = Path(__file__).parents[2]
+    evaluator_head = ""
+    anchor_sha256 = ""
+    parent_hash = parent.get("parentManifestSha256")
+    try:
+        evaluator_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
+        ).strip()
+        anchor_sha256 = hashlib.sha256(
+            subprocess.check_output(
+                ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"], cwd=repo_root
+            )
+        ).hexdigest()
+    except (OSError, subprocess.CalledProcessError):
+        errors.append({"side": "evaluator", "reason": "evaluator source identity unavailable"})
     try:
         if candidate.get("kind") != "second45-production-candidate-summary-v1":
             raise ValueError("saved production candidate kind is not supported")
@@ -154,33 +178,91 @@ def compare_saved(candidate_path, local, parent_path):
         errors.append({"side": "production", "reason": str(error)})
 
     try:
+        unsigned_parent = {
+            key: value for key, value in parent.items() if key != "parentManifestSha256"
+        }
+        if (
+            not isinstance(parent_hash, str)
+            or parent_hash != digest(unsigned_parent)
+        ):
+            raise ValueError("parent manifest integrity binding is invalid")
+        evaluator_commit = parent.get("executionCommit")
+        def git_ok(arguments):
+            process = subprocess.Popen(
+                arguments,
+                cwd=repo_root,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return process.wait() == 0
+
+        if (
+            not isinstance(evaluator_commit, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", evaluator_commit)
+            or not git_ok(["git", "cat-file", "-e", f"{evaluator_commit}^{{commit}}"])
+            or not git_ok(["git", "diff", "--quiet", evaluator_commit, "--", "tools/compat-broad"])
+        ):
+            raise ValueError("parent execution commit does not bind evaluator source")
+        anchor_raw = subprocess.check_output(
+            ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"],
+            cwd=repo_root,
+        )
+        anchor = json.loads(anchor_raw)
+        if (
+            not isinstance(anchor, dict)
+            or anchor.get("parentManifestSha256") != parent_hash
+            or anchor.get("mappedReceiptFileSha256")
+            != parent.get("mappedReceiptFileSha256")
+            or anchor.get("runtimeIdentity") != {
+                "artifactSha256": parent.get("artifactSha256"),
+                "executionCommit": parent.get("executionCommit"),
+                "configurationDigest": parent.get("configurationDigest"),
+            }
+        ):
+            raise ValueError("parent evidence is not bound to immutable source anchor")
         if parent.get("status") != "completed":
             raise ValueError("parent execution manifest is incomplete")
         if parent.get("productionExecuted") is not False:
             raise ValueError("parent execution manifest is not local-only")
         observations = parent.get("localObservations")
         parent_local = observations.get("mapped") if isinstance(observations, dict) else None
-        if not isinstance(parent_local, dict):
-            raise ValueError("parent mapped local observation is unavailable")
-        if parent_local != local:
+        if parent_local is not None and parent_local != local:
             raise ValueError("current local receipt differs from parent mapped observation")
-        identity = local.get("runtimeIdentity")
+        if not isinstance(local_source_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", local_source_sha256
+        ):
+            raise ValueError("current local receipt byte hash is unavailable")
+        if parent.get("mappedReceiptFileSha256") != local_source_sha256:
+            raise ValueError("current local receipt byte hash differs from parent")
+        if parent.get("mappedReceiptKind") != "second45-local-run-v1":
+            raise ValueError("parent mapped receipt kind is unsupported")
         parent_identity = {
             "artifactSha256": parent.get("artifactSha256"),
             "executionCommit": parent.get("executionCommit"),
             "configurationDigest": parent.get("configurationDigest"),
         }
+        if parent.get("mappedReceiptRuntimeIdentity") != parent_identity:
+            raise ValueError("parent mapped receipt identity is not bound")
+        identity = local.get("runtimeIdentity")
         if identity != parent_identity:
             raise ValueError("current local runtime identity differs from parent")
         if (
             local.get("target") != "local"
             or local.get("mode") != "mapped"
             or local.get("productionExecuted") is not False
-            or parent_local.get("productionExecuted") is not False
         ):
             raise ValueError("current local mapped target required")
+        from second_admission import manifest as local_manifest
+
         if (
-            local.get("manifestDigest") != digest(manifest())
+            local.get("kind") != "second45-local-run-v1"
+            or local.get("manifestDigest") != digest(local_manifest())
+            or local.get("admissionDigest") != digest(local_manifest())
+            or local.get("comparisonManifestDigest") != digest(manifest())
+        ):
+            raise ValueError("current local receipt manifest bindings are invalid")
+        if (
+            local.get("comparisonManifestDigest") != digest(manifest())
             or local.get("comparisonContractDigest") != digest(binding())
             or local.get("observerDigest") != observer_digest()
         ):
@@ -260,6 +342,11 @@ def compare_saved(candidate_path, local, parent_path):
         "localSourceSha256": digest(local),
         "historicalProductionReceiptSha256": candidate.get("productionReceiptFileSha256"),
         "historicalLocalReceiptSha256": candidate.get("localReceiptFileSha256"),
+        "runtimeSourceCommit": parent.get("executionCommit"),
+        "evaluatorCommit": evaluator_head,
+        "evaluatorAnchorSha256": anchor_sha256,
+        "parentManifestSha256": parent_hash,
+        "mappedReceiptFileSha256": parent.get("mappedReceiptFileSha256"),
         "recordingComplete": candidate.get("recordingComplete") is True
         and local.get("recordingComplete") is True,
         "cleanupComplete": candidate.get("cleanupComplete") is True
@@ -299,6 +386,7 @@ def main():
             args.saved_production_candidate,
             json.loads(args.local.read_text()),
             args.parent_manifest,
+            local_source_sha256=hashlib.sha256(args.local.read_bytes()).hexdigest(),
         )
     else:
         if args.production is None:

@@ -54,6 +54,11 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
 
 
+def seal_parent_manifest(report):
+    unsigned = {key: value for key, value in report.items() if key != "parentManifestSha256"}
+    report["parentManifestSha256"] = digest(unsigned)
+
+
 def source_inputs():
     paths = list(HERE.glob("*.py")) + list(HERE.glob("*.mjs"))
     paths += [
@@ -441,6 +446,21 @@ def supervise(command, output, nonce, report, *, timeout=240, recovery_grace=0.2
                 report["partialResultSha256"] = hashlib.sha256(
                     partial_path.read_bytes()
                 ).hexdigest()
+                mapped_path = output / "pair/mapped/result.json"
+                if mapped_path.exists():
+                    mapped_bytes = mapped_path.read_bytes()
+                    mapped = json.loads(mapped_bytes)
+                    if (
+                        mapped.get("kind") == "second45-local-run-v1"
+                        and mapped.get("mode") == "mapped"
+                    ):
+                        report.update(
+                            mappedReceiptFileSha256=hashlib.sha256(mapped_bytes).hexdigest(),
+                            mappedReceiptKind=mapped["kind"],
+                            mappedReceiptRuntimeIdentity=mapped.get("runtimeIdentity"),
+                            mappedReceiptRecordingComplete=mapped.get("recordingComplete"),
+                            mappedReceiptCleanupComplete=mapped.get("cleanupComplete"),
+                        )
         except Exception as error:
             report.update(
                 recordingComplete=False, partialResultFailure=type(error).__name__
@@ -489,6 +509,7 @@ def supervise(command, output, nonce, report, *, timeout=240, recovery_grace=0.2
                 status="incomplete", summaryFailure=type(error).__name__, summary={}
             )
         finally:
+            seal_parent_manifest(report)
             save(output / "manifest.json", report)
     return report
 

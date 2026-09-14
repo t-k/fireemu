@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use fireemu_core_firestore::query::{Direction, Query, QueryScope};
+use fireemu_core_firestore::store::Aggregation;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use prost_types::{value::Kind, Struct, Value};
 
@@ -31,12 +32,18 @@ fn object(fields: impl IntoIterator<Item = (&'static str, Value)>) -> Struct {
 
 pub(crate) fn explain_metrics(
     query: &Query,
-    aggregation: bool,
+    aggregations: Option<&[Aggregation]>,
     execution: Option<ExplainExecution>,
 ) -> pb::ExplainMetrics {
     let order = query.effective_order_by();
+    let aggregation = aggregations.is_some();
+    let count_cap = match aggregations {
+        Some([Aggregation::Count { up_to }]) => Some(*up_to),
+        _ => None,
+    };
     // Physical composite/filter plans and their billing are not inferred from a local full scan.
-    let modeled = matches!(query.scope, QueryScope::Collection { .. })
+    let modeled = (!aggregation || count_cap.is_some())
+        && matches!(query.scope, QueryScope::Collection { .. })
         && query.filter.is_none()
         && query.find_nearest.is_none()
         && query.start_at.is_none()
@@ -58,7 +65,13 @@ pub(crate) fn explain_metrics(
     pb::ExplainMetrics {
         plan_summary: Some(pb::PlanSummary { indexes_used }),
         execution_stats: execution.map(|execution| {
-            let entries = execution.entries;
+            // COUNT stops after its cap, after consuming any offset. Other aggregate
+            // operators need different index fields and retain the unmodeled fallback.
+            let entries = count_cap.flatten().map_or(execution.entries, |cap| {
+                execution
+                    .entries
+                    .min(cap.saturating_add(u64::from(query.offset)))
+            });
             let documents = if aggregation { 0 } else { entries };
             let billable_entries = if aggregation { entries } else { 0 };
             let reads = if aggregation {

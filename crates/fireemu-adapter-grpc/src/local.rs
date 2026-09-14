@@ -3886,7 +3886,7 @@ impl LocalBackend {
                 if let Some(response) = responses.last_mut() {
                     response.explain_metrics = Some(crate::service::explain_metrics(
                         &authorization.query,
-                        false,
+                        None,
                         None,
                     ));
                 }
@@ -3977,7 +3977,7 @@ impl LocalBackend {
             {
                 let metrics = crate::service::explain_metrics(
                     &authorization.query,
-                    false,
+                    None,
                     Some(crate::service::ExplainExecution {
                         results_returned: i64::try_from(docs.len()).unwrap_or(i64::MAX),
                         entries: u64::try_from(docs.len())
@@ -4066,7 +4066,7 @@ impl LocalBackend {
                         transaction: access.report().to_vec(),
                         explain_metrics: Some(crate::service::explain_metrics(
                             &accepted.query,
-                            true,
+                            Some(&aggregations),
                             None,
                         )),
                         ..Default::default()
@@ -4092,7 +4092,7 @@ impl LocalBackend {
                         options.analyze.then(|| {
                             crate::service::explain_metrics(
                                 &accepted.query,
-                                true,
+                                Some(&aggregations),
                                 Some(crate::service::ExplainExecution {
                                     results_returned: 1,
                                     entries: accepted.query.limit.map_or(stats.matched, |limit| {

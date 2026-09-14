@@ -1377,7 +1377,7 @@ impl GatewayService {
                     if let Some(response) = pending.as_mut() {
                         response.explain_metrics = explain_query
                             .as_ref()
-                            .map(|query| explain_metrics(query, false, None));
+                            .map(|query| explain_metrics(query, None, None));
                     }
                 } else if req
                     .explain_options
@@ -1389,7 +1389,7 @@ impl GatewayService {
                         response.explain_metrics = explain_query.as_ref().map(|query| {
                             explain_metrics(
                                 query,
-                                false,
+                                None,
                                 Some(ExplainExecution {
                                     results_returned,
                                     entries: u64::try_from(results_returned)

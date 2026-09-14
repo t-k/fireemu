@@ -545,3 +545,138 @@ async fn explain_count_read_operations_use_thousand_entry_batches() {
         2
     );
 }
+
+#[tokio::test]
+async fn explain_count_up_to_caps_billable_index_entries() {
+    let backend = test_backend();
+    let service = GatewayService::local(test_gateway(), backend.clone());
+    let request = aggregation(analyze(
+        super::query_transaction_tests::seeded_query(&backend, 1001, false),
+        true,
+    ));
+    for (cap, offset, limit, scanned) in [
+        (7, 0, None, 7),
+        (7, 3, None, 10),
+        (7, 3, Some(2), 5),
+        (2000, 0, None, 1001),
+    ] {
+        let mut request = request.clone();
+        let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+            aggregate,
+        )) = &mut request.query_type
+        else {
+            unreachable!()
+        };
+        let Some(pb::structured_aggregation_query::aggregation::Operator::Count(count)) =
+            &mut aggregate.aggregations[0].operator
+        else {
+            unreachable!()
+        };
+        count.up_to = Some(cap);
+        let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(query)) =
+            &mut aggregate.query_type
+        else {
+            unreachable!()
+        };
+        query.offset = offset;
+        query.limit = limit;
+        let response = Firestore::run_aggregation_query(&service, Request::new(request))
+            .await
+            .unwrap()
+            .into_inner()
+            .next()
+            .await
+            .unwrap()
+            .unwrap();
+        let stats = response.explain_metrics.unwrap().execution_stats.unwrap();
+        assert_eq!(stats.read_operations, (scanned + 999) / 1000);
+        let debug = stats.debug_stats.unwrap();
+        assert_eq!(
+            debug.fields["index_entries_scanned"].kind,
+            Some(prost_types::value::Kind::StringValue(scanned.to_string()))
+        );
+        let Some(prost_types::value::Kind::StructValue(billing)) =
+            &debug.fields["billing_details"].kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            billing.fields["index_entries_billable"].kind,
+            Some(prost_types::value::Kind::StringValue(scanned.to_string()))
+        );
+    }
+}
+
+#[tokio::test]
+async fn explain_unmodeled_aggregations_do_not_claim_count_index_or_billing() {
+    use pb::structured_aggregation_query::aggregation::{Avg, Operator, Sum};
+    let backend = test_backend();
+    let service = GatewayService::local(test_gateway(), backend.clone());
+    let request = aggregation(analyze(
+        super::query_transaction_tests::seeded_query(&backend, 3, false),
+        true,
+    ));
+    let sum = Operator::Sum(Sum {
+        field: Some(pb::structured_query::FieldReference {
+            field_path: "rank".to_owned(),
+        }),
+    });
+    let avg = Operator::Avg(Avg {
+        field: Some(pb::structured_query::FieldReference {
+            field_path: "rank".to_owned(),
+        }),
+    });
+    let count = Operator::Count(pb::structured_aggregation_query::aggregation::Count::default());
+    for operators in [
+        vec![sum.clone()],
+        vec![avg],
+        vec![count.clone(), sum],
+        vec![count.clone(), count],
+    ] {
+        for analyze in [false, true] {
+            let mut request = request.clone();
+            request.explain_options = Some(pb::ExplainOptions { analyze });
+            let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                aggregate,
+            )) = &mut request.query_type
+            else {
+                unreachable!()
+            };
+            let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(query)) =
+                &mut aggregate.query_type
+            else {
+                unreachable!()
+            };
+            query.order_by.clear();
+            aggregate.aggregations = operators
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, operator)| pb::structured_aggregation_query::Aggregation {
+                        alias: format!("value{index}"),
+                        operator: Some(operator.clone()),
+                    },
+                )
+                .collect();
+            let response = Firestore::run_aggregation_query(&service, Request::new(request))
+                .await
+                .unwrap()
+                .into_inner()
+                .next()
+                .await
+                .unwrap()
+                .unwrap();
+            let metrics = response.explain_metrics.unwrap();
+            assert!(metrics.plan_summary.unwrap().indexes_used.is_empty());
+            if analyze {
+                let stats = metrics.execution_stats.unwrap();
+                assert_eq!(stats.results_returned, 1);
+                assert!(stats.execution_duration.is_some());
+                assert_eq!(stats.read_operations, 0);
+                assert!(stats.debug_stats.is_none());
+            } else {
+                assert!(metrics.execution_stats.is_none());
+            }
+        }
+    }
+}

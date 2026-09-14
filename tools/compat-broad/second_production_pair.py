@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
 
 from broad_contract import digest
 from second_admission import equal
-from second_mapping import comparable, validate_rows, validate_trace
+from second_mapping import comparable, expected_ids, validate_rows, validate_trace
+
+
+PINNED_PRODUCTION_CANDIDATE_SHA256 = (
+    "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73"
+)
 
 
 def observed_value(row, bindings):
@@ -98,16 +104,169 @@ def compare(production, local):
     }
 
 
+def load_saved_candidate(path, *, expected_sha256=PINNED_PRODUCTION_CANDIDATE_SHA256):
+    """Load the immutable published candidate, checking its file bytes first."""
+    raw = path.read_bytes()
+    source_sha256 = hashlib.sha256(raw).hexdigest()
+    if source_sha256 != expected_sha256:
+        raise ValueError("saved production candidate file hash mismatch")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("saved production candidate must be an object")
+    return value, source_sha256
+
+
+def compare_saved(candidate, local, *, candidate_source_sha256):
+    """Compare a saved normalized production candidate with one current local receipt."""
+    from second_production_contract import binding, manifest, observer_digest
+
+    errors = []
+    state_validation = None
+    try:
+        if candidate.get("kind") != "second45-production-candidate-summary-v1":
+            raise ValueError("saved production candidate kind is not supported")
+        if candidate.get("manifestDigest") != digest(manifest()):
+            raise ValueError("saved production manifest is not bound")
+        if candidate.get("comparisonContractDigest") != digest(binding()):
+            raise ValueError("saved production comparison contract is not bound")
+        if not isinstance(candidate.get("observerDigest"), str) or not candidate[
+            "observerDigest"
+        ]:
+            raise ValueError("saved production observer is not bound")
+        rows = candidate.get("rows")
+        if not isinstance(rows, list) or [r.get("id") for r in rows] != expected_ids() or any(
+            not isinstance(r, dict) or not isinstance(r.get("production"), dict)
+            for r in rows
+        ):
+            raise ValueError("saved production rows are incomplete")
+        if not isinstance(candidate_source_sha256, str) or not candidate_source_sha256:
+            raise ValueError("saved production source hash is unavailable")
+    except (ValueError, KeyError, TypeError) as error:
+        errors.append({"side": "production", "reason": str(error)})
+
+    try:
+        if local.get("target") != "local" or local.get("mode") != "mapped":
+            raise ValueError("current local mapped target required")
+        if (
+            local.get("manifestDigest") != digest(manifest())
+            or local.get("comparisonContractDigest") != digest(binding())
+            or local.get("observerDigest") != observer_digest()
+        ):
+            raise ValueError(
+                "current local manifest, comparison contract, or observer not bound"
+            )
+        identity = local.get("runtimeIdentity")
+        if (
+            not isinstance(identity, dict)
+            or set(identity)
+            != {"artifactSha256", "executionCommit", "configurationDigest"}
+            or not all(isinstance(v, str) and v for v in identity.values())
+        ):
+            raise ValueError("fixed current local runtime identity unavailable")
+        validate_rows(local, observed_outcomes=True)
+        state_validation = validate_trace(local, observed_outcomes=True)
+        if state_validation is not True or local.get("safety") is False:
+            raise ValueError("current local trace or state validation failed")
+        if (
+            local.get("recordingComplete") is not True
+            or local.get("cleanupComplete") is not True
+        ):
+            raise ValueError("current local recording or cleanup incomplete")
+    except (ValueError, KeyError, TypeError, StopIteration) as error:
+        errors.append({"side": "local", "reason": str(error)})
+
+    rows = []
+    if not errors:
+        if len(candidate["rows"]) != len(local["rows"]):
+            errors.append(
+                {"side": "comparison", "reason": "saved/current row count differs"}
+            )
+        else:
+            for saved_row, local_row in zip(candidate["rows"], local["rows"], strict=True):
+                if saved_row["id"] != local_row["id"]:
+                    errors.append(
+                        {
+                            "side": "comparison",
+                            "reason": "saved/current row order differs",
+                        }
+                    )
+                    break
+                rows.append(
+                    {
+                        "id": saved_row["id"],
+                        "compatibility": "match"
+                        if equal(
+                            saved_row["production"],
+                            observed_value(local_row, local["bindings"]),
+                        )
+                        else "mismatch",
+                    }
+                )
+    complete = all(
+        value is True
+        for value in (
+            candidate.get("recordingComplete"),
+            candidate.get("cleanupComplete"),
+            local.get("recordingComplete"),
+            local.get("cleanupComplete"),
+        )
+    )
+    return {
+        "kind": "second45-production-local-comparison-v2",
+        "mode": "saved-production-versus-local",
+        "comparisonContractDigest": digest(binding()),
+        "historicalObserverDigest": candidate.get("observerDigest"),
+        "currentObserverDigest": local.get("observerDigest"),
+        "productionObserverDigest": candidate.get("observerDigest"),
+        "localObserverDigest": local.get("observerDigest"),
+        "productionCandidateSourceSha256": candidate_source_sha256,
+        "currentLocalSourceSha256": digest(local),
+        "productionSourceSha256": candidate_source_sha256,
+        "localSourceSha256": digest(local),
+        "historicalProductionReceiptSha256": candidate.get("productionReceiptFileSha256"),
+        "historicalLocalReceiptSha256": candidate.get("localReceiptFileSha256"),
+        "recordingComplete": complete,
+        "cleanupComplete": complete,
+        "stateValidation": False if state_validation is False else state_validation,
+        "compatibility": (
+            "indeterminate"
+            if errors or not complete
+            else (
+                "match" if all(r["compatibility"] == "match" for r in rows) else "mismatch"
+            )
+        ),
+        "rows": rows,
+        "errors": errors,
+        "limitations": [
+            "Raw historical production receipts are unavailable; comparison uses the pinned normalized candidate production rows."
+        ],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--production", type=Path, required=True)
+    parser.add_argument("--mode", choices=("live", "saved"), default="live")
+    parser.add_argument("--production", type=Path)
+    parser.add_argument("--saved-production-candidate", type=Path)
     parser.add_argument("--local", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    result = compare(
-        json.loads(args.production.read_text()), json.loads(args.local.read_text())
-    )
+    if args.mode == "saved":
+        if args.saved_production_candidate is None:
+            parser.error("--saved-production-candidate is required in saved mode")
+        candidate, source_sha256 = load_saved_candidate(args.saved_production_candidate)
+        result = compare_saved(
+            candidate,
+            json.loads(args.local.read_text()),
+            candidate_source_sha256=source_sha256,
+        )
+    else:
+        if args.production is None:
+            parser.error("--production is required in live mode")
+        result = compare(
+            json.loads(args.production.read_text()), json.loads(args.local.read_text())
+        )
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     return (
         1

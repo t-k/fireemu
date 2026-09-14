@@ -309,3 +309,44 @@ def test_other_parameters_and_invalid_headers_are_not_erased(left, right):
     assert observed_value(a, source["bindings"]) != observed_value(
         b, source["bindings"]
     )
+
+
+def test_saved_candidate_compares_only_production_rows_and_records_bindings(
+    production_inputs, tmp_path
+):
+    from second_mapped import execute_45
+    from second_production import Production45Adapter
+    from second_production_contract import binding, manifest as production_manifest
+    from second_production_pair import compare_saved, observed_value
+
+    permission, backend = production_inputs
+    adapter = Production45Adapter(
+        production_manifest(), permission, permission["nonce"], tmp_path / "saved"
+    )
+    remote = execute_45(adapter, adapter.output, {"executionCommit": "c" * 40})
+    candidate = {
+        "kind": "second45-production-candidate-summary-v1",
+        "manifestDigest": digest(production_manifest()),
+        "comparisonContractDigest": digest(binding()),
+        "observerDigest": remote["observerDigest"],
+        "recordingComplete": True,
+        "cleanupComplete": True,
+        "localRuntimeIdentity": {"artifactSha256": "historical-artifact"},
+        "rows": [
+            {"id": row["id"], "production": observed_value(row, remote["bindings"]), "local": {"ignored": True}}
+            for row in remote["rows"]
+        ],
+    }
+    local = current_local(backend.source)
+    result = compare_saved(candidate, local, candidate_source_sha256="test-candidate")
+    assert result["compatibility"] == "match", result["errors"]
+    assert result["mode"] == "saved-production-versus-local"
+    assert result["historicalObserverDigest"] == remote["observerDigest"]
+    assert result["currentObserverDigest"] == local["observerDigest"]
+    assert result["productionCandidateSourceSha256"] == "test-candidate"
+    assert result["currentLocalSourceSha256"] == digest(local)
+
+    candidate["rows"][0]["local"]["observation"] = {"body": {"poison": True}}
+    assert compare_saved(candidate, local, candidate_source_sha256="test-candidate")[
+        "compatibility"
+    ] == "match"

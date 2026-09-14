@@ -2142,14 +2142,17 @@ fn handle_with_policy(
     };
     // Project config updates and tenant publication share the namespace gate. This keeps the
     // registry's parent read/modify/write and inherited-config snapshot in one request order.
-    let project_mutation = matches!(
-        resolution,
-        routes::Resolution::Matched { route, .. }
-            if matches!(
-                route.handler,
-                routes::Handler::AdminUpdateProjectConfig | routes::Handler::TenantCreate
-            )
-    );
+    // Routed compatibility requests already hold this exact project gate above. Reacquiring it
+    // here would deadlock the request before it can publish the routed store.
+    let project_mutation = routed_gate.is_none()
+        && matches!(
+            resolution,
+            routes::Resolution::Matched { route, .. }
+                if matches!(
+                    route.handler,
+                    routes::Handler::AdminUpdateProjectConfig | routes::Handler::TenantCreate
+                )
+        );
     let blocking_auth = state.blocking.as_deref().is_some_and(|blocking| {
         matches!(
             resolution,

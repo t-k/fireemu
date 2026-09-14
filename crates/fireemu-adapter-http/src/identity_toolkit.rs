@@ -15,7 +15,7 @@
 //!
 //! Error bodies use the Firebase shape `{"error": {"code": 400, "message": "EMAIL_EXISTS"}}`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
@@ -2223,7 +2223,7 @@ fn handle_with_policy(
         routes::Handler::AdminGetProjectConfig | routes::Handler::AdminUpdateProjectConfig
     ) {
         drop(store);
-        return project_config_management(state, route.handler, project, body);
+        return project_config_management(state, route.handler, project, query, body);
     }
     if matches!(
         route.handler,
@@ -2553,10 +2553,104 @@ fn dispatch(
     }
 }
 
+fn inferred_project_config_fields(body: &Value) -> Result<Vec<String>, JsonResponse> {
+    let mut fields = Vec::new();
+    for (parent, child) in [
+        ("signIn", "allowDuplicateEmails"),
+        ("emailPrivacyConfig", "enableImprovedEmailPrivacy"),
+    ] {
+        let Some(value) = body.get(parent) else {
+            continue;
+        };
+        let Some(object) = value.as_object() else {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        };
+        if object.contains_key(child) {
+            fields.push(format!("{parent}.{child}"));
+        }
+    }
+    Ok(fields)
+}
+
+fn apply_project_config_fields(
+    config: &mut fireemu_core_auth::store::ProjectAuthConfig,
+    body: &Value,
+    fields: &[String],
+) -> Result<(), JsonResponse> {
+    for field in fields {
+        match field.as_str() {
+            "signIn" => apply_project_config_parent(
+                body,
+                "signIn",
+                "allowDuplicateEmails",
+                &mut config.allow_duplicate_emails,
+            )?,
+            "signIn.allowDuplicateEmails" => {
+                config.allow_duplicate_emails =
+                    nested_bool_default_false(body, "signIn", "allowDuplicateEmails")?;
+            }
+            "emailPrivacyConfig" => apply_project_config_parent(
+                body,
+                "emailPrivacyConfig",
+                "enableImprovedEmailPrivacy",
+                &mut config.enable_improved_email_privacy,
+            )?,
+            "emailPrivacyConfig.enableImprovedEmailPrivacy" => {
+                config.enable_improved_email_privacy = nested_bool_default_false(
+                    body,
+                    "emailPrivacyConfig",
+                    "enableImprovedEmailPrivacy",
+                )?;
+            }
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    Ok(())
+}
+
+fn apply_project_config_parent(
+    body: &Value,
+    parent: &str,
+    child: &str,
+    current: &mut bool,
+) -> Result<(), JsonResponse> {
+    let Some(value) = body.get(parent) else {
+        return Ok(());
+    };
+    let Some(object) = value.as_object() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    if let Some(value) = object.get(child) {
+        *current = value
+            .as_bool()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    }
+    Ok(())
+}
+
+fn nested_bool_default_false(
+    body: &Value,
+    parent: &str,
+    child: &str,
+) -> Result<bool, JsonResponse> {
+    let Some(value) = body.get(parent) else {
+        return Ok(false);
+    };
+    let Some(object) = value.as_object() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    match object.get(child) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
 fn project_config_management(
     state: &AuthState,
     handler: routes::Handler,
     project: Option<&str>,
+    query: Option<&str>,
     body: &Value,
 ) -> JsonResponse {
     use routes::Handler;
@@ -2583,19 +2677,16 @@ fn project_config_management(
             body: project_config_json(config),
         };
     }
-    if let Some(value) = body
-        .get("signIn")
-        .and_then(|sign_in| sign_in.get("allowDuplicateEmails"))
-        .and_then(Value::as_bool)
-    {
-        config.allow_duplicate_emails = value;
-    }
-    if let Some(value) = body
-        .get("emailPrivacyConfig")
-        .and_then(|privacy| privacy.get("enableImprovedEmailPrivacy"))
-        .and_then(Value::as_bool)
-    {
-        config.enable_improved_email_privacy = value;
+    let fields = match update_mask(query) {
+        Ok(Some(fields)) => fields,
+        Ok(None) => match inferred_project_config_fields(body) {
+            Ok(fields) => fields,
+            Err(response) => return response,
+        },
+        Err(response) => return response,
+    };
+    if let Err(response) = apply_project_config_fields(&mut config, body, &fields) {
+        return response;
     }
     drop(store);
     if let Some(registry) = &state.registry {
@@ -3047,6 +3138,51 @@ fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, Jso
     Ok(config)
 }
 
+fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse> {
+    let mut value = None;
+    for pair in query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+    {
+        let (key, candidate) = pair.split_once('=').unwrap_or((pair, ""));
+        if decode_query_component(key) != "updateMask" {
+            continue;
+        }
+        if value.is_some() {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        value = Some(decode_query_component(candidate));
+    }
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let mut fields = Vec::new();
+    let mut seen = BTreeSet::new();
+    for field in value.split(',') {
+        if field.is_empty()
+            || field.split('.').any(|part| {
+                part.is_empty()
+                    || !part.chars().enumerate().all(|(index, character)| {
+                        (index == 0 && (character.is_ascii_alphabetic() || character == '_'))
+                            || (index > 0
+                                && (character.is_ascii_alphanumeric() || character == '_'))
+                    })
+            })
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if !seen.insert(field.to_owned()) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        fields.push(field.to_owned());
+    }
+    Ok(Some(fields))
+}
+
 fn selected_fields(query: Option<&str>) -> Vec<String> {
     query_params(query)
         .get("updateMask")
@@ -3104,19 +3240,43 @@ fn patch_saml(
     body: &Value,
     query: Option<&str>,
 ) -> Result<InboundSamlProviderConfig, JsonResponse> {
-    for field in selected_fields(query) {
+    let fields = update_mask(query)?.unwrap_or_default();
+    for field in fields {
         match field.as_str() {
             "displayName" => current.display_name = optional_string(body, "displayName")?,
             "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
-            "idpConfig"
-            | "idpConfig.idpEntityId"
-            | "idpConfig.ssoUrl"
-            | "idpConfig.idpCertificates"
-            | "idpConfig.signRequest" => {
+            "idpConfig" => {
                 let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
                     return Err(error(400, "INVALID_ARGUMENT"));
                 };
-                if field == "idpConfig" || field == "idpConfig.idpEntityId" {
+                if let Some(value) = idp.get("idpEntityId") {
+                    current.idp_entity_id = value
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                }
+                if let Some(value) = idp.get("ssoUrl") {
+                    current.sso_url = value
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                }
+                if let Some(value) = idp.get("idpCertificates") {
+                    current.idp_certificates = parse_saml_certificates(value)?;
+                }
+                if let Some(value) = idp.get("signRequest") {
+                    current.sign_request = value
+                        .as_bool()
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                }
+            }
+            "idpConfig.idpEntityId" | "idpConfig.ssoUrl" | "idpConfig.idpCertificates" => {
+                let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                };
+                if field == "idpConfig.idpEntityId" {
                     if let Some(value) = idp.get("idpEntityId") {
                         current.idp_entity_id = value
                             .as_str()
@@ -3125,7 +3285,7 @@ fn patch_saml(
                             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
                     }
                 }
-                if field == "idpConfig" || field == "idpConfig.ssoUrl" {
+                if field == "idpConfig.ssoUrl" {
                     if let Some(value) = idp.get("ssoUrl") {
                         current.sso_url = value
                             .as_str()
@@ -3134,18 +3294,14 @@ fn patch_saml(
                             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
                     }
                 }
-                if field == "idpConfig" || field == "idpConfig.idpCertificates" {
+                if field == "idpConfig.idpCertificates" {
                     if let Some(value) = idp.get("idpCertificates") {
                         current.idp_certificates = parse_saml_certificates(value)?;
                     }
                 }
-                if field == "idpConfig" || field == "idpConfig.signRequest" {
-                    if let Some(value) = idp.get("signRequest") {
-                        current.sign_request = value
-                            .as_bool()
-                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-                    }
-                }
+            }
+            "idpConfig.signRequest" => {
+                current.sign_request = nested_bool_default_false(body, "idpConfig", "signRequest")?;
             }
             "spConfig" | "spConfig.spEntityId" | "spConfig.callbackUri" => {
                 let Some(sp) = body.get("spConfig").and_then(Value::as_object) else {
@@ -5133,44 +5289,45 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
 }
 
 /// Minimal `application/x-www-form-urlencoded` query decoding (ASCII percent escapes).
-fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
-    fn decode(s: &str) -> String {
-        let bytes = s.as_bytes();
-        let mut out = Vec::with_capacity(bytes.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'%' if i + 2 < bytes.len() => {
-                    if let Some(b) = s
-                        .get(i + 1..i + 3)
-                        .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-                    {
-                        out.push(b);
-                        i += 3;
-                    } else {
-                        out.push(b'%');
-                        i += 1;
-                    }
-                }
-                b'+' => {
-                    out.push(b' ');
-                    i += 1;
-                }
-                b => {
+fn decode_query_component(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                if let Some(b) = s
+                    .get(i + 1..i + 3)
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                {
                     out.push(b);
+                    i += 3;
+                } else {
+                    out.push(b'%');
                     i += 1;
                 }
             }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
         }
-        String::from_utf8_lossy(&out).into_owned()
     }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
     query
         .unwrap_or("")
         .split('&')
         .filter(|kv| !kv.is_empty())
         .map(|kv| match kv.split_once('=') {
-            Some((k, v)) => (decode(k), decode(v)),
-            None => (decode(kv), String::new()),
+            Some((k, v)) => (decode_query_component(k), decode_query_component(v)),
+            None => (decode_query_component(kv), String::new()),
         })
         .collect()
 }

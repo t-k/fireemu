@@ -2706,7 +2706,12 @@ impl AuthStore {
         session: &RefreshSession,
         now: LogicalInstant,
     ) -> Result<IdTokenClaims, AuthError> {
-        let mut claims = self.id_token_claims(&session.uid, session.second_factor.as_ref(), now)?;
+        let mut claims = self.id_token_claims_with_auth_time(
+            &session.uid,
+            session.second_factor.as_ref(),
+            now,
+            session.issued_at,
+        )?;
         if let Some(p) = &session.provider {
             p.id().clone_into(&mut claims.firebase.sign_in_provider);
         }
@@ -3095,8 +3100,22 @@ impl AuthStore {
         second_factor: Option<&SecondFactorAssertion>,
         now: LogicalInstant,
     ) -> Result<IdTokenClaims, AuthError> {
+        self.id_token_claims_with_auth_time(uid, second_factor, now, now)
+    }
+
+    /// Builds ID token claims with an explicit authentication instant. New sign-ins use their
+    /// issuance time, while refresh sessions retain the instant at which the session started.
+    fn id_token_claims_with_auth_time(
+        &self,
+        uid: &LocalId,
+        second_factor: Option<&SecondFactorAssertion>,
+        now: LogicalInstant,
+        auth_time: LogicalInstant,
+    ) -> Result<IdTokenClaims, AuthError> {
         let user = self.users.get(uid).ok_or(AuthError::UserNotFound)?;
         let iat = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+        let auth_time =
+            i64::try_from(auth_time.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
         let mut identities: BTreeMap<String, Vec<String>> = BTreeMap::new();
         if let Some(email) = &user.email {
             identities.insert("email".to_owned(), vec![email.clone()]);
@@ -3115,7 +3134,7 @@ impl AuthStore {
         Ok(IdTokenClaims {
             iss: format!("https://securetoken.google.com/{}", self.project_id),
             aud: self.project_id.clone(),
-            auth_time: iat,
+            auth_time,
             user_id: uid.as_str().to_owned(),
             sub: uid.as_str().to_owned(),
             iat,

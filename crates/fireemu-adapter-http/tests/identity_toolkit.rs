@@ -744,6 +744,147 @@ fn sign_up_sign_in_lookup_and_refresh() {
 }
 
 #[test]
+fn secure_token_refresh_preserves_authentication_time() {
+    let s = state();
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "auth-time@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "auth-time@example.com",
+            "password": "hunter22",
+            "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let initial = fireemu_core_auth::jwt::decode_unsigned(signed_in["idToken"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    let initial_iat = initial
+        .get("iat")
+        .and_then(fireemu_core_types::json::JsonValue::as_i64)
+        .unwrap();
+    assert_eq!(
+        initial
+            .get("auth_time")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64),
+        Some(initial_iat)
+    );
+
+    let refresh = signed_in["refreshToken"].as_str().unwrap();
+    advance(&s, 1);
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    let refreshed_claims =
+        fireemu_core_auth::jwt::decode_unsigned(refreshed["id_token"].as_str().unwrap())
+            .unwrap()
+            .payload;
+    assert_eq!(
+        refreshed_claims
+            .get("auth_time")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64),
+        Some(initial_iat)
+    );
+    assert_eq!(
+        refreshed_claims
+            .get("iat")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64),
+        Some(initial_iat + 1)
+    );
+    assert_eq!(
+        refreshed_claims
+            .get("exp")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64),
+        Some(initial_iat + 1 + 3600)
+    );
+}
+
+#[test]
+fn refresh_authentication_time_remains_revocable_in_both_profiles() {
+    for strict in [false, true] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, signed_in) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "revocable-auth-time@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{signed_in}");
+        let refresh = signed_in["refreshToken"].as_str().unwrap();
+        let initial =
+            fireemu_core_auth::jwt::decode_unsigned(signed_in["idToken"].as_str().unwrap())
+                .unwrap()
+                .payload;
+        let initial_auth_time = initial
+            .get("auth_time")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64)
+            .unwrap();
+
+        advance(&s, 1);
+        let (status, revoked) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": signed_in["localId"],
+                "validSince": (initial_auth_time + 1).to_string()
+            }),
+        );
+        assert_eq!(status, 200, "{revoked}");
+
+        let (status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+        );
+        if strict {
+            assert_eq!(status, 400, "{refreshed}");
+            assert!(
+                refreshed["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| {
+                        message.starts_with("TOKEN_EXPIRED") || message == "INVALID_REFRESH_TOKEN"
+                    }),
+                "{refreshed}"
+            );
+        } else {
+            assert_eq!(status, 200, "{refreshed}");
+            let claims =
+                fireemu_core_auth::jwt::decode_unsigned(refreshed["id_token"].as_str().unwrap())
+                    .unwrap()
+                    .payload;
+            assert_eq!(
+                claims
+                    .get("auth_time")
+                    .and_then(fireemu_core_types::json::JsonValue::as_i64),
+                Some(initial_auth_time)
+            );
+            let (status, looked_up) = post(
+                &s,
+                &format!("{V1}/accounts:lookup"),
+                &json!({"idToken": refreshed["id_token"]}),
+            );
+            assert_eq!(status, 400, "{looked_up}");
+            assert!(
+                looked_up["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("TOKEN_EXPIRED")),
+                "{looked_up}"
+            );
+        }
+    }
+}
+
+#[test]
 fn custom_claims_via_accounts_update_show_up_in_tokens() {
     let s = state();
     let (_, body) = post(
@@ -2628,6 +2769,7 @@ fn strict_admin_query_applies_the_production_page_contract() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic() {
     let s = state();
     let (status, signed) = post(
@@ -2673,8 +2815,14 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &format!("{V1}/accounts:lookup"),
         &json!({"idToken": refreshed_before_update["id_token"]}),
     );
-    assert_eq!(status, 200, "{looked_up_after_update}");
-    let (status, _) = post(
+    assert_eq!(status, 400, "{looked_up_after_update}");
+    assert!(
+        looked_up_after_update["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("TOKEN_EXPIRED")),
+        "{looked_up_after_update}"
+    );
+    let (status, refreshed_after_update) = post(
         &s,
         "/securetoken.googleapis.com/v1/token",
         &json!({
@@ -2685,6 +2833,18 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
     assert_eq!(
         status, 200,
         "the official emulator keeps refresh tokens usable after an Admin password change"
+    );
+    let (status, looked_up_after_refresh) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": refreshed_after_update["id_token"]}),
+    );
+    assert_eq!(status, 400, "{looked_up_after_refresh}");
+    assert!(
+        looked_up_after_refresh["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("TOKEN_EXPIRED")),
+        "{looked_up_after_refresh}"
     );
     let (status, _) = post(
         &s,

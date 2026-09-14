@@ -2760,6 +2760,47 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
     );
     assert_eq!(initial.status, 200, "{}", initial.body);
 
+    for body in [json!("wrong shape"), json!([]), Value::Null] {
+        let refused = handle_with(
+            &s,
+            "PATCH",
+            &format!("{path}?updateMask=signIn.allowDuplicateEmails"),
+            &owner(),
+            &body,
+        );
+        assert_eq!(refused.status, 400, "{body}");
+        let unchanged = read();
+        assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+        assert_eq!(unchanged.body["signIn"]["allowDuplicateEmails"], true);
+        assert_eq!(
+            unchanged.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+            true
+        );
+    }
+
+    for (mask, body) in [
+        (
+            "%73ignIn%2EallowDuplicateEmails",
+            json!({"signIn": {"allowDuplicateEmails": true}}),
+        ),
+        (
+            "signIn.allowDuplicateEmails%2CemailPrivacyConfig.enableImprovedEmailPrivacy",
+            json!({
+                "signIn": {"allowDuplicateEmails": true},
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+            }),
+        ),
+    ] {
+        let accepted = handle_with(
+            &s,
+            "PATCH",
+            &format!("{path}?updateMask={mask}"),
+            &owner(),
+            &body,
+        );
+        assert_eq!(accepted.status, 200, "mask={mask}: {}", accepted.body);
+    }
+
     let outside_mask = handle_with(
         &s,
         "PATCH",
@@ -2819,21 +2860,23 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
         path,
         &owner(),
         &json!({
-            "signIn": {"allowDuplicateEmails": true},
-            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+            "signIn": {"allowDuplicateEmails": true}
         }),
     );
     assert_eq!(omitted_mask.status, 200, "{}", omitted_mask.body);
     assert_eq!(omitted_mask.body["signIn"]["allowDuplicateEmails"], true);
     assert_eq!(
         omitted_mask.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
+        false
     );
 
     for mask in [
         "signIn.unknown",
         "signIn.allowDuplicateEmails,signIn.allowDuplicateEmails",
         "signIn.allowDuplicateEmails,,emailPrivacyConfig.enableImprovedEmailPrivacy",
+        "signIn.allowDuplicateEmails%2CsignIn.allowDuplicateEmails",
+        "signIn.allowDuplicateEmails&updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy",
+        "%ZZ",
     ] {
         let refused = handle_with(
             &s,
@@ -2847,12 +2890,25 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
         );
         assert_eq!(refused.status, 400, "mask={mask}: {}", refused.body);
     }
+    for query in [
+        "up%ZZdateMask=signIn.allowDuplicateEmails",
+        "updateMask=signIn.allowDuplicateEmails%ZZ",
+    ] {
+        let refused = handle_with(
+            &s,
+            "PATCH",
+            &format!("{path}?{query}"),
+            &owner(),
+            &json!({"signIn": {"allowDuplicateEmails": false}}),
+        );
+        assert_eq!(refused.status, 400, "query={query}: {}", refused.body);
+    }
     let after_bad_masks = read();
     assert_eq!(after_bad_masks.status, 200, "{}", after_bad_masks.body);
     assert_eq!(after_bad_masks.body["signIn"]["allowDuplicateEmails"], true);
     assert_eq!(
         after_bad_masks.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
+        false
     );
 
     let empty = handle_with(
@@ -2869,8 +2925,144 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
     assert_eq!(empty.body["signIn"]["allowDuplicateEmails"], true);
     assert_eq!(
         empty.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        false
+    );
+}
+
+#[test]
+fn admin_v2_config_disjoint_masks_commit_without_lost_updates() {
+    let mut base = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        base.store.clone(),
+    ));
+    base.registry = Some(registry);
+    let state = Arc::new(base);
+    let start = Arc::new(std::sync::Barrier::new(3));
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    std::thread::scope(|scope| {
+        let left = Arc::clone(&state);
+        let left_start = Arc::clone(&start);
+        scope.spawn(move || {
+            left_start.wait();
+            handle_with(
+                &left,
+                "PATCH",
+                &format!("{path}?updateMask=signIn.allowDuplicateEmails"),
+                &owner(),
+                &json!({"signIn": {"allowDuplicateEmails": true}}),
+            )
+        });
+        let right = Arc::clone(&state);
+        let right_start = Arc::clone(&start);
+        scope.spawn(move || {
+            right_start.wait();
+            handle_with(
+                &right,
+                "PATCH",
+                &format!("{path}?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy"),
+                &owner(),
+                &json!({
+                    "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+                }),
+            )
+        });
+        start.wait();
+    });
+    let result = handle_with(&state, "GET", path, &owner(), &json!({}));
+    assert_eq!(result.status, 200, "{}", result.body);
+    assert_eq!(result.body["signIn"]["allowDuplicateEmails"], true);
+    assert_eq!(
+        result.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
         true
     );
+}
+
+#[test]
+fn admin_v2_config_empty_mask_does_not_revert_a_concurrent_update() {
+    let state = Arc::new(state());
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let start = Arc::new(std::sync::Barrier::new(3));
+    std::thread::scope(|scope| {
+        let update_state = Arc::clone(&state);
+        let update_start = Arc::clone(&start);
+        scope.spawn(move || {
+            update_start.wait();
+            handle_with(
+                &update_state,
+                "PATCH",
+                &format!("{path}?updateMask=signIn.allowDuplicateEmails"),
+                &owner(),
+                &json!({"signIn": {"allowDuplicateEmails": true}}),
+            )
+        });
+        let empty_state = Arc::clone(&state);
+        let empty_start = Arc::clone(&start);
+        scope.spawn(move || {
+            empty_start.wait();
+            handle_with(
+                &empty_state,
+                "PATCH",
+                &format!("{path}?updateMask="),
+                &owner(),
+                &json!({"signIn": {"allowDuplicateEmails": false}}),
+            )
+        });
+        start.wait();
+    });
+    let result = handle_with(&state, "GET", path, &owner(), &json!({}));
+    assert_eq!(result.status, 200, "{}", result.body);
+    assert_eq!(result.body["signIn"]["allowDuplicateEmails"], true);
+}
+
+#[test]
+fn admin_v2_config_racing_tenant_publication_keeps_inherited_config_current() {
+    let mut base = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        base.store.clone(),
+    ));
+    base.registry = Some(registry.clone());
+    let state = Arc::new(base);
+    let start = Arc::new(std::sync::Barrier::new(3));
+    let config_path =
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy";
+    let tenants_path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants";
+    std::thread::scope(|scope| {
+        let config_state = Arc::clone(&state);
+        let config_start = Arc::clone(&start);
+        scope.spawn(move || {
+            config_start.wait();
+            handle_with(
+                &config_state,
+                "PATCH",
+                config_path,
+                &owner(),
+                &json!({
+                    "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+                }),
+            )
+        });
+        let tenant_state = Arc::clone(&state);
+        let tenant_start = Arc::clone(&start);
+        scope.spawn(move || {
+            tenant_start.wait();
+            handle_with(
+                &tenant_state,
+                "POST",
+                tenants_path,
+                &owner(),
+                &json!({"displayName": "racing tenant"}),
+            )
+        });
+        start.wait();
+    });
+    assert!(registry.tenants("demo-app").iter().any(|tenant| {
+        registry
+            .tenant_store("demo-app", tenant)
+            .and_then(|store| store.lock().ok().map(|store| store.config()))
+            .is_some_and(|config| config.enable_improved_email_privacy)
+    }));
 }
 
 #[test]

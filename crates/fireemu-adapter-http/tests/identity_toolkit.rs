@@ -2270,6 +2270,60 @@ fn inbound_saml_sign_request_mask_defaults_and_is_atomic_for_project_and_tenant(
         );
         assert_eq!(create.status, 200, "{}", create.body);
 
+        for body in [json!("wrong shape"), json!([]), Value::Null] {
+            let refused = handle_with(
+                &s,
+                "PATCH",
+                &format!("{item}?updateMask=idpConfig.signRequest"),
+                &owner(),
+                &body,
+            );
+            assert_eq!(refused.status, 400, "{body}");
+            let unchanged = handle_with(&s, "GET", &item, &owner(), &json!({}));
+            assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+            assert_eq!(unchanged.body["idpConfig"]["signRequest"], true);
+        }
+
+        let encoded = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=%69dpConfig%2EsignRequest"),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": true}}),
+        );
+        assert_eq!(encoded.status, 200, "{}", encoded.body);
+        for mask in [
+            "%69dpConfig%2EsignRequest%2C%69dpConfig%2EsignRequest",
+            "%ZZ",
+        ] {
+            let refused = handle_with(
+                &s,
+                "PATCH",
+                &format!("{item}?updateMask={mask}"),
+                &owner(),
+                &json!({"idpConfig": {"signRequest": false}}),
+            );
+            assert_eq!(refused.status, 400, "mask={mask}: {}", refused.body);
+            let unchanged = handle_with(&s, "GET", &item, &owner(), &json!({}));
+            assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+            assert_eq!(unchanged.body["idpConfig"]["signRequest"], true);
+        }
+        let repeated = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest&updateMask=displayName"),
+            &owner(),
+            &json!({
+                "displayName": "Changed",
+                "idpConfig": {"signRequest": false}
+            }),
+        );
+        assert_eq!(repeated.status, 400, "{}", repeated.body);
+        let unchanged = handle_with(&s, "GET", &item, &owner(), &json!({}));
+        assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+        assert_eq!(unchanged.body["displayName"], "Original");
+        assert_eq!(unchanged.body["idpConfig"]["signRequest"], true);
+
         let parent_no_presence = handle_with(
             &s,
             "PATCH",

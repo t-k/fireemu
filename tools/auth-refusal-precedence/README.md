@@ -32,6 +32,8 @@ uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-refusa
 
 `precedence_owned.py` builds and owns the strict fireemu artifact and runs the same `observe()` against it with no configuration change and codes read from the emulator inspection route. It validates the recorder end to end and records the local order; it is not evidence of production behavior.
 
+For the local `disableUser:null` case, the recorder reads and compares account state immediately after the update, then finalizes the previously held MFA pending credential and SMS session. Finalization is recorded separately so consuming or invalidating that credential cannot alter the profile-state comparison; a failed continuity check keeps the local report incomplete.
+
 ```sh
 uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-refusal-precedence/precedence_owned.py --output /absolute/private/new-local
 ```

@@ -543,6 +543,21 @@
     ],
     "status": "implemented"
   },
+  "FS-ADMIN-INVENTORY-1": {
+    "implemented": [
+      "read-only Firestore Admin REST GET projects/{project}/databases and projects/{project}/databases/{database} for locally registered Standard/Native databases",
+      "exact project/name validation, owner credential authorization before catalog lookup, deterministic name ordering, Discovery-compatible showDeleted validation, stable documented database projection and healthy unreachable: []",
+      "unknown databases return NOT_FOUND and catalog reads never create, mutate or detach database state"
+    ],
+    "notes": [
+      "local-only bounded adapter surface; it does not claim production parity",
+      "Enterprise databases, create/update/delete, indexes, TTL, backups, import/export and long-running operations are outside this capability",
+      "database metadata projection is the stable local field subset documented in docs/compatibility/firestore-admin-inventory.md; unsupported identity and billing fields are omitted",
+      "conformance input: spec/compatibility/upstream/2026-09-09-retry/discovery.json and the historical database projection v2 reference"
+    ],
+    "precision": "bounded-local-semantics",
+    "status": "implemented"
+  },
   "FS-RPC-1": {
     "implemented": [
       "GetDocument",

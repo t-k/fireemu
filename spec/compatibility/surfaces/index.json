@@ -216,12 +216,14 @@
     {
       "id": "FS-DATABASES",
       "source": "FS-ADMIN",
-      "locator": "projects.databases.get",
+      "locator": "projects.databases.list and projects.databases.get",
       "kind": "method",
       "transport": "REST",
-      "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
-      "requirements": []
+      "classification": "requirement",
+      "reason": "Finite local-only Standard/Native read inventory; Enterprise and MongoDB-compatible modes are explicitly refused.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
     }
   ]
 }

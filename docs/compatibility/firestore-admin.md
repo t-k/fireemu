@@ -8,7 +8,7 @@ Labels summarize only linked capability declarations. They do not establish that
 
 | Feature / applicability | Capability-derived label | Requirements: mapped / unfinished | Production | Official emulator | SDK | Known limitations |
 | --- | --- | --- | --- | --- | --- | --- |
-| FS-ADMIN-INVENTORY: Database, index and retention administration / Database/index administration; TTL, backup/restore, PITR, import/export and operation lifecycle | Unmapped, unverified | 0 / unknown | Not attested | Not attested | Not attested | Admin discovery fields and long-running operation semantics remain unclassified; configuration acceptance does not imply managed-service execution. |
+| FS-ADMIN-INVENTORY: Database, index and retention administration / Database/index administration; TTL, backup/restore, PITR, import/export and operation lifecycle | Implemented, unverified | 1 / 0 | Not attested | Not attested | Not attested | Admin discovery fields and long-running operation semantics remain unclassified; configuration acceptance does not imply managed-service execution.; local-only bounded adapter surface; it does not claim production parity; Enterprise databases, create/update/delete, indexes, TTL, backups, import/export and long-running operations are outside this capability; database metadata projection is the stable local field subset documented in docs/compatibility/firestore-admin-inventory.md; unsupported identity and billing fields are omitted; conformance input: spec/compatibility/upstream/2026-09-09-retry/discovery.json and the historical database projection v2 reference |
 
 ## Traceability links
 
@@ -18,9 +18,10 @@ All links below are mappings. Test names and corpus paths must be reviewed for t
 
 Sources: FS-ADMIN; FS-DISCOVERY-V1. API surfaces: FS-DATABASES.
 
-Requirements: None mapped.
+Requirements: REQ-FS-PARITY-01.
 
-Contract claims: None mapped.
+Contract claims: FS-CLAIM-REST.
 
+- FS-ADMIN-INVENTORY-1: implemented ([manifest](../../crates/fireemu/src/capabilities.json)).
 
 [Requirements and artifact references](requirements.md) · [Sources](sources.md) · [Surface inventory](surfaces.md) · [Evidence policy](evidence-policy.md)

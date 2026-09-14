@@ -43,7 +43,7 @@ def validate_local_active_token(extension):
 
     def continuity(checks):
         require(isinstance(checks, dict))
-        require(set(checks) == FINALIZE_CHECKS)
+        require(set(checks) == {*FINALIZE_CHECKS, "finalizeHttpStatus"})
         require(all(value is True for value in checks.values()))
 
     for row in extension["fields"]:

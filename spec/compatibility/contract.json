@@ -581,12 +581,17 @@
             {
               "id": "FS-REST-1",
               "status": "implemented"
+            },
+            {
+              "id": "FS-ADMIN-INVENTORY-1",
+              "status": "implemented"
             }
           ],
           "evidence": {
             "tests": [],
             "integration": [
               "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-grpc/src/rest/admin_inventory_tests.rs",
               "conformance/firestore-matrix.json"
             ],
             "conformance": [

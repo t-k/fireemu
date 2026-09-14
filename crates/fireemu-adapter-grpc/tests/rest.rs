@@ -521,6 +521,7 @@ fn commit_query_aggregation_and_transactions_over_rest() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
     let s = state(None);
     let document = |id: &str, fields: Value| {
@@ -565,7 +566,7 @@ fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
     );
     assert_eq!(
         aggregate[0]["result"]["aggregateFields"]["avg"]["doubleValue"],
-        10.166666666666666
+        10.166_666_666_666_666
     );
 
     // The failed precondition is checked before any write is applied. This mirrors the

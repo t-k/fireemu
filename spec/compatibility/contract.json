@@ -638,6 +638,58 @@
           "preview": []
         },
         {
+          "id": "FS-CLAIM-VECTOR",
+          "statement": "Firestore Standard/Native findNearest vector queries are implemented locally on both the v1 gRPC RunQuery and Firestore REST :runQuery surfaces. The local implementation supports Euclidean, cosine and dot-product distance measures, optional distance-result projection, finite distance thresholds, a result limit from 1 through 1000, ordinary query projection, filters, offsets and limits before nearest ranking, and the declared vector-index policy: strict production planning requires a dimensioned vector index matching the query vector and a matching composite vector index when prefilters are present, while the emulator profile assumes the vector index. This is a local implementation mapping: production parity and SDK execution are unobserved, and findNearest is refused for Listen/WebChannel targets.",
+          "capabilities": [
+            {
+              "id": "FS-QRY-1",
+              "status": "implemented"
+            },
+            {
+              "id": "FS-REST-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "rest_run_query_supports_standard_find_nearest",
+              "grpc_run_query_supports_standard_find_nearest",
+              "grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking",
+              "nearest_vector_query_orders_euclidean_cosine_and_dot_product",
+              "nearest_projection_controls_synthesized_distance_field",
+              "nearest_vector_query_limit_and_threshold_are_applied",
+              "vector_queries_require_a_dimensioned_vector_index_in_production",
+              "vector_query_prefilters_require_the_same_composite_vector_index",
+              "emulator_vector_queries_assume_a_vector_index_without_using_name_index"
+            ],
+            "integration": [
+              "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-grpc/tests/local.rs",
+              "crates/fireemu-adapter-grpc/tests/webchannel.rs",
+              "crates/fireemu-core-firestore/tests/execute.rs",
+              "crates/fireemu-core-firestore/tests/index.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the pinned official Firestore emulator refuses findNearest on its REST surface; this contract records fireemu's REST implementation as a local capability rather than official-emulator parity"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "REST and gRPC findNearest execution with projection, Euclidean/cosine/dot-product distance, finite thresholds, limits and ordinary pre-ranking query stages; Listen and WebChannel reject findNearest targets explicitly",
+              "precision": "finite-local-read-subset"
+            },
+            {
+              "behaviour": "Non-document-name explicit ordering materializes at most offset + limit <= 1000 ordinary rows before nearest ranking; unbounded offsets require document-name ordering or a top-level limit",
+              "precision": "resource-safety-divergence"
+            }
+          ],
+          "productionOnly": [
+            "production vector-search execution, index-build/backfill behaviour, and production error or ranking parity"
+          ],
+          "preview": []
+        },
+        {
           "id": "FS-CLAIM-WEBCHANNEL",
           "statement": "The browser web SDK's WebChannel v8 transport is served on the Firestore port, and a target refused on its own merits is removed without closing the channel. Unacknowledged arrays remain replayable by their original AIDs while explicit local byte budgets bound retained data, each response batch, and concurrently owned replay copies per session and per Hub.",
           "capabilities": [

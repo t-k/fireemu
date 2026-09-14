@@ -1,0 +1,19 @@
+{
+  "kind": "query-explain-reference-evaluator-anchor-v3",
+  "evaluatorSourceCommit": "c94cce0fc861640296f4ffccf3ab374626925fba",
+  "sourceFiles": {
+    "tools/compat-explain-reference-v3/evaluate.py": "6e5055888d53db7686f90574438c3f0ef7abcd6caeeacb7aab8d324dfe80b406",
+    "tools/compat-explain-reference-v3/test_evaluate_v3.py": "8bfeccc1a8966c4ee17df6c0e77402203104632f2a38fb2f290db930dbdaaea4",
+    "docs/compatibility/query-explain-saved-reference-v3.md": "524b333bff88776f46a191b7918b0f2bc640d51eda378addd49e1db07d445747",
+    "spec/compatibility/broad-runs/query-explain-reference-inputs-v3.json": "31a4d48199a2ba35ab7e1ec1861fdbdeb7cda4ed4f9f6f170a9c03de8567b476",
+    "tools/compat-explain-reference/evaluate.py": "298f4084f3d1318c038c77cf24ef4de8b79c90f67535d2d2bfbb90212ae13742",
+    "tools/compat-explain-reference/test_evaluate.py": "6f0b4345d45501af75335fa0dc94372a7adcd259387292f540fbd8d3880382b9",
+    "docs/compatibility/query-explain-saved-reference-v2.md": "26fd87af54e289376099584d6d8a5076d03ee783bfb6caeab0850ec2eea0aa17",
+    "spec/compatibility/broad-runs/query-explain-reference-inputs-v2.json": "8393086ffcf41fb97851442229d1a69f4ab09558d654a650ce7956d2d1924469",
+    "spec/compatibility/broad-runs/query-explain-reference-evaluator-v2.json": "dfbb55fbe226de09259a507f38cf8b198fdc14cc07ef8e9ab1bc785a692073ea",
+    "spec/compatibility/broad-runs/query-explain-reference-summary-v2.json": "22e035d29a61801ee97258c10dd2832a544974853f6e212c2cfeea4cf9e3e2cd",
+    "tools/compat-inventory/pyproject.toml": "2cd843edbfa0d2603121113cadd8c02a825c48dd11c95e54edb243507128d6a7",
+    "tools/compat-inventory/uv.lock": "0a2374a0081466d557ee5d4fdc14f99f00b1b8aacf983705d80ade5246f8ed55"
+  },
+  "contractDigest": "55185e80f489131b0ef8f97f2c5d4997bd2f5d365c41def8790baa21b73622fa"
+}

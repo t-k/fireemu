@@ -4492,10 +4492,7 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
         &format!("{V1}/accounts:signUp"),
         &json!({"email": "fake-hash-overwrite@example.com", "password": "original-password"}),
     );
-    assert_eq!(
-        status, 200,
-        "initial account creation failed: status {status}"
-    );
+    assert_eq!(status, 200, "{existing}");
     let oversized = password_with_utf16_units(4097);
     let (status, refused) = admin(
         &s,

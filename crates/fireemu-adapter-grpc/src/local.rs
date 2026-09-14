@@ -58,6 +58,8 @@ pub const READ_TIME_RETENTION_SECONDS: i64 = 3600;
 /// it, so an operation holds this lock alone and never the catalog's.
 #[derive(Debug, Default)]
 struct DatabaseEntry {
+    /// Never reused within a backend, including across resets and restores.
+    incarnation: u64,
     cell: RwLock<DatabaseCell>,
     /// Wakes writers refused for lock contention when a transaction finishes.
     releases: TransactionReleases,
@@ -69,8 +71,9 @@ struct DatabaseEntry {
 
 impl DatabaseEntry {
     /// A fresh, attached entry holding a restored state.
-    fn restored(state: FirestoreState) -> Self {
+    fn restored(state: FirestoreState, incarnation: u64) -> Self {
         Self {
+            incarnation,
             cell: RwLock::new(DatabaseCell {
                 detached: false,
                 state,
@@ -241,6 +244,8 @@ pub struct LocalBackend {
     /// The database catalog. Locked only to locate, create or retire an entry: an
     /// operation clones the entry's handle and releases this lock before it runs.
     databases: Mutex<BTreeMap<(String, String), Arc<DatabaseEntry>>>,
+    /// Allocates identities for database instances independently of delayed wipe notifications.
+    database_incarnations: std::sync::atomic::AtomicU64,
     /// The sessions' fault plans (looked up by project), when shared.
     faults: Mutex<Option<fireemu_core_session::fault::SharedFaultRegistry>>,
     /// Told after a fault plan moved the virtual clock (the functions runtime re-reads
@@ -1231,6 +1236,7 @@ impl LocalBackend {
             ))),
             tenancy: Mutex::new(None),
             databases: Mutex::new(BTreeMap::new()),
+            database_incarnations: std::sync::atomic::AtomicU64::new(0),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
@@ -1831,6 +1837,8 @@ impl LocalBackend {
                         Arc::new(DatabaseEntry::restored(
                             v.clone()
                                 .with_retained_version_limit(self.history_version_limit),
+                            self.database_incarnations
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
                         )),
                     );
                 }
@@ -2468,6 +2476,8 @@ impl LocalBackend {
                         FirestoreState::with_limit_scope(scope)
                             .with_retained_version_limit(self.history_version_limit)
                             .with_transaction_id_offset(offset),
+                        self.database_incarnations
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
                     ))
                 })
                 .clone(),
@@ -4338,54 +4348,89 @@ impl LocalBackend {
             }
             None => None,
         };
-        let selector = match &req.consistency_selector {
-            Some(pb::list_collection_ids_request::ConsistencySelector::ReadTime(_)) => {
-                SnapshotSelector::ReadTime(read_at.expect("read time was decoded"))
+        // Capture the database instance before validating the token. A raw project reset
+        // may remove its catalog entry before publishing a new generation; incarnation
+        // identity distinguishes a replacement even during that interval.
+        let handle = {
+            let _admitted = self.barrier.admit();
+            let existing = self
+                .databases
+                .lock()
+                .map_err(|_| lock_poisoned())?
+                .get(&database_key(&parent))
+                .cloned()
+                .map(DatabaseHandle);
+            match existing {
+                Some(handle) => handle,
+                None if !req.page_token.is_empty() => {
+                    return Err(Status::invalid_argument(
+                        "page_token was issued for a different listing",
+                    ));
+                }
+                None => self.database_handle(&parent)?,
             }
-            None => SnapshotSelector::Latest,
         };
-        let identity = format!(
-            "{}|{}|{}|{}|{}",
-            req.parent,
-            self.epoch(),
-            self.database_generation(&parent),
-            match read_at {
-                Some(at) => format!("rt:{}", at.as_nanos()),
-                None => "live".to_owned(),
-            },
-            req.request_options
-                .as_ref()
-                .map_or_else(String::new, |options| format!("{options:?}")),
-        );
-        let after = list_collection_ids_page_cursor(&req.page_token, &identity)?;
+        let identity = || {
+            format!(
+                "{}|{}|{}|{}|{}|{}",
+                req.parent,
+                self.epoch(),
+                self.database_generation(&parent),
+                handle.0.incarnation,
+                match read_at {
+                    Some(at) => format!("rt:{}", at.as_nanos()),
+                    None => "live".to_owned(),
+                },
+                req.request_options
+                    .as_ref()
+                    .map_or_else(String::new, |options| format!("{options:?}")),
+            )
+        };
+        list_collection_ids_page_cursor(&req.page_token, &identity())?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let page_size = if req.page_size > 0 {
             usize::try_from(req.page_size).unwrap_or(usize::MAX)
         } else {
             DEFAULT_LIST_PAGE_SIZE
         };
-        self.with_selected_snapshot(&parent, selector, now, |access| {
-            let mut ids = access
-                .db()
-                .list_collection_ids_at(parent.document.as_ref(), access.version()?);
-            if let Some(after) = &after {
-                ids.retain(|id| id > after);
-            }
-            // As for documents: a token only when a collection id follows the page.
-            let full = ids.len() > page_size;
-            ids.truncate(page_size);
-            let next_page_token = if full {
-                ids.last().map_or(String::new(), |id| {
-                    crate::rest::json::base64_encode(format!("{id}\n{identity}").as_bytes())
+        let _admitted = self.barrier.admit();
+        // Validation and snapshot selection use this same instance under its read lock.
+        // Retaining the handle across faults prevents a reset from redirecting an accepted
+        // cursor to a replacement database, even when reset bypasses session admission.
+        handle
+            .read_status(|db| {
+                let identity = identity();
+                let after = list_collection_ids_page_cursor(&req.page_token, &identity)?;
+                let version = match read_at {
+                    Some(at) => Some(Self::retained_read_version(db, at)?),
+                    None => None,
+                };
+                let mut ids = db.list_collection_ids_at(parent.document.as_ref(), version);
+                if let Some(after) = &after {
+                    ids.retain(|id| id > after);
+                }
+                // As for documents: a token only when a collection id follows the page.
+                let full = ids.len() > page_size;
+                ids.truncate(page_size);
+                let next_page_token = if full {
+                    ids.last().map_or(String::new(), |id| {
+                        crate::rest::json::base64_encode(format!("{id}\n{identity}").as_bytes())
+                    })
+                } else {
+                    String::new()
+                };
+                Ok(pb::ListCollectionIdsResponse {
+                    collection_ids: ids,
+                    next_page_token,
                 })
-            } else {
-                String::new()
-            };
-            Ok(pb::ListCollectionIdsResponse {
-                collection_ids: ids,
-                next_page_token,
             })
-        })
+            .map_err(|error| {
+                if !req.page_token.is_empty() && handle.is_detached() {
+                    Status::invalid_argument("page_token belongs to a reset database")
+                } else {
+                    error
+                }
+            })
     }
 
     /// `BatchWrite`: each write is applied independently and reported with its own status.
@@ -4695,6 +4740,7 @@ fn list_collection_ids_page_cursor(
             "page_token was issued for a different listing",
         ));
     }
+    CollectionId::try_new(id).map_err(|_| malformed())?;
     Ok(Some(id.to_owned()))
 }
 
@@ -5327,7 +5373,7 @@ mod lock_tests {
 
     #[test]
     fn two_readers_enter_the_same_database_concurrently() {
-        let handle = DatabaseHandle(Arc::new(DatabaseEntry::restored(FirestoreState::new())));
+        let handle = DatabaseHandle(Arc::new(DatabaseEntry::restored(FirestoreState::new(), 0)));
         let first = handle.clone();
         let second = handle;
         let (first_entered_tx, first_entered_rx) = mpsc::channel();

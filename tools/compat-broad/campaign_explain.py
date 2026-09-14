@@ -13,7 +13,9 @@ import os
 import re
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from batch_contract import (
     DATABASE_PROJECTION,
@@ -417,11 +419,54 @@ class ProductionGate(SharedProductionGate):
             raise
 
 
+def creation_proof(operation, status, body):
+    name = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+    version = body.get("updateTime") if isinstance(body, dict) else None
+    if (
+        type(status) is not int
+        or status != 200
+        or not isinstance(body, dict)
+        or operation["method"] != "PATCH"
+        or not operation["path"].endswith("?currentDocument.exists=false")
+        or body.get("name") != name
+        or digest(body.get("fields")) != digest(operation["body"]["fields"])
+        or not isinstance(version, str)
+        or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", version)
+    ):
+        raise ValueError("successful typed conditional creation required")
+    datetime.fromisoformat(version)
+    return {
+        "kind": "campaign-created-document",
+        "name": name,
+        "updateTime": version,
+        "requestDigest": digest(operation),
+        "responseDigest": digest(body),
+    }
+
+
 def _dispatch(gate, adapter, operation, send):
+    created = getattr(adapter, "_campaign_created", {})
+    if operation["method"] == "DELETE":
+        name = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+        proof = created.get(name)
+        if proof is None or operation[
+            "path"
+        ] != "/v1/" + name + "?currentDocument.updateTime=" + quote(
+            proof["updateTime"], safe=""
+        ):
+            raise ValueError(
+                "cleanup requires this campaign's journaled creation version"
+            )
+
     def admitted():
         adapter._shared_dispatch = True
         try:
-            return send()
+            status, body = send()
+            if operation["method"] == "PATCH":
+                proof = creation_proof(operation, status, body)
+                adapter.record(proof)
+                adapter._campaign_created = {**created, proof["name"]: proof}
+            return status, body
         finally:
             adapter._shared_dispatch = False
 
@@ -480,6 +525,11 @@ def bind_receipt(receipt, state, adapter):
         authentication=adapter.auth_evidence,
         permissionDigest=None if adapter.local else digest(adapter.permission),
     )
+    journal_bytes = adapter.journal.read_bytes() if adapter.journal.exists() else b""
+    receipt["ownershipJournal"] = [
+        json.loads(line) for line in journal_bytes.splitlines()
+    ]
+    receipt["ownershipJournalSha256"] = hashlib.sha256(journal_bytes).hexdigest()
     receipt["lifecycleStateVerified"] = state_readback_valid(receipt, state["plan"])
     save(adapter.output / "result.json", receipt)
 
@@ -600,6 +650,15 @@ def _validate_envelope(value, *, local, directory):
     ):
         _require(receipt.get(key) is True, key + " incomplete")
     _require(state_readback_valid(receipt, plan), "state readback differs")
+    validate_creation_journal(receipt, plan)
+    if local and directory is not None:
+        _require(
+            hashlib.sha256(
+                (directory / "worker/ownership.jsonl").read_bytes()
+            ).hexdigest()
+            == receipt["ownershipJournalSha256"],
+            "ownership journal file differs",
+        )
     for key in (
         "manifestDigest",
         "comparisonContractDigest",
@@ -686,6 +745,43 @@ def _validate_envelope(value, *, local, directory):
     validate_gate_accounting(state, local=local)
     if local:
         validate_local_runtime(value, directory)
+
+
+def validate_creation_journal(receipt, plan):
+    resources = plan["jobs"]["query-explain"]["resources"]
+    expected = [
+        {"kind": "document-attempt", "name": name, "preflightAbsent": True}
+        for name in resources
+    ]
+    for row, read_index in zip(receipt["rows"][2:4], (0, 3), strict=True):
+        proof = creation_proof(row["request"], row["status"], row["body"])
+        expected.append(proof)
+        cleanup_read = receipt["cleanup"][read_index]
+        cleanup_delete = receipt["cleanup"][read_index + 1]
+        _require(
+            cleanup_read["body"].get("updateTime") == proof["updateTime"],
+            "cleanup observed a replacement version",
+        )
+        _require(
+            cleanup_delete["request"]["path"]
+            == "/v1/"
+            + proof["name"]
+            + "?currentDocument.updateTime="
+            + quote(proof["updateTime"], safe=""),
+            "DELETE is not bound to the campaign creation version",
+        )
+    _require(
+        digest(receipt["ownershipJournal"]) == digest(expected),
+        "successful creation journal differs",
+    )
+    journal_bytes = b"".join(
+        (json.dumps(event, allow_nan=False) + "\n").encode()
+        for event in receipt["ownershipJournal"]
+    )
+    _require(
+        hashlib.sha256(journal_bytes).hexdigest() == receipt["ownershipJournalSha256"],
+        "ownership journal digest differs",
+    )
 
 
 def validate_gate_accounting(state, *, local):

@@ -175,7 +175,7 @@ def test_shadow_cli_imports_without_pythonpath(tmp_path):
     assert "FixtureWire" not in script.read_text()
 
 
-def campaign_receipt(tmp_path, monkeypatch):
+def campaign_receipt(tmp_path, monkeypatch, *, backend=None, before_cleanup=None):
     import batch_adapter
     import campaign_explain as campaign
     from shared_cases import run_scenario
@@ -194,9 +194,9 @@ def campaign_receipt(tmp_path, monkeypatch):
         local_origins=origins,
     )
     adapter.shared_gate = gate
-    monkeypatch.setattr(batch_adapter, "wire", FixtureBackend())
+    monkeypatch.setattr(batch_adapter, "wire", backend or FixtureBackend())
     monkeypatch.setattr("shared_gate.time.sleep", lambda _: None)
-    result = run_scenario(adapter, plan, "query-explain")
+    result = run_scenario(adapter, plan, "query-explain", before_cleanup=before_cleanup)
     campaign.bind_receipt(result, gate.snapshot(), adapter)
     return result, gate.snapshot()
 
@@ -685,3 +685,91 @@ def test_complete_production_rejects_rebound_metadata_and_time(real_shadow, muta
         production["gate"]["events"][0].pop("ended")
     with pytest.raises(ValueError):
         validate_envelope(production, local=False)
+
+
+def test_foreign_document_collision_is_never_deleted(tmp_path, monkeypatch):
+    from test_campaign_slice import FixtureBackend
+
+    class CollisionBackend(FixtureBackend):
+        foreign = None
+
+        def __call__(self, url, method, body, headers, **kwargs):
+            if method == "PATCH" and self.foreign is None:
+                path = url.split("/v1/", 1)[1].split("?", 1)[0]
+                self.foreign = {
+                    "name": path,
+                    "fields": {"value": {"integerValue": "999"}},
+                    "updateTime": "2026-09-14T00:00:01Z",
+                }
+                self.docs[path] = copy.deepcopy(self.foreign)
+                return 409, {"error": {"status": "ALREADY_EXISTS"}}, "application/json"
+            return super().__call__(url, method, body, headers, **kwargs)
+
+    backend = CollisionBackend()
+    receipt, _ = campaign_receipt(tmp_path, monkeypatch, backend=backend)
+    assert backend.docs.get(backend.foreign["name"]) == backend.foreign
+    assert receipt["cleanupComplete"] is False
+
+
+def test_foreign_replacement_after_successful_create_is_never_deleted(
+    tmp_path, monkeypatch
+):
+    from test_campaign_slice import FixtureBackend
+
+    backend = FixtureBackend()
+    foreign = {}
+
+    def replace_before_cleanup():
+        path = next(iter(backend.docs))
+        foreign.update(
+            name=path,
+            fields={"value": {"integerValue": "999"}},
+            updateTime="2026-09-14T00:00:01Z",
+        )
+        backend.docs[path] = copy.deepcopy(foreign)
+
+    receipt, _ = campaign_receipt(
+        tmp_path, monkeypatch, backend=backend, before_cleanup=replace_before_cleanup
+    )
+    assert backend.docs.get(foreign["name"]) == foreign
+    assert receipt["cleanupComplete"] is False
+
+
+@pytest.mark.parametrize(
+    "failure", ["lost-response", "wrong-name", "missing-version", "wrong-fields"]
+)
+def test_uncertain_create_response_never_authorizes_delete(
+    tmp_path, monkeypatch, failure
+):
+    from test_campaign_slice import FixtureBackend
+
+    class UncertainBackend(FixtureBackend):
+        def __init__(self):
+            super().__init__()
+            self.target = None
+            self.deletes = []
+
+        def __call__(self, url, method, body, headers, **kwargs):
+            if method == "DELETE":
+                self.deletes.append(url)
+            result = super().__call__(url, method, body, headers, **kwargs)
+            if method == "PATCH" and self.target is None:
+                self.target = url.split("/v1/", 1)[1].split("?", 1)[0]
+                if failure == "lost-response":
+                    raise TimeoutError("fixture response lost after creation")
+                status, response, media = result
+                response = copy.deepcopy(response)
+                if failure == "wrong-name":
+                    response["name"] = "wrong"
+                elif failure == "missing-version":
+                    response.pop("updateTime")
+                else:
+                    response["fields"] = {}
+                return status, response, media
+            return result
+
+    backend = UncertainBackend()
+    receipt, _ = campaign_receipt(tmp_path, monkeypatch, backend=backend)
+    assert backend.target in backend.docs
+    assert not backend.deletes
+    assert receipt["cleanupComplete"] is False

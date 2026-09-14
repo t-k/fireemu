@@ -207,6 +207,26 @@ fn nearest_query() -> Query {
 }
 
 #[test]
+fn vector_queries_without_a_collection_source_are_unsupported_in_production() {
+    let query = Query::new(QueryScope::kindless_all_descendants(None)).with_find_nearest(
+        fireemu_core_firestore::query::FindNearest {
+            vector_field: fp("embedding"),
+            query_vector: vec![0.0, 1.0],
+            distance_measure: fireemu_core_firestore::query::DistanceMeasure::Cosine,
+            limit: 5,
+            distance_result_field: None,
+            distance_threshold: None,
+        },
+    );
+    assert!(matches!(
+        decide(&query, &IndexSet::default(), standard()),
+        IndexDecision::Unsupported {
+            feature: "findNearest requires a collection source"
+        }
+    ));
+}
+
+#[test]
 fn vector_queries_require_a_dimensioned_vector_index_in_production() {
     let query = nearest_query();
     let missing = decide(&query, &IndexSet::default(), standard());

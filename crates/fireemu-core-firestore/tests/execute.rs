@@ -283,6 +283,89 @@ fn nearest_distance_math_excludes_non_finite_results() {
 }
 
 #[test]
+fn nearest_projection_respects_nested_distance_field_masks_and_replaces_collisions() {
+    let mut state = vector_state();
+    state
+        .commit(
+            &[Write {
+                op: WriteOp::Set {
+                    path: path("items/near"),
+                    fields: [
+                        ("embedding".to_owned(), Value::Vector(vec![1.0, 0.0])),
+                        (
+                            "meta".to_owned(),
+                            Value::Map(
+                                [(
+                                    "distance".to_owned(),
+                                    Value::Map(
+                                        [("raw".to_owned(), Value::String("stored".to_owned()))]
+                                            .into_iter()
+                                            .collect(),
+                                    ),
+                                )]
+                                .into_iter()
+                                .collect(),
+                            ),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    update_mask: None,
+                },
+                precondition: None,
+                transforms: vec![],
+            }],
+            None,
+            LogicalInstant::from_unix_seconds(3_000),
+        )
+        .unwrap();
+
+    let mut ancestor = nearest(DistanceMeasure::Euclidean, 1);
+    ancestor
+        .find_nearest
+        .as_mut()
+        .unwrap()
+        .distance_result_field = Some(fp("meta.distance"));
+    ancestor.projection = Some(vec![fp("meta")]);
+    let document = state
+        .run_query(&ancestor.canonicalize().unwrap(), None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let Value::Map(meta) = &document.fields["meta"] else {
+        panic!("ancestor projection should retain the map");
+    };
+    assert_eq!(meta["distance"], Value::Double(0.0));
+
+    let mut exact = ancestor.clone();
+    exact.projection = Some(vec![fp("meta.distance")]);
+    let document = state
+        .run_query(&exact.canonicalize().unwrap(), None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let Value::Map(meta) = &document.fields["meta"] else {
+        panic!("nested projection should retain the parent map");
+    };
+    assert_eq!(meta["distance"], Value::Double(0.0));
+
+    let mut descendant = ancestor;
+    descendant.projection = Some(vec![fp("meta.distance.raw")]);
+    let document = state
+        .run_query(&descendant.canonicalize().unwrap(), None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let Value::Map(meta) = &document.fields["meta"] else {
+        panic!("descendant projection should retain the parent map");
+    };
+    let Value::Map(distance) = &meta["distance"] else {
+        panic!("descendant projection must not synthesize the scalar distance");
+    };
+    assert_eq!(distance["raw"], Value::String("stored".to_owned()));
+}
+
+#[test]
 fn nearest_vector_query_limit_and_threshold_are_applied() {
     let state = vector_state();
     let mut query = nearest(DistanceMeasure::Euclidean, 3);

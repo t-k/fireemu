@@ -521,6 +521,35 @@ fn commit_query_aggregation_and_transactions_over_rest() {
 }
 
 #[test]
+fn rest_find_nearest_without_a_source_is_rejected_before_kindless_scan() {
+    let s = state(None);
+    let vector = json!({
+        "mapValue": {"fields": {
+            "__type__": {"stringValue": "__vector__"},
+            "value": {"arrayValue": {"values": [{"doubleValue": 0.0}, {"doubleValue": 1.0}]}}
+        }}
+    });
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {
+            "findNearest": {
+                "vectorField": {"fieldPath": "embedding"},
+                "queryVector": vector,
+                "distanceMeasure": "COSINE",
+                "limit": 1
+            }
+        }}),
+    );
+    assert_eq!(status, 501, "{body}");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("collection source"));
+}
+
+#[test]
 fn rest_run_query_supports_standard_find_nearest() {
     let s = state(None);
     let mut indexes = IndexSet::default();

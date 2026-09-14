@@ -1302,6 +1302,17 @@ async fn collect_docs(
     }
     out
 }
+async fn collect_responses(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    req: pb::RunQueryRequest,
+) -> Vec<pb::RunQueryResponse> {
+    let mut stream = client.run_query(req).await.unwrap().into_inner();
+    let mut out = Vec::new();
+    while let Some(response) = stream.next().await {
+        out.push(response.unwrap());
+    }
+    out
+}
 
 fn vector(values: &[f64]) -> pb::Value {
     pb::Value {
@@ -1326,6 +1337,35 @@ fn vector(values: &[f64]) -> pb::Value {
             .collect(),
         })),
     }
+}
+
+#[tokio::test]
+async fn grpc_find_nearest_without_a_source_is_rejected_before_kindless_scan() {
+    let (mut client, _, handle) = start().await;
+    let error = client
+        .run_query(pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    find_nearest: Some(sq::FindNearest {
+                        vector_field: Some(sq::FieldReference {
+                            field_path: "embedding".to_owned(),
+                        }),
+                        query_vector: Some(vector(&[0.0, 1.0])),
+                        distance_measure: sq::find_nearest::DistanceMeasure::Cosine as i32,
+                        limit: Some(1),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Unimplemented);
+    assert!(error.message().contains("collection source"));
+    handle.abort();
 }
 
 #[tokio::test]
@@ -1395,7 +1435,7 @@ async fn grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking() {
         })
         .await
         .unwrap();
-    let documents = collect_docs(
+    let responses = collect_responses(
         &mut client,
         pb::RunQueryRequest {
             parent: DOCS.to_owned(),
@@ -1423,8 +1463,17 @@ async fn grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking() {
         },
     )
     .await;
-    let ids = documents
+    assert_eq!(
+        responses
+            .iter()
+            .map(|response| response.skipped_results)
+            .sum::<i32>(),
+        1,
+        "the original offset is reported in skipped_results"
+    );
+    let ids = responses
         .iter()
+        .filter_map(|response| response.document.as_ref())
         .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
         .collect::<Vec<_>>();
     assert_eq!(ids, ["c", "b"]);

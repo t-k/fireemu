@@ -870,7 +870,9 @@ fn vector_index_serves(index: &IndexDefinition, required: &IndexDefinition) -> b
 
 fn decide_find_nearest(query: &Query, indexes: &IndexSet, ctx: PlanningContext) -> IndexDecision {
     let Some(collection) = query.scope.collection_id() else {
-        return IndexDecision::KindlessScan;
+        return IndexDecision::Unsupported {
+            feature: "findNearest requires a collection source",
+        };
     };
     let Some(find_nearest) = query.find_nearest.as_ref() else {
         unreachable!("nearest planner requires a findNearest stage");

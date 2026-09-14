@@ -4161,7 +4161,7 @@ impl FirestoreState {
                 let include_distance = query
                     .projection
                     .as_ref()
-                    .is_none_or(|projection| projection.iter().any(|path| path == field));
+                    .is_none_or(|projection| projection_includes_field(projection, field));
                 if include_distance {
                     set_field(&mut projected.fields, field, Value::Double(distance));
                 }
@@ -5430,6 +5430,12 @@ pub fn project(
     out
 }
 
+fn projection_includes_field(projection: &[FieldPath], field: &FieldPath) -> bool {
+    projection
+        .iter()
+        .any(|selected| field.segments().starts_with(selected.segments()))
+}
+
 fn project_document(document: &Document, projection: Option<&[FieldPath]>) -> Document {
     Document {
         path: document.path.clone(),
@@ -5469,7 +5475,7 @@ fn project_document_for_query(document: &Document, query: &Query) -> Option<Docu
             let include_distance = query
                 .projection
                 .as_ref()
-                .is_none_or(|projection| projection.iter().any(|path| path == field));
+                .is_none_or(|projection| projection_includes_field(projection, field));
             if include_distance {
                 set_field(&mut projected.fields, field, Value::Double(distance));
             }

@@ -442,6 +442,88 @@ fn batch_write_rest_unknown_transaction_rejects_before_writes() {
 }
 
 #[test]
+fn batch_write_rest_continues_after_item_failures_and_preserves_suffix() {
+    let s = state(None);
+    for (failure_index, failure) in [
+        (
+            0,
+            json!({
+                "update": {
+                    "name": "not a document name",
+                    "fields": {"v": {"integerValue": "0"}}
+                }
+            }),
+        ),
+        (
+            1,
+            json!({
+                "update": {
+                    "name": "projects/demo-app/databases/(default)/documents/rest-batch-1/1",
+                    "fields": {"v": {"integerValue": "8"}}
+                },
+                "currentDocument": {"exists": false}
+            }),
+        ),
+    ] {
+        let collection = format!("rest-batch-{failure_index}");
+        let wire_docs = DOCS.trim_start_matches("/v1/");
+        let middle = format!("{wire_docs}/{collection}/1");
+        let middle_path = format!("{DOCS}/{collection}/1");
+        let (status, _) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}/{collection}?documentId=1"),
+            json!({"fields": {"v": {"integerValue": "7"}}}),
+        );
+        assert_eq!(status, 200);
+
+        let first = format!("{wire_docs}/{collection}/0");
+        let last = format!("{wire_docs}/{collection}/2");
+        let first_path = format!("{DOCS}/{collection}/0");
+        let last_path = format!("{DOCS}/{collection}/2");
+        let mut writes = vec![
+            json!({"update": {"name": first, "fields": {"v": {"integerValue": "1"}}}}),
+            json!({"update": {"name": middle, "fields": {"v": {"integerValue": "8"}}}}),
+            json!({"update": {"name": last, "fields": {"v": {"integerValue": "3"}}}}),
+        ];
+        writes[failure_index] = failure;
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchWrite"),
+            json!({"writes": writes}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["status"].as_array().map(Vec::len), Some(3), "{body}");
+        assert_ne!(body["status"][failure_index]["code"], Value::Null, "{body}");
+        assert_eq!(
+            body["writeResults"].as_array().map(Vec::len),
+            Some(3),
+            "{body}"
+        );
+
+        for (index, path) in [(0, first_path), (1, middle_path), (2, last_path)] {
+            let (status, document) = call(&s, "GET", &path, Value::Null);
+            if failure_index == 0 && index == 0 {
+                assert_eq!(status, 404, "{document}");
+            } else {
+                assert_eq!(status, 200, "{document}");
+                let expected = if index == 0 {
+                    "1".to_owned()
+                } else if index == 1 && failure_index == 1 {
+                    "7".to_owned()
+                } else if index == 1 {
+                    "8".to_owned()
+                } else {
+                    "3".to_owned()
+                };
+                assert_eq!(document["fields"]["v"]["integerValue"], expected);
+            }
+        }
+    }
+}
+
+#[test]
 fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() {
     let s = state(None);
     let mut read_time = String::new();

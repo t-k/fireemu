@@ -2013,12 +2013,31 @@ fn dispatch_with_blocking_hook(
     }
 }
 
-/// Routes one request with its headers (privileged routes check them).
+/// Handles standard REST requests with caller-pinned local OIDC verification enabled.
+///
+/// This embedder/test configuration is not a new HTTP API. Every `signInWithIdp` request
+/// must match this single trust pin and an enabled provider configuration in the selected
+/// namespace; refusal never falls back to fixture parsing. No discovery or network calls
+/// occur. The daemon and [`handle_with`] retain fixture mode until explicitly wired here.
 ///
 /// The order is fixed: the store of the target project is selected, App Check decides, the
 /// route's privilege class is checked (owner credential, control token, project match), and
 /// only then does the handler run. Every step reads the same route table
 /// (`AUTH-ROUTE-03`).
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn handle_with_oidc_trust(
+    state: &AuthState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+    body: &Value,
+    trust: &crate::oidc::LocalOidcTrust,
+) -> JsonResponse {
+    handle_with_policy(state, method, path, headers, body, Some(trust))
+}
+
+/// Handles a request using the emulator fixture assertion policy.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn handle_with(
@@ -2027,6 +2046,18 @@ pub fn handle_with(
     path: &str,
     headers: &RequestHeaders,
     body: &Value,
+) -> JsonResponse {
+    handle_with_policy(state, method, path, headers, body, None)
+}
+
+#[allow(clippy::too_many_lines)]
+fn handle_with_policy(
+    state: &AuthState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+    body: &Value,
+    oidc_trust: Option<&crate::oidc::LocalOidcTrust>,
 ) -> JsonResponse {
     let (path, query) = match path.split_once('?') {
         Some((p, q)) => (p, Some(q)),
@@ -2245,6 +2276,18 @@ pub fn handle_with(
             tenant_policy_denial_with_metadata(route.handler, tenant_metadata.as_ref(), body)
         {
             return denial;
+        }
+    }
+    // Verify the selected namespace and assertion before any account or transient mutation.
+    if route.handler == routes::Handler::SignInWithIdp {
+        if let Some(trust) = oidc_trust {
+            let params = normalized_idp_params(
+                str_field(body, "requestUri").unwrap_or_default(),
+                str_field(body, "postBody"),
+            );
+            if !trust.accepts(&store, &params, at) {
+                return error(400, "INVALID_IDP_RESPONSE");
+            }
         }
     }
     // Expired transient credentials are swept before every request is served, so nothing

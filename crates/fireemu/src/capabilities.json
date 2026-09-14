@@ -228,6 +228,24 @@
     "precision": "boundary-conformance",
     "status": "implemented"
   },
+  "AUTH-FEDERATION-ASSERTION-LOCAL": {
+    "status": "partial",
+    "precision": "exact-for-local-semantics",
+    "implemented": [
+      "Opt-in Rust adapter handler configuration, handle_with_oidc_trust, preserves the standard accounts:signInWithIdp REST request and injects one caller-pinned public RS256 JWK; no new client HTTP API or network traffic",
+      "Enabled provider and project/tenant/provider/issuer/client trust binding; real compact RS256 signature verification; issuer, subject, audience/authorized-party, expiry, issued-at, not-before and SDK raw-nonce SHA-256 checks before account mutation",
+      "Signed assertion account creation, repeated sign-in, explicit account linking, cross-account identity collision refusal and unverified-email confirmation without tokens"
+    ],
+    "notes": [
+      "Local evidence: crates/fireemu-adapter-http/tests/auth_oidc_assertions.rs; public contract and remaining limits: docs/compatibility/auth-federation-assertion-local.md",
+      "The default daemon, handle and handle_with remain emulator fixture mode. This entry is not a claim that provider-config CRUD enables signed assertion verification in the shipped daemon",
+      "Finite local policy: single pinned key, RS256 only, required matching kid, 2048-8192-bit RSA, 64 KiB token bound, integer timestamps with no clock skew; exact production error precedence and boundary policies remain unmeasured"
+    ],
+    "unsupported": [
+      "Daemon trust configuration, discovery/JWKS retrieval and rotation, hosted redirects, authorization-code exchange, external IdP traffic and SDK end-to-end execution",
+      "SAML XMLDSig, assertion replay consumption and production parity; a repeated valid bearer ID token may sign in again"
+    ]
+  },
   "AUTH-OAUTH-0": {
     "implemented": [
       "accounts:signInWithIdp (verifyAssertion): the credential is read from requestUri and/or postBody (the official getNormalizedUri merges the request URI query, the post body and the URI fragment); providerId is lowercased; the id_token (a fake JWT or strict JSON) or a JSON access_token carries the claims; no OAuth round trip",

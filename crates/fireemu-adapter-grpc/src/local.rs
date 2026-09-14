@@ -4361,16 +4361,16 @@ impl LocalBackend {
                 .cloned()
                 .map(DatabaseHandle);
             match existing {
-                Some(handle) => handle,
+                Some(handle) => Some(handle),
                 None if !req.page_token.is_empty() => {
                     return Err(Status::invalid_argument(
                         "page_token was issued for a different listing",
                     ));
                 }
-                None => self.database_handle(&parent)?,
+                None => None,
             }
         };
-        let identity = || {
+        let identity = |handle: &DatabaseHandle| {
             format!(
                 "{}|{}|{}|{}|{}|{}",
                 req.parent,
@@ -4386,7 +4386,9 @@ impl LocalBackend {
                     .map_or_else(String::new, |options| format!("{options:?}")),
             )
         };
-        list_collection_ids_page_cursor(&req.page_token, &identity())?;
+        if let Some(handle) = &handle {
+            list_collection_ids_page_cursor(&req.page_token, &identity(handle))?;
+        }
         self.fault(parent.project.as_str(), "firestore.read")?;
         let page_size = if req.page_size > 0 {
             usize::try_from(req.page_size).unwrap_or(usize::MAX)
@@ -4394,12 +4396,18 @@ impl LocalBackend {
             DEFAULT_LIST_PAGE_SIZE
         };
         let _admitted = self.barrier.admit();
+        // A tokenless request for an absent database creates state only after faults
+        // succeed, leaving the catalog and deterministic generators untouched on error.
+        let handle = match handle {
+            Some(handle) => handle,
+            None => self.database_handle(&parent)?,
+        };
         // Validation and snapshot selection use this same instance under its read lock.
         // Retaining the handle across faults prevents a reset from redirecting an accepted
         // cursor to a replacement database, even when reset bypasses session admission.
         handle
             .read_status(|db| {
-                let identity = identity();
+                let identity = identity(&handle);
                 let after = list_collection_ids_page_cursor(&req.page_token, &identity)?;
                 let version = match read_at {
                     Some(at) => Some(Self::retained_read_version(db, at)?),

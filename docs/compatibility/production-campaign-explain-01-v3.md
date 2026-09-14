@@ -1,8 +1,8 @@
 # Query Explain campaign comparison contract v3
 
-This contract is a follow-up to the frozen Query Explain campaign evidence. The
-v2 manifest, collector, receipts and original comparison remain unchanged. The
-current manifest is [prod-campaign-explain-01-v2.json](../../spec/compatibility/broad-runs/prod-campaign-explain-01-v2.json); its comparison binding is v3.
+This contract is a follow-up to the frozen Query Explain campaign evidence.
+The original production receipt and comparison remain unchanged. The checked-in
+prepared manifest is [prod-campaign-explain-01-v2.json](../../spec/compatibility/broad-runs/prod-campaign-explain-01-v2.json); its observer binding was refreshed after the collector source changed, while the comparison binding is v3.
 
 The campaign still requires a complete request, response, readback and cleanup
 receipt. A response is complete when it is either a valid Explain success or a

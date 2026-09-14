@@ -9,7 +9,7 @@ import pytest
 
 
 def publisher():
-    path = Path(__file__).parents[1] / "publish-auth-session-v2.py"
+    path = Path(__file__).with_name("frozen_receipt.py")
     assert path.exists(), "New publisher required"
     spec = importlib.util.spec_from_file_location("session_v2_publisher", path)
     assert spec and spec.loader

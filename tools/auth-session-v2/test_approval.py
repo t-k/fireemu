@@ -15,6 +15,15 @@ def tool():
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    frozen_path = Path(__file__).with_name("frozen_receipt.py")
+    frozen_spec = importlib.util.spec_from_file_location(
+        "session_v2_frozen_receipt", frozen_path
+    )
+    assert frozen_spec and frozen_spec.loader
+    frozen = importlib.util.module_from_spec(frozen_spec)
+    frozen_spec.loader.exec_module(frozen)
+    module.publisher.validate = frozen.validate_frozen
+    module.publisher.render_frozen = frozen.render_frozen
     return module
 
 

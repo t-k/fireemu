@@ -917,7 +917,7 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
             "displayName": "Default user",
             "photoUrl": "https://example.com/default.png",
             "phoneNumber": "+15555550111",
-            "disabled": true,
+            "disabled": false,
             "passwordHash": default_hash,
             "salt": "default-salt",
             "passwordUpdatedAt": 1_111_111_111_111_i64,
@@ -930,10 +930,6 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
                 {"providerId":"password","rawId":"default@example.com","federatedId":"default@example.com","email":"default@example.com"},
                 {"providerId":"google.com","rawId":"google-default","federatedId":"google-default","email":"default@example.com","displayName":"Default user"}
             ],
-            "mfaInfo": [
-                {"mfaEnrollmentId":"phone-factor","displayName":"phone","phoneInfo":"+15555550112","unobfuscatedPhoneInfo":"+15555550112","enrolledAt":"2005-03-18T01:58:31Z"},
-                {"mfaEnrollmentId":"totp-factor","displayName":"totp","enrolledAt":"2005-03-18T01:58:31Z","totpInfo":{"sharedSecretKey":"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"}}
-            ]
         }]
     });
     std::fs::write(
@@ -955,6 +951,10 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
             "createdAt": "2222222222000",
             "providerUserInfo": [
                 {"providerId":"password","rawId":"tenant@example.com","federatedId":"tenant@example.com","email":"tenant@example.com"}
+            ],
+            "mfaInfo": [
+                {"mfaEnrollmentId":"phone-factor","displayName":"phone","phoneInfo":"+15555550112","unobfuscatedPhoneInfo":"+15555550112","enrolledAt":"2005-03-18T01:58:31Z"},
+                {"mfaEnrollmentId":"totp-factor","displayName":"totp","enrolledAt":"2005-03-18T01:58:31Z","totpInfo":{"sharedSecretKey":"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"}}
             ]
         }]
     });
@@ -965,16 +965,22 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
     .unwrap();
 
     let out = dir.join("out");
+    let probe = format!(
+        r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key" -H 'Content-Type: application/json' -d '{{"email":"default@example.com","password":"{long_password}","returnSecureToken":true}}'"#
+    );
     let output = exec()
         .args(["--only", "auth", "--import"])
         .arg(&source)
         .arg("--export-on-exit")
         .arg(&out)
-        .args(["--", "true"])
+        .args(["--", "sh", "-c"])
+        .arg(&probe)
         .output()
         .unwrap();
     let log = text(&output);
     assert!(output.status.success(), "{log}");
+    assert!(log.contains("\"localId\":\"shared-uid\""), "{log}");
+    assert!(log.contains("\"idToken\":"), "{log}");
 
     let read_user = |path: &Path| -> serde_json::Value {
         let text = std::fs::read_to_string(path).unwrap();
@@ -984,17 +990,64 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
     let tenant = read_user(&out.join("auth_export/accounts-customer-a.json"));
     assert_eq!(default["localId"], "shared-uid");
     assert_eq!(default["passwordUpdatedAt"], 1_111_111_111_111_i64);
-    assert_eq!(default["disabled"], true);
+    assert_eq!(default["disabled"], false);
+    assert_eq!(default["emailVerified"], true);
     assert_eq!(default["customAttributes"], "{\"tier\":\"default\"}");
     assert_eq!(default["providerUserInfo"].as_array().unwrap().len(), 3);
-    assert_eq!(default["mfaInfo"].as_array().unwrap().len(), 2, "{default}");
+    assert_eq!(default["providerUserInfo"][0]["providerId"], "password");
+    assert_eq!(
+        default["providerUserInfo"][0]["rawId"],
+        "default@example.com"
+    );
+    assert_eq!(
+        default["providerUserInfo"][0]["federatedId"],
+        "default@example.com"
+    );
+    assert_eq!(default["providerUserInfo"][1]["providerId"], "phone");
+    assert_eq!(default["providerUserInfo"][1]["rawId"], "+15555550111");
+    assert_eq!(default["providerUserInfo"][2]["providerId"], "google.com");
+    assert_eq!(default["providerUserInfo"][2]["rawId"], "google-default");
+    assert_eq!(
+        default["providerUserInfo"][2]["federatedId"],
+        "google-default"
+    );
+    assert_eq!(
+        default["providerUserInfo"][2]["email"],
+        "default@example.com"
+    );
     assert_eq!(
         default["passwordHash"].as_str().unwrap().len(),
         default_hash.len()
     );
     assert_eq!(tenant["localId"], "shared-uid");
     assert_eq!(tenant["tenantId"], "customer-a");
+    assert_eq!(tenant["emailVerified"], true);
+    assert_eq!(tenant["disabled"], false);
     assert_eq!(tenant["passwordUpdatedAt"], 2_222_222_222_222_i64);
+    assert_eq!(tenant["providerUserInfo"][0]["providerId"], "password");
+    assert_eq!(tenant["providerUserInfo"][0]["rawId"], "tenant@example.com");
+    assert_eq!(tenant["mfaInfo"].as_array().unwrap().len(), 2, "{tenant}");
+    assert_eq!(tenant["mfaInfo"][0]["mfaEnrollmentId"], "phone-factor");
+    assert_eq!(tenant["mfaInfo"][0]["displayName"], "phone");
+    assert_eq!(tenant["mfaInfo"][0]["phoneInfo"], "+15555550112");
+    assert_eq!(
+        tenant["mfaInfo"][0]["unobfuscatedPhoneInfo"],
+        "+15555550112"
+    );
+    assert_eq!(
+        tenant["mfaInfo"][0]["enrolledAt"],
+        "2005-03-18T01:58:31.000Z"
+    );
+    assert_eq!(tenant["mfaInfo"][1]["mfaEnrollmentId"], "totp-factor");
+    assert_eq!(tenant["mfaInfo"][1]["displayName"], "totp");
+    assert_eq!(
+        tenant["mfaInfo"][1]["enrolledAt"],
+        "2005-03-18T01:58:31.000Z"
+    );
+    assert_eq!(
+        tenant["mfaInfo"][1]["totpInfo"]["sharedSecretKey"],
+        "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+    );
 
     let again = dir.join("again");
     let second = exec()
@@ -1007,14 +1060,12 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
         .unwrap();
     let log = text(&second);
     assert!(second.status.success(), "{log}");
-    assert_eq!(
-        read_user(&again.join("auth_export/accounts.json"))["passwordUpdatedAt"],
-        1_111_111_111_111_i64
-    );
-    assert_eq!(
-        read_user(&again.join("auth_export/accounts-customer-a.json"))["passwordUpdatedAt"],
-        2_222_222_222_222_i64
-    );
+    let again_default = read_user(&again.join("auth_export/accounts.json"));
+    let again_tenant = read_user(&again.join("auth_export/accounts-customer-a.json"));
+    assert_eq!(again_default, default);
+    assert_eq!(again_tenant, tenant);
+    assert_eq!(again_default["passwordUpdatedAt"], 1_111_111_111_111_i64);
+    assert_eq!(again_tenant["passwordUpdatedAt"], 2_222_222_222_222_i64);
 }
 
 #[test]

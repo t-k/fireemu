@@ -88,10 +88,12 @@ def current_local(source):
 
     value = copy.deepcopy(source)
     value.update(
+        kind="second45-local-run-v1",
         target="local",
         productionExecuted=False,
         admissionDigest=digest(manifest()),
-        manifestDigest=digest(production_manifest()),
+        manifestDigest=digest(manifest()),
+        comparisonManifestDigest=digest(production_manifest()),
         comparisonContractDigest=digest(binding()),
         observerDigest=observer_digest(),
     )
@@ -333,17 +335,66 @@ def test_saved_candidate_compares_only_production_rows_and_records_bindings(
                 "artifactSha256": local["runtimeIdentity"]["artifactSha256"],
                 "executionCommit": local["runtimeIdentity"]["executionCommit"],
                 "configurationDigest": local["runtimeIdentity"]["configurationDigest"],
+                "mappedReceiptFileSha256": digest(local),
+                "mappedReceiptKind": local["kind"],
+                "mappedReceiptRuntimeIdentity": local["runtimeIdentity"],
+                "mappedReceiptRecordingComplete": True,
+                "mappedReceiptCleanupComplete": True,
                 "localObservations": {"mapped": local},
             }
         )
     )
-    result = compare_saved(candidate_path, local, parent_path)
+    parent = json.loads(parent_path.read_text())
+    parent["parentManifestSha256"] = digest(parent)
+    parent_path.write_text(json.dumps(parent))
+    result = compare_saved(
+        candidate_path, local, parent_path, local_source_sha256=digest(local)
+    )
     assert result["compatibility"] in {"match", "mismatch"}, result["errors"]
     assert result["mode"] == "saved-production-versus-local"
     assert result["historicalObserverDigest"]
     assert result["currentObserverDigest"] == local["observerDigest"]
     assert len(result["productionCandidateSourceSha256"]) == 64
     assert result["currentLocalSourceSha256"] == digest(local)
+
+
+@pytest.mark.parametrize("field", ["kind", "manifestDigest", "admissionDigest", "comparisonManifestDigest"])
+def test_saved_mode_rejects_exact_local_receipt_manifest_mutations(
+    production_inputs, tmp_path, field
+):
+    from broad_contract import ROOT
+    from second_production_pair import compare_saved
+
+    _, backend = production_inputs
+    local = current_local(backend.source)
+    original = copy.deepcopy(local)
+    parent = {
+        "status": "completed",
+        "productionExecuted": False,
+        "artifactSha256": local["runtimeIdentity"]["artifactSha256"],
+        "executionCommit": local["runtimeIdentity"]["executionCommit"],
+        "configurationDigest": local["runtimeIdentity"]["configurationDigest"],
+        "mappedReceiptFileSha256": digest(original),
+        "mappedReceiptKind": original["kind"],
+        "mappedReceiptRuntimeIdentity": original["runtimeIdentity"],
+        "mappedReceiptRecordingComplete": True,
+        "mappedReceiptCleanupComplete": True,
+        "localObservations": {"mapped": original},
+    }
+    parent["parentManifestSha256"] = digest(parent)
+    parent_path = tmp_path / "parent.json"
+    parent_path.write_text(json.dumps(parent))
+    if field == "kind":
+        local[field] = "second45-local-run-v0"
+    else:
+        local[field] = "0" * 64
+    result = compare_saved(
+        ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json",
+        local,
+        parent_path,
+        local_source_sha256=digest(local),
+    )
+    assert result["compatibility"] == "indeterminate"
 
 
 @pytest.mark.parametrize(

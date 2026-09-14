@@ -50,8 +50,13 @@ def compare(production, local):
         try:
             if result.get("target") != target or result.get("mode") != "mapped":
                 raise ValueError("distinct production/local mapped targets required")
+            manifest_digest = (
+                result.get("manifestDigest")
+                if target == "production"
+                else result.get("comparisonManifestDigest")
+            )
             if (
-                result.get("manifestDigest") != digest(manifest())
+                manifest_digest != digest(manifest())
                 or result.get("comparisonContractDigest") != digest(binding())
                 or result.get("observerDigest") != observer_digest()
             ):
@@ -123,7 +128,7 @@ def load_parent_manifest(path):
     return value
 
 
-def compare_saved(candidate_path, local, parent_path):
+def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=None):
     """Compare a saved normalized production candidate with one current local receipt."""
     from second_production_contract import binding, manifest, observer_digest
 
@@ -154,6 +159,12 @@ def compare_saved(candidate_path, local, parent_path):
         errors.append({"side": "production", "reason": str(error)})
 
     try:
+        parent_hash = parent.get("parentManifestSha256")
+        unsigned_parent = {
+            key: value for key, value in parent.items() if key != "parentManifestSha256"
+        }
+        if not isinstance(parent_hash, str) or parent_hash != digest(unsigned_parent):
+            raise ValueError("parent manifest integrity binding is invalid")
         if parent.get("status") != "completed":
             raise ValueError("parent execution manifest is incomplete")
         if parent.get("productionExecuted") is not False:
@@ -164,12 +175,22 @@ def compare_saved(candidate_path, local, parent_path):
             raise ValueError("parent mapped local observation is unavailable")
         if parent_local != local:
             raise ValueError("current local receipt differs from parent mapped observation")
-        identity = local.get("runtimeIdentity")
+        if not isinstance(local_source_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", local_source_sha256
+        ):
+            raise ValueError("current local receipt byte hash is unavailable")
+        if parent.get("mappedReceiptFileSha256") != local_source_sha256:
+            raise ValueError("current local receipt byte hash differs from parent")
+        if parent.get("mappedReceiptKind") != "second45-local-run-v1":
+            raise ValueError("parent mapped receipt kind is unsupported")
         parent_identity = {
             "artifactSha256": parent.get("artifactSha256"),
             "executionCommit": parent.get("executionCommit"),
             "configurationDigest": parent.get("configurationDigest"),
         }
+        if parent.get("mappedReceiptRuntimeIdentity") != parent_identity:
+            raise ValueError("parent mapped receipt identity is not bound")
+        identity = local.get("runtimeIdentity")
         if identity != parent_identity:
             raise ValueError("current local runtime identity differs from parent")
         if (
@@ -179,6 +200,15 @@ def compare_saved(candidate_path, local, parent_path):
             or parent_local.get("productionExecuted") is not False
         ):
             raise ValueError("current local mapped target required")
+        from second_admission import manifest as local_manifest
+
+        if (
+            local.get("kind") != "second45-local-run-v1"
+            or local.get("manifestDigest") != digest(local_manifest())
+            or local.get("admissionDigest") != digest(local_manifest())
+            or local.get("comparisonManifestDigest") != digest(manifest())
+        ):
+            raise ValueError("current local receipt manifest bindings are invalid")
         if (
             local.get("comparisonManifestDigest", local.get("manifestDigest"))
             != digest(manifest())
@@ -300,6 +330,7 @@ def main():
             args.saved_production_candidate,
             json.loads(args.local.read_text()),
             args.parent_manifest,
+            local_source_sha256=hashlib.sha256(args.local.read_bytes()).hexdigest(),
         )
     else:
         if args.production is None:

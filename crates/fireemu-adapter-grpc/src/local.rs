@@ -4895,6 +4895,89 @@ mod lock_tests {
     }
 
     #[test]
+    fn list_collection_ids_return_error_does_not_create_database() {
+        check_list_collection_ids_fault_leaves_absent_database_unchanged(
+            fireemu_core_session::fault::FaultAction::ReturnError {
+                code: "UNAVAILABLE".into(),
+            },
+            tonic::Code::Unavailable,
+        );
+    }
+
+    #[test]
+    fn list_collection_ids_timeout_does_not_create_database() {
+        check_list_collection_ids_fault_leaves_absent_database_unchanged(
+            fireemu_core_session::fault::FaultAction::Timeout,
+            tonic::Code::DeadlineExceeded,
+        );
+    }
+
+    #[test]
+    fn list_collection_ids_transaction_conflict_does_not_create_database() {
+        check_list_collection_ids_fault_leaves_absent_database_unchanged(
+            fireemu_core_session::fault::FaultAction::TransactionConflict,
+            tonic::Code::Aborted,
+        );
+    }
+
+    #[test]
+    fn list_collection_ids_drop_connection_does_not_create_database() {
+        check_list_collection_ids_fault_leaves_absent_database_unchanged(
+            fireemu_core_session::fault::FaultAction::DropConnection,
+            tonic::Code::Unavailable,
+        );
+    }
+
+    fn check_list_collection_ids_fault_leaves_absent_database_unchanged(
+        action: fireemu_core_session::fault::FaultAction,
+        code: tonic::Code,
+    ) {
+        use fireemu_core_session::fault::{FaultMatch, FaultPlan, FaultRegistry, FaultRule};
+
+        let backend = backend();
+        let before = backend.snapshot_databases();
+        assert!(before.is_empty());
+        let transaction_ids_before = backend.transaction_ids.lock().unwrap().clone();
+        let document_ids_before = backend.ids.lock().unwrap().clone();
+        let incarnations_before = backend
+            .database_incarnations
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let registry = Arc::new(FaultRegistry::new());
+        registry.default_state().lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.read".into(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action,
+            }],
+        });
+        backend.set_faults(registry);
+        let error = backend
+            .list_collection_ids(&pb::ListCollectionIdsRequest {
+                parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), code);
+        assert!(backend.snapshot_databases().is_empty());
+        assert_eq!(
+            *backend.transaction_ids.lock().unwrap(),
+            transaction_ids_before
+        );
+        assert_eq!(*backend.ids.lock().unwrap(), document_ids_before);
+        assert_eq!(
+            backend
+                .database_incarnations
+                .load(std::sync::atomic::Ordering::SeqCst),
+            incarnations_before
+        );
+    }
+
+    #[test]
     fn list_collection_ids_rejects_reset_between_token_validation_and_read() {
         check_list_collection_ids_reset_during_fault(true);
     }

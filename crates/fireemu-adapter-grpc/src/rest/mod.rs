@@ -678,7 +678,7 @@ impl RestState {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
             page_size,
-            page_token: first(params, "pageToken").unwrap_or("").to_owned(),
+            page_token: single(params, "pageToken")?.unwrap_or("").to_owned(),
             order_by: order_by.to_owned(),
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
             show_missing,

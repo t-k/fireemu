@@ -1552,6 +1552,73 @@ fn rest_list_rejects_duplicate_scalar_parameters() {
 }
 
 #[test]
+fn rest_list_rejects_duplicate_page_token_without_fault_or_state_change() {
+    use fireemu_core_session::fault::{
+        FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (s, clock) = state_with_clock(None, TokenAcceptance::Verified);
+    for id in ["a", "b"] {
+        let (status, created) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/token/{id}"),
+            json!({"fields": {"value": {"stringValue": id}}}),
+        );
+        assert_eq!(status, 200, "{created}");
+    }
+    let (status, baseline) = call(&s, "GET", &format!("{DOCS}/token"), json!({}));
+    assert_eq!(status, 200, "{baseline}");
+    let (status, first_page) = call(&s, "GET", &format!("{DOCS}/token?pageSize=1"), json!({}));
+    assert_eq!(status, 200, "{first_page}");
+    let token = first_page["nextPageToken"].as_str().unwrap().to_owned();
+
+    let fault_callbacks = Arc::new(AtomicUsize::new(0));
+    let callback_counter = Arc::clone(&fault_callbacks);
+    s.local.set_clock_observer(Arc::new(move || {
+        callback_counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    let registry = Arc::new(FaultRegistry::new());
+    registry.default_state().lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "firestore.read".into(),
+                nth: None,
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::Delay { seconds: 90 },
+        }],
+    });
+    s.local.set_faults(registry);
+    let clock_before = clock.lock().unwrap().now_for_test();
+    let (status, _) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/token?pageSize=1&pageToken=a&pageToken=b"),
+        json!({}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(clock.lock().unwrap().now_for_test(), clock_before);
+    assert_eq!(fault_callbacks.load(Ordering::SeqCst), 0);
+
+    s.local.set_faults(Arc::new(FaultRegistry::new()));
+    let (status, single_page) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/token?pageSize=1&pageToken={token}"),
+        json!({}),
+    );
+    assert_eq!(status, 200, "{single_page}");
+    assert_eq!(single_page["documents"].as_array().map(Vec::len), Some(1));
+    let (status, after) = call(&s, "GET", &format!("{DOCS}/token"), json!({}));
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after["documents"], baseline["documents"]);
+}
+
+#[test]
 fn rest_negative_page_size_refusal_does_not_move_clock_or_change_state() {
     use fireemu_core_session::fault::{
         FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,

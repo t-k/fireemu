@@ -2312,6 +2312,130 @@ fn admin_create_is_atomic_and_typed() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn account_lifecycle_keeps_admin_and_client_post_state_consistent() {
+    let s = strict_state();
+    let uid = "lifecycle-user";
+    let email = "lifecycle@example.test";
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": uid, "email": email, "password": "lifecycle-password"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["localId"], uid);
+
+    let (status, duplicate) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "other-user", "email": email, "password": "other-password"}),
+    );
+    assert_eq!(status, 400, "{duplicate}");
+    assert_eq!(duplicate["error"]["message"], "EMAIL_EXISTS");
+    let (_, after_duplicate) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid, "other-user"]}),
+    );
+    assert_eq!(after_duplicate["users"].as_array().map(Vec::len), Some(1));
+
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "lifecycle-password", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let (status, updated) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "displayName": "Lifecycle User", "disableUser": true}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    let (_, disabled_view) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert_eq!(disabled_view["users"][0]["disabled"], true);
+    let (status, disabled) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "lifecycle-password"}),
+    );
+    assert_eq!(status, 400, "{disabled}");
+    assert_eq!(disabled["error"]["message"], "USER_DISABLED");
+    let (status, reenabled) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "disableUser": false}),
+    );
+    assert_eq!(status, 200, "{reenabled}");
+    let (_, reenabled_view) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert!(reenabled_view["users"][0].get("disabled").is_none());
+    let (status, client_signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "lifecycle-password"}),
+    );
+    assert_eq!(status, 200, "{client_signed}");
+    let (_, client_view) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": client_signed["idToken"]}),
+    );
+    assert_eq!(client_view["users"][0]["localId"], uid);
+    assert_eq!(client_view["users"][0]["displayName"], "Lifecycle User");
+
+    let (status, listed) = admin(
+        &s,
+        "GET",
+        &format!("{ADMIN}/accounts:batchGet?maxResults=10"),
+        &json!({}),
+    );
+    assert_eq!(status, 200, "{listed}");
+    assert!(listed["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|u| u["localId"] == uid));
+
+    let (status, deleted) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:delete"),
+        &json!({"localId": uid}),
+    );
+    assert_eq!(status, 200, "{deleted}");
+    let (_, missing) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert!(missing.get("users").is_none(), "{missing}");
+
+    let (status, recreated) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": uid, "email": "recreated@example.test", "password": "recreated-password"}),
+    );
+    assert_eq!(status, 200, "{recreated}");
+    assert_eq!(recreated["localId"], uid);
+}
+
+#[test]
 fn admin_lookup_resolves_every_identifier_and_batch_get_pages_over_get() {
     let s = state();
     for i in 0..5 {

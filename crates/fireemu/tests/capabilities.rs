@@ -692,3 +692,27 @@ fn the_local_divergences_and_the_observation_surface_are_published() {
         "the entry states where a raw debug secret may appear: {observe_text}"
     );
 }
+
+#[test]
+fn account_lifecycle_capability_is_published_with_its_compatibility_boundary() {
+    let entry = &manifest()["capabilities"]["AUTH-ACCOUNT-LIFECYCLE-1"];
+    assert_eq!(entry["status"], "implemented");
+    assert_eq!(entry["precision"], "boundary-conformance");
+    let text = text_of(entry);
+    for term in [
+        "Admin",
+        "client",
+        "duplicate email",
+        "disable and re-enable",
+        "UID reuse",
+        "anonymous upgrade",
+        "provider linking",
+        "production",
+    ] {
+        assert!(
+            text.to_ascii_lowercase()
+                .contains(&term.to_ascii_lowercase()),
+            "missing {term}: {text}"
+        );
+    }
+}

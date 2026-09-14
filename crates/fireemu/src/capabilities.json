@@ -189,6 +189,23 @@
     ],
     "status": "implemented"
   },
+  "AUTH-ACCOUNT-LIFECYCLE-1": {
+    "implemented": [
+      "Admin account create, get, list, update and delete through the projects/{project}/accounts routes",
+      "client account create, get, update and delete through the Identity Toolkit accounts routes",
+      "duplicate email refusal without mutating either account, and UID reuse after delete",
+      "disable and re-enable: disabled accounts remain readable and retain their credentials while client sign-in is refused",
+      "anonymous upgrade to an email/password account while retaining the anonymous UID, and federated provider linking through linkProviderUserInfo",
+      "post-state checks from both Admin selectors and the authenticated client subject"
+    ],
+    "notes": [
+      "conformance: auth/admin-account-lifecycle and auth/client-account-flows (conformance/README.md); these are pinned official Local Emulator Suite references, never production evidence",
+      "production candidate: account lifecycle observations require a project/API-key run with matching inputs and observer identity before any production compatibility claim is promoted",
+      "session cookies, out-of-band actions, MFA and external federation protocol exchange are separate capabilities"
+    ],
+    "precision": "boundary-conformance",
+    "status": "implemented"
+  },
   "AUTH-MFA-SMS-0": {
     "notes": [
       "phone second factors: mfaEnrollment:start/finalize/withdraw with phoneEnrollmentInfo / phoneVerificationInfo, mfaSignIn:start/finalize with phoneSignInInfo; codes come from /emulator/v1/projects/{p}/verificationCodes; up to five factors per user",

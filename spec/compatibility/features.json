@@ -54,6 +54,33 @@
       ]
     },
     {
+      "id": "AUTH-ACCOUNT-LIFECYCLE",
+      "title": "Authentication account lifecycle",
+      "goal": "AUTH-CORE",
+      "appliesTo": "Identity Toolkit REST; configured project; Admin owner and authenticated client subjects",
+      "sources": [
+        "AUTH-OVERVIEW",
+        "AUTH-REST",
+        "AUTH-DISCOVERY-V1",
+        "AUTH-EMULATOR"
+      ],
+      "surfaces": [
+        "AUTH-SIGNUP",
+        "AUTH-PASSWORD"
+      ],
+      "requirements": [],
+      "capabilities": [
+        "AUTH-ACCOUNT-LIFECYCLE-1"
+      ],
+      "claims": [
+        "AUTH-CLAIM-IDENTITY-TOOLKIT"
+      ],
+      "limitations": [
+        "The pinned conformance fixtures are official Local Emulator Suite observations; production account lifecycle parity remains a candidate until matching project, input and observer identities are recorded.",
+        "Session cookies, out-of-band actions, MFA and external provider protocol exchange are outside this finite lifecycle slice."
+      ]
+    },
+    {
       "id": "AUTH-TOTP",
       "title": "TOTP enrollment and sign-in",
       "goal": "AUTH-IP-MAIN",

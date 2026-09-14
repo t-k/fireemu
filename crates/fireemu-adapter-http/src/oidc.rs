@@ -49,10 +49,10 @@ impl LocalOidcTrust {
         {
             return false;
         }
-        // This bounded mode authenticates only an ID token; no access-token binding is implemented.
-        if params
-            .get("access_token")
-            .is_some_and(|token| !token.is_empty())
+        // This bounded mode authenticates only an ID token; other OAuth credentials are unverified.
+        if ["access_token", "refresh_token"]
+            .iter()
+            .any(|field| params.get(*field).is_some_and(|token| !token.is_empty()))
         {
             return false;
         }

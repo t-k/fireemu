@@ -575,3 +575,87 @@ fn signed_oidc_bad_signature_preserves_populated_sessions_transients_and_allocat
             .unwrap()
     );
 }
+
+#[test]
+fn signed_oidc_mixed_refresh_token_never_reaches_hooks_or_pending_credentials() {
+    use fireemu_core_auth::store::PendingSignInId;
+    for require_mfa in [false, true] {
+        let mut s = state();
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        s.blocking = Some(Arc::new(CredentialObserver {
+            contexts: contexts.clone(),
+        }));
+        let body = request(&token(&claims()));
+        let created = signed_post(&s, &trust(), &body);
+        assert_eq!(created.status, 200);
+        assert!(!contexts.lock().unwrap().is_empty());
+        contexts.lock().unwrap().clear();
+        if require_mfa {
+            let mut store = s.store.lock().unwrap();
+            let uid = store
+                .user_by_id(created.body["localId"].as_str().unwrap())
+                .unwrap()
+                .local_id
+                .clone();
+            store
+                .enroll_phone_factor(
+                    &uid,
+                    "+15555550126",
+                    None,
+                    LogicalInstant::from_unix_seconds(NOW),
+                )
+                .unwrap();
+        }
+        let baseline = s.store.lock().unwrap().clone();
+        let mut mixed = body.clone();
+        mixed["postBody"] = json!(format!(
+            "{}&refresh_token=unverified-refresh-sentinel",
+            body["postBody"].as_str().unwrap()
+        ));
+        let response = signed_post(&s, &trust(), &mixed);
+        assert_eq!(response.status, 400, "require_mfa={require_mfa}");
+        assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
+        assert!(response.body.get("idToken").is_none());
+        assert!(response.body.get("refreshToken").is_none());
+        assert!(response.body.get("mfaPendingCredential").is_none());
+        assert!(contexts.lock().unwrap().is_empty());
+        {
+            let store = s.store.lock().unwrap();
+            assert_eq!(
+                store.users_shared_with(&baseline),
+                baseline.retained_user_bytes()
+            );
+            assert_eq!(store.transient_registries_shared_with(&baseline), 6);
+            assert_eq!(store.pending_sign_in_count(), 0);
+        }
+        let mut empty = body.clone();
+        empty["postBody"] = json!(format!(
+            "{}&refresh_token=",
+            body["postBody"].as_str().unwrap()
+        ));
+        let allowed = signed_post(&s, &trust(), &empty);
+        assert_eq!(allowed.status, 200);
+        if require_mfa {
+            let pending =
+                PendingSignInId::parse(allowed.body["mfaPendingCredential"].as_str().unwrap())
+                    .unwrap();
+            let store = s.store.lock().unwrap();
+            assert_eq!(store.pending_sign_in_count(), 1);
+            let credentials = store
+                .pending_sign_in_context(&pending)
+                .unwrap()
+                .inbound_credentials()
+                .unwrap();
+            assert!(credentials.refresh_token().is_none());
+            assert!(credentials.id_token().is_some());
+        } else {
+            let recorded = contexts.lock().unwrap();
+            assert!(!recorded.is_empty());
+            for context in recorded.iter() {
+                let credential = context.credential.as_ref().unwrap();
+                assert!(credential.refresh_token.is_none());
+                assert!(credential.id_token.is_some());
+            }
+        }
+    }
+}

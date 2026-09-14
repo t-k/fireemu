@@ -233,7 +233,7 @@
     "precision": "exact-for-local-semantics",
     "implemented": [
       "Opt-in Rust adapter handler configuration, handle_with_oidc_trust, preserves the standard accounts:signInWithIdp REST request and injects one caller-pinned public RS256 JWK; no new client HTTP API or network traffic",
-      "Enabled provider and project/tenant/provider/issuer/client trust binding; real compact RS256 signature verification; issuer, subject, audience/authorized-party, expiry, issued-at, not-before and SDK raw-nonce SHA-256 checks before account mutation; nonempty accompanying access_token is refused before response or blocking credential forwarding",
+      "Enabled provider and project/tenant/provider/issuer/client trust binding; real compact RS256 signature verification; issuer, subject, audience/authorized-party, expiry, issued-at, not-before and SDK raw-nonce SHA-256 checks before account mutation; nonempty accompanying access_token or refresh_token is refused before response or blocking credential forwarding",
       "Signed assertion account creation, repeated sign-in, explicit account linking, cross-account identity collision refusal, unverified-email confirmation without tokens, tenant routing/pin isolation and populated refusal-state preservation"
     ],
     "notes": [

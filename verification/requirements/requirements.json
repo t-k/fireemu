@@ -929,6 +929,20 @@
       }
     },
     {
+      "id": "AUTH-REFRESH-001",
+      "statement": "A well-formed Secure Token refresh request for a project- or tenant-owned refresh session issues a new ID token without changing the session authentication time, preserves the session claims and provider, advances issuance and expiry timestamps under the virtual clock, reports the configured project identifier, and rejects malformed, unknown, revoked, disabled or deleted credentials without mutating the account or session.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+          "crates/fireemu-adapter-http/tests/auth_flows.rs"
+        ]
+      },
+      "note": "The strict and official-emulator profiles are exercised separately. Local tests cover malformed and unknown tokens, revocation, disabled/deleted users, project/tenant routing, claim preservation and virtual-clock timestamp progression. Production Secure Token response and exact verifier-path parity remain unobserved."
+    },
+    {
       "id": "AC-CFG-001",
       "statement": "App Check defaults preserve current behaviour, and invalid keys, types, service modes, token TTLs, app IDs, project numbers and debug-token digests fail closed in both the canonical JSON Schema and the Rust loader.",
       "criticality": "important",

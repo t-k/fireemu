@@ -42,7 +42,9 @@
       "surfaces": [
         "AUTH-REFRESH"
       ],
-      "requirements": [],
+      "requirements": [
+        "AUTH-REFRESH-001"
+      ],
       "capabilities": [
         "AUTH-TOKEN-1"
       ],

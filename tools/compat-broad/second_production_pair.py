@@ -116,11 +116,19 @@ def load_saved_candidate(path, *, expected_sha256=PINNED_PRODUCTION_CANDIDATE_SH
     return value, source_sha256
 
 
-def compare_saved(candidate_path, local):
+def load_parent_manifest(path):
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError("parent execution manifest must be an object")
+    return value
+
+
+def compare_saved(candidate_path, local, parent_path):
     """Compare a saved normalized production candidate with one current local receipt."""
     from second_production_contract import binding, manifest, observer_digest
 
     candidate, candidate_source_sha256 = load_saved_candidate(candidate_path)
+    parent = load_parent_manifest(parent_path)
     errors = []
     state_validation = None
     try:
@@ -146,10 +154,27 @@ def compare_saved(candidate_path, local):
         errors.append({"side": "production", "reason": str(error)})
 
     try:
+        if parent.get("status") != "completed":
+            raise ValueError("parent execution manifest is incomplete")
+        observations = parent.get("localObservations")
+        parent_local = observations.get("mapped") if isinstance(observations, dict) else None
+        if not isinstance(parent_local, dict):
+            raise ValueError("parent mapped local observation is unavailable")
+        if parent_local != local:
+            raise ValueError("current local receipt differs from parent mapped observation")
+        identity = local.get("runtimeIdentity")
+        parent_identity = {
+            "artifactSha256": parent.get("artifactSha256"),
+            "executionCommit": parent.get("executionCommit"),
+            "configurationDigest": parent.get("configurationDigest"),
+        }
+        if identity != parent_identity:
+            raise ValueError("current local runtime identity differs from parent")
         if (
             local.get("target") != "local"
             or local.get("mode") != "mapped"
             or local.get("productionExecuted") is not False
+            or parent_local.get("productionExecuted") is not False
         ):
             raise ValueError("current local mapped target required")
         if (
@@ -258,6 +283,7 @@ def main():
     parser.add_argument("--mode", choices=("live", "saved"), default="live")
     parser.add_argument("--production", type=Path)
     parser.add_argument("--saved-production-candidate", type=Path)
+    parser.add_argument("--parent-manifest", type=Path)
     parser.add_argument("--local", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
@@ -265,8 +291,12 @@ def main():
     if args.mode == "saved":
         if args.saved_production_candidate is None:
             parser.error("--saved-production-candidate is required in saved mode")
+        if args.parent_manifest is None:
+            parser.error("--parent-manifest is required in saved mode")
         result = compare_saved(
-            args.saved_production_candidate, json.loads(args.local.read_text())
+            args.saved_production_candidate,
+            json.loads(args.local.read_text()),
+            args.parent_manifest,
         )
     else:
         if args.production is None:

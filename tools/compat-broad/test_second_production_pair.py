@@ -118,6 +118,7 @@ def test_production_pair_preserves_match_mismatch_missing_and_cleanup(
     )
     remote = execute_45(adapter, adapter.output, {"executionCommit": "c" * 40})
     local = current_local(backend.source)
+    parent_local = copy.deepcopy(local)
     result = compare(remote, local)
     assert result["compatibility"] == "match", result["errors"]
     changed = copy.deepcopy(local)
@@ -323,7 +324,19 @@ def test_saved_candidate_compares_only_production_rows_and_records_bindings(
     permission, backend = production_inputs
     local = current_local(backend.source)
     candidate_path = ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json"
-    result = compare_saved(candidate_path, local)
+    parent_path = tmp_path / "parent.json"
+    parent_path.write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "artifactSha256": local["runtimeIdentity"]["artifactSha256"],
+                "executionCommit": local["runtimeIdentity"]["executionCommit"],
+                "configurationDigest": local["runtimeIdentity"]["configurationDigest"],
+                "localObservations": {"mapped": local},
+            }
+        )
+    )
+    result = compare_saved(candidate_path, local, parent_path)
     assert result["compatibility"] in {"match", "mismatch"}, result["errors"]
     assert result["mode"] == "saved-production-versus-local"
     assert result["historicalObserverDigest"]
@@ -332,7 +345,18 @@ def test_saved_candidate_compares_only_production_rows_and_records_bindings(
     assert result["currentLocalSourceSha256"] == digest(local)
 
 
-@pytest.mark.parametrize("mutation", ["relabeled", "identity", "recording", "cleanup"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "relabeled",
+        "artifact-identity",
+        "commit-identity",
+        "configuration-identity",
+        "parent-status",
+        "recording",
+        "cleanup",
+    ],
+)
 def test_saved_cli_rejects_unbound_or_incomplete_current_receipt(
     production_inputs, tmp_path, mutation
 ):
@@ -340,18 +364,36 @@ def test_saved_cli_rejects_unbound_or_incomplete_current_receipt(
 
     _, backend = production_inputs
     local = current_local(backend.source)
+    parent_local = copy.deepcopy(local)
     if mutation == "relabeled":
         local["target"] = "production"
-    elif mutation == "identity":
-        local["runtimeIdentity"]["artifactSha256"] = "x"
+    elif mutation == "artifact-identity":
+        local["runtimeIdentity"]["artifactSha256"] = "a" * 64
+    elif mutation == "commit-identity":
+        local["runtimeIdentity"]["executionCommit"] = "a" * 40
+    elif mutation == "configuration-identity":
+        local["runtimeIdentity"]["configurationDigest"] = "a" * 64
     elif mutation == "recording":
         local["recordingComplete"] = False
-    else:
+    elif mutation == "cleanup":
         local["cleanupComplete"] = False
     candidate_path = ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json"
     local_path = tmp_path / "local.json"
     output_path = tmp_path / "comparison.json"
     local_path.write_text(json.dumps(local))
+    parent_path = tmp_path / "parent.json"
+    parent_status = "incomplete" if mutation == "parent-status" else "completed"
+    parent_path.write_text(
+        json.dumps(
+            {
+                "status": parent_status,
+                "artifactSha256": parent_local["runtimeIdentity"]["artifactSha256"],
+                "executionCommit": parent_local["runtimeIdentity"]["executionCommit"],
+                "configurationDigest": parent_local["runtimeIdentity"]["configurationDigest"],
+                "localObservations": {"mapped": parent_local},
+            }
+        )
+    )
     script = ROOT / "tools/compat-broad/second_production_pair.py"
     process = subprocess.Popen(
         [
@@ -363,6 +405,8 @@ def test_saved_cli_rejects_unbound_or_incomplete_current_receipt(
             str(candidate_path),
             "--local",
             str(local_path),
+            "--parent-manifest",
+            str(parent_path),
             "--output",
             str(output_path),
         ],
@@ -389,6 +433,8 @@ def test_saved_cli_rejects_tampered_candidate_file(production_inputs, tmp_path):
     )
     local_path = tmp_path / "local.json"
     local_path.write_text(json.dumps(current_local(backend.source)))
+    parent_path = tmp_path / "parent.json"
+    parent_path.write_text(json.dumps({"status": "completed"}))
     output_path = tmp_path / "comparison.json"
     script = ROOT / "tools/compat-broad/second_production_pair.py"
     process = subprocess.Popen(
@@ -401,6 +447,8 @@ def test_saved_cli_rejects_tampered_candidate_file(production_inputs, tmp_path):
             str(candidate_path),
             "--local",
             str(local_path),
+            "--parent-manifest",
+            str(parent_path),
             "--output",
             str(output_path),
         ],

@@ -180,7 +180,8 @@ def compare_saved(candidate_path, local, parent_path):
         ):
             raise ValueError("current local mapped target required")
         if (
-            local.get("manifestDigest") != digest(manifest())
+            local.get("comparisonManifestDigest", local.get("manifestDigest"))
+            != digest(manifest())
             or local.get("comparisonContractDigest") != digest(binding())
             or local.get("observerDigest") != observer_digest()
         ):

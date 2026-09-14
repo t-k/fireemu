@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from urllib.parse import quote
 
@@ -21,14 +22,45 @@ G0_ORIGINAL_MANIFEST_DIGEST = (
     "13e97e0146c483ad6ab93f1dc8ecc4a8ea2615eaf481878047aec94f42fcecd1"
 )
 G0_NORMALIZATION_VERSION = "shared-g0-batchwrite-status-resource-v1"
+G0_FROZEN_SOURCE = "a35f85b464743d62344a3a58763d382b5b3838ce"
+G0_FROZEN_INPUTS_SHA256 = (
+    "a3193a57fd84c416358cb16a66e72a94bfd5d95cb76f36afbed7189e3abb4bc0"
+)
+# Recomputed from the complete Python observer sources in each archived Git tree.
+G0_LOCAL_OBSERVERS = {
+    G0_FROZEN_SOURCE: "1045d0940439fdcb3d6ac228b1c408a49a98893785cd89ce13851e5096acaee5",
+    "68012694f81df504600f8e67301410c63ec9e2e7": "3bfd6d1c13f08dab230b9180d7d7e9d69e3a8f256d383f4dc6e3b5c0a784e773",
+    "b6dcf561ad2cbf8d3f3db49948dbdc35fb3ef4d5": "3cc87696714da1996b2248a99cd8e0d0652c414fc942e660480d8a82e9c5a70b",
+}
+
+
+def frozen_g0_manifest(nonce):
+    """Read only the hash-pinned v1 recipe; current builders cannot change it."""
+    if not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        raise ValueError("G0 hexadecimal namespace required")
+    path = (
+        Path(__file__).parents[2]
+        / "spec/compatibility/broad-runs/a35f85b4-shared-execution-inputs.json"
+    )
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != G0_FROZEN_INPUTS_SHA256:
+        raise ValueError("G0 frozen inputs hash mismatch")
+    inputs = json.loads(raw)
+    if (
+        inputs["frozenCommit"] != G0_FROZEN_SOURCE
+        or digest(inputs["manifest"]) != G0_ORIGINAL_MANIFEST_DIGEST
+    ):
+        raise ValueError("G0 frozen source/manifest mismatch")
+    # The pinned template uses this one placeholder exclusively for its nonce.
+    return json.loads(json.dumps(inputs["manifest"]["template"]).replace("0" * 32, nonce))
 
 
 def g0_contract():
-    from shared_production import binding
-
     return {
-        "version": "shared-g0-runtime-recomparison-v1",
-        "baseAdmissionContractDigest": digest(binding()),
+        "version": "shared-g0-runtime-recomparison-v2",
+        "baseAdmissionContractDigest": G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST,
+        "frozenInputsSha256": G0_FROZEN_INPUTS_SHA256,
+        "localObserverSources": G0_LOCAL_OBSERVERS.copy(),
         "normalizationVersion": G0_NORMALIZATION_VERSION,
         "normalizerImplementationDigest": hashlib.sha256(
             Path(__file__).read_bytes()
@@ -97,12 +129,35 @@ def normalize_g0(value, names, *, service, path=()):
 
 
 def validate_record(record, *, local=False, historical_observer=False):
+    """Validate current v2, or the explicitly selected frozen G0 v1 contract."""
     batch = record.get("batch", record)
     plan = batch["gate"]["plan"]
-    expected = manifest(plan["nonce"])
-    expected_observer = (
-        batch.get("observerDigest") if historical_observer else observer_digest()
-    )
+    if historical_observer:
+        expected = frozen_g0_manifest(plan["nonce"])
+        source = (
+            record.get("executionCommit")
+            if local
+            else batch.get("permission", {}).get("frozenCommit")
+        )
+        expected_observer = (
+            G0_LOCAL_OBSERVERS.get(source)
+            if local
+            else G0_LOCAL_OBSERVERS[G0_FROZEN_SOURCE]
+        )
+        if expected_observer is None or (not local and source != G0_FROZEN_SOURCE):
+            raise ValueError("G0 frozen collector source mismatch")
+        if not local and batch.get("observerDigest") != expected_observer:
+            raise ValueError("G0 production observer mismatch")
+    else:
+        expected = manifest(plan["nonce"])
+        expected_observer = observer_digest()
+    if (
+        plan.get("contract") != expected["contract"]
+        or plan.get("collector") != expected["collector"]
+    ):
+        raise ValueError("collector contract mismatch")
+    if batch["gate"].get("planDigest") != digest(plan):
+        raise ValueError("persisted plan digest mismatch")
     if plan["observerSha256"] != expected_observer:
         raise ValueError("observer mismatch")
     if digest(plan["jobs"]) != digest(expected["jobs"]):
@@ -236,7 +291,7 @@ def _compare(production, local, *, g0_recompare=False):
     }
     try:
         left = validate_record(production, historical_observer=g0_recompare)
-        right = validate_record(local, local=True)
+        right = validate_record(local, local=True, historical_observer=g0_recompare)
         production_contract = (
             G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST
             if g0_recompare

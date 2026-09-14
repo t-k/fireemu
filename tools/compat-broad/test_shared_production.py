@@ -77,6 +77,7 @@ def local_fixture():
     return {
         "gate": {
             "plan": plan,
+            "planDigest": digest(plan),
             "events": events,
             "jobs": states,
             "total": 26,
@@ -385,15 +386,13 @@ def test_g0_status_message_normalization_is_exact_and_owned():
 
 
 def _g0_local_runtime_fixture(production, local):
-    """Derive a local-shaped receipt from the pinned bodies without changing its inputs."""
-    from batch_adapter import observer_digest
-
+    """Build synthetic test responses over a copied frozen-v1 local fixture."""
     result = copy.deepcopy(local)
-    result["gate"]["plan"]["observerSha256"] = observer_digest()
+    batch = result.get("batch", result)
     for key, production_job in production["jobs"].items():
-        local_job = result["jobs"][key]
+        local_job = batch["jobs"][key]
         production_resources = production["gate"]["plan"]["jobs"][key]["resources"]
-        local_resources = result["gate"]["plan"]["jobs"][key]["resources"]
+        local_resources = batch["gate"]["plan"]["jobs"][key]["resources"]
         sources = tuple(production_resources)
         targets = tuple(local_resources)
 
@@ -414,7 +413,7 @@ def _g0_local_runtime_fixture(production, local):
             local_row["body"] = remap(production_row["body"])
             event = next(
                 event
-                for event in result["gate"]["events"]
+                for event in batch["gate"]["events"]
                 if event["job"] == key
                 and event["phase"] == "observation"
                 and event["index"] == local_row["index"]
@@ -445,7 +444,7 @@ def test_g0_runtime_recompare_pins_production_and_does_not_reuse_old_local_hash(
 ):
     source = _g0_production_source()
     production = json.loads(source.read_bytes())
-    local = _g0_local_runtime_fixture(production, local_fixture())
+    local = _g0_local_runtime_fixture(production, frozen_g0_local_fixture())
     pinned = tmp_path / "g0-production.json"
     pinned.write_bytes(source.read_bytes())
     result = compare_g0_runtime_recompare(pinned, local)
@@ -467,7 +466,7 @@ def test_g0_runtime_recompare_pins_production_and_does_not_reuse_old_local_hash(
 def test_g0_runtime_recompare_rejects_missing_production_safety_or_cleanup(field):
     source = _g0_production_source()
     production = json.loads(source.read_bytes())
-    local = _g0_local_runtime_fixture(production, local_fixture())
+    local = _g0_local_runtime_fixture(production, frozen_g0_local_fixture())
     production["jobs"]["partial"][field] = False
     result = _compare(production, local, g0_recompare=True)
     assert result["compatibility"] == "indeterminate"
@@ -487,8 +486,8 @@ def test_g0_runtime_recompare_rejects_local_safety_or_state_without_true_value(
 ):
     source = _g0_production_source()
     production = json.loads(source.read_bytes())
-    local = _g0_local_runtime_fixture(production, local_fixture())
-    local["jobs"]["partial"][field] = value
+    local = _g0_local_runtime_fixture(production, frozen_g0_local_fixture())
+    local["batch"]["jobs"]["partial"][field] = value
     result = _compare(production, local, g0_recompare=True)
     assert result["compatibility"] == "indeterminate"
 
@@ -497,8 +496,8 @@ def test_g0_runtime_recompare_rejects_local_safety_or_state_without_true_value(
 def test_g0_runtime_recompare_rejects_missing_local_safety_or_state(field):
     source = _g0_production_source()
     production = json.loads(source.read_bytes())
-    local = _g0_local_runtime_fixture(production, local_fixture())
-    del local["jobs"]["partial"][field]
+    local = _g0_local_runtime_fixture(production, frozen_g0_local_fixture())
+    del local["batch"]["jobs"]["partial"][field]
     result = _compare(production, local, g0_recompare=True)
     assert result["compatibility"] == "indeterminate"
 
@@ -660,3 +659,95 @@ def test_no_data_dispatch_does_not_claim_uncertain_document_cleanup(boundary, tm
     assert all(job["pid"] is None for job in result["gate"]["jobs"].values())
     assert result["cleanupComplete"] is True
     assert result["completed"] is False
+
+
+def frozen_g0_local_fixture():
+    """Copy the immutable public v1 receipt, never rebuild it with the v2 collector."""
+    return json.loads((Path(__file__).parents[2] / "spec/compatibility/broad-runs/a35f85b4-shared-local-reference.json").read_bytes())
+
+
+def test_frozen_g0_contract_is_accepted_only_by_explicit_historical_validation():
+    from shared_production_pair import validate_record
+
+    frozen = frozen_g0_local_fixture()
+    before = digest(frozen)
+    assert validate_record(frozen, local=True, historical_observer=True) == frozen["batch"]
+    assert digest(frozen) == before
+    with pytest.raises(ValueError):
+        validate_record(frozen, local=True)
+    with pytest.raises(ValueError):
+        validate_record(local_fixture(), local=True, historical_observer=True)
+
+
+@pytest.mark.parametrize("field,value", [("contract", "shared-local-v1"), ("collector", "existing-batch-adapter-shared-v1"), ("contract", None), ("collector", None)])
+def test_current_v2_validation_rejects_relabeling_even_with_rebound_plan_digest(field, value):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    validate_record(record, local=True)
+    record["gate"]["plan"][field] = value
+    record["gate"]["planDigest"] = digest(record["gate"]["plan"])
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize("variant", ["missing", "wrong", "unbound-plan"])
+def test_current_v2_validation_requires_persisted_plan_digest(variant):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    record["gate"]["planDigest"] = digest(record["gate"]["plan"])
+    validate_record(record, local=True)
+    if variant == "missing":
+        del record["gate"]["planDigest"]
+    elif variant == "wrong":
+        record["gate"]["planDigest"] = "0" * 64
+    else:
+        record["gate"]["plan"]["intervalSeconds"] += 0.25
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize("variant", ["source-missing", "source-unknown", "source-other-observer", "observer-rebound", "contract-rebound", "collector-rebound", "plan-digest-missing"])
+def test_historical_g0_validation_binds_frozen_source_observer_and_plan(variant):
+    from shared_production_pair import validate_record
+
+    record = frozen_g0_local_fixture()
+    plan = record["batch"]["gate"]["plan"]
+    if variant == "source-missing":
+        del record["executionCommit"]
+    elif variant == "source-unknown":
+        record["executionCommit"] = "0" * 40
+    elif variant == "source-other-observer":
+        record["executionCommit"] = "68012694f81df504600f8e67301410c63ec9e2e7"
+    elif variant == "observer-rebound":
+        record["observerSha256"] = plan["observerSha256"] = production.observer_digest()
+    elif variant == "contract-rebound":
+        plan["contract"] = "shared-local-v2"
+    elif variant == "collector-rebound":
+        plan["collector"] = "existing-batch-adapter-shared-v2"
+    record["batch"]["gate"]["planDigest"] = digest(plan)
+    if variant == "plan-digest-missing":
+        del record["batch"]["gate"]["planDigest"]
+    with pytest.raises(ValueError):
+        validate_record(record, local=True, historical_observer=True)
+
+
+def test_g0_contract_retains_frozen_v1_admission_without_current_builder():
+    from shared_production_pair import (
+        G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST,
+        frozen_g0_manifest,
+        g0_contract,
+    )
+
+    plan = frozen_g0_manifest("a" * 32)
+    assert plan["contract"] == "shared-local-v1"
+    assert plan["collector"] == "existing-batch-adapter-shared-v1"
+    writes = plan["jobs"]["partial"]["observation"][4]["body"]["writes"]
+    assert "currentDocument" not in writes[0]
+    assert writes[1]["currentDocument"] == {"exists": False}
+    assert "currentDocument" not in writes[2]
+    assert all("_sharedOwner" not in write["update"]["fields"] for write in writes)
+    contract = g0_contract()
+    assert contract["baseAdmissionContractDigest"] == G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST
+    assert contract["baseAdmissionContractDigest"] != digest(production.binding())

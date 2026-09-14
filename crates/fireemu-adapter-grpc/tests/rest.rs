@@ -646,14 +646,14 @@ fn rest_aggregation_refused_commit_preserves_state_and_new_transaction_route() {
         json!({"transaction": transaction, "writes": []}),
     );
     assert_eq!(status, 200, "{committed}");
-    let (status, reused) = call(
+    let (status, reused_transaction) = call(
         &s,
         "POST",
         &format!("{DOCS}:commit"),
         json!({"transaction": transaction, "writes": []}),
     );
-    assert_eq!(status, 409, "{reused}");
-    assert_eq!(reused["error"]["status"], "ABORTED");
+    assert_eq!(status, 409, "{reused_transaction}");
+    assert_eq!(reused_transaction["error"]["status"], "ABORTED");
 }
 
 #[test]

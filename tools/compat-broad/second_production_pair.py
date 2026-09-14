@@ -132,7 +132,9 @@ def load_parent_manifest(path):
     return value
 
 
-def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=None):
+def compare_saved(
+    candidate_path, local, parent_path, *, local_source_sha256=None, anchor_path=None
+):
     """Compare a saved normalized production candidate with one current local receipt."""
     from second_production_contract import binding, manifest, observer_digest
 
@@ -148,11 +150,14 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
         evaluator_head = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
         ).strip()
-        anchor_sha256 = hashlib.sha256(
-            subprocess.check_output(
+        anchor_raw = (
+            Path(anchor_path).read_bytes()
+            if anchor_path is not None
+            else subprocess.check_output(
                 ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"], cwd=repo_root
             )
-        ).hexdigest()
+        )
+        anchor_sha256 = hashlib.sha256(anchor_raw).hexdigest()
     except (OSError, subprocess.CalledProcessError):
         errors.append({"side": "evaluator", "reason": "evaluator source identity unavailable"})
     try:
@@ -203,10 +208,6 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
             or not git_ok(["git", "diff", "--quiet", evaluator_commit, "--", "tools/compat-broad"])
         ):
             raise ValueError("parent execution commit does not bind evaluator source")
-        anchor_raw = subprocess.check_output(
-            ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"],
-            cwd=repo_root,
-        )
         anchor = json.loads(anchor_raw)
         if (
             not isinstance(anchor, dict)

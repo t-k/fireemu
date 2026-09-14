@@ -14,9 +14,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools/compat-broad"))
+
 from batch_contract import PROJECT
 from batch_pair import normalize
-from broad_contract import ROOT, digest
+from broad_contract import digest
 from campaign_explain import normalize_response, validate_envelope
 
 

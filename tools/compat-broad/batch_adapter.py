@@ -104,7 +104,11 @@ def wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
 
 def observer_digest():
     return digest(
-        {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in HERE.glob("*.py")}
+        {
+            p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in HERE.glob("*.py")
+            if p.name not in {"campaign_explain.py", "campaign_explain_shadow.py", "test_campaign_explain.py"}
+        }
     )
 
 

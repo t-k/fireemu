@@ -703,12 +703,12 @@ fn decode_target(
                     "query target requires a structured_query",
                 ));
             };
-            let accepted = ctx.local.accepted_query(&query_parent, sq)?;
-            if accepted.query.find_nearest.is_some() {
+            if sq.find_nearest.is_some() {
                 return Err(Status::unimplemented(
                     "Listen does not support findNearest targets",
                 ));
             }
+            let accepted = ctx.local.accepted_query(&query_parent, sq)?;
             Ok(TargetKind::Query(Box::new(accepted.query)))
         }
         None => Err(Status::invalid_argument("target without target_type")),

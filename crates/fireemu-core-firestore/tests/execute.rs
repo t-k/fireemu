@@ -383,6 +383,39 @@ fn nearest_vector_query_limit_and_threshold_are_applied() {
         .canonicalize()
         .is_err());
 }
+
+#[test]
+fn nearest_vector_query_retains_only_the_requested_top_k_candidates() {
+    let mut state = FirestoreState::new();
+    for index in 0..2_000 {
+        let value = f64::from(index);
+        state
+            .commit(
+                &[Write {
+                    op: WriteOp::Set {
+                        path: path(&format!("items/item-{index:04}")),
+                        fields: [("embedding".to_owned(), Value::Vector(vec![value, 0.0]))]
+                            .into_iter()
+                            .collect(),
+                        update_mask: None,
+                    },
+                    precondition: None,
+                    transforms: vec![],
+                }],
+                None,
+                LogicalInstant::from_unix_seconds(4_000 + i64::from(index)),
+            )
+            .unwrap();
+    }
+
+    let query = nearest(DistanceMeasure::Euclidean, 1)
+        .canonicalize()
+        .unwrap();
+    let (documents, query_stats) = state.run_query_with_stats(&query, None).unwrap();
+
+    assert_eq!(documents.len(), 1);
+    assert_eq!(query_stats.nearest_peak_candidates, 1);
+}
 fn tasks() -> Query {
     Query::new(QueryScope::collection(
         None,

@@ -1250,11 +1250,11 @@ async fn webchannel_rejects_find_nearest_listen_targets() {
         .find(|payload| payload["targetChange"]["targetChangeType"] == "REMOVE")
         .expect("findNearest target is removed with a cause");
     assert_eq!(removal["targetChange"]["targetIds"][0], 41);
-    assert_eq!(removal["targetChange"]["cause"]["code"], 9, "{removal:?}");
+    assert_eq!(removal["targetChange"]["cause"]["code"], 12, "{removal:?}");
     assert!(removal["targetChange"]["cause"]["message"]
         .as_str()
         .unwrap()
-        .contains("vectorConfig"));
+        .contains("findNearest"));
 }
 
 #[tokio::test]

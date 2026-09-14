@@ -106,8 +106,8 @@ pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
                         .get("dimension")
                         .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
                         .and_then(|value| u32::try_from(value).ok())
-                        .filter(|dimension| *dimension > 0)
-                        .ok_or_else(|| format!("index field {path}: vectorConfig.dimension must be a positive integer"))?;
+                        .filter(|dimension| (1..=2048).contains(dimension))
+                        .ok_or_else(|| format!("index field {path}: vectorConfig.dimension must be an integer from 1 through 2048"))?;
                     if !config.get("flat").is_some_and(Value::is_object) {
                         return Err(format!("index field {path}: vectorConfig.flat is required"));
                     }
@@ -298,6 +298,7 @@ mod tests {
     fn rejects_malformed_vector_index_configuration() {
         for vector_config in [
             json!({"dimension": 0, "flat": {}}),
+            json!({"dimension": 2049, "flat": {}}),
             json!({"dimension": 2}),
             json!({"dimension": "not-a-number", "flat": {}}),
         ] {

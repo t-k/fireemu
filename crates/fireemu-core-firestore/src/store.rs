@@ -671,6 +671,8 @@ pub struct QueryStats {
     /// Largest number of candidate rows held at once. With a finite `offset + limit` this
     /// never exceeds that sum, whatever the size of the matched set.
     pub peak_candidates: u64,
+    /// Largest bounded heap used by a nearest-vector ranking stage.
+    pub nearest_peak_candidates: u64,
     /// Documents cloned into the result. Execution borrows every value it filters and orders
     /// on, so this is the only place where a document's heap-backed fields are copied.
     pub cloned_documents: u64,
@@ -693,6 +695,9 @@ impl QueryStats {
         self.scanned = self.scanned.saturating_add(other.scanned);
         self.matched = self.matched.saturating_add(other.matched);
         self.peak_candidates = self.peak_candidates.max(other.peak_candidates);
+        self.nearest_peak_candidates = self
+            .nearest_peak_candidates
+            .max(other.nearest_peak_candidates);
         self.cloned_documents = self.cloned_documents.saturating_add(other.cloned_documents);
         self.cloned_field_bytes = self
             .cloned_field_bytes
@@ -1301,6 +1306,18 @@ fn query_retained_bytes(query: &Query) -> u64 {
     }
     if let Some(projection) = &query.projection {
         for field in projection {
+            total = total.saturating_add(field_path_retained_bytes(field));
+        }
+    }
+    if let Some(find_nearest) = &query.find_nearest {
+        total = total
+            .saturating_add(64)
+            .saturating_add(field_path_retained_bytes(&find_nearest.vector_field))
+            .saturating_add(u64::try_from(core::mem::size_of::<Value>()).unwrap_or(u64::MAX))
+            .saturating_add(allocation_bytes::<f64>(
+                find_nearest.query_vector.capacity(),
+            ));
+        if let Some(field) = &find_nearest.distance_result_field {
             total = total.saturating_add(field_path_retained_bytes(field));
         }
     }
@@ -4117,8 +4134,15 @@ impl FirestoreState {
         let mut ordinary = query.clone();
         ordinary.find_nearest = None;
         ordinary.projection = None;
-        let mut candidates = Vec::new();
-        let mut stats = self.select(&ordinary, version, &[], Consumption::Ordered, |document| {
+        let mut candidates = BinaryHeap::new();
+        let nearest_limit = usize::try_from(find_nearest.limit).unwrap_or(usize::MAX);
+        let nearest_peak_candidates = std::cell::Cell::new(0usize);
+        let consumption = if ordinary.offset == 0 && ordinary.limit.is_none() {
+            Consumption::Unordered
+        } else {
+            Consumption::Ordered
+        };
+        let mut stats = self.select(&ordinary, version, &[], consumption, |document| {
             let Some(Value::Vector(vector)) =
                 get_field(&document.fields, &find_nearest.vector_field)
             else {
@@ -4144,18 +4168,30 @@ impl FirestoreState {
                     }
                 });
             if admitted {
-                candidates.push((distance, document));
+                if nearest_limit == 0 {
+                    return;
+                }
+                let candidate = NearestCandidate {
+                    distance,
+                    document,
+                    measure: find_nearest.distance_measure,
+                };
+                if candidates.len() < nearest_limit {
+                    candidates.push(candidate);
+                } else if candidates.peek().is_some_and(|worst| candidate < *worst) {
+                    candidates.pop();
+                    candidates.push(candidate);
+                }
+                nearest_peak_candidates.set(nearest_peak_candidates.get().max(candidates.len()));
             }
         })?;
-        candidates.sort_unstable_by(|(left, _), (right, _)| {
-            let ordering = left.partial_cmp(right).unwrap_or(Ordering::Equal);
-            match find_nearest.distance_measure {
-                DistanceMeasure::DotProduct => ordering.reverse(),
-                DistanceMeasure::Euclidean | DistanceMeasure::Cosine => ordering,
-            }
-        });
+        stats.nearest_peak_candidates =
+            u64::try_from(nearest_peak_candidates.get()).unwrap_or(u64::MAX);
         let mut out = Vec::new();
-        for (distance, document) in candidates.into_iter().take(find_nearest.limit as usize) {
+        let candidates = candidates.into_sorted_vec();
+        for candidate in candidates {
+            let distance = candidate.distance;
+            let document = candidate.document;
             let mut projected = project_document(document, query.projection.as_deref());
             if let Some(field) = &find_nearest.distance_result_field {
                 let include_distance = query
@@ -4750,6 +4786,7 @@ fn take_field_tree_clone_count() -> usize {
     FIELD_TREE_CLONES.with(std::cell::Cell::take)
 }
 
+#[allow(clippy::too_many_lines)]
 fn select_from<'a, I, F>(
     query: &Query,
     documents: I,
@@ -4768,18 +4805,20 @@ where
     let bound = query.limit.map(|limit| {
         usize::try_from(u64::from(query.offset) + u64::from(limit)).unwrap_or(usize::MAX)
     });
-    let streaming = consumption == Consumption::Unordered && bound.is_none() && offset == 0;
     let path_ordered = source_order.is_some_and(|source_direction| {
         order.len() == 1
             && order[0].field.is_document_name()
             && order[0].direction == source_direction
     });
+    let streaming =
+        consumption == Consumption::Unordered && bound.is_none() && (offset == 0 || path_ordered);
     let mut stats = QueryStats::default();
     if bound == Some(0) {
         return Ok(stats);
     }
     let mut heap: BinaryHeap<Candidate<'a, '_>> = BinaryHeap::new();
     let mut rows: Vec<Candidate<'a, '_>> = Vec::new();
+    let mut skipped = 0usize;
     for document in documents {
         stats.scanned += 1;
         if !document_in_scope(document, scope) {
@@ -4805,6 +4844,10 @@ where
         }
         stats.matched += 1;
         if streaming {
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
             sink(document);
             continue;
         }
@@ -5211,6 +5254,44 @@ struct Candidate<'d, 'o> {
     key: Vec<FieldRef<'d>>,
     doc: &'d Document,
     order: &'o [OrderClause],
+}
+
+/// One nearest-vector row retained by the bounded top-K heap. The heap root is the worst
+/// retained distance, allowing every admitted candidate to be considered without retaining the
+/// complete matching set.
+struct NearestCandidate<'d> {
+    distance: f64,
+    document: &'d Document,
+    measure: DistanceMeasure,
+}
+
+impl PartialEq for NearestCandidate<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.distance
+            .partial_cmp(&other.distance)
+            .is_some_and(|ordering| ordering == Ordering::Equal)
+    }
+}
+
+impl Eq for NearestCandidate<'_> {}
+
+impl PartialOrd for NearestCandidate<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NearestCandidate<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let ordering = self
+            .distance
+            .partial_cmp(&other.distance)
+            .unwrap_or(Ordering::Equal);
+        match self.measure {
+            DistanceMeasure::DotProduct => ordering.reverse(),
+            DistanceMeasure::Euclidean | DistanceMeasure::Cosine => ordering,
+        }
+    }
 }
 
 impl PartialEq for Candidate<'_, '_> {
@@ -6007,5 +6088,25 @@ mod scope_index_tests {
             &raw const next.as_ref().unwrap().fields,
             &raw const current.fields
         ));
+    }
+
+    #[test]
+    fn retained_query_bytes_include_nearest_vector_and_result_paths() {
+        let scope = QueryScope::collection(None, CollectionId::try_new("items").unwrap());
+        let ordinary = Query::new(scope.clone());
+        let nearest = ordinary
+            .clone()
+            .with_find_nearest(crate::query::FindNearest {
+                vector_field: FieldPath::parse("embedding").unwrap(),
+                query_vector: vec![0.0; 2048],
+                distance_measure: DistanceMeasure::Euclidean,
+                limit: 1,
+                distance_result_field: Some(FieldPath::parse("meta.distance").unwrap()),
+                distance_threshold: None,
+            });
+        let delta = query_retained_bytes(&nearest).saturating_sub(query_retained_bytes(&ordinary));
+        assert!(delta >= allocation_bytes::<f64>(2048));
+        assert!(delta >= field_path_retained_bytes(&FieldPath::parse("embedding").unwrap()));
+        assert!(delta >= field_path_retained_bytes(&FieldPath::parse("meta.distance").unwrap()));
     }
 }

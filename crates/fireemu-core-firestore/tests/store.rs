@@ -1133,6 +1133,177 @@ fn a_query_in_a_transaction_locks_its_range() {
 }
 
 #[test]
+fn a_transaction_nearest_query_replays_with_vector_semantics_after_conflict() {
+    use fireemu_core_firestore::query::{DistanceMeasure, FindNearest, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[set(
+                "items/a",
+                &[("embedding", Value::Vector(vec![1.0, 0.0]))],
+            )],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("items").unwrap(),
+    ))
+    .with_find_nearest(FindNearest {
+        vector_field: FieldPath::parse("embedding").unwrap(),
+        query_vector: vec![1.0, 0.0],
+        distance_measure: DistanceMeasure::Euclidean,
+        limit: 1,
+        distance_result_field: None,
+        distance_threshold: None,
+    })
+    .canonicalize()
+    .unwrap();
+    let first = state.begin_transaction(false, t(1)).unwrap();
+    let second = state.begin_transaction(false, t(1)).unwrap();
+    assert_eq!(
+        state.run_query_in_transaction(&first, &query).unwrap()[0]
+            .path
+            .document_id()
+            .as_str(),
+        "a"
+    );
+    assert_eq!(
+        state.run_query_in_transaction(&second, &query).unwrap()[0]
+            .path
+            .document_id()
+            .as_str(),
+        "a"
+    );
+    let replacement = set("items/a", &[("embedding", Value::Vector(vec![0.0, 1.0]))]);
+    assert!(matches!(
+        state.commit(std::slice::from_ref(&replacement), Some(&first), t(2)),
+        Err(FirestoreError::Aborted(message)) if message == TOO_MUCH_CONTENTION
+    ));
+    assert!(matches!(
+        state.commit(std::slice::from_ref(&replacement), Some(&second), t(3)),
+        Err(FirestoreError::Aborted(message)) if message == TOO_MUCH_CONTENTION
+    ));
+    state
+        .commit(std::slice::from_ref(&replacement), Some(&first), t(4))
+        .unwrap();
+    let retry = state.retry_transaction(&second, t(5)).unwrap();
+    let nearest = state.run_query_in_transaction(&retry, &query).unwrap();
+    assert_eq!(nearest.len(), 1);
+    assert_eq!(
+        nearest[0].fields["embedding"],
+        Value::Vector(vec![0.0, 1.0])
+    );
+}
+
+#[test]
+fn a_maximum_vector_query_is_charged_before_transaction_admission() {
+    use fireemu_core_firestore::query::{
+        DistanceMeasure, FieldOp, FilterExpr, FindNearest, Query, QueryScope,
+    };
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    let baseline = state.begin_transaction(false, t(0)).unwrap();
+    let empty = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("empty").unwrap(),
+    ));
+    state.run_query_in_transaction(&baseline, &empty).unwrap();
+    let baseline_bytes = state.transaction_bookkeeping_stats().conflict_ledger_bytes;
+    state.rollback(&baseline).unwrap();
+
+    let query = empty
+        .with_find_nearest(FindNearest {
+            vector_field: FieldPath::parse("embedding").unwrap(),
+            query_vector: vec![1.0; 2048],
+            distance_measure: DistanceMeasure::Euclidean,
+            limit: 1,
+            distance_result_field: Some(FieldPath::parse("distance.result").unwrap()),
+            distance_threshold: None,
+        })
+        .canonicalize()
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state
+        .run_query_in_transaction(&transaction, &query)
+        .unwrap();
+    let charged = state.transaction_bookkeeping_stats().conflict_ledger_bytes;
+    assert!(charged > baseline_bytes + 2048 * 8);
+
+    let mut oversized = query;
+    oversized.filter = Some(FilterExpr::Field {
+        field: FieldPath::parse("unused").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::String(
+            "x".repeat(usize::try_from(MAX_TRANSACTION_CONFLICT_LEDGER_BYTES).unwrap() - 8_000),
+        ),
+    });
+    let refused = state.begin_transaction(false, t(0)).unwrap();
+    assert!(matches!(
+        state.run_query_in_transaction(&refused, &oversized),
+        Err(FirestoreError::Aborted(message))
+            if message == "transaction observed data exceeds the retained conflict-detection budget"
+    ));
+}
+
+#[test]
+fn maximum_vector_query_descriptors_share_the_active_transaction_budget() {
+    use fireemu_core_firestore::query::{
+        DistanceMeasure, FieldOp, FilterExpr, FindNearest, Query, QueryScope,
+    };
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    let mut query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("empty").unwrap(),
+    ));
+    query.filter = Some(FilterExpr::Field {
+        field: FieldPath::parse("unused").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::String("q".repeat(1024 * 1024)),
+    });
+    query.find_nearest = Some(FindNearest {
+        vector_field: FieldPath::parse("embedding").unwrap(),
+        query_vector: vec![0.0; 2048],
+        distance_measure: DistanceMeasure::Euclidean,
+        limit: 1,
+        distance_result_field: Some(FieldPath::parse("distance").unwrap()),
+        distance_threshold: None,
+    });
+    let mut active = Vec::new();
+    let mut refused = false;
+    for attempt in 0..128 {
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        match state.run_query_in_transaction(&transaction, &query) {
+            Ok(_) => active.push(transaction),
+            Err(FirestoreError::Aborted(_)) => {
+                state.abandon_transaction(&transaction);
+                refused = true;
+                break;
+            }
+            Err(error) => panic!("unexpected vector query failure: {error}"),
+        }
+        assert!(attempt < 127);
+    }
+    assert!(
+        refused,
+        "active vector query descriptors must hit the global cap"
+    );
+    for transaction in active {
+        state.rollback(&transaction).unwrap();
+    }
+    assert_eq!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+        0
+    );
+}
+
+#[test]
 fn failed_multiwrite_commit_does_not_publish_any_document() {
     let mut state = FirestoreState::new();
     let invalid = Value::String("x".repeat(1_048_488));

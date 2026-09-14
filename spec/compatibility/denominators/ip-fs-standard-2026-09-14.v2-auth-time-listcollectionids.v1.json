@@ -35,11 +35,11 @@
   ],
   "mappingSource": {
     "path": "spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2-auth-time-listcollectionids.v1.mapping.json",
-    "sha256": "448dc1aa4c39e384be9ffb4310223b97f4a7ffb83d3ab9e54abda246e7350f1f"
+    "sha256": "62f6ba9cf4d5fb3f99928ee319f8a4fa530c75e6e87957f73e956ef82bf8e51d"
   },
   "generator": {
     "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-    "sha256": "42d7d97807600249656bb7a65fc631809988045bd6b63ef25dc935e93fcac17d"
+    "sha256": "7f2b5be04f28e1ec48e23b0d73d7f18744bc098f4bd08297de4d17aaa31fe923"
   },
   "targets": [
     {
@@ -32637,7 +32637,7 @@
       "adapterId": "auth-refresh-auth-time.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-        "sha256": "42d7d97807600249656bb7a65fc631809988045bd6b63ef25dc935e93fcac17d"
+        "sha256": "7f2b5be04f28e1ec48e23b0d73d7f18744bc098f4bd08297de4d17aaa31fe923"
       },
       "production": {
         "receipt": {
@@ -32676,7 +32676,7 @@
       "adapterId": "auth-refresh-auth-time.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-        "sha256": "42d7d97807600249656bb7a65fc631809988045bd6b63ef25dc935e93fcac17d"
+        "sha256": "7f2b5be04f28e1ec48e23b0d73d7f18744bc098f4bd08297de4d17aaa31fe923"
       },
       "production": {
         "receipt": {
@@ -32716,7 +32716,7 @@
       "adapterId": "firestore-list-collection-ids.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2_auth_time.py",
-        "sha256": "42d7d97807600249656bb7a65fc631809988045bd6b63ef25dc935e93fcac17d"
+        "sha256": "7f2b5be04f28e1ec48e23b0d73d7f18744bc098f4bd08297de4d17aaa31fe923"
       },
       "production": {
         "receipt": {
@@ -32765,20 +32765,20 @@
           "decodedWithoutSignatureVerification": true
         },
         "evidencePointers": [
-          "/production/cases/14",
-          "/local/cases/14"
+          "/production/cases/15",
+          "/local/cases/15"
         ]
       },
       "surfaces": [
         {
           "targetId": "securetoken-v1:method:REST:securetoken.token",
           "observationPointers": [
-            "/production/cases/14",
-            "/local/cases/14"
+            "/production/cases/15",
+            "/local/cases/15"
           ],
           "assertionPointers": [
-            "/production/cases/14/response/checks/idTokenPresent",
-            "/local/cases/14/response/checks/idTokenPresent"
+            "/production/cases/15/response/checks/idTokenPresent",
+            "/local/cases/15/response/checks/idTokenPresent"
           ],
           "coverage": "partial",
           "reason": "Refresh method is observed in the pinned session-v2 receipt; decoded authTime differs between production and local."
@@ -32786,12 +32786,12 @@
         {
           "targetId": "securetoken-v1:request:REST:securetoken.token/request",
           "observationPointers": [
-            "/production/cases/14",
-            "/local/cases/14"
+            "/production/cases/15",
+            "/local/cases/15"
           ],
           "assertionPointers": [
-            "/production/cases/14/response/checks/refreshTokenPresent",
-            "/local/cases/14/response/checks/refreshTokenPresent"
+            "/production/cases/15/response/checks/refreshTokenPresent",
+            "/local/cases/15/response/checks/refreshTokenPresent"
           ],
           "coverage": "partial",
           "reason": "Refresh request acceptance is observed for the selected fixed refresh case."
@@ -32799,12 +32799,12 @@
         {
           "targetId": "securetoken-v1:response:REST:securetoken.token/response",
           "observationPointers": [
-            "/production/cases/14",
-            "/local/cases/14"
+            "/production/cases/15",
+            "/local/cases/15"
           ],
           "assertionPointers": [
-            "/production/cases/14/response/checks/noError",
-            "/local/cases/14/response/checks/noError"
+            "/production/cases/15/response/checks/noError",
+            "/local/cases/15/response/checks/noError"
           ],
           "coverage": "partial",
           "reason": "Response success and token presence are observed, with authTime mismatch retained as partial evidence."
@@ -32812,12 +32812,12 @@
         {
           "targetId": "securetoken-v1:field:REST:schemas/GrantTokenResponse/properties/id_token",
           "observationPointers": [
-            "/production/cases/14",
-            "/local/cases/14"
+            "/production/cases/15",
+            "/local/cases/15"
           ],
           "assertionPointers": [
-            "/production/cases/14/response/checks/idTokenPresent",
-            "/local/cases/14/response/checks/idTokenPresent"
+            "/production/cases/15/response/checks/idTokenPresent",
+            "/local/cases/15/response/checks/idTokenPresent"
           ],
           "coverage": "partial",
           "reason": "The returned id_token is present and its decoded authTime is bounded; signature and general refresh semantics are unmapped."
@@ -32909,22 +32909,22 @@
           "noContinuationTokenObserved": true
         },
         "evidencePointers": [
-          "/cases/0",
-          "/cases/1",
-          "/cases/2"
+          "/cases/54",
+          "/cases/55",
+          "/cases/56"
         ]
       },
       "surfaces": [
         {
           "targetId": "firestore-v1:method:REST:firestore.projects.databases.documents.listCollectionIds",
           "observationPointers": [
-            "/cases/0",
-            "/cases/1",
-            "/cases/2"
+            "/cases/54",
+            "/cases/55",
+            "/cases/56"
           ],
           "assertionPointers": [
-            "/cases/0/status",
-            "/cases/1/status"
+            "/cases/54/status",
+            "/cases/55/status"
           ],
           "coverage": "partial",
           "reason": "Exactly three saved production-reference rows observe the method with successful JSON responses."
@@ -32932,13 +32932,13 @@
         {
           "targetId": "firestore-v1:request:REST:firestore.projects.databases.documents.listCollectionIds/request",
           "observationPointers": [
-            "/cases/0",
-            "/cases/1",
-            "/cases/2"
+            "/cases/54",
+            "/cases/55",
+            "/cases/56"
           ],
           "assertionPointers": [
-            "/cases/0/status",
-            "/cases/1/status"
+            "/cases/54/status",
+            "/cases/55/status"
           ],
           "coverage": "partial",
           "reason": "The three rows cover the request route and selected parent cases; pageToken/readTime are unmapped."
@@ -32946,13 +32946,13 @@
         {
           "targetId": "firestore-v1:response:REST:firestore.projects.databases.documents.listCollectionIds/response",
           "observationPointers": [
-            "/cases/0",
-            "/cases/1",
-            "/cases/2"
+            "/cases/54",
+            "/cases/55",
+            "/cases/56"
           ],
           "assertionPointers": [
-            "/cases/0/expected/body/collectionIds",
-            "/cases/1/expected/body/collectionIds"
+            "/cases/54/expected/body/collectionIds",
+            "/cases/55/expected/body/collectionIds"
           ],
           "coverage": "partial",
           "reason": "All three exact rows return collectionIds-only bodies; no nextPageToken is emitted or consumed."
@@ -32960,12 +32960,12 @@
         {
           "targetId": "firestore-v1:schema:REST:schemas/ListCollectionIdsRequest",
           "observationPointers": [
-            "/cases/0",
-            "/cases/1",
-            "/cases/2"
+            "/cases/54",
+            "/cases/55",
+            "/cases/56"
           ],
           "assertionPointers": [
-            "/cases/0/status"
+            "/cases/54/status"
           ],
           "coverage": "partial",
           "reason": "Request schema is represented by the three saved route observations, with pagination and readTime fields excluded."
@@ -32973,12 +32973,12 @@
         {
           "targetId": "firestore-v1:schema:REST:schemas/ListCollectionIdsResponse",
           "observationPointers": [
-            "/cases/0",
-            "/cases/1",
-            "/cases/2"
+            "/cases/54",
+            "/cases/55",
+            "/cases/56"
           ],
           "assertionPointers": [
-            "/cases/0/expected/body/collectionIds"
+            "/cases/54/expected/body/collectionIds"
           ],
           "coverage": "partial",
           "reason": "Response schema coverage is limited to the observed collectionIds member."
@@ -32986,12 +32986,12 @@
         {
           "targetId": "firestore-v1:field:REST:firestore.projects.databases.documents.listCollectionIds/parameters/parent",
           "observationPointers": [
-            "/cases/0",
-            "/cases/1",
-            "/cases/2"
+            "/cases/54",
+            "/cases/55",
+            "/cases/56"
           ],
           "assertionPointers": [
-            "/cases/0/status"
+            "/cases/54/status"
           ],
           "coverage": "partial",
           "reason": "Root, missing-document and paged parent cases are saved; parent validation details are not inferred."
@@ -32999,10 +32999,10 @@
         {
           "targetId": "firestore-v1:field:REST:schemas/ListCollectionIdsRequest/properties/pageSize",
           "observationPointers": [
-            "/cases/2"
+            "/cases/56"
           ],
           "assertionPointers": [
-            "/cases/2/status"
+            "/cases/56/status"
           ],
           "coverage": "partial",
           "reason": "The paged saved row records the pageSize request case, without continuation consumption."
@@ -33010,13 +33010,13 @@
         {
           "targetId": "firestore-v1:field:REST:schemas/ListCollectionIdsResponse/properties/collectionIds",
           "observationPointers": [
-            "/cases/0",
-            "/cases/1",
-            "/cases/2"
+            "/cases/54",
+            "/cases/55",
+            "/cases/56"
           ],
           "assertionPointers": [
-            "/cases/0/expected/body/collectionIds",
-            "/cases/1/expected/body/collectionIds"
+            "/cases/54/expected/body/collectionIds",
+            "/cases/55/expected/body/collectionIds"
           ],
           "coverage": "partial",
           "reason": "The three rows observe collectionIds values in successful responses."

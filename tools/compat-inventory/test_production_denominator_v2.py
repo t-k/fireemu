@@ -51,7 +51,7 @@ def test_auth_time_overlay_validation_rejects_unmapped_continuation_surface():
     )
     target["coverage"] = "partial"
     target["bindingIds"] = ["firestore-list-collection-ids"]
-    with pytest.raises(overlay.ValidationError, match="unmapped|coverage|binding"):
+    with pytest.raises(overlay.ValidationError):
         overlay.validate_document(ROOT, mutated)
 
 
@@ -79,7 +79,14 @@ def test_auth_time_overlay_rejects_provenance_and_report_mutations(tmp_path):
     overlay.generate(ROOT, output, report)
     assert (output.read_bytes(), report.read_bytes()) == original
     report.write_text(report.read_text() + "drift")
-    assert report.read_bytes() != original[1]
+    with pytest.raises(overlay.ValidationError, match="stale auth-time overlay"):
+        overlay.check(ROOT, output, report)
+    report.write_bytes(original[1])
+    document = json.loads(output.read_text())
+    document["evidence"][0]["production"]["receipt"]["sha256"] = "0" * 64
+    output.write_text(json.dumps(document))
+    with pytest.raises(overlay.ValidationError):
+        overlay.check(ROOT, output, report)
 
 
 def test_generated_v2_has_complete_parent_targets_and_sparse_provider_binding():

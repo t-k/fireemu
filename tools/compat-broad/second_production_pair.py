@@ -18,7 +18,7 @@ PINNED_PRODUCTION_CANDIDATE_SHA256 = (
     "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73"
 )
 PARENT_RUNTIME_ANCHOR = (
-    "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v2.json"
+    "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v3.json"
 )
 
 

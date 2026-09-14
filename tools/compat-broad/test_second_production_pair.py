@@ -324,7 +324,7 @@ def test_saved_comparator_uses_current_runtime_anchor_path():
     from second_production_pair import PARENT_RUNTIME_ANCHOR
 
     assert PARENT_RUNTIME_ANCHOR == (
-        "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v2.json"
+        "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v3.json"
     )
 
 

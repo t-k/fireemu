@@ -22,6 +22,8 @@ from precedence_contract import (
     CLAIM_SENTINEL_KEY,
     CORPUS,
     DIAGNOSTIC_FINALIZES,
+    LOCAL_VALID_ACTIVE_ERRORS,
+    LOCAL_VALID_ACTIVE_FIELDS,
     PHOTO_SENTINEL_PREFIX,
     TEST_CODE,
     TEST_PHONES,
@@ -457,6 +459,94 @@ def observe(output, origin=None):
                 else None,
             )
 
+        def local_valid_active_token_variants():
+            """Exercise valid-session authorization on the owned local runtime only.
+
+            These rows are local safety/spec observations, deliberately excluded from
+            the production corpus and receipt. Every rejected request includes an
+            ordinary displayName sentinel to prove the whole request is atomic; the
+            held MFA credentials and sessions are then exercised by the existing rows
+            after this function returns.
+            """
+            if production:
+                return
+            fields = {
+                "customAttributes": json.dumps({"fireemuPrecedenceLocal": "sentinel"}),
+                "emailVerified": False,
+                "mfa": {"enrollments": [{"phoneInfo": "+15555550102"}]},
+                "linkProviderUserInfo": {
+                    "providerId": "google.com",
+                    "rawId": "auth-u13-local-sentinel",
+                },
+                "disableUser": True,
+            }
+            observations = []
+            for label, account in accounts.items():
+                token = account["baseline"]["idToken"]
+                before = lookup(account)
+                for field in LOCAL_VALID_ACTIVE_FIELDS:
+                    request = {
+                        "idToken": token,
+                        "displayName": "auth-u13-must-not-apply",
+                        field: fields[field],
+                    }
+                    status, response = client("update", request)
+                    after = lookup(account)
+                    expected = LOCAL_VALID_ACTIVE_ERRORS[field]
+                    require(status == 400 and error_code(response) == expected)
+                    require(after == before)
+                    observations.append(
+                        {
+                            "account": label,
+                            "field": field,
+                            "httpStatus": status,
+                            "outcome": "refused",
+                            "observedError": error_code(response),
+                            "accountStateUnchanged": after == before,
+                        }
+                    )
+
+            # A permitted ordinary field controls that the active token itself remains
+            # usable and that the preceding refusals did not poison either session.
+            controls = []
+            for label, account in accounts.items():
+                token = account["baseline"]["idToken"]
+                before = lookup(account)
+                status, response = client(
+                    "update",
+                    {"idToken": token, "displayName": "auth-u13-ordinary-control"},
+                )
+                changed = lookup(account)
+                require(
+                    status == 200
+                    and "error" not in response
+                    and changed.get("displayName") == "auth-u13-ordinary-control"
+                )
+                status, response = client(
+                    "update", {"idToken": token, "displayName": account["marker"]}
+                )
+                restored = lookup(account)
+                require(
+                    status == 200
+                    and "error" not in response
+                    and restored == before
+                )
+                controls.append(
+                    {
+                        "account": label,
+                        "field": "displayName",
+                        "httpStatus": 200,
+                        "outcome": "accepted",
+                        "observedError": None,
+                        "accountStateRestored": restored == before,
+                    }
+                )
+            report["localValidActiveToken"] = {
+                "fields": observations,
+                "ordinaryFieldControls": controls,
+                "heldCredentialsAndSessionsDeferred": True,
+            }
+
         def transition(disabled):
             for account in accounts.values():
                 require(core.recovery_identity(account["journal"])[1] == account["uid"])
@@ -533,7 +623,9 @@ def observe(output, origin=None):
 
         a, b = accounts["a"], accounts["b"]
         baseline = fresh_finalize("baseline-a-fresh-finalize", a)
-        fresh_finalize("baseline-b-fresh-finalize", b)
+        a["baseline"] = baseline
+        # Keep both control tokens in memory for the local-only valid-token variants.
+        b["baseline"] = fresh_finalize("baseline-b-fresh-finalize", b)
 
         # Invalid signature against an administrator-only field, before any disable, so
         # that only these two conditions overlap. The privileged field is a custom claim
@@ -589,6 +681,8 @@ def observe(output, origin=None):
             account["session"] = start(account, account["held"])
             account["code"] = code_for(account["session"])
             report["held"][label] = True
+
+        local_valid_active_token_variants()
 
         transition(True)
         held_finalize("disabled-a-wrong-code-finalize", a, WRONG_CODE)

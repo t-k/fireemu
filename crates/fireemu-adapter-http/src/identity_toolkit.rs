@@ -4805,7 +4805,7 @@ fn update(
                     }
                 }
                 if has_admin_field
-                    && ["mfa", "linkProviderUserInfo"]
+                    && ["emailVerified", "mfa", "linkProviderUserInfo"]
                         .iter()
                         .any(|key| body.get(*key).is_some())
                 {

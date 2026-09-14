@@ -4634,28 +4634,26 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
                 "{field}: tampered update must not mutate"
             );
 
-            if *field != "emailVerified" {
-                // Valid session plus the same field: authenticated, then refused on the field.
-                let mut request =
-                    json!({"idToken": signed["idToken"], "displayName": "must-not-apply"});
-                request[*field] = value.clone();
-                let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
-                assert_eq!(status, 400, "{field}: {refused}");
-                assert_eq!(
-                    refused["error"]["message"],
-                    if *field == "customAttributes" {
-                        "INSUFFICIENT_PERMISSION"
-                    } else {
-                        "OPERATION_NOT_ALLOWED"
-                    },
-                    "{field}"
-                );
-                assert_eq!(
-                    lookup(&s),
-                    baseline,
-                    "{field}: valid-token update must not mutate"
-                );
-            }
+            // Valid session plus the same field: authenticated, then refused on the field.
+            let mut request =
+                json!({"idToken": signed["idToken"], "displayName": "must-not-apply"});
+            request[*field] = value.clone();
+            let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400, "{field}: {refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                if *field == "customAttributes" {
+                    "INSUFFICIENT_PERMISSION"
+                } else {
+                    "OPERATION_NOT_ALLOWED"
+                },
+                "{field}"
+            );
+            assert_eq!(
+                lookup(&s),
+                baseline,
+                "{field}: valid-token update must not mutate"
+            );
 
             // OOB code plus the same field: refused on the field, code not consumed.
             let mut request = json!({"oobCode": link["oobCode"], "displayName": "must-not-apply"});

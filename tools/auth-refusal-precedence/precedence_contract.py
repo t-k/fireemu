@@ -90,6 +90,24 @@ WRONG_CODE = "246801"
 CLAIM_SENTINEL_KEY = "fireemuPrecedence"
 PHOTO_SENTINEL_PREFIX = "https://example.test/precedence-"
 
+# Local-only safety coverage. These observations deliberately stay outside CASES and
+# CORPUS: production revision 1 records only the tampered-token overlap, while the
+# valid-token authorization answers are checked against the local policy and API spec.
+LOCAL_VALID_ACTIVE_FIELDS = (
+    "customAttributes",
+    "emailVerified",
+    "mfa",
+    "linkProviderUserInfo",
+    "disableUser",
+)
+LOCAL_VALID_ACTIVE_ERRORS = {
+    "customAttributes": "INSUFFICIENT_PERMISSION",
+    "emailVerified": "OPERATION_NOT_ALLOWED",
+    "mfa": "OPERATION_NOT_ALLOWED",
+    "linkProviderUserInfo": "OPERATION_NOT_ALLOWED",
+    "disableUser": "OPERATION_NOT_ALLOWED",
+}
+
 
 def error_code(value):
     error = value.get("error") if isinstance(value, dict) else None

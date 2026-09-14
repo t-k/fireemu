@@ -239,6 +239,19 @@ class World:
         return self.finalize(body)
 
     def update(self, body):
+        # Local-only AUTH-U13 coverage: an active user token may update an ordinary
+        # profile field, but every administrator-only field is refused atomically. The
+        # recorder keeps these observations out of the production corpus.
+        if body["idToken"] in self.tokens:
+            user = self.users[self.tokens[body["idToken"]]]
+            admin_fields = set(body) & set(contract.LOCAL_VALID_ACTIVE_FIELDS)
+            if admin_fields:
+                assert len(admin_fields) == 1 and "displayName" in body
+                field = next(iter(admin_fields))
+                return self.error(contract.LOCAL_VALID_ACTIVE_ERRORS[field])
+            assert set(body) == {"idToken", "displayName"}
+            user["displayName"] = body["displayName"]
+            return 200, {"localId": user["localId"], "email": user["email"]}
         # The tampered token is a token this world issued with its signature changed,
         # and it arrives before any account is disabled.
         head, payload, signature = body["idToken"].split(".")
@@ -396,6 +409,40 @@ def test_disabled_first_order_completes(tmp_path, monkeypatch):
     assert rows["disabled-a-wrong-code-finalize"]["observedError"] == "USER_DISABLED"
     assert rows["disabled-b-correct-code-finalize"]["observedError"] == "USER_DISABLED"
     assert rows["reenabled-a-held-finalize"]["outcome"] == "accepted"
+
+
+def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
+    w = world(tmp_path)
+    for label in ("a", "b"):
+        uid = f"uid-{label}"
+        user = {
+            "localId": uid,
+            "email": f"{label}@example.test",
+            "displayName": f"marker-{label}",
+            "emailVerified": True,
+            "mfaInfo": [{"mfaEnrollmentId": f"factor-{label}", "phoneInfo": "+15555550100"}],
+        }
+        w.users[uid] = user
+        token = w.issue(user, True)["idToken"]
+        before = json.loads(json.dumps(user))
+        values = {
+            "customAttributes": json.dumps({"sentinel": label}),
+            "emailVerified": False,
+            "mfa": {"enrollments": [{"phoneInfo": "+15555550102"}]},
+            "linkProviderUserInfo": {"providerId": "google.com", "rawId": f"raw-{label}"},
+            "disableUser": True,
+        }
+        for field in contract.LOCAL_VALID_ACTIVE_FIELDS:
+            status, response = w.update(
+                {"idToken": token, "displayName": "must-not-apply", field: values[field]}
+            )
+            assert status == 400
+            assert error_code(response) == contract.LOCAL_VALID_ACTIVE_ERRORS[field]
+            assert user == before
+        status, _ = w.update({"idToken": token, "displayName": "ordinary"})
+        assert status == 200 and user["displayName"] == "ordinary"
+        status, _ = w.update({"idToken": token, "displayName": before["displayName"]})
+        assert status == 200 and user == before
 
 
 def test_a_consuming_refusal_is_recorded_not_fatal(tmp_path, monkeypatch):

@@ -25,6 +25,8 @@ from test_second_production import fixture_permission as old_permission
 def local_fixture():
     from urllib.parse import quote
 
+    from shared_gate import _creation_proofs
+
     plan = manifest("a" * 32)
     backend = Backend(old_permission())
     jobs, events, states = {}, [], {}
@@ -34,6 +36,7 @@ def local_fixture():
     }
     for key, job in plan["jobs"].items():
         rows, cleanup = [], []
+        proofs = {}
         for phase, operations, target in (
             ("observation", job["observation"], rows),
             ("recovery", job["recovery"], cleanup),
@@ -51,6 +54,9 @@ def local_fixture():
                     operation["body"],
                     headers,
                 )
+                if phase == "observation":
+                    for proof in _creation_proofs(operation, status, body, job, plan):
+                        proofs.setdefault(proof["name"], proof)
                 target.append(
                     {"index": i, "request": operation, "status": status, "body": body}
                 )
@@ -73,10 +79,17 @@ def local_fixture():
             "rows": rows,
             "cleanup": cleanup,
         }
-        states[key] = {"complete": True, "inflight": False, "absent": job["resources"]}
+        states[key] = {
+            "complete": True,
+            "inflight": False,
+            "absent": job["resources"],
+            "owned": list(proofs),
+            "creationProofs": proofs,
+        }
     return {
         "gate": {
             "plan": plan,
+            "planDigest": digest(plan),
             "events": events,
             "jobs": states,
             "total": 26,
@@ -158,6 +171,10 @@ class Backend:
                 "fields": body["fields"],
                 "updateTime": "2026-09-13T01:00:00Z",
             }
+            if self.variant == "lost-create":
+                raise ValueError("creation acknowledgement lost after commit")
+            if self.variant == "interrupted-create":
+                raise KeyboardInterrupt()
             return 200, copy.deepcopy(self.docs[path]), "application/json"
         if method == "DELETE":
             if self.variant == "unrecovered":
@@ -180,7 +197,7 @@ class Backend:
                 {"error": {"code": 400, "status": "INVALID_ARGUMENT"}},
                 "application/json",
             )
-        statuses = []
+        statuses, results = [], []
         for write in body["writes"]:
             document = copy.deepcopy(write["update"])
             if (
@@ -188,11 +205,13 @@ class Backend:
                 and document["name"] in self.docs
             ):
                 statuses.append({"code": 6})
+                results.append({})
                 continue
             document["updateTime"] = "2026-09-13T01:00:01Z"
             self.docs[document["name"]] = document
             statuses.append({"code": 0})
-        return 200, {"status": statuses}, "application/json"
+            results.append({"updateTime": document["updateTime"]})
+        return 200, {"status": statuses, "writeResults": results}, "application/json"
 
 
 @pytest.fixture
@@ -261,9 +280,19 @@ def test_management_and_data_share_budget(boundary, tmp_path):
 def test_other_diagnostic_results_are_observations(boundary, tmp_path, variant):
     boundary[1].variant = variant
     result = run(boundary, tmp_path)
-    assert result["completed"] and result["cleanupComplete"]
     assert not all(j["safety"] for j in result["jobs"].values())
-    assert not boundary[1].docs
+    if variant == "unexpected-success":
+        # The invalid transaction write unexpectedly changed the created version.
+        # An observation of that new version cannot grant cleanup ownership.
+        assert not result["completed"] and not result["cleanupComplete"]
+        assert len(boundary[1].docs) == 1
+        assert not any(
+            method == "DELETE" and "transaction-field" in url
+            for url, method, _body, _headers in boundary[1].calls
+        )
+    else:
+        assert result["completed"] and result["cleanupComplete"]
+        assert not boundary[1].docs
 
 
 @pytest.mark.parametrize(
@@ -369,15 +398,13 @@ def test_g0_status_message_normalization_is_exact_and_owned():
 
 
 def _g0_local_runtime_fixture(production, local):
-    """Derive a local-shaped receipt from the pinned bodies without changing its inputs."""
-    from batch_adapter import observer_digest
-
+    """Build synthetic test responses over a copied frozen-v1 local fixture."""
     result = copy.deepcopy(local)
-    result["gate"]["plan"]["observerSha256"] = observer_digest()
+    batch = result.get("batch", result)
     for key, production_job in production["jobs"].items():
-        local_job = result["jobs"][key]
+        local_job = batch["jobs"][key]
         production_resources = production["gate"]["plan"]["jobs"][key]["resources"]
-        local_resources = result["gate"]["plan"]["jobs"][key]["resources"]
+        local_resources = batch["gate"]["plan"]["jobs"][key]["resources"]
         sources = tuple(production_resources)
         targets = tuple(local_resources)
 
@@ -398,7 +425,7 @@ def _g0_local_runtime_fixture(production, local):
             local_row["body"] = remap(production_row["body"])
             event = next(
                 event
-                for event in result["gate"]["events"]
+                for event in batch["gate"]["events"]
                 if event["job"] == key
                 and event["phase"] == "observation"
                 and event["index"] == local_row["index"]
@@ -429,7 +456,7 @@ def test_g0_runtime_recompare_pins_production_and_does_not_reuse_old_local_hash(
 ):
     source = _g0_production_source()
     production = json.loads(source.read_bytes())
-    local = _g0_local_runtime_fixture(production, local_fixture())
+    local = _g0_local_runtime_fixture(production, frozen_g0_local_fixture())
     pinned = tmp_path / "g0-production.json"
     pinned.write_bytes(source.read_bytes())
     result = compare_g0_runtime_recompare(pinned, local)
@@ -451,7 +478,7 @@ def test_g0_runtime_recompare_pins_production_and_does_not_reuse_old_local_hash(
 def test_g0_runtime_recompare_rejects_missing_production_safety_or_cleanup(field):
     source = _g0_production_source()
     production = json.loads(source.read_bytes())
-    local = _g0_local_runtime_fixture(production, local_fixture())
+    local = _g0_local_runtime_fixture(production, frozen_g0_local_fixture())
     production["jobs"]["partial"][field] = False
     result = _compare(production, local, g0_recompare=True)
     assert result["compatibility"] == "indeterminate"
@@ -471,8 +498,8 @@ def test_g0_runtime_recompare_rejects_local_safety_or_state_without_true_value(
 ):
     source = _g0_production_source()
     production = json.loads(source.read_bytes())
-    local = _g0_local_runtime_fixture(production, local_fixture())
-    local["jobs"]["partial"][field] = value
+    local = _g0_local_runtime_fixture(production, frozen_g0_local_fixture())
+    local["batch"]["jobs"]["partial"][field] = value
     result = _compare(production, local, g0_recompare=True)
     assert result["compatibility"] == "indeterminate"
 
@@ -481,8 +508,8 @@ def test_g0_runtime_recompare_rejects_local_safety_or_state_without_true_value(
 def test_g0_runtime_recompare_rejects_missing_local_safety_or_state(field):
     source = _g0_production_source()
     production = json.loads(source.read_bytes())
-    local = _g0_local_runtime_fixture(production, local_fixture())
-    del local["jobs"]["partial"][field]
+    local = _g0_local_runtime_fixture(production, frozen_g0_local_fixture())
+    del local["batch"]["jobs"]["partial"][field]
     result = _compare(production, local, g0_recompare=True)
     assert result["compatibility"] == "indeterminate"
 
@@ -615,3 +642,403 @@ def test_compare_cli_preserves_existing_inputs(boundary, tmp_path, monkeypatch):
     with pytest.raises(FileExistsError):
         pair.main()
     assert p.read_bytes() == original
+
+
+@pytest.mark.parametrize("variant", ["lost-create", "interrupted-create"])
+def test_unacknowledged_creation_never_reports_top_level_cleanup_complete(boundary, tmp_path, variant):
+    boundary[1].variant = variant
+    if variant == "interrupted-create":
+        with pytest.raises(KeyboardInterrupt):
+            run(boundary, tmp_path)
+        result = json.loads((tmp_path / "run/result.json").read_bytes())
+    else:
+        result = run(boundary, tmp_path)
+        assert result["jobs"]["partial"]["cleanupComplete"] is False
+    assert len(boundary[1].docs) == 1
+    assert result["gate"]["jobs"]["partial"]["owned"] == []
+    assert result["cleanupComplete"] is False
+    assert result["recordingComplete"] is False
+    assert result["completed"] is False
+    assert compare(result, boundary[2])["compatibility"] == "indeterminate"
+    assert not any(method == "DELETE" for _url, method, _body, _headers in boundary[1].calls)
+    assert json.loads((tmp_path / "run/result.json").read_bytes())["cleanupComplete"] is False
+
+
+def test_no_data_dispatch_does_not_claim_uncertain_document_cleanup(boundary, tmp_path):
+    boundary[1].variant = "auth-command"
+    result = run(boundary, tmp_path)
+    assert not boundary[1].docs
+    assert all(job["pid"] is None for job in result["gate"]["jobs"].values())
+    assert result["cleanupComplete"] is True
+    assert result["completed"] is False
+
+
+def frozen_g0_local_fixture():
+    """Copy the immutable public v1 receipt, never rebuild it with the v2 collector."""
+    return json.loads((Path(__file__).parents[2] / "spec/compatibility/broad-runs/a35f85b4-shared-local-reference.json").read_bytes())
+
+
+def test_frozen_g0_contract_is_accepted_only_by_explicit_historical_validation():
+    from shared_production_pair import validate_record
+
+    frozen = frozen_g0_local_fixture()
+    before = digest(frozen)
+    assert validate_record(frozen, local=True, historical_observer=True) == frozen["batch"]
+    assert digest(frozen) == before
+    with pytest.raises(ValueError):
+        validate_record(frozen, local=True)
+    with pytest.raises(ValueError):
+        validate_record(local_fixture(), local=True, historical_observer=True)
+
+
+@pytest.mark.parametrize("field,value", [("contract", "shared-local-v1"), ("collector", "existing-batch-adapter-shared-v1"), ("contract", None), ("collector", None)])
+def test_current_v2_validation_rejects_relabeling_even_with_rebound_plan_digest(field, value):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    validate_record(record, local=True)
+    record["gate"]["plan"][field] = value
+    record["gate"]["planDigest"] = digest(record["gate"]["plan"])
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize("variant", ["missing", "wrong", "unbound-plan"])
+def test_current_v2_validation_requires_persisted_plan_digest(variant):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    record["gate"]["planDigest"] = digest(record["gate"]["plan"])
+    validate_record(record, local=True)
+    if variant == "missing":
+        del record["gate"]["planDigest"]
+    elif variant == "wrong":
+        record["gate"]["planDigest"] = "0" * 64
+    else:
+        record["gate"]["plan"]["intervalSeconds"] += 0.25
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize("variant", ["source-missing", "source-unknown", "source-other-observer", "observer-rebound", "contract-rebound", "collector-rebound", "plan-digest-missing"])
+def test_historical_g0_validation_binds_frozen_source_observer_and_plan(variant):
+    from shared_production_pair import validate_record
+
+    record = frozen_g0_local_fixture()
+    plan = record["batch"]["gate"]["plan"]
+    if variant == "source-missing":
+        del record["executionCommit"]
+    elif variant == "source-unknown":
+        record["executionCommit"] = "0" * 40
+    elif variant == "source-other-observer":
+        record["executionCommit"] = "68012694f81df504600f8e67301410c63ec9e2e7"
+    elif variant == "observer-rebound":
+        record["observerSha256"] = plan["observerSha256"] = production.observer_digest()
+    elif variant == "contract-rebound":
+        plan["contract"] = "shared-local-v2"
+    elif variant == "collector-rebound":
+        plan["collector"] = "existing-batch-adapter-shared-v2"
+    record["batch"]["gate"]["planDigest"] = digest(plan)
+    if variant == "plan-digest-missing":
+        del record["batch"]["gate"]["planDigest"]
+    with pytest.raises(ValueError):
+        validate_record(record, local=True, historical_observer=True)
+
+
+def test_g0_contract_retains_frozen_v1_admission_without_current_builder():
+    from shared_production_pair import (
+        G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST,
+        frozen_g0_manifest,
+        g0_contract,
+    )
+
+    plan = frozen_g0_manifest("a" * 32)
+    assert plan["contract"] == "shared-local-v1"
+    assert plan["collector"] == "existing-batch-adapter-shared-v1"
+    writes = plan["jobs"]["partial"]["observation"][4]["body"]["writes"]
+    assert "currentDocument" not in writes[0]
+    assert writes[1]["currentDocument"] == {"exists": False}
+    assert "currentDocument" not in writes[2]
+    assert all("_sharedOwner" not in write["update"]["fields"] for write in writes)
+    contract = g0_contract()
+    assert (
+        contract["baseAdmissionContractDigest"]
+        == G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST
+    )
+    assert contract["baseAdmissionContractDigest"] != digest(production.binding())
+
+
+def rebind_fixture_events(record):
+    for event in record["gate"]["events"]:
+        job = record["jobs"][event["job"]]
+        rows = job["rows"] if event["phase"] == "observation" else job["cleanup"]
+        row = rows[event["index"]]
+        event["requestDigest"] = digest(row["request"])
+        event["responseDigest"] = digest(row["body"])
+        event["status"] = row["status"]
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_current_v2_requires_creation_proofs_even_when_foreign_cleanup_is_rebound(
+    replace,
+):
+    from urllib.parse import quote
+
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    validate_record(record, local=True)
+    record["gate"]["jobs"]["partial"].pop("creationProofs", None)
+    if replace:
+        rows = record["jobs"]["partial"]["cleanup"]
+        rows[0]["body"]["updateTime"] = "2026-09-14T01:00:00Z"
+        rows[1]["request"]["path"] = (
+            rows[1]["request"]["path"].split("?")[0]
+            + "?currentDocument.updateTime="
+            + quote(rows[0]["body"]["updateTime"], safe="")
+        )
+        rebind_fixture_events(record)
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "empty",
+        "extra",
+        "owned-missing",
+        "name",
+        "updateTime",
+        "fieldsDigest",
+        "requestDigest",
+        "responseDigest",
+    ],
+)
+def test_current_v2_creation_journal_must_match_acknowledged_exact_proofs(variant):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    state = record["gate"]["jobs"]["partial"]
+    name = record["gate"]["plan"]["jobs"]["partial"]["resources"][1]
+    if variant == "empty":
+        state["creationProofs"] = {}
+    elif variant == "extra":
+        state["creationProofs"][name + "-foreign"] = copy.deepcopy(
+            state["creationProofs"][name]
+        )
+    elif variant == "owned-missing":
+        state["owned"].remove(name)
+    else:
+        state["creationProofs"][name][variant] = "foreign"
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize(
+    "variant", ["version", "fields", "name", "skipped-status", "bool-status"]
+)
+def test_current_v2_rebound_cleanup_cannot_replace_created_resource_state(variant):
+    from urllib.parse import quote
+
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    rows = record["jobs"]["partial"]["cleanup"]
+    if variant == "version":
+        rows[0]["body"]["updateTime"] = "2026-09-14T01:00:00Z"
+        rows[1]["request"]["path"] = (
+            rows[1]["request"]["path"].split("?")[0]
+            + "?currentDocument.updateTime="
+            + quote(rows[0]["body"]["updateTime"], safe="")
+        )
+    elif variant == "fields":
+        rows[0]["body"]["fields"] = {"foreign": {"booleanValue": True}}
+    elif variant == "name":
+        rows[0]["body"]["name"] += "-foreign"
+    else:
+        rows[1]["status"] = None if variant == "skipped-status" else True
+    rebind_fixture_events(record)
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "conflict",
+        "lost",
+        "bool-status",
+        "foreign-name",
+        "missing-version",
+        "invalid-version",
+        "bool-version",
+        "foreign-marker",
+        "bool-batch-code",
+        "missing-batch-result",
+    ],
+)
+def test_current_v2_rebound_creation_response_cannot_grant_destructive_authority(
+    variant,
+):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    job = record["jobs"]["partial"]
+    row = job["rows"][3]
+    state = record["gate"]["jobs"]["partial"]
+    name = row["body"]["name"]
+    if variant == "conflict":
+        row["status"] = 409
+    elif variant == "lost":
+        row["status"] = None
+    elif variant == "bool-status":
+        row["status"] = True
+    elif variant == "foreign-name":
+        row["body"]["name"] += "-foreign"
+    elif variant == "missing-version":
+        del row["body"]["updateTime"]
+    elif variant == "invalid-version":
+        row["body"]["updateTime"] = "invalid"
+    elif variant == "bool-version":
+        row["body"]["updateTime"] = True
+    elif variant == "foreign-marker":
+        row["body"]["fields"]["_sharedOwner"] = {"referenceValue": name + "-foreign"}
+    elif variant == "bool-batch-code":
+        job["rows"][4]["body"]["status"][0]["code"] = False
+    else:
+        job["rows"][4]["body"]["writeResults"].pop()
+    state["creationProofs"][name]["responseDigest"] = digest(row["body"])
+    state["creationProofs"][name]["fieldsDigest"] = digest(row["body"].get("fields"))
+    state["creationProofs"][name]["updateTime"] = row["body"].get("updateTime")
+    rebind_fixture_events(record)
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize("variant", ["read-status", "final-status", "incomplete-event"])
+def test_current_v2_cleanup_chain_requires_typed_completed_receipts(variant):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    rows = record["jobs"]["partial"]["cleanup"]
+    if variant == "read-status":
+        rows[0]["status"] = 200.0
+    elif variant == "final-status":
+        rows[2]["status"] = 404.0
+    rebind_fixture_events(record)
+    if variant == "incomplete-event":
+        next(
+            event for event in record["gate"]["events"] if event["phase"] == "recovery"
+        )["completed"] = False
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+@pytest.mark.parametrize("status", [{}, {"code": 0}])
+def test_v2_batch_creation_accepts_archived_protobuf_default_status(status):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    row = record["jobs"]["partial"]["rows"][4]
+    # Frozen G0 production successes have {}, unlike the explicit local default 0.
+    row["body"]["status"][0] = row["body"]["status"][2] = status
+    for index in (0, 2):
+        resource = record["gate"]["plan"]["jobs"]["partial"]["resources"][index]
+        record["gate"]["jobs"]["partial"]["creationProofs"][resource][
+            "responseDigest"
+        ] = digest(row["body"])
+    rebind_fixture_events(record)
+    assert validate_record(record, local=True) == record
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"code": False},
+        {"code": "0"},
+        {"code": None},
+        {"code": 6},
+        {"code": []},
+        {"code": {}},
+        None,
+        [],
+    ],
+)
+def test_v2_batch_creation_rejects_explicit_nonsuccess_or_malformed_status(status):
+    from shared_production_pair import validate_record
+
+    record = local_fixture()
+    row = record["jobs"]["partial"]["rows"][4]
+    row["body"]["status"][0] = row["body"]["status"][2] = status
+    for index in (0, 2):
+        resource = record["gate"]["plan"]["jobs"]["partial"]["resources"][index]
+        record["gate"]["jobs"]["partial"]["creationProofs"][resource][
+            "responseDigest"
+        ] = digest(row["body"])
+    rebind_fixture_events(record)
+    with pytest.raises(ValueError):
+        validate_record(record, local=True)
+
+
+@pytest.mark.parametrize(
+    "target", ["skipped", "unknown-index", "unknown-job", "unknown-phase"]
+)
+def test_skipped_cleanup_rejects_foreign_dispatch_receipt(boundary, tmp_path, target):
+    from shared_production_pair import validate_record
+
+    boundary[1].variant = "whole-refusal"
+    record = run(boundary, tmp_path)
+    assert validate_record(record) == record
+    skipped = record["gate"]["skips"][0]
+    row = record["jobs"][skipped["job"]]["cleanup"][skipped["index"]]
+    assert row["status"] is None
+    foreign = copy.deepcopy(row["request"])
+    foreign["path"] = "/v1/projects/foreign/databases/(default)/documents/foreign/doc"
+    record["gate"]["events"].append(
+        {
+            "job": skipped["job"],
+            "phase": "recovery",
+            "index": skipped["index"],
+            "completed": True,
+            "status": 200,
+            "requestDigest": digest(foreign),
+            "responseDigest": digest({}),
+        }
+    )
+    event = record["gate"]["events"][-1]
+    if target == "unknown-index":
+        event["index"] = -1
+    elif target == "unknown-job":
+        event["job"] = "unrelated"
+    elif target == "unknown-phase":
+        event["phase"] = "unrelated"
+    record["gate"]["total"] += 1
+    record["gate"]["recovery"] += 1
+    record["gate"]["costMicrousd"] += record["gate"]["plan"]["requestCostMicrousd"]
+    with pytest.raises(ValueError, match="recovery receipt"):
+        validate_record(record)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["body", "missing-journal", "duplicate-journal", "foreign-journal"]
+)
+def test_skipped_cleanup_requires_exact_nondispatch_evidence(
+    boundary, tmp_path, mutation
+):
+    from shared_production_pair import validate_record
+
+    boundary[1].variant = "whole-refusal"
+    record = run(boundary, tmp_path)
+    assert validate_record(record) == record
+    skipped = record["gate"]["skips"][0]
+    row = record["jobs"][skipped["job"]]["cleanup"][skipped["index"]]
+    if mutation == "body":
+        row["body"] = {}
+    elif mutation == "missing-journal":
+        record["gate"]["skips"].pop(0)
+    elif mutation == "duplicate-journal":
+        record["gate"]["skips"].append(copy.deepcopy(skipped))
+    else:
+        skipped["job"] = "unrelated"
+    with pytest.raises(ValueError, match="skipped cleanup"):
+        validate_record(record)

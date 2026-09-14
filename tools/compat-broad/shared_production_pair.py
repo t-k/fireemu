@@ -3,6 +3,8 @@
 import argparse
 import hashlib
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -21,14 +23,45 @@ G0_ORIGINAL_MANIFEST_DIGEST = (
     "13e97e0146c483ad6ab93f1dc8ecc4a8ea2615eaf481878047aec94f42fcecd1"
 )
 G0_NORMALIZATION_VERSION = "shared-g0-batchwrite-status-resource-v1"
+G0_FROZEN_SOURCE = "a35f85b464743d62344a3a58763d382b5b3838ce"
+G0_FROZEN_INPUTS_SHA256 = (
+    "a3193a57fd84c416358cb16a66e72a94bfd5d95cb76f36afbed7189e3abb4bc0"
+)
+# Recomputed from the complete Python observer sources in each archived Git tree.
+G0_LOCAL_OBSERVERS = {
+    G0_FROZEN_SOURCE: "1045d0940439fdcb3d6ac228b1c408a49a98893785cd89ce13851e5096acaee5",
+    "68012694f81df504600f8e67301410c63ec9e2e7": "3bfd6d1c13f08dab230b9180d7d7e9d69e3a8f256d383f4dc6e3b5c0a784e773",
+    "b6dcf561ad2cbf8d3f3db49948dbdc35fb3ef4d5": "3cc87696714da1996b2248a99cd8e0d0652c414fc942e660480d8a82e9c5a70b",
+}
+
+
+def frozen_g0_manifest(nonce):
+    """Read only the hash-pinned v1 recipe; current builders cannot change it."""
+    if not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        raise ValueError("G0 hexadecimal namespace required")
+    path = (
+        Path(__file__).parents[2]
+        / "spec/compatibility/broad-runs/a35f85b4-shared-execution-inputs.json"
+    )
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != G0_FROZEN_INPUTS_SHA256:
+        raise ValueError("G0 frozen inputs hash mismatch")
+    inputs = json.loads(raw)
+    if (
+        inputs["frozenCommit"] != G0_FROZEN_SOURCE
+        or digest(inputs["manifest"]) != G0_ORIGINAL_MANIFEST_DIGEST
+    ):
+        raise ValueError("G0 frozen source/manifest mismatch")
+    # The pinned template uses this one placeholder exclusively for its nonce.
+    return json.loads(json.dumps(inputs["manifest"]["template"]).replace("0" * 32, nonce))
 
 
 def g0_contract():
-    from shared_production import binding
-
     return {
-        "version": "shared-g0-runtime-recomparison-v1",
-        "baseAdmissionContractDigest": digest(binding()),
+        "version": "shared-g0-runtime-recomparison-v2",
+        "baseAdmissionContractDigest": G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST,
+        "frozenInputsSha256": G0_FROZEN_INPUTS_SHA256,
+        "localObserverSources": G0_LOCAL_OBSERVERS.copy(),
         "normalizationVersion": G0_NORMALIZATION_VERSION,
         "normalizerImplementationDigest": hashlib.sha256(
             Path(__file__).read_bytes()
@@ -96,13 +129,125 @@ def normalize_g0(value, names, *, service, path=()):
     return batch_normalize(value, names, service=service, path=path)
 
 
+def _validate_v2_creation_proofs(job, state, declared):
+    """Independently derive authority from acknowledged creates, never cleanup reads."""
+    proofs = {}
+
+    def created(name, fields, version, row):
+        if (
+            name not in declared["resources"]
+            or not isinstance(fields, dict)
+            or fields.get("_sharedOwner") != {"referenceValue": name}
+            or not isinstance(version, str)
+            or not re.fullmatch(
+                r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", version
+            )
+        ):
+            raise ValueError("invalid typed creation ownership evidence")
+        datetime.fromisoformat(version)
+        proofs.setdefault(
+            name,
+            {
+                "name": name,
+                "updateTime": version,
+                "fieldsDigest": digest(fields),
+                "requestDigest": digest(row["request"]),
+                "responseDigest": digest(row["body"]),
+            },
+        )
+
+    for row in job["rows"]:
+        operation, body = row["request"], row["body"]
+        if row["status"] != 200:
+            continue
+        if operation["method"] == "PATCH" and operation["path"].endswith(
+            "?currentDocument.exists=false"
+        ):
+            name = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+            fields = operation["body"]["fields"]
+            if (
+                not isinstance(body, dict)
+                or body.get("name") != name
+                or digest(body.get("fields")) != digest(fields)
+            ):
+                raise ValueError("creation acknowledgement identity/fields mismatch")
+            created(name, fields, body.get("updateTime"), row)
+        elif operation["method"] == "POST" and operation["path"].endswith(
+            ":batchWrite"
+        ):
+            writes = operation["body"]["writes"]
+            if not any(
+                digest(write.get("currentDocument")) == digest({"exists": False})
+                for write in writes
+            ):
+                continue
+            statuses = body.get("status") if isinstance(body, dict) else None
+            results = body.get("writeResults") if isinstance(body, dict) else None
+            if (
+                not isinstance(statuses, list)
+                or not isinstance(results, list)
+                or len(statuses) != len(writes)
+                or len(results) != len(writes)
+            ):
+                raise ValueError("creation acknowledgement write results unavailable")
+            for write, status, result in zip(writes, statuses, results, strict=True):
+                # Only absence receives the protobuf default; explicit values stay typed.
+                if (
+                    not isinstance(status, dict)
+                    or type(status.get("code", 0)) is not int
+                ):
+                    raise ValueError("creation acknowledgement status is not typed")
+                if status.get("code", 0) != 0 or digest(
+                    write.get("currentDocument")
+                ) != digest({"exists": False}):
+                    continue
+                if not isinstance(result, dict):
+                    raise ValueError(  # noqa: TRY004 -- Admission uses ValueError.
+                        "creation acknowledgement write result unavailable"
+                    )
+                created(
+                    write["update"]["name"],
+                    write["update"]["fields"],
+                    result.get("updateTime"),
+                    row,
+                )
+    if digest(state.get("creationProofs")) != digest(proofs) or digest(
+        state.get("owned")
+    ) != digest(list(proofs)):
+        raise ValueError("creation ownership journal differs from acknowledgements")
+    return proofs
+
+
 def validate_record(record, *, local=False, historical_observer=False):
+    """Validate current v2, or the explicitly selected frozen G0 v1 contract."""
     batch = record.get("batch", record)
     plan = batch["gate"]["plan"]
-    expected = manifest(plan["nonce"])
-    expected_observer = (
-        batch.get("observerDigest") if historical_observer else observer_digest()
-    )
+    if historical_observer:
+        expected = frozen_g0_manifest(plan["nonce"])
+        source = (
+            record.get("executionCommit")
+            if local
+            else batch.get("permission", {}).get("frozenCommit")
+        )
+        expected_observer = (
+            G0_LOCAL_OBSERVERS.get(source)
+            if local
+            else G0_LOCAL_OBSERVERS[G0_FROZEN_SOURCE]
+        )
+        if expected_observer is None or (not local and source != G0_FROZEN_SOURCE):
+            raise ValueError("G0 frozen collector source mismatch")
+        if not local and batch.get("observerDigest") != expected_observer:
+            raise ValueError("G0 production observer mismatch")
+    else:
+        expected = manifest(plan["nonce"])
+        expected_observer = observer_digest()
+    if (
+        plan.get("contract") != expected["contract"]
+        or plan.get("collector") != expected["collector"]
+    ):
+        raise ValueError("collector contract mismatch")
+    if batch["gate"].get("planDigest") != digest(plan):
+        raise ValueError("persisted plan digest mismatch")
     if plan["observerSha256"] != expected_observer:
         raise ValueError("observer mismatch")
     if digest(plan["jobs"]) != digest(expected["jobs"]):
@@ -134,6 +279,8 @@ def validate_record(record, *, local=False, historical_observer=False):
     if batch.get("completed") is not True:
         raise ValueError("incomplete execution")
     events = batch["gate"]["events"]
+    expected_receipts = 0
+    expected_skips = []
     for key, job in batch["jobs"].items():
         observed = [
             e for e in events if e["job"] == key and e["phase"] == "observation"
@@ -157,12 +304,23 @@ def validate_record(record, *, local=False, historical_observer=False):
             or sorted(state["absent"]) != sorted(expected["jobs"][key]["resources"])
         ):
             raise ValueError("cleanup evidence incomplete")
+        proofs = (
+            _validate_v2_creation_proofs(job, state, expected["jobs"][key])
+            if not historical_observer
+            else None
+        )
         declared_cleanup = expected["jobs"][key]["recovery"]
         if len(job["cleanup"]) != len(declared_cleanup):
             raise ValueError("cleanup sequence incomplete")
         for index, (row, declared) in enumerate(
             zip(job["cleanup"], declared_cleanup, strict=True)
         ):
+            if (
+                proofs is not None
+                and row.get("status") is not None
+                and type(row["status"]) is not int
+            ):
+                raise ValueError("cleanup response status is not typed")
             operation = dict(declared)
             source = operation.pop("versionFrom", None)
             if source is not None:
@@ -173,6 +331,20 @@ def validate_record(record, *, local=False, historical_observer=False):
                     and isinstance(version, str)
                     and version
                 ):
+                    if proofs is not None:
+                        resource = operation["path"].removeprefix("/v1/")
+                        proof = proofs.get(resource)
+                        if (
+                            proof is None
+                            or proof["updateTime"] != version
+                            or original["body"].get("name") != resource
+                            or digest(original["body"].get("fields"))
+                            != proof["fieldsDigest"]
+                            or type(row.get("status")) is not int
+                        ):
+                            raise ValueError(
+                                "DELETE differs from acknowledged creation ownership/version"
+                            )
                     operation["path"] += "?currentDocument.updateTime=" + quote(
                         version, safe=""
                     )
@@ -182,6 +354,13 @@ def validate_record(record, *, local=False, historical_observer=False):
                 [index, operation]
             ):
                 raise ValueError("cleanup recipe/version relation differs")
+            if proofs is not None and row.get("status") is None:
+                reason = "absent-or-unavailable-cleanup-read"
+                if source is None or digest(row.get("body")) != digest(
+                    {"skipped": reason}
+                ):
+                    raise ValueError("skipped cleanup representation mismatch")
+                expected_skips.append({"job": key, "index": index, "reason": reason})
         for resource in expected["jobs"][key]["resources"]:
             last = [
                 r
@@ -192,18 +371,37 @@ def validate_record(record, *, local=False, historical_observer=False):
             if not last or last[-1].get("status") != 404:
                 raise ValueError("final absence receipt missing")
         recovery = [e for e in events if e["job"] == key and e["phase"] == "recovery"]
+        expected_receipts += len(job["rows"]) + sum(
+            row.get("status") is not None for row in job["cleanup"]
+        )
         for row in job["cleanup"]:
-            if row.get("status") is None:
-                continue
             matching = [e for e in recovery if e["index"] == row["index"]]
+            if row.get("status") is None:
+                if not historical_observer and matching:
+                    raise ValueError("skipped cleanup has a recovery receipt")
+                continue
             if (
                 len(matching) != 1
                 or matching[0].get("requestDigest") != digest(row["request"])
                 or matching[0].get("responseDigest") != digest(row["body"])
                 or matching[0].get("status") != row["status"]
+                or (
+                    not historical_observer
+                    and (
+                        type(matching[0].get("index")) is not int
+                        or matching[0].get("completed") is not True
+                        or type(matching[0].get("status")) is not int
+                    )
+                )
             ):
                 raise ValueError("recovery receipt mismatch")
+    if not historical_observer and len(events) != expected_receipts:
+        raise ValueError("unconsumed observation/recovery receipt")
     state = batch["gate"]
+    if not historical_observer and sorted(
+        map(digest, state.get("skips", []))
+    ) != sorted(map(digest, expected_skips)):
+        raise ValueError("skipped cleanup journal mismatch")
     management = state.get("managementEvents", [])
     if (
         state["total"] != len(events) + len(management) + plan["coordinatorRequests"]
@@ -236,7 +434,7 @@ def _compare(production, local, *, g0_recompare=False):
     }
     try:
         left = validate_record(production, historical_observer=g0_recompare)
-        right = validate_record(local, local=True)
+        right = validate_record(local, local=True, historical_observer=g0_recompare)
         production_contract = (
             G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST
             if g0_recompare

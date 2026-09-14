@@ -11,9 +11,12 @@ import fcntl
 import json
 import math
 import os
+import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from broad_contract import digest
 
@@ -50,7 +53,7 @@ def create(path, plan):
     overhead = plan.get("coordinatorRequests", 0)
     fixed_cost = plan.get("fixedCostMicrousd", 0)
     if (
-        plan["contract"] != "shared-local-v1"
+        plan["contract"] not in {"shared-local-v1", "shared-local-v2"}
         or not 1 <= len(jobs) <= 2
         or len(resources) != len(set(resources))
         or not resources
@@ -101,11 +104,93 @@ def create(path, plan):
             "observation": 0,
             "recovery": 0,
             "owned": [],
+            "creationProofs": {},
             "absent": [],
             "captures": {},
             "complete": False,
         }
     _save(path, state)
+
+
+def _creation_proofs(operation, status, body, job, plan):
+    """Only exact conditional-create acknowledgements grant destructive authority."""
+    if status != 200 or operation["service"] != "firestore":
+        return []
+    request = operation.get("body")
+    candidates = []
+    if operation["method"] == "PATCH" and operation["path"].endswith(
+        "?currentDocument.exists=false"
+    ):
+        name = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+        if not isinstance(body, dict) or body.get("name") != name:
+            raise ValueError("conditional creation identity mismatch")
+        fields = request.get("fields") if isinstance(request, dict) else None
+        if digest(body.get("fields")) != digest(fields):
+            raise ValueError("conditional creation fields mismatch")
+        candidates.append((name, fields, body.get("updateTime")))
+    elif operation["method"] == "POST" and operation["path"].endswith(":batchWrite"):
+        writes = request.get("writes", []) if isinstance(request, dict) else []
+        conditional = [
+            write
+            for write in writes
+            if isinstance(write, dict)
+            and write.get("currentDocument") == {"exists": False}
+            and write["currentDocument"]["exists"] is False
+        ]
+        if not conditional:
+            return []
+        statuses = body.get("status") if isinstance(body, dict) else None
+        results = body.get("writeResults") if isinstance(body, dict) else None
+        if (
+            not isinstance(statuses, list)
+            or not isinstance(results, list)
+            or len(statuses) != len(writes)
+            or len(results) != len(writes)
+        ):
+            raise ValueError("conditional batch creation acknowledgement incomplete")
+        for write, result, entry in zip(writes, results, statuses, strict=True):
+            # google.rpc.Status omits its protobuf-default zero on production success.
+            if not isinstance(entry, dict) or type(entry.get("code", 0)) is not int:
+                raise ValueError("typed conditional batch status required")
+            if (
+                not isinstance(write, dict)
+                or write.get("currentDocument", {}).get("exists") is not False
+                or digest(write.get("currentDocument")) != digest({"exists": False})
+                or entry.get("code", 0) != 0
+            ):
+                continue
+            update = write.get("update", {})
+            if not isinstance(update, dict) or not isinstance(result, dict):
+                raise ValueError("conditional batch creation body mismatch")  # noqa: TRY004 -- Gate admission uses ValueError.
+            candidates.append(
+                (update.get("name"), update.get("fields"), result.get("updateTime"))
+            )
+    proofs = []
+    for name, fields, version in candidates:
+        if (
+            name not in job["resources"]
+            or not isinstance(fields, dict)
+            or not isinstance(version, str)
+            or not re.fullmatch(
+                r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", version
+            )
+        ):
+            raise ValueError("typed conditional creation resource/version required")
+        datetime.fromisoformat(version)
+        if plan["contract"] == "shared-local-v2" and fields.get("_sharedOwner") != {
+            "referenceValue": name
+        }:
+            raise ValueError("conditional creation namespace marker required")
+        proofs.append(
+            {
+                "name": name,
+                "updateTime": version,
+                "fieldsDigest": digest(fields),
+                "requestDigest": digest(operation),
+                "responseDigest": digest(body),
+            }
+        )
+    return proofs
 
 
 class Gate:
@@ -220,13 +305,12 @@ class Gate:
                 capture = job["captures"].get(str(source))
                 valid_version = bool(
                     capture
+                    and type(capture["status"]) is int
                     and capture["status"] == 200
                     and isinstance(capture.get("updateTime"), str)
                     and capture["updateTime"]
                 )
                 if valid_version:
-                    from urllib.parse import quote
-
                     version = capture.get("updateTime")
                     expected["path"] += "?currentDocument.updateTime=" + quote(
                         version, safe=""
@@ -234,8 +318,25 @@ class Gate:
             if digest(operation) != digest(expected):
                 raise ValueError("request outside closed scenario")
             resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
-            if recovery and resource not in job["owned"]:
-                raise ValueError("cleanup target has no absent-before-use proof")
+            if recovery and resource not in job["resources"]:
+                raise ValueError("cleanup target outside assigned resources")
+            if operation["method"] == "DELETE" and (source is None or valid_version):
+                proof = job.get("creationProofs", {}).get(resource)
+                capture = job["captures"].get(str(source), {})
+                if (
+                    not recovery
+                    or proof is None
+                    or capture.get("name") != resource
+                    or capture.get("fieldsDigest") != proof["fieldsDigest"]
+                    or operation["path"]
+                    != "/v1/"
+                    + resource
+                    + "?currentDocument.updateTime="
+                    + quote(proof["updateTime"], safe="")
+                ):
+                    raise ValueError(
+                        "cleanup requires journaled creation ownership/version"
+                    )
             if recovery:
                 job["stopped"] = True  # Recovery is a one-way transition.
             if source is not None and not valid_version:
@@ -302,10 +403,22 @@ class Gate:
             else:
                 status, body = result
                 event.update(status=status, responseDigest=digest(body), completed=True)
+                if type(status) is not int:
+                    job["stopped"] = True
+                    raise ValueError("typed HTTP status required")
+                if not recovery:
+                    try:
+                        proofs = _creation_proofs(operation, status, body, job, plan)
+                    except ValueError:
+                        job["stopped"] = True
+                        raise
+                    for proof in proofs:
+                        # Never replace a creation version with a later read or write.
+                        job["creationProofs"].setdefault(proof["name"], proof)
+                        if proof["name"] not in job["owned"]:
+                            job["owned"].append(proof["name"])
                 if operation["method"] == "GET" and resource in job["resources"]:
                     if status == 404:
-                        if resource not in job["owned"] and not recovery:
-                            job["owned"].append(resource)
                         if recovery and resource not in job["absent"]:
                             job["absent"].append(resource)
                     elif status == 200 and (
@@ -318,6 +431,10 @@ class Gate:
                 if recovery:
                     job["captures"][str(index)] = {
                         "status": status,
+                        "name": body.get("name") if isinstance(body, dict) else None,
+                        "fieldsDigest": digest(body.get("fields"))
+                        if isinstance(body, dict)
+                        else None,
                         "updateTime": body.get("updateTime")
                         if isinstance(body, dict)
                         else None,

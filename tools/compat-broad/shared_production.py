@@ -384,7 +384,20 @@ def execute(permission, nonce, output, api_key, local):
         recording = len(jobs) == 2 and all(
             j["recordingComplete"] for j in jobs.values()
         )
-        cleanup = all(not j["owned"] or j["complete"] for j in state["jobs"].values())
+        # An empty ownership journal can mean the create acknowledgement was lost.
+        # Only completed recovery or an untouched, unclaimed job is resolved.
+        cleanup = all(
+            not j["inflight"]
+            and (
+                j["complete"] is True
+                or (
+                    j["pid"] is None
+                    and j["observation"] == 0
+                    and j["recovery"] == 0
+                )
+            )
+            for j in state["jobs"].values()
+        )
         result = {
             "kind": "shared-two-production-result-v1",
             "acceptance": "candidate",

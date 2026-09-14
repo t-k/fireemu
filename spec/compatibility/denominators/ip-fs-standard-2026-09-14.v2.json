@@ -39,7 +39,7 @@
   },
   "generator": {
     "path": "tools/compat-inventory/production_denominator_v2.py",
-    "sha256": "14bbf75b0861a2b8cc3eaf2ba7516c545e8d45790cc0f6946adaa47c1b4465fc"
+    "sha256": "a05282e491355f8d3274b7ff8728672b906af76263f05e6f89ed280579c6cf9f"
   },
   "targets": [
     {
@@ -32609,7 +32609,7 @@
       "adapterId": "auth-pending-trigger-provider-unlink.v1",
       "adapter": {
         "path": "tools/compat-inventory/production_denominator_v2.py",
-        "sha256": "14bbf75b0861a2b8cc3eaf2ba7516c545e8d45790cc0f6946adaa47c1b4465fc"
+        "sha256": "a05282e491355f8d3274b7ff8728672b906af76263f05e6f89ed280579c6cf9f"
       },
       "production": {
         "receipt": {

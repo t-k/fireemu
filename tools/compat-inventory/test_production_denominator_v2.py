@@ -166,6 +166,30 @@ def test_exported_document_rejects_unsafe_corpus_reference_and_unbound_partial_c
         v2.validate_document(ROOT, partial)
 
 
+def test_exported_document_rejects_forged_projection_semantics():
+    value = load(v2.OUTPUT_PATH)
+    mutated = copy.deepcopy(value)
+    mutated["evidence"][0]["comparator"]["projection"] = "exact wire bytes including headers and elapsedMs"
+    with pytest.raises(v2.ValidationError, match="projection"):
+        v2.validate_document(ROOT, mutated)
+
+
+def test_exported_document_rejects_redirected_configuration_pointer():
+    value = load(v2.OUTPUT_PATH)
+    mutated = copy.deepcopy(value)
+    mutated["evidence"][0]["local"]["configuration"]["evidencePointer"] = "/production/configuration"
+    with pytest.raises(v2.ValidationError, match="configuration"):
+        v2.validate_document(ROOT, mutated)
+
+
+def test_exported_document_rejects_unknown_nested_collector_input_field():
+    value = load(v2.OUTPUT_PATH)
+    mutated = copy.deepcopy(value)
+    mutated["evidence"][0]["production"]["collector"]["inputs"][0]["unknown"] = True
+    with pytest.raises(v2.ValidationError, match="collector input"):
+        v2.validate_document(ROOT, mutated)
+
+
 def test_v2_json_parser_rejects_duplicate_keys(tmp_path):
     path = tmp_path / "duplicate.json"
     path.write_text('{"schemaVersion": 2, "schemaVersion": 1}')

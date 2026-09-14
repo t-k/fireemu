@@ -35,6 +35,7 @@ PROVIDER_CORPUS_INPUTS = [
     "tools/auth-pending-triggers/triggers_contract.py",
     "tools/auth-pending-triggers/triggers_recorder.py",
 ]
+SEMANTIC_PROJECTION = "semantic row projection excluding elapsedMs"
 EVIDENCE_LEVELS = {"historical-reference", "local-verified", "production-observed", "oracle-compared"}
 COMPARISON_RESULTS = {"not-compared", "match", "mismatch", "indeterminate"}
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -368,7 +369,7 @@ def evidence_document(root: Path, mapping: dict[str, Any], parent: dict[str, Any
             "comparison": {"path": local_ref["path"], "sha256": local_ref["sha256"]},
             "productionSubjectDigest": production_subject,
             "localSubjectDigest": local_subject,
-            "projection": "semantic row projection excluding elapsedMs",
+            "projection": SEMANTIC_PROJECTION,
             "result": "match" if all_match else "mismatch",
         },
         "limitations": [
@@ -480,11 +481,15 @@ def validate_document(root: Path, value: dict[str, Any]) -> None:
     if production["raw"]["availability"] != "private-hash-only" or production["representation"] != "normalized":
         raise ValidationError("production raw/normalized limitation is not explicit")
     exact(production["collector"], {"commit", "inputs"}, "production collector")
+    for input_ref in production["collector"]["inputs"]:
+        exact(input_ref, {"path", "sha256"}, "collector input")
     if production["collector"]["commit"] != receipt["production"]["probeSourceCommit"]:
         raise ValidationError("production collector commit mismatch")
     if {item["path"]: item["sha256"] for item in production["collector"]["inputs"]} != receipt["production"]["recordedWith"]["recorderInputs"]:
         raise ValidationError("production collector inputs mismatch")
     exact(production["configuration"], {"sha256", "evidencePointer"}, "production configuration")
+    if production["configuration"]["evidencePointer"] != "/production/configuration":
+        raise ValidationError("production configuration pointer is not canonical")
     if production["configuration"]["sha256"] != receipt["production"]["configuration"]["sha256"]:
         raise ValidationError("production configuration digest mismatch")
     if production.get("raw", {}).get("sha256") != receipt["production"].get("privateReceiptSha256"):
@@ -508,9 +513,13 @@ def validate_document(root: Path, value: dict[str, Any]) -> None:
     if local["runtimeInputs"]["sha256"] != digest(comparison["local"]["build"]["inputs"]):
         raise ValidationError("local runtime inputs digest mismatch")
     exact(local["collector"], {"commit", "inputs"}, "local collector")
+    for input_ref in local["collector"]["inputs"]:
+        exact(input_ref, {"path", "sha256"}, "collector input")
     if local["collector"]["commit"] != comparison["local"]["probeSourceCommit"] or {item["path"]: item["sha256"] for item in local["collector"]["inputs"]} != comparison["local"]["recordedWith"]["recorderInputs"]:
         raise ValidationError("local collector inputs mismatch")
     exact(local["configuration"], {"sha256", "evidencePointer"}, "local configuration")
+    if local["configuration"]["evidencePointer"] != "/local/configuration":
+        raise ValidationError("local configuration pointer is not canonical")
     if local["configuration"]["sha256"] != comparison["local"]["configuration"]["sha256"]:
         raise ValidationError("local configuration digest mismatch")
     comparator = evidence.get("comparator")
@@ -518,7 +527,9 @@ def validate_document(root: Path, value: dict[str, Any]) -> None:
         raise ValidationError("comparison selector mismatch")
     checked_reference(root, comparator["comparison"], "comparison")
     exact(comparator, {"id", "inputs", "contract", "comparison", "productionSubjectDigest", "localSubjectDigest", "projection", "result"}, "evidence comparator")
-    if comparator["result"] not in {"match", "mismatch"} or not comparator["projection"]:
+    if comparator["projection"] != SEMANTIC_PROJECTION:
+        raise ValidationError("comparator projection is not canonical")
+    if comparator["result"] not in {"match", "mismatch"}:
         raise ValidationError("invalid comparator result")
     expected_comparison_result = "match" if all(row["sameSemanticProjection"] is True for row in comparison["comparison"]) else "mismatch"
     if comparator["result"] != expected_comparison_result:
@@ -567,6 +578,9 @@ def validate_document(root: Path, value: dict[str, Any]) -> None:
         expected_coverage = "partial" if expected_ids else "none"
         if target["coverage"] != expected_coverage:
             raise ValidationError("target coverage does not match binding index")
+    canonical = evidence_document(root, mapping, parent, source_sha, receipt, comparison)["evidence"]
+    if [evidence] != canonical:
+        raise ValidationError("evidence differs from canonical bound evidence")
 
 
 def serialized(value: dict[str, Any]) -> bytes:

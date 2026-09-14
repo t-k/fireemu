@@ -32,6 +32,7 @@ use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tokio_stream::StreamExt;
+use tonic::Request;
 
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
@@ -133,6 +134,48 @@ fn delete_write(name: &str) -> pb::Write {
         operation: Some(pb::write::Operation::Delete(format!("{DOCS}/{name}"))),
         ..Default::default()
     }
+}
+
+fn exists_precondition_write(name: &str, exists: bool) -> pb::Write {
+    let mut write = set_write(name, &[("v", s("next"))]);
+    write.current_document = Some(pb::Precondition {
+        condition_type: Some(pb::precondition::ConditionType::Exists(exists)),
+    });
+    write
+}
+
+fn server_timestamp_write(name: &str) -> pb::Write {
+    let mut write = set_write(name, &[]);
+    write.update_transforms = vec![pb::document_transform::FieldTransform {
+        field_path: "updatedAt".to_owned(),
+        transform_type: Some(
+            pb::document_transform::field_transform::TransformType::SetToServerValue(
+                pb::document_transform::field_transform::ServerValue::RequestTime as i32,
+            ),
+        ),
+    }];
+    write
+}
+
+fn increment_write(name: &str, field: &str, amount: i64) -> pb::Write {
+    let mut write = set_write(
+        name,
+        &[(
+            field,
+            pb::Value {
+                value_type: Some(pb::value::ValueType::IntegerValue(5)),
+            },
+        )],
+    );
+    write.update_transforms = vec![pb::document_transform::FieldTransform {
+        field_path: field.to_owned(),
+        transform_type: Some(
+            pb::document_transform::field_transform::TransformType::Increment(pb::Value {
+                value_type: Some(pb::value::ValueType::IntegerValue(amount)),
+            }),
+        ),
+    }];
+    write
 }
 fn add_query_target(id: i32, collection: &str) -> pb::ListenRequest {
     pb::ListenRequest {
@@ -293,7 +336,7 @@ async fn write_stream_handshake_then_sequential_commits() {
     assert!(handshake.write_results.is_empty());
     tx.send(pb::WriteRequest {
         writes: vec![set_write("open/a", &[("v", s("1"))])],
-        stream_token: handshake.stream_token,
+        stream_token: handshake.stream_token.clone(),
         ..Default::default()
     })
     .await
@@ -319,6 +362,153 @@ async fn write_stream_handshake_then_sequential_commits() {
         .await
         .is_err());
     handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn write_stream_tokens_are_bound_to_stream_and_stream_id() {
+    let (mut client, handle) = start(false).await;
+    let (first_tx, first_rx) = mpsc::channel(8);
+    let mut first = client
+        .write(ReceiverStream::new(first_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    first_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let first_handshake = first.next().await.unwrap().unwrap();
+
+    first_tx
+        .send(pb::WriteRequest {
+            stream_id: "fireemu-wrong".to_owned(),
+            stream_token: first_handshake.stream_token.clone(),
+            writes: vec![set_write("stream/wrong-id", &[("v", s("x"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        first.next().await.unwrap().unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    drop(first_tx);
+    drop(first);
+
+    let (second_tx, second_rx) = mpsc::channel(8);
+    let mut second = client
+        .write(ReceiverStream::new(second_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    second_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let second_handshake = second.next().await.unwrap().unwrap();
+    second_tx
+        .send(pb::WriteRequest {
+            stream_token: first_handshake.stream_token,
+            writes: vec![set_write("stream/cross-stream", &[("v", s("x"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        second.next().await.unwrap().unwrap_err().code(),
+        tonic::Code::FailedPrecondition
+    );
+    assert_ne!(second_handshake.stream_token, Vec::<u8>::new());
+    drop(second_tx);
+    drop(second);
+
+    let (third_tx, third_rx) = mpsc::channel(8);
+    let mut third = client
+        .write(ReceiverStream::new(third_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    third_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let third_handshake = third.next().await.unwrap().unwrap();
+    let acknowledged_token = third_handshake.stream_token.clone();
+    third_tx
+        .send(pb::WriteRequest {
+            stream_token: acknowledged_token.clone(),
+            writes: vec![set_write("stream/continuity", &[("v", s("x"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let next = third.next().await.unwrap().unwrap();
+    third_tx
+        .send(pb::WriteRequest {
+            stream_token: next.stream_token.clone(),
+            writes: vec![set_write("stream/continuity-2", &[("v", s("y"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let _next = third.next().await.unwrap().unwrap();
+    third_tx
+        .send(pb::WriteRequest {
+            stream_token: acknowledged_token,
+            writes: vec![set_write("stream/replay", &[("v", s("x"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        third.next().await.unwrap().unwrap_err().code(),
+        tonic::Code::FailedPrecondition
+    );
+    drop(third_tx);
+    drop(third);
+
+    let (fourth_tx, fourth_rx) = mpsc::channel(8);
+    let mut fourth = client
+        .write(ReceiverStream::new(fourth_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    fourth_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let fourth_handshake = fourth.next().await.unwrap().unwrap();
+    let mut future_token = fourth_handshake.stream_token;
+    future_token[15] = 9;
+    fourth_tx
+        .send(pb::WriteRequest {
+            stream_token: future_token,
+            writes: vec![set_write("stream/future", &[("v", s("x"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        fourth.next().await.unwrap().unwrap_err().code(),
+        tonic::Code::FailedPrecondition
+    );
+    drop(fourth_tx);
+    drop(fourth);
+    handle.abort();
+    handle.await.unwrap_err();
 }
 
 #[tokio::test]
@@ -517,6 +707,7 @@ async fn limited_listen_recomputes_the_boundary_after_an_update() {
         vec!["CHANGE b", "REMOVE a", "NO_CHANGE[1]", "NO_CHANGE[]"]
     );
     handle.abort();
+    handle.await.unwrap_err();
 }
 
 #[tokio::test]
@@ -758,8 +949,71 @@ service cloud.firestore {
     assert_eq!(revision, Some(s("2")));
     drop(tx);
     drop(responses);
+
+    let (trailing_tx, trailing_rx) = mpsc::channel(8);
+    let mut trailing = client
+        .write(ReceiverStream::new(trailing_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    trailing_tx
+        .send(pb::WriteRequest {
+            database: format!("{DB}/documents"),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        trailing.next().await.unwrap().unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    drop(trailing_tx);
+    drop(trailing);
     handle.abort();
     assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn write_stream_rules_refuse_malformed_and_wrong_audience_auth() {
+    for authorization in [
+        "Bearer malformed",
+        "Bearer eyJhbGciOiJub25lIn0.eyJhdWQiOiJvdGhlciJ9.",
+    ] {
+        let (mut client, handle) = start(true).await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut request = Request::new(ReceiverStream::new(rx));
+        request.metadata_mut().insert(
+            "authorization",
+            authorization.parse().expect("ASCII authorization"),
+        );
+        let mut responses = client.write(request).await.unwrap().into_inner();
+        tx.send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        responses.next().await.unwrap().unwrap();
+        tx.send(pb::WriteRequest {
+            writes: vec![set_write("stream/auth-refused", &[("v", s("x"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let error = responses.next().await.unwrap().unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unauthenticated);
+        assert!(client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/stream/auth-refused"),
+                ..Default::default()
+            })
+            .await
+            .is_err());
+        drop(tx);
+        drop(responses);
+        handle.abort();
+        handle.await.unwrap_err();
+    }
 }
 
 #[tokio::test]
@@ -779,16 +1033,25 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
     .unwrap();
     let handshake = responses.next().await.unwrap().unwrap();
     assert!(!handshake.stream_id.is_empty());
-    // Two batches queued against the same acknowledged token (what the JS SDK does).
-    for name in ["open/p1", "open/p2"] {
-        tx.send(pb::WriteRequest {
-            writes: vec![set_write(name, &[("v", s("1"))])],
-            stream_token: handshake.stream_token.clone(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    }
+    // Two distinguishable batches queued against the same acknowledged token (what the JS
+    // SDK does); response swapping is observable from result cardinality.
+    tx.send(pb::WriteRequest {
+        writes: vec![set_write("open/p1", &[("v", s("one"))])],
+        stream_token: handshake.stream_token.clone(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    tx.send(pb::WriteRequest {
+        writes: vec![
+            set_write("open/p2", &[("v", s("two"))]),
+            set_write("open/p3", &[("v", s("three"))]),
+        ],
+        stream_token: handshake.stream_token.clone(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     let first = responses.next().await.unwrap().unwrap();
     let second = responses.next().await.unwrap().unwrap();
     assert!(
@@ -796,7 +1059,8 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
         "the stream id is only announced once"
     );
     assert_ne!(first.stream_token, second.stream_token);
-    assert_eq!(second.write_results.len(), 1);
+    assert_eq!(first.write_results.len(), 1);
+    assert_eq!(second.write_results.len(), 2);
 
     // A `once` target ends with REMOVE after its consistent snapshot; a resume token
     // triggers RESET before the replay.
@@ -820,6 +1084,7 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
             "RESET[3]",
             "CHANGE p1",
             "CHANGE p2",
+            "CHANGE p3",
             "CURRENT[3]",
             "NO_CHANGE[3]",
             "NO_CHANGE[]",
@@ -827,6 +1092,335 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
         ]
     );
     handle.abort();
+}
+
+/// FS-WRITE-STREAM-LOCAL: the public stream contract preserves request order, applies
+/// preconditions and transforms atomically, and exposes commit versions in every result.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn write_stream_preserves_order_preconditions_transforms_and_post_state() {
+    let (mut client, handle) = start(false).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .write(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(pb::WriteRequest {
+        database: DB.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let handshake = responses.next().await.unwrap().unwrap();
+
+    tx.send(pb::WriteRequest {
+        stream_token: handshake.stream_token,
+        writes: vec![
+            set_write("stream/a", &[("v", s("first"))]),
+            set_write("stream/a", &[("v", s("second"))]),
+            increment_write("stream/b", "v", 2),
+            server_timestamp_write("stream/c"),
+        ],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let committed = responses.next().await.unwrap().unwrap();
+    assert_eq!(committed.write_results.len(), 4);
+    assert!(committed.write_results[0].update_time.is_some());
+    assert!(committed.write_results[1].update_time.is_some());
+    assert_eq!(
+        committed.write_results[0].transform_results,
+        Vec::<pb::Value>::new()
+    );
+    assert_eq!(
+        committed.write_results[2].transform_results,
+        vec![pb::Value {
+            value_type: Some(pb::value::ValueType::IntegerValue(7))
+        }]
+    );
+    assert!(committed.commit_time.is_some());
+
+    let a = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/stream/a"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let b = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/stream/b"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let c = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/stream/c"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(a.fields["v"], s("second"));
+    assert_eq!(
+        b.fields["v"],
+        pb::Value {
+            value_type: Some(pb::value::ValueType::IntegerValue(7))
+        }
+    );
+    let stored_c = match c.fields["updatedAt"].value_type.as_ref() {
+        Some(pb::value::ValueType::TimestampValue(timestamp)) => timestamp,
+        other => panic!("expected stored timestamp, got {other:?}"),
+    };
+    assert_eq!(
+        committed.write_results[3].transform_results,
+        vec![pb::Value {
+            value_type: Some(pb::value::ValueType::TimestampValue(*stored_c))
+        }]
+    );
+    assert_eq!(Some(*stored_c), committed.write_results[3].update_time);
+    assert_eq!(a.fields["v"], s("second"));
+    assert_eq!(committed.write_results[0].update_time, a.update_time);
+    assert_eq!(committed.write_results[1].update_time, a.update_time);
+    assert_eq!(committed.write_results[2].update_time, b.update_time);
+    assert_eq!(committed.write_results[3].update_time, c.update_time);
+    assert_eq!(
+        committed.write_results[0].update_time,
+        committed.commit_time
+    );
+    assert_eq!(
+        committed.write_results[1].update_time,
+        committed.commit_time
+    );
+    assert_eq!(
+        committed.write_results[2].update_time,
+        committed.commit_time
+    );
+    assert_eq!(
+        committed.write_results[3].update_time,
+        committed.commit_time
+    );
+    assert_eq!(
+        committed.commit_time,
+        committed.write_results[0].update_time
+    );
+
+    // A refused precondition does not publish an earlier write in the same request and
+    // terminates this stream; a fresh stream can still commit successfully.
+    tx.send(pb::WriteRequest {
+        writes: vec![
+            set_write("stream/refused-prefix", &[("v", s("must-not-publish"))]),
+            exists_precondition_write("stream/a", false),
+        ],
+        stream_token: committed.stream_token,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let refused = responses.next().await.unwrap().unwrap_err();
+    // Local precedence for this conflicting exists=false update is ALREADY_EXISTS;
+    // production precedence is intentionally unclaimed without a saved observation.
+    assert_eq!(refused.code(), tonic::Code::AlreadyExists);
+    let unchanged = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/stream/a"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(unchanged.fields, a.fields);
+    assert_eq!(unchanged.update_time, a.update_time);
+    assert!(client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/stream/refused-prefix"),
+            ..Default::default()
+        })
+        .await
+        .is_err());
+    assert!(tx
+        .send(pb::WriteRequest {
+            writes: vec![set_write("stream/after-refusal", &[("v", s("no"))])],
+            ..Default::default()
+        })
+        .await
+        .is_err());
+    drop(responses);
+
+    let (reopen_tx, reopen_rx) = mpsc::channel(8);
+    let mut reopened = client
+        .write(ReceiverStream::new(reopen_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    reopen_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let fresh = reopened.next().await.unwrap().unwrap();
+    reopen_tx
+        .send(pb::WriteRequest {
+            stream_token: fresh.stream_token,
+            writes: vec![set_write("stream/reopened", &[("v", s("ok"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let reopened_result = reopened.next().await.unwrap().unwrap();
+    assert_eq!(reopened_result.write_results.len(), 1);
+    assert!(reopened_result.write_results[0].update_time.is_some());
+    let reopened_doc = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/stream/reopened"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(reopened_doc.fields["v"], s("ok"));
+    drop(reopen_tx);
+    drop(reopened);
+    handle.abort();
+    handle.await.unwrap_err();
+}
+
+/// FS-WRITE-STREAM-LOCAL: a graceful client half-close completes the stream after the
+/// handshake and has no mutation side effect.
+#[tokio::test]
+async fn write_stream_graceful_half_close_has_no_side_effect() {
+    let (mut client, handle) = start(false).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .write(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(pb::WriteRequest {
+        database: DB.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let handshake = responses.next().await.unwrap().unwrap();
+    drop(tx);
+    assert!(responses.next().await.is_none());
+    assert!(!handshake.stream_token.is_empty());
+    handle.abort();
+    handle.await.unwrap_err();
+}
+
+/// FS-WRITE-STREAM-LOCAL: handshake fields establish the routed database, and every later
+/// write must stay inside that project/database namespace.
+#[tokio::test]
+async fn write_stream_enforces_handshake_and_database_ownership() {
+    let (mut client, handle) = start(false).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .write(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(pb::WriteRequest {
+        database: DB.to_owned(),
+        writes: vec![set_write("stream/invalid-handshake", &[("v", s("x"))])],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let error = responses.next().await.unwrap().unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    drop(tx);
+    drop(responses);
+
+    let (escape_tx, escape_rx) = mpsc::channel(8);
+    let mut escape = client
+        .write(ReceiverStream::new(escape_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    escape_tx
+        .send(pb::WriteRequest {
+            database: format!("{DB}/documents/escape"),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        escape.next().await.unwrap().unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    drop(escape_tx);
+    drop(escape);
+
+    let (resume_tx, resume_rx) = mpsc::channel(8);
+    let mut resume = client
+        .write(ReceiverStream::new(resume_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    resume_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            stream_id: "old-stream".to_owned(),
+            stream_token: vec![1],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        resume.next().await.unwrap().unwrap_err().code(),
+        tonic::Code::FailedPrecondition
+    );
+    drop(resume_tx);
+    drop(resume);
+
+    let (owner_tx, owner_rx) = mpsc::channel(8);
+    let mut owner_responses = client
+        .write(ReceiverStream::new(owner_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    owner_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let handshake = owner_responses.next().await.unwrap().unwrap();
+    let mut foreign = set_write("stream/foreign", &[("v", s("x"))]);
+    if let Some(pb::write::Operation::Update(document)) = &mut foreign.operation {
+        document.name = "projects/demo-app/databases/other/documents/stream/foreign".to_owned();
+    }
+    owner_tx
+        .send(pb::WriteRequest {
+            stream_token: handshake.stream_token,
+            writes: vec![foreign],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let error = owner_responses.next().await.unwrap().unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(client
+        .get_document(pb::GetDocumentRequest {
+            name: "projects/demo-app/databases/other/documents/stream/foreign".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .is_err());
+    drop(owner_tx);
+    drop(owner_responses);
+    handle.abort();
+    handle.await.unwrap_err();
 }
 
 #[tokio::test]

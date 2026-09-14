@@ -157,6 +157,7 @@ struct WriteStreamState {
     /// against the last token they saw).
     issued: u64,
     acknowledged: u64,
+    token_prefix: u64,
 }
 
 /// Runs the `Write` stream: the first message (no writes) is the handshake; every later
@@ -166,11 +167,13 @@ pub async fn write_stream(
     mut inbound: impl tokio_stream::Stream<Item = Result<pb::WriteRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::WriteResponse, Status>>,
 ) {
+    let stream_number = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
     let mut state = WriteStreamState {
         parent: None,
-        stream_id: format!("fireemu-{}", NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)),
+        stream_id: format!("fireemu-{stream_number}"),
         issued: 0,
         acknowledged: 0,
+        token_prefix: stream_number,
     };
     while let Some(next) = inbound.next().await {
         let req = match next {
@@ -188,8 +191,11 @@ pub async fn write_stream(
     }
 }
 
-fn token_bytes(n: u64) -> Vec<u8> {
-    n.to_be_bytes().to_vec()
+fn token_bytes(prefix: u64, n: u64) -> Vec<u8> {
+    let mut token = Vec::with_capacity(16);
+    token.extend_from_slice(&prefix.to_be_bytes());
+    token.extend_from_slice(&n.to_be_bytes());
+    token
 }
 
 fn handle_write_request(
@@ -215,6 +221,11 @@ fn handle_write_request(
             ));
         }
         let parent = database_parent(&req.database)?;
+        if parent.document.is_some() {
+            return Err(Status::invalid_argument(
+                "the first Write request must name the database root",
+            ));
+        }
         // The route and the target database are resolved; App Check decides before the
         // Firebase Auth credential, Security Rules and every mutation (section 7.4).
         ctx.admit_app_check(&parent, "Write")?;
@@ -228,8 +239,18 @@ fn handle_write_request(
         return Err(Status::internal("write stream without database"));
     };
     if !req.stream_token.is_empty() {
-        let acknowledged: Option<[u8; 8]> = req.stream_token.as_slice().try_into().ok();
-        let acknowledged = acknowledged.map_or(0, u64::from_be_bytes);
+        let acknowledged = req
+            .stream_token
+            .as_slice()
+            .try_into()
+            .ok()
+            .and_then(|bytes: [u8; 16]| {
+                let (prefix, sequence) = bytes.split_at(8);
+                let prefix = u64::from_be_bytes(prefix.try_into().ok()?);
+                let sequence = u64::from_be_bytes(sequence.try_into().ok()?);
+                (prefix == state.token_prefix).then_some(sequence)
+            })
+            .unwrap_or(0);
         if acknowledged == 0 || acknowledged > state.issued || acknowledged < state.acknowledged {
             return Err(Status::failed_precondition("unknown write stream token"));
         }
@@ -244,7 +265,7 @@ fn handle_write_request(
     if req.writes.is_empty() {
         return Ok(pb::WriteResponse {
             stream_id,
-            stream_token: token_bytes(state.issued),
+            stream_token: token_bytes(state.token_prefix, state.issued),
             write_results: Vec::new(),
             commit_time: None,
         });
@@ -278,7 +299,7 @@ fn handle_write_request(
     let result = ctx.local.commit_writes(parent, &writes, &guarded)?;
     Ok(pb::WriteResponse {
         stream_id,
-        stream_token: token_bytes(state.issued),
+        stream_token: token_bytes(state.token_prefix, state.issued),
         write_results: result.write_results,
         commit_time: result.commit_time,
     })

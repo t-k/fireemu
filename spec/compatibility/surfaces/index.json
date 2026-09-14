@@ -186,7 +186,7 @@
       "kind": "method",
       "transport": "gRPC",
       "classification": "unknown",
-      "reason": "Seed locator; definition and behavior decomposition remain open.",
+      "reason": "FS-WRITE-STREAM-LOCAL records finite local gRPC evidence only; production/REST parity remains unmapped.",
       "requirements": []
     },
     {

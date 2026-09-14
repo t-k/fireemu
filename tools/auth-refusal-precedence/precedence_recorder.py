@@ -23,7 +23,7 @@ from precedence_contract import (
     CORPUS,
     DIAGNOSTIC_FINALIZES,
     LOCAL_VALID_ACTIVE_ERRORS,
-    LOCAL_VALID_ACTIVE_FIELDS,
+    LOCAL_VALID_ACTIVE_REFUSED_FIELDS,
     PHOTO_SENTINEL_PREFIX,
     TEST_CODE,
     TEST_PHONES,
@@ -478,23 +478,38 @@ def observe(output, origin=None):
                     "providerId": "google.com",
                     "rawId": "auth-u13-local-sentinel",
                 },
-                "disableUser": True,
             }
             observations = []
+
+            def without_display_name(value):
+                if isinstance(value, dict):
+                    return {
+                        key: without_display_name(item)
+                        for key, item in value.items()
+                        if key != "displayName"
+                    }
+                if isinstance(value, list):
+                    return [without_display_name(item) for item in value]
+                return value
+
             for label, account in accounts.items():
                 token = account["baseline"]["idToken"]
-                before = lookup(account)
-                for field in LOCAL_VALID_ACTIVE_FIELDS:
+                for field in LOCAL_VALID_ACTIVE_REFUSED_FIELDS:
+                    before_accounts = {
+                        name: lookup(candidate) for name, candidate in accounts.items()
+                    }
                     request = {
                         "idToken": token,
                         "displayName": "auth-u13-must-not-apply",
                         field: fields[field],
                     }
                     status, response = client("update", request)
-                    after = lookup(account)
+                    after_accounts = {
+                        name: lookup(candidate) for name, candidate in accounts.items()
+                    }
                     expected = LOCAL_VALID_ACTIVE_ERRORS[field]
                     require(status == 400 and error_code(response) == expected)
-                    require(after == before)
+                    require(after_accounts == before_accounts)
                     observations.append(
                         {
                             "account": label,
@@ -502,9 +517,67 @@ def observe(output, origin=None):
                             "httpStatus": status,
                             "outcome": "refused",
                             "observedError": error_code(response),
-                            "accountStateUnchanged": after == before,
+                            "allAccountStateUnchanged": after_accounts == before_accounts,
                         }
                     )
+
+                before_accounts = {
+                    name: lookup(candidate) for name, candidate in accounts.items()
+                }
+                status, response = client(
+                    "update",
+                    {
+                        "idToken": token,
+                        "emailVerified": False,
+                        "displayName": "auth-u13-email-verified-ignored",
+                    },
+                )
+                after_accounts = {
+                    name: lookup(candidate) for name, candidate in accounts.items()
+                }
+                owner_before_without_display = without_display_name(before_accounts[label])
+                owner_after_without_display = without_display_name(after_accounts[label])
+                require(
+                    status == 200
+                    and "error" not in response
+                    and owner_after_without_display == owner_before_without_display
+                    and after_accounts["b" if label == "a" else "a"]
+                    == before_accounts["b" if label == "a" else "a"]
+                )
+                observations.append(
+                    {
+                        "account": label,
+                        "field": "emailVerified",
+                        "httpStatus": status,
+                        "outcome": "accepted",
+                        "observedError": None,
+                        "emailVerifiedUnchanged": after_accounts[label].get(
+                            "emailVerified"
+                        )
+                        == before_accounts[label].get("emailVerified"),
+                        "displayNameApplied": after_accounts[label].get("displayName")
+                        == "auth-u13-email-verified-ignored",
+                        "ownerOtherStateUnchanged": owner_after_without_display
+                        == owner_before_without_display,
+                        "otherAccountUnchanged": after_accounts[
+                            "b" if label == "a" else "a"
+                        ]
+                        == before_accounts["b" if label == "a" else "a"],
+                    }
+                )
+                status, response = client(
+                    "update", {"idToken": token, "displayName": account["marker"]}
+                )
+                restored_accounts = {
+                    name: lookup(candidate) for name, candidate in accounts.items()
+                }
+                require(
+                    status == 200
+                    and "error" not in response
+                    and restored_accounts[label] == before_accounts[label]
+                    and restored_accounts["b" if label == "a" else "a"]
+                    == before_accounts["b" if label == "a" else "a"]
+                )
 
             # A permitted ordinary field controls that the active token itself remains
             # usable and that the preceding refusals did not poison either session.
@@ -544,7 +617,6 @@ def observe(output, origin=None):
             report["localValidActiveToken"] = {
                 "fields": observations,
                 "ordinaryFieldControls": controls,
-                "heldCredentialsAndSessionsDeferred": True,
             }
 
         def transition(disabled):
@@ -689,8 +761,19 @@ def observe(output, origin=None):
         held_finalize("disabled-b-correct-code-finalize", b, b["code"])
 
         transition(False)
-        held_finalize("reenabled-a-held-finalize", a, a["code"])
-        held_finalize("reenabled-b-held-finalize", b, b["code"])
+        reenabled_a = held_finalize("reenabled-a-held-finalize", a, a["code"])
+        reenabled_b = held_finalize("reenabled-b-held-finalize", b, b["code"])
+        if not production:
+            require(
+                reenabled_a["outcome"] == "accepted"
+                and reenabled_b["outcome"] == "accepted"
+                and all(reenabled_a["checks"].values())
+                and all(reenabled_b["checks"].values())
+            )
+            report["localValidActiveToken"]["heldCredentialsAndSessions"] = {
+                "a": reenabled_a["checks"],
+                "b": reenabled_b["checks"],
+            }
 
         fresh_finalize("final-a-fresh-finalize", a)
         fresh_finalize("final-b-fresh-finalize", b)

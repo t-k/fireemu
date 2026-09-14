@@ -4442,10 +4442,11 @@ fn end_user_update_rejects_admin_fields_atomically_by_presence() {
 /// AUTH-U03: production refuses a client accounts:update carrying a tampered ID token and
 /// an administrator-only field with `INVALID_ID_TOKEN`, verifying the session before the
 /// field is judged (auth-refusal-precedence revision 1, approved 2026-09-12). The
-/// end-user route now authenticates first. A valid session with such a field is still
-/// refused by field authorization (second45 observes `INSUFFICIENT_PERMISSION` for
-/// customAttributes strings); the OOB
-/// route still rejects the field before consuming the code, and neither refusal mutates.
+/// end-user route now authenticates first. A valid session with customAttributes, mfa or
+/// linkProviderUserInfo is refused by field authorization (second45 observes
+/// `INSUFFICIENT_PERMISSION` for customAttributes strings); emailVerified is ignored
+/// while ordinary displayName changes apply. The OOB route still rejects these fields
+/// before consuming the code, and refusals do not mutate.
 /// AUTH-U03 / GAP-AUTH-003 invariant fence: the end-user accounts:update route
 /// authenticates before it authorizes for EVERY session-failure class, not only the
 /// tampered signature production observed. An expired, revoked, disabled or deleted
@@ -4565,7 +4566,6 @@ fn end_user_update_session_failure_precedes_admin_field_authorization() {
 fn end_user_update_authenticates_before_authorizing_admin_fields() {
     let admin_fields = [
         ("customAttributes", json!("{\"role\":\"admin\"}")),
-        ("emailVerified", json!(true)),
         (
             "mfa",
             json!({"enrollments": [{"phoneInfo": "+16505550111"}]}),
@@ -4579,7 +4579,7 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
         let (_, signed) = post(
             &s,
             &format!("{V1}/accounts:signUp"),
-            &json!({"email": "precedence@example.com", "password": "password1", "returnSecureToken": true}),
+            &json!({"email": "precedence@example.com", "password": "password1", "displayName": "precedence-marker", "returnSecureToken": true}),
         );
         let uid = &signed["localId"];
         let token = signed["idToken"].as_str().unwrap();
@@ -4665,6 +4665,29 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
                 "{field}"
             );
         }
+
+        // Production's valid-token client behavior ignores emailVerified while applying
+        // the permitted displayName change. Restore the display name before the remaining
+        // refusal checks so every later state comparison has the original baseline.
+        let (status, applied) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"],
+                "emailVerified": false,
+                "displayName": "email-verified-ignored"
+            }),
+        );
+        assert_eq!(status, 200, "{applied}");
+        assert_eq!(applied["displayName"], "email-verified-ignored");
+        assert_eq!(lookup(&s)["emailVerified"], baseline["emailVerified"]);
+        let (status, restored) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": "precedence-marker"}),
+        );
+        assert_eq!(status, 200, "{restored}");
+        assert_eq!(lookup(&s), baseline);
 
         // disableUser is symmetric with the administrator-only fields: a tampered session
         // is refused on the token, a valid session on the flag, and neither mutates.

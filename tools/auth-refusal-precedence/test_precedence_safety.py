@@ -244,6 +244,10 @@ class World:
         # recorder keeps these observations out of the production corpus.
         if body["idToken"] in self.tokens:
             user = self.users[self.tokens[body["idToken"]]]
+            if "emailVerified" in body:
+                assert set(body) == {"idToken", "emailVerified", "displayName"}
+                user["displayName"] = body["displayName"]
+                return 200, {"localId": user["localId"], "email": user["email"]}
             admin_fields = set(body) & set(contract.LOCAL_VALID_ACTIVE_FIELDS)
             if admin_fields:
                 assert len(admin_fields) == 1 and "displayName" in body
@@ -423,26 +427,37 @@ def test_local_valid_active_admin_fields_are_atomic_for_both_accounts(tmp_path):
             "mfaInfo": [{"mfaEnrollmentId": f"factor-{label}", "phoneInfo": "+15555550100"}],
         }
         w.users[uid] = user
-        token = w.issue(user, True)["idToken"]
-        before = json.loads(json.dumps(user))
+    tokens = {
+        label: w.issue(w.users[f"uid-{label}"], True)["idToken"] for label in ("a", "b")
+    }
+    before_accounts = json.loads(json.dumps(w.users))
+    for label in ("a", "b"):
+        uid = f"uid-{label}"
+        user = w.users[uid]
+        token = tokens[label]
         values = {
             "customAttributes": json.dumps({"sentinel": label}),
-            "emailVerified": False,
             "mfa": {"enrollments": [{"phoneInfo": "+15555550102"}]},
             "linkProviderUserInfo": {"providerId": "google.com", "rawId": f"raw-{label}"},
-            "disableUser": True,
         }
-        for field in contract.LOCAL_VALID_ACTIVE_FIELDS:
+        for field in contract.LOCAL_VALID_ACTIVE_REFUSED_FIELDS:
             status, response = w.update(
                 {"idToken": token, "displayName": "must-not-apply", field: values[field]}
             )
             assert status == 400
             assert error_code(response) == contract.LOCAL_VALID_ACTIVE_ERRORS[field]
-            assert user == before
-        status, _ = w.update({"idToken": token, "displayName": "ordinary"})
-        assert status == 200 and user["displayName"] == "ordinary"
-        status, _ = w.update({"idToken": token, "displayName": before["displayName"]})
-        assert status == 200 and user == before
+            assert w.users == before_accounts
+        status, _ = w.update(
+            {"idToken": token, "emailVerified": False, "displayName": "ignored-email-verified"}
+        )
+        assert status == 200
+        assert user["displayName"] == "ignored-email-verified"
+        assert user["emailVerified"] is True
+        assert w.users["uid-a" if label == "b" else "uid-b"] == before_accounts[
+            "uid-a" if label == "b" else "uid-b"
+        ]
+        status, _ = w.update({"idToken": token, "displayName": before_accounts[uid]["displayName"]})
+        assert status == 200 and w.users == before_accounts
 
 
 def test_a_consuming_refusal_is_recorded_not_fatal(tmp_path, monkeypatch):

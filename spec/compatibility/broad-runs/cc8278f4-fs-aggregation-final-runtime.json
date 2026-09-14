@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "kind": "firestore-aggregation-final-runtime-local-result",
-  "status": "local-comparison-complete",
+  "status": "local-production-reference-complete",
   "capturedOn": "2026-09-14",
-  "executionCommit": "bb1fb61783f781f4c8a44ba3cf4d82a01f713159",
+  "executionCommit": "abd24ced6a00639aab2d4411a629bf89004c8101",
   "baseCommit": "984ecfd3",
   "target": "owned-local-artifact",
   "project": "demo-firestore-probe",
@@ -15,24 +15,976 @@
     "sha256": "sha256-0edd478068f4a6bdfd1ed9699e5542a45d638383050d18cca99b73aa48ca6127",
     "buildCommand": "CARGO_TARGET_DIR=/tmp/fireemu-aggregation-target cargo build -p fireemu --release"
   },
-  "corpus": {
+  "selection": {
     "program": "queries/aggregations",
-    "source": "conformance/src/firestore-probe/programs.mjs",
-    "sourceSha256": "sha256-a5584c3a83305592d3ca7ec8fd3d976a5d933e843b19cf3bfd2cd3e7af9e88a2",
-    "selectedProgramsSha256": "sha256-3c7cb3e9e21f867ceb3de67ec28cff26b4a12847f71acee8a70a7a5623c01587",
-    "session": "conformance/src/firestore-probe/session.mjs",
-    "sessionSha256": "sha256-af4e664ac4d1efe9cfa5de445c2ee8833ee91d1c0c515283133e8e0a8c5b4823",
-    "matrix": "conformance/firestore-matrix.json",
-    "matrixSha256": "sha256-e0753a337bd96b1c4255c84820d76fbbad757b482f1acc8b26213196a624a4eb",
-    "rows": 23
+    "persistedCorpus": "conformance/.runs/firestore-probe/programs.json",
+    "persistedCorpusSha256": "sha256-9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+    "selectedProgramsSha256": "sha256-0ffb49e9425062a53f07d3d198e2c747dc407018cf7077e46b2d8bef317c5c80",
+    "selectedProgramsDigestAlgorithm": "sha256(JSON.stringify(recursively-key-sorted([programs.json entry whose id is queries/aggregations])))",
+    "generator": "conformance/src/firestore-probe/programs.mjs",
+    "generatorSha256": "sha256-a5584c3a83305592d3ca7ec8fd3d976a5d933e843b19cf3bfd2cd3e7af9e88a2",
+    "caseCount": 23,
+    "caseIds": [
+      "count-all",
+      "count-up-to",
+      "count-with-filter",
+      "count-with-limit",
+      "count-with-offset",
+      "count-empty",
+      "sum-integers",
+      "sum-mixed-numbers",
+      "sum-doubles-only",
+      "sum-empty",
+      "sum-missing-field",
+      "sum-overflow-saturates-or-promotes",
+      "avg-integers",
+      "avg-with-nan",
+      "avg-empty",
+      "several-aggregations",
+      "count-collection-group",
+      "count-with-cursor",
+      "count-beside-a-sum-over-a-missing-field",
+      "count-beside-an-avg-over-a-missing-field",
+      "duplicate-alias",
+      "no-aggregations",
+      "sum-on-name"
+    ]
   },
-  "configuration": {
-    "config": "conformance/firestore-probe.fireemu.json",
-    "configSha256": "sha256-69b6695dbd921ecd7a3c44314070e5c816675a8a0459f97c2469069294b18808",
-    "rules": "conformance/firestore-probe.rules",
-    "rulesSha256": "sha256-95b6b2680f3d3d64231ca4f90b88f348e09439665a2ea77befe5d0e64277a428",
-    "indexes": "conformance/firestore.indexes.json",
-    "indexesSha256": "sha256-62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7"
+  "productionMatrix": {
+    "path": "conformance/firestore-production-matrix.json",
+    "sha256": "sha256-4bcb04ac9427e73bfe89aab5bc9916f318b2ea60efbf156d79cdf47632d58f56",
+    "version": 1,
+    "recordedAgainst": {
+      "target": "production Firestore (Native mode) over the public REST surface",
+      "database": {
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "PESSIMISTIC",
+        "databaseEdition": "STANDARD",
+        "locationId": "us-central1",
+        "versionRetentionPeriod": "3600s"
+      },
+      "officialEmulatorMatrix": {
+        "firebaseTools": "15.28.2",
+        "note": "the Firestore emulator jar that firebase-tools pins; see ORACLE.md",
+        "evidenceSchema": 1,
+        "evidence": {
+          "identity": {
+            "sourceSha": "sha256-73a2ceaa84e28d2d935777fa5473871622c5c074fc65814a037ea3a439f6c15b",
+            "packageVersion": "0.0.0-dev",
+            "packageManifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
+            "packageIntegrity": null,
+            "artifactSha256": null,
+            "artifactPlatform": null,
+            "profile": "official-emulator",
+            "configDigest": "sha256-728c1ff5b7060009b1f54e3dad7b6367a5161544ad3535c94d38f16ca6a24d77",
+            "rulesDigest": "sha256-95b6b2680f3d3d64231ca4f90b88f348e09439665a2ea77befe5d0e64277a428",
+            "sdkLockDigest": "sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
+            "corpusDigest": "sha256-d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b",
+            "indexDigest": "sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a",
+            "databaseDigest": "sha256-163cbb73917a2b1603a32eee8a0c4f906c56d8abd1ffa98ae8219305d6b82c4c"
+          }
+        }
+      },
+      "evidenceSchema": 1,
+      "note": "The production project id is normalized to the recording project id in every value; the project itself is not recorded. Rows compare status, canonical error code and normalized body; error message text is not compared."
+    },
+    "observation": {
+      "schemaVersion": 1,
+      "observation": {
+        "side": "production",
+        "mode": "live",
+        "startedAt": "2026-09-07T14:12:49.893Z",
+        "finishedAt": "2026-09-07T14:16:43.655Z",
+        "database": {
+          "type": "FIRESTORE_NATIVE",
+          "concurrencyMode": "PESSIMISTIC",
+          "databaseEdition": "STANDARD",
+          "locationId": "us-central1",
+          "versionRetentionPeriod": "3600s"
+        }
+      },
+      "source": {
+        "gitSha": "2526c61eda5fc53ac91250307786127ae3c601be",
+        "sourceTreeDigest": "sha256-73a2ceaa84e28d2d935777fa5473871622c5c074fc65814a037ea3a439f6c15b",
+        "trackedTreeClean": true
+      },
+      "package": {
+        "name": "fireemu",
+        "version": "0.0.0-dev",
+        "manifest": "fireemu/package.json",
+        "manifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
+        "integrity": "sha512-H9jEDrw2r1rsfXDhojPaZfYjIxDav2NS1bs6lFiO+kvjOpYNEywv37CH/XyR9/W+pCeGyocGSkxNR90XwnEG6Q=="
+      },
+      "artifact": null,
+      "runtime": {
+        "profile": "production",
+        "config": null,
+        "configDigest": null,
+        "rules": null,
+        "rulesDigest": null
+      },
+      "inputs": {
+        "sdkLock": "conformance/pnpm-lock.yaml",
+        "sdkLockDigest": "sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
+        "corpus": "conformance/.runs/firestore-probe/programs.json",
+        "corpusDigest": "sha256-d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b",
+        "indexFiles": [
+          {
+            "file": "conformance/firestore.indexes.json",
+            "bytes": 2484,
+            "sha256": "sha256-8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c"
+          }
+        ],
+        "indexDigest": "sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a"
+      }
+    },
+    "limitations": [
+      "Historical live observation from 2026-09-07 against Firestore Native Standard over the public REST surface.",
+      "The production project id is normalized out of every recorded value and is not present in this result.",
+      "Rows compare normalized status, canonical error code and body; error message text is retained as diagnostics and is not compared.",
+      "The production observation does not establish gRPC, SDK, Rules, Enterprise, Cloud or whole-service parity."
+    ]
+  },
+  "comparator": {
+    "source": "conformance/src/firestore-probe/run.mjs",
+    "sourceSha256": "sha256-a04a63a7fa022dae9eafe220f88f3cdcf4a10c9f535677f835b078812f85668b",
+    "normalizer": "conformance/src/firestore-probe/session.mjs",
+    "normalizerSha256": "sha256-af4e664ac4d1efe9cfa5de445c2ee8833ee91d1c0c515283133e8e0a8c5b4823",
+    "normalizationSupportSource": "conformance/src/normalize.mjs",
+    "normalizationSupportSha256": "sha256-9d6891b2c1ab79d4ef202f55730fd34ee341620d8feecf7cae05da047324d952",
+    "contract": {
+      "expected": "conformance/firestore-production-matrix.json#programs[queries/aggregations].steps[*].production",
+      "actual": "conformance/.runs/firestore-probe/fireemu.json#queries/aggregations",
+      "success": "compare status, code and normalized body with recursively sorted object keys",
+      "error": "compare status and canonical code; retain message for diagnostics only",
+      "missing": "missing actual rows never match a saved production row",
+      "implementation": "same decision/canonical comparison used by firestore-probe/run.mjs; no firestore-matrix divergence or official-emulator value is used"
+    }
+  },
+  "executionConfiguration": {
+    "effective": {
+      "authorization": "Bearer owner; admin bypass",
+      "rules": "none loaded; every request allowed",
+      "compositeIndexes": "not applied; emulator profile serves aggregation queries without configured composite indexes"
+    },
+    "referenceOnly": {
+      "rules": {
+        "path": "conformance/firestore-probe.rules",
+        "sha256": "sha256-95b6b2680f3d3d64231ca4f90b88f348e09439665a2ea77befe5d0e64277a428",
+        "role": "reference-only; not applied in this run"
+      },
+      "indexes": {
+        "path": "conformance/firestore.indexes.json",
+        "sha256": "sha256-62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+        "role": "reference-only; not applied in this run"
+      },
+      "config": {
+        "path": "conformance/firestore-probe.fireemu.json",
+        "sha256": "sha256-69b6695dbd921ecd7a3c44314070e5c816675a8a0459f97c2469069294b18808",
+        "role": "runtime profile/config reference"
+      }
+    }
+  },
+  "directReplay": {
+    "command": "fireemu exec --config conformance/firestore-probe.fireemu.json --project demo-firestore-probe --only firestore --firestore-port 32291 --http-port 32292 --ui-port 0 --hub-port 0 -- node src/firestore-probe/session.mjs",
+    "responsePath": "conformance/.runs/firestore-probe/fireemu.json",
+    "responseSha256": "sha256-ef95c98bc798e8f00dba3815cf0b54508ab9b166ee45c0f90aca23f72e7af8c9",
+    "selectedResponseSha256": "sha256-8a92470e165bdf1a839c008999d14e1eb379f31539241b51388644b2c285bafc",
+    "result": "23/23 direct aggregation rows completed"
+  },
+  "comparison": {
+    "basis": "executable comparator contract applied to current normalized local responses and saved production values",
+    "rowCount": 23,
+    "matches": 23,
+    "mismatches": 0,
+    "rows": [
+      {
+        "id": "count-all",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "6"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "6"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-up-to",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "c": {
+                    "integerValue": "2"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "c": {
+                    "integerValue": "2"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-with-filter",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "2"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "2"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-with-limit",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "3"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-with-offset",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "2"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "2"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-empty",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "0"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "0"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-integers",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 9223372036854776000
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 9223372036854776000
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-mixed-numbers",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-doubles-only",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 4
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 4
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-empty",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "integerValue": "0"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "integerValue": "0"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-missing-field",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "integerValue": "0"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "integerValue": "0"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-overflow-saturates-or-promotes",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 9223372036854776000
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 9223372036854776000
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "avg-integers",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "doubleValue": 1.5
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "doubleValue": 1.5
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "avg-with-nan",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "avg-empty",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "nullValue": null
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "nullValue": null
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "several-aggregations",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "total": {
+                    "integerValue": "4"
+                  },
+                  "sum_n": {
+                    "integerValue": "6"
+                  },
+                  "avg_d": {
+                    "doubleValue": "NaN"
+                  },
+                  "capped": {
+                    "integerValue": "1"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg_d": {
+                    "doubleValue": "NaN"
+                  },
+                  "capped": {
+                    "integerValue": "1"
+                  },
+                  "sum_n": {
+                    "integerValue": "6"
+                  },
+                  "total": {
+                    "integerValue": "4"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-collection-group",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "6"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "6"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-with-cursor",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "4"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "4"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-beside-a-sum-over-a-missing-field",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "total": {
+                    "integerValue": "4"
+                  },
+                  "sum_d": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum_d": {
+                    "doubleValue": "NaN"
+                  },
+                  "total": {
+                    "integerValue": "4"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-beside-an-avg-over-a-missing-field",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "total": {
+                    "integerValue": "4"
+                  },
+                  "avg_d": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg_d": {
+                    "doubleValue": "NaN"
+                  },
+                  "total": {
+                    "integerValue": "4"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "duplicate-alias",
+        "comparison": "match",
+        "production": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        },
+        "local": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        }
+      },
+      {
+        "id": "no-aggregations",
+        "comparison": "match",
+        "production": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        },
+        "local": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        }
+      },
+      {
+        "id": "sum-on-name",
+        "comparison": "match",
+        "production": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        },
+        "local": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        }
+      }
+    ]
   },
   "savedReferences": {
     "historicalProductionReceipt": {
@@ -56,477 +1008,15 @@
       "scope": "14 approved bounded REST expectations; immutable"
     }
   },
-  "comparison": {
-    "basis": "checked-in official-emulator matrix and its pinned fireemu divergences",
-    "rowCount": 23,
-    "rows": [
-      {
-        "id": "count-all",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-all divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "count": {
-              "integerValue": "6"
-            }
-          },
-          "bodyDigest": "sha256-8ca52e85870d60f05b882281c43716f5d37a484351beabff318c3e52e5178d6c"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "count-up-to",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-up-to divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "c": {
-              "integerValue": "2"
-            }
-          },
-          "bodyDigest": "sha256-a51b8caf78a4ed44abcab920e755353c1d8779495e1209356dbe44e1f4fc1905"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "count-with-filter",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-with-filter divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "count": {
-              "integerValue": "2"
-            }
-          },
-          "bodyDigest": "sha256-bb40871feb7656713d97c55d5bb1df98c07f36689ab9a326dc0079d241900e4b"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "count-with-limit",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-with-limit divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "count": {
-              "integerValue": "3"
-            }
-          },
-          "bodyDigest": "sha256-ab3ae5edf508eb9abb0517bd82c857c9ce729d8d4706928702b921e649489b7b"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "count-with-offset",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-with-offset divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "count": {
-              "integerValue": "2"
-            }
-          },
-          "bodyDigest": "sha256-bb40871feb7656713d97c55d5bb1df98c07f36689ab9a326dc0079d241900e4b"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "count-empty",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-empty divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "count": {
-              "integerValue": "0"
-            }
-          },
-          "bodyDigest": "sha256-43dd599fa6f2e0bdad12f74e6d6d192d6be3323771eb969835214af9a662052c"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "sum-integers",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#sum-integers divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "sum": {
-              "doubleValue": 9223372036854776000
-            }
-          },
-          "bodyDigest": "sha256-49b9a4d63340def149073bdeae0c07fcda1e542f72c6326c3b84bed9bd03273d"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05). Production could not serve this particular row without a composite index (production-needs-index in the production matrix); the wire shape is the one production serves on every indexed row."
-      },
-      {
-        "id": "sum-mixed-numbers",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#sum-mixed-numbers divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "sum": {
-              "doubleValue": "NaN"
-            }
-          },
-          "bodyDigest": "sha256-fbf46f6c207b5c039e01ded826f38fef2936774656de8129fd054f296d3e5b52"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "sum-doubles-only",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#sum-doubles-only divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "sum": {
-              "doubleValue": 4
-            }
-          },
-          "bodyDigest": "sha256-e38101bf49f5fc5743ae1febda516c08e64093f2cf49e7453c84ea7ccb33d039"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05). Production could not serve this particular row without a composite index (production-needs-index in the production matrix); the wire shape is the one production serves on every indexed row."
-      },
-      {
-        "id": "sum-empty",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#sum-empty divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "sum": {
-              "integerValue": "0"
-            }
-          },
-          "bodyDigest": "sha256-6030b0e898a1f01a5d3de8539a907342c8e37f1b5ba4ac04ca25268469cf0815"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05). Production could not serve this particular row without a composite index (production-needs-index in the production matrix); the wire shape is the one production serves on every indexed row."
-      },
-      {
-        "id": "sum-missing-field",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#sum-missing-field divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "sum": {
-              "integerValue": "0"
-            }
-          },
-          "bodyDigest": "sha256-6030b0e898a1f01a5d3de8539a907342c8e37f1b5ba4ac04ca25268469cf0815"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "sum-overflow-saturates-or-promotes",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#sum-overflow-saturates-or-promotes divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "sum": {
-              "doubleValue": 9223372036854776000
-            }
-          },
-          "bodyDigest": "sha256-49b9a4d63340def149073bdeae0c07fcda1e542f72c6326c3b84bed9bd03273d"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "avg-integers",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#avg-integers divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "avg": {
-              "doubleValue": 1.5
-            }
-          },
-          "bodyDigest": "sha256-d01e3806d1220c0590a3cbb158a09d5fbc8f24bbff6d4986b26a2acc60d2e48f"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05). Production could not serve this particular row without a composite index (production-needs-index in the production matrix); the wire shape is the one production serves on every indexed row."
-      },
-      {
-        "id": "avg-with-nan",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#avg-with-nan divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "avg": {
-              "doubleValue": "NaN"
-            }
-          },
-          "bodyDigest": "sha256-05afc94c22a83f8cca3a1fbcab5983022b18297b063b8cd1a14daa9dfd3d355e"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "avg-empty",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#avg-empty divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "avg": {
-              "nullValue": null
-            }
-          },
-          "bodyDigest": "sha256-9d9a50997dc299ee928b7a25f19333dc986b34b8e4d76f28accb30a479753d4f"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05). Production could not serve this particular row without a composite index (production-needs-index in the production matrix); the wire shape is the one production serves on every indexed row."
-      },
-      {
-        "id": "several-aggregations",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#several-aggregations divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "avg_d": {
-              "doubleValue": "NaN"
-            },
-            "capped": {
-              "integerValue": "1"
-            },
-            "sum_n": {
-              "integerValue": "6"
-            },
-            "total": {
-              "integerValue": "4"
-            }
-          },
-          "bodyDigest": "sha256-cb9310546b45b29723bf9efbb2f208db8660344115620af4a8892e4abb8a0aad"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05). Production could not serve this particular row without a composite index (production-needs-index in the production matrix); the wire shape is the one production serves on every indexed row."
-      },
-      {
-        "id": "count-collection-group",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-collection-group divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "count": {
-              "integerValue": "6"
-            }
-          },
-          "bodyDigest": "sha256-8ca52e85870d60f05b882281c43716f5d37a484351beabff318c3e52e5178d6c"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "count-with-cursor",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-with-cursor divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "count": {
-              "integerValue": "4"
-            }
-          },
-          "bodyDigest": "sha256-18219d6ce34b0a4cf9913918ccc3afe1b4befbfea8ab59aae15fc2d37bd2f45b"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "count-beside-a-sum-over-a-missing-field",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-beside-a-sum-over-a-missing-field divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "sum_d": {
-              "doubleValue": "NaN"
-            },
-            "total": {
-              "integerValue": "4"
-            }
-          },
-          "bodyDigest": "sha256-6b171c692bc11fac2da748d4747c2412b91545da5c972ad9f091e6130c5d28c6"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "count-beside-an-avg-over-a-missing-field",
-        "comparison": "match",
-        "expected": {
-          "status": 200,
-          "code": "OK",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#count-beside-an-avg-over-a-missing-field divergence.fireemu"
-        },
-        "actual": {
-          "status": 200,
-          "code": "OK",
-          "aggregateFields": {
-            "avg_d": {
-              "doubleValue": "NaN"
-            },
-            "total": {
-              "integerValue": "4"
-            }
-          },
-          "bodyDigest": "sha256-06e73c9ba4714e7784740909aa8f377e91ea3bea562eb99959ded7574a0797d1"
-        },
-        "divergenceReason": "Production sends no `done` marker in a REST runAggregationQuery response; the official emulator appends `done: true` to the last element. fireemu follows production (conformance/firestore-production-matrix.json, recorded 2026-09-05)."
-      },
-      {
-        "id": "duplicate-alias",
-        "comparison": "match",
-        "expected": {
-          "status": 400,
-          "code": "INVALID_ARGUMENT",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#duplicate-alias oracle"
-        },
-        "actual": {
-          "status": 400,
-          "code": "INVALID_ARGUMENT"
-        }
-      },
-      {
-        "id": "no-aggregations",
-        "comparison": "match",
-        "expected": {
-          "status": 400,
-          "code": "INVALID_ARGUMENT",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#no-aggregations oracle"
-        },
-        "actual": {
-          "status": 400,
-          "code": "INVALID_ARGUMENT"
-        }
-      },
-      {
-        "id": "sum-on-name",
-        "comparison": "match",
-        "expected": {
-          "status": 400,
-          "code": "INVALID_ARGUMENT",
-          "source": "conformance/firestore-matrix.json#queries/aggregations#sum-on-name oracle"
-        },
-        "actual": {
-          "status": 400,
-          "code": "INVALID_ARGUMENT"
-        }
-      }
-    ],
-    "matches": 23,
-    "mismatches": 0
-  },
   "verification": {
-    "aggregationRestReplay": "node src/firestore-probe/session.mjs through fireemu exec with only queries/aggregations selected",
-    "aggregationRestRows": "23/23 match",
+    "productionReferenceRows": "23/23 recomputed matches",
+    "directReplay": "23/23 aggregation rows completed",
     "focusedGrpcAndRestTests": "cargo nextest run -p fireemu-adapter-grpc --profile pr -E test(aggregation): 14 passed",
     "fullFirestoreReplay": "324 rows reached runtime; 2 unrelated writes/transforms rows fail on existing transform-path behavior"
   },
   "limitations": [
     "No production request was made and no historical receipt was edited or rebound.",
-    "The result covers the 23 checked-in REST aggregation rows plus focused local gRPC/REST tests; it does not claim SDK, Rules, Cloud, Enterprise, or whole Firestore parity.",
-    "The historical 2026-09-09 aggregation receipts contain extracted values, not complete streams, and were used only as immutable references."
+    "Rules and index files are recorded as reference-only; this local run used the effective no-rules/admin path and did not apply composite-index enforcement.",
+    "The result covers the 23 saved production aggregation rows plus focused local gRPC/REST tests; it does not claim SDK, Rules, Cloud, Enterprise or whole Firestore parity."
   ]
 }

@@ -8,7 +8,7 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 from evidence_common import runtime_inputs_at_commit
 

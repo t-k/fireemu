@@ -15,15 +15,6 @@ def tool():
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    frozen_path = Path(__file__).with_name("frozen_receipt.py")
-    frozen_spec = importlib.util.spec_from_file_location(
-        "session_v2_frozen_receipt", frozen_path
-    )
-    assert frozen_spec and frozen_spec.loader
-    frozen = importlib.util.module_from_spec(frozen_spec)
-    frozen_spec.loader.exec_module(frozen)
-    module.publisher.validate = frozen.validate_frozen
-    module.publisher.render_frozen = frozen.render_frozen
     return module
 
 
@@ -37,7 +28,7 @@ def test_approval_page_is_current_and_bounded():
     assert "not a guarantee of universal immediate revocation" in page
     assert "historical integrity" in page
     assert len(approval["cases"]) == 34
-    assert t.publisher.PAGE.read_text() == t.publisher.render_frozen(receipt)
+    assert t.publisher.PAGE.read_text() == t.publisher.render(receipt)
 
 
 @pytest.mark.parametrize(

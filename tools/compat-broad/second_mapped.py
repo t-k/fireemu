@@ -426,6 +426,7 @@ def execute_45(a, output, runtime_identity):
         "runtimeIdentity": runtime_identity,
         "nonce": nonce,
         "manifestDigest": digest(manifest()),
+        "admissionDigest": digest(manifest()),
         "comparisonManifestDigest": digest(comparison_manifest()),
         "comparisonContractDigest": digest(comparison_binding()),
         "observerDigest": comparison_observer_digest(),

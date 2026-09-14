@@ -4,7 +4,7 @@ use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningCon
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::time::LogicalInstant;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::{RestRequest, RestState};
 use crate::decode::parse_parent;
@@ -38,16 +38,70 @@ fn state() -> RestState {
 }
 
 fn call(state: &RestState, authorization: Option<&str>, path: &str) -> (u16, Value) {
+    call_request(state, authorization, "GET", path, Value::Null)
+}
+
+fn call_request(
+    state: &RestState,
+    authorization: Option<&str>,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> (u16, Value) {
     let (path, query) = path.split_once('?').map_or((path, ""), |parts| parts);
     let response = state.handle(&RestRequest {
-        method: "GET".to_owned(),
+        method: method.to_owned(),
         path: path.to_owned(),
         query: query.to_owned(),
         authorization: authorization.map(str::to_owned),
         app_check: Vec::new(),
-        body: Value::Null,
+        body,
     });
     (response.status, response.body)
+}
+
+#[test]
+fn admin_inventory_coexists_with_document_crud_commit_and_query_routes() {
+    let state = state();
+    let documents = "/v1/projects/demo/databases/(default)/documents";
+    let (status, created) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "POST",
+        &format!("{documents}/users?documentId=alice"),
+        json!({"fields": {"name": {"stringValue": "Alice"}}}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    let (status, committed) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "POST",
+        &format!("{documents}:commit"),
+        json!({"writes": []}),
+    );
+    assert_eq!(status, 200, "{committed}");
+
+    let (status, queried) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "POST",
+        &format!("{documents}:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "users"}]}}),
+    );
+    assert_eq!(status, 200, "{queried}");
+    assert!(queried.as_array().is_some());
+
+    let (status, listed) = call(&state, Some("Bearer owner"), "/v1/projects/demo/databases");
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(listed["databases"].as_array().map(Vec::len), Some(1));
+
+    let (status, database) = call(
+        &state,
+        Some("Bearer owner"),
+        "/v1/projects/demo/databases/(default)",
+    );
+    assert_eq!(status, 200, "{database}");
 }
 
 fn create_database(state: &RestState, project: &str, database: &str) {

@@ -653,7 +653,13 @@ impl RestState {
             return Ok(not_found_text());
         };
         let params = query_params(&req.query);
-        if path.starts_with("projects/") && path.split('/').nth(2) == Some("databases") {
+        let segments: Vec<&str> = path.split('/').collect();
+        if action.is_none()
+            && matches!(
+                segments.as_slice(),
+                ["projects", _, "databases"] | ["projects", _, "databases", _]
+            )
+        {
             return self.admin_inventory_route(req, path, &params);
         }
         if !path.contains("/documents") {

@@ -3876,6 +3876,7 @@ impl LocalBackend {
                     query: &authorization.query,
                 },
             )?;
+            let explain_started = std::time::Instant::now();
             if req
                 .explain_options
                 .as_ref()
@@ -3883,7 +3884,11 @@ impl LocalBackend {
             {
                 let mut responses = query_responses(&[], None, access.report(), 0);
                 if let Some(response) = responses.last_mut() {
-                    response.explain_metrics = Some(crate::service::explain_metrics(None));
+                    response.explain_metrics = Some(crate::service::explain_metrics(
+                        &authorization.query,
+                        false,
+                        None,
+                    ));
                 }
                 return Ok((responses, authorization.warnings.clone(), selection));
             }
@@ -3970,9 +3975,17 @@ impl LocalBackend {
                 .as_ref()
                 .is_some_and(|options| options.analyze)
             {
-                let metrics = crate::service::explain_metrics(Some(
-                    i64::try_from(docs.len()).unwrap_or(i64::MAX),
-                ));
+                let metrics = crate::service::explain_metrics(
+                    &authorization.query,
+                    false,
+                    Some(crate::service::ExplainExecution {
+                        results_returned: i64::try_from(docs.len()).unwrap_or(i64::MAX),
+                        entries: u64::try_from(docs.len())
+                            .unwrap_or(u64::MAX)
+                            .saturating_add(u64::try_from(skipped).unwrap_or(0)),
+                        duration: explain_started.elapsed(),
+                    }),
+                );
                 if let Some(response) = responses.last_mut() {
                     response.explain_metrics = Some(metrics);
                 }
@@ -4046,11 +4059,16 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
+            let explain_started = std::time::Instant::now();
             if plan_only {
                 return Ok((
                     pb::RunAggregationQueryResponse {
                         transaction: access.report().to_vec(),
-                        explain_metrics: Some(crate::service::explain_metrics(None)),
+                        explain_metrics: Some(crate::service::explain_metrics(
+                            &accepted.query,
+                            true,
+                            None,
+                        )),
                         ..Default::default()
                     },
                     QueryStats::default(),
@@ -4071,9 +4089,22 @@ impl LocalBackend {
                     transaction: access.report().to_vec(),
                     read_time: Some(encode_instant(read_time)),
                     explain_metrics: req.explain_options.as_ref().and_then(|options| {
-                        options
-                            .analyze
-                            .then(|| crate::service::explain_metrics(Some(1)))
+                        options.analyze.then(|| {
+                            crate::service::explain_metrics(
+                                &accepted.query,
+                                true,
+                                Some(crate::service::ExplainExecution {
+                                    results_returned: 1,
+                                    entries: accepted.query.limit.map_or(stats.matched, |limit| {
+                                        stats.matched.min(
+                                            u64::from(limit)
+                                                .saturating_add(u64::from(accepted.query.offset)),
+                                        )
+                                    }),
+                                    duration: explain_started.elapsed(),
+                                }),
+                            )
+                        })
                     }),
                 },
                 stats,

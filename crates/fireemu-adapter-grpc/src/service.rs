@@ -32,20 +32,21 @@ pub type BoxStream<T> = tonic::codegen::BoxStream<T>;
 const RUN_QUERY_BATCH_SIZE: i32 = 32;
 const RUN_QUERY_CHANNEL_CAPACITY: usize = 16;
 
-/// Local Explain reports emitted results only; billing and index plans are not modeled.
-pub(crate) fn explain_metrics(results_returned: Option<i64>) -> pb::ExplainMetrics {
-    pb::ExplainMetrics {
-        plan_summary: Some(pb::PlanSummary {
-            indexes_used: Vec::new(),
-        }),
-        execution_stats: results_returned.map(|results_returned| pb::ExecutionStats {
-            results_returned,
-            // No production billing estimate or pre-authorization scan work is exposed.
-            read_operations: 0,
-            execution_duration: None,
-            debug_stats: None,
-        }),
-    }
+mod explain;
+pub(crate) use explain::{explain_metrics, ExplainExecution};
+
+fn explain_page_duration(rows: &[pb::RunQueryResponse]) -> std::time::Duration {
+    rows.iter()
+        .filter_map(|row| {
+            row.explain_metrics
+                .as_ref()?
+                .execution_stats
+                .as_ref()?
+                .execution_duration
+                .as_ref()
+        })
+        .filter_map(|duration| std::time::Duration::try_from(*duration).ok())
+        .sum()
 }
 
 /// Where validated requests go.
@@ -1109,15 +1110,16 @@ impl GatewayService {
                 .explain_options
                 .as_ref()
                 .is_some_and(|options| !options.analyze);
-            let name_order_continuation = match req.query_type.as_ref() {
+            let explain_query = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
                     let parent = parse_parent(&req.parent)
                         .map_err(|error| Rejection::Decode(error).to_status())?;
                     let accepted = local.accepted_query(&parent, query)?;
-                    is_name_ordered_query(&accepted.query)
+                    Some(accepted.query)
                 }
-                None => false,
+                None => None,
             };
+            let name_order_continuation = explain_query.as_ref().is_some_and(is_name_ordered_query);
             let find_nearest_query = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
                     let parent = parse_parent(&req.parent)
@@ -1210,6 +1212,11 @@ impl GatewayService {
                 // Hide only the dedicated transaction announcement, preserving offset metadata.
                 first.retain(|response| response.transaction.is_empty());
             }
+            let skipped_entries: u64 = first
+                .iter()
+                .map(|row| u64::try_from(row.skipped_results).unwrap_or(0))
+                .sum();
+            let mut execution_duration = explain_page_duration(&first);
             let first_documents = first
                 .iter()
                 .filter(|response| response.document.is_some())
@@ -1316,6 +1323,7 @@ impl GatewayService {
                             return;
                         }
                     };
+                    execution_duration += explain_page_duration(&responses);
                     for response in &mut responses {
                         response.skipped_results = 0;
                     }
@@ -1367,7 +1375,9 @@ impl GatewayService {
                 }
                 if plan_only {
                     if let Some(response) = pending.as_mut() {
-                        response.explain_metrics = Some(explain_metrics(None));
+                        response.explain_metrics = explain_query
+                            .as_ref()
+                            .map(|query| explain_metrics(query, false, None));
                     }
                 } else if req
                     .explain_options
@@ -1376,7 +1386,19 @@ impl GatewayService {
                 {
                     if let Some(response) = pending.as_mut() {
                         // Stream-owned count survives eviction from the bounded diagnostic cache.
-                        response.explain_metrics = Some(explain_metrics(Some(results_returned)));
+                        response.explain_metrics = explain_query.as_ref().map(|query| {
+                            explain_metrics(
+                                query,
+                                false,
+                                Some(ExplainExecution {
+                                    results_returned,
+                                    entries: u64::try_from(results_returned)
+                                        .unwrap_or(0)
+                                        .saturating_add(skipped_entries),
+                                    duration: execution_duration,
+                                }),
+                            )
+                        });
                     }
                 }
                 drop(rollback);

@@ -2299,7 +2299,7 @@ fn explain_rest_plan_only_new_and_existing_transactions_can_be_rolled_back() {
                 assert_eq!(body[0], json!({"transaction": token}));
                 assert_eq!(
                     body[1],
-                    json!({"explainMetrics": {"planSummary": {"indexesUsed": []}}})
+                    json!({"explainMetrics": {"planSummary": {"indexesUsed": [{"properties": "(__name__ ASC)", "query_scope": "Collection"}]}}})
                 );
             }
             let mut reuse = explain_body(aggregation, false);
@@ -2395,7 +2395,88 @@ fn explain_rest_empty_analyze_output_preserves_read_time() {
         assert!(rows[0]["readTime"].is_string(), "{body}");
         assert_eq!(
             rows[0]["explainMetrics"]["executionStats"]["resultsReturned"],
-            if aggregation { "1" } else { "0" }
+            if aggregation { json!("1") } else { Value::Null }
         );
+    }
+}
+
+#[test]
+fn explain_rest_name_scans_report_production_plan_billing_and_protojson_defaults() {
+    let s = state(None);
+    for index in 0..3 {
+        assert_eq!(
+            call(
+                &s,
+                "PATCH",
+                &format!("{DOCS}/items/{index}"),
+                json!({"fields": {}})
+            )
+            .0,
+            200
+        );
+    }
+    for aggregation in [false, true] {
+        for (analyze, limit) in [(false, None), (true, None), (true, Some(0))] {
+            let mut request = explain_body(aggregation, analyze);
+            let query = if aggregation {
+                &mut request["structuredAggregationQuery"]["structuredQuery"]
+            } else {
+                &mut request["structuredQuery"]
+            };
+            query["offset"] = json!(0);
+            if let Some(limit) = limit {
+                query["limit"] = json!(limit);
+            }
+            let (http_code, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:{}", explain_method(aggregation)),
+                request,
+            );
+            assert_eq!(http_code, 200, "{body}");
+            let metrics = &body.as_array().unwrap().last().unwrap()["explainMetrics"];
+            let empty = limit == Some(0);
+            assert_eq!(
+                metrics["planSummary"],
+                if empty && !aggregation {
+                    json!({})
+                } else {
+                    json!({"indexesUsed": [{"properties": "(__name__ ASC)", "query_scope": "Collection"}]})
+                },
+                "{body}"
+            );
+            if !analyze {
+                assert!(metrics.get("executionStats").is_none());
+                continue;
+            }
+            let stats = &metrics["executionStats"];
+            assert_eq!(
+                stats["readOperations"],
+                if aggregation || empty { "1" } else { "3" }
+            );
+            if !aggregation && empty {
+                assert!(stats.get("resultsReturned").is_none());
+            } else {
+                assert_eq!(
+                    stats["resultsReturned"],
+                    if aggregation { "1" } else { "3" }
+                );
+            }
+            let duration = stats["executionDuration"].as_str().unwrap();
+            assert!(duration.strip_suffix('s').unwrap().parse::<f64>().unwrap() >= 0.0);
+            assert_eq!(
+                stats["debugStats"],
+                json!({
+                    "index_entries_scanned": if empty { if aggregation { "1" } else { "0" } } else { "3" },
+                    "documents_scanned": if aggregation || empty { "0" } else { "3" },
+                    "billing_details": {
+                        "index_entries_billable": if aggregation && !empty { "3" } else { "0" },
+                        "documents_billable": if !aggregation && !empty { "3" } else { "0" },
+                        "min_query_cost": if empty { "1" } else { "0" },
+                        "small_ops": "0"
+                    }
+                })
+            );
+        }
     }
 }

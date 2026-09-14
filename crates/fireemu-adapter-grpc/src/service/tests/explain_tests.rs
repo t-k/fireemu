@@ -487,3 +487,61 @@ async fn explain_analyze_empty_output_still_returns_final_metrics() {
         assert_eq!(transaction_stats(&backend).active, 0);
     }
 }
+
+#[tokio::test]
+async fn explain_name_scan_billing_includes_offset_across_stream_pages() {
+    let backend = test_backend();
+    let service = GatewayService::local(test_gateway(), backend.clone());
+    let mut request = analyze(
+        super::query_transaction_tests::seeded_query(&backend, 80, false),
+        true,
+    );
+    let Some(pb::run_query_request::QueryType::StructuredQuery(query)) = &mut request.query_type
+    else {
+        unreachable!()
+    };
+    query.offset = 7;
+    query.limit = Some(65);
+    let responses: Vec<_> = Firestore::run_query(&service, Request::new(request))
+        .await
+        .unwrap()
+        .into_inner()
+        .map(Result::unwrap)
+        .collect()
+        .await;
+    let metrics = responses.last().unwrap().explain_metrics.as_ref().unwrap();
+    assert_eq!(metrics.plan_summary.as_ref().unwrap().indexes_used.len(), 1);
+    let stats = metrics.execution_stats.as_ref().unwrap();
+    assert_eq!(stats.results_returned, 65);
+    assert_eq!(stats.read_operations, 72);
+    assert!(stats.execution_duration.is_some());
+    assert!(stats.debug_stats.is_some());
+}
+
+#[tokio::test]
+async fn explain_count_read_operations_use_thousand_entry_batches() {
+    let backend = test_backend();
+    let service = GatewayService::local(test_gateway(), backend.clone());
+    let request = aggregation(analyze(
+        super::query_transaction_tests::seeded_query(&backend, 1001, false),
+        true,
+    ));
+    let responses: Vec<_> = Firestore::run_aggregation_query(&service, Request::new(request))
+        .await
+        .unwrap()
+        .into_inner()
+        .map(Result::unwrap)
+        .collect()
+        .await;
+    assert_eq!(
+        responses[0]
+            .explain_metrics
+            .as_ref()
+            .unwrap()
+            .execution_stats
+            .as_ref()
+            .unwrap()
+            .read_operations,
+        2
+    );
+}

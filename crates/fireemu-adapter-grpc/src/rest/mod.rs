@@ -1240,14 +1240,7 @@ impl RestState {
                     v["skippedResults"] = json!(r.skipped_results);
                 }
                 if let Some(metrics) = &r.explain_metrics {
-                    let mut explain = json!({"planSummary": {"indexesUsed": []}});
-                    if let Some(stats) = &metrics.execution_stats {
-                        explain["executionStats"] = json!({
-                            "resultsReturned": stats.results_returned.to_string(),
-                            "readOperations": stats.read_operations.to_string()
-                        });
-                    }
-                    v["explainMetrics"] = explain;
+                    v["explainMetrics"] = json::explain_metrics_to_json(metrics);
                 }
                 // Production Firestore sends no `done` marker over REST (the official emulator
                 // does); the last element is simply the last element of the array.
@@ -1340,14 +1333,7 @@ impl RestState {
             v["result"] = json!({"aggregateFields": fields});
         }
         if let Some(metrics) = &response.explain_metrics {
-            let mut explain = json!({"planSummary": {"indexesUsed": []}});
-            if let Some(stats) = &metrics.execution_stats {
-                explain["executionStats"] = json!({
-                    "resultsReturned": stats.results_returned.to_string(),
-                    "readOperations": stats.read_operations.to_string()
-                });
-            }
-            v["explainMetrics"] = explain;
+            v["explainMetrics"] = json::explain_metrics_to_json(metrics);
         }
         if !response.transaction.is_empty() {
             v["transaction"] = Value::String(base64_encode(&response.transaction));

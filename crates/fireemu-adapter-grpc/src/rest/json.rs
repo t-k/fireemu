@@ -141,6 +141,59 @@ pub fn strict_keys(v: &Value, allowed: &[&str]) -> Result<(), JsonError> {
     Ok(())
 }
 
+fn struct_to_json(value: &prost_types::Struct) -> Value {
+    Value::Object(
+        value
+            .fields
+            .iter()
+            .map(|(key, value)| (key.clone(), struct_value_to_json(value)))
+            .collect(),
+    )
+}
+
+fn struct_value_to_json(value: &prost_types::Value) -> Value {
+    use prost_types::value::Kind;
+    match &value.kind {
+        Some(Kind::StringValue(value)) => Value::String(value.clone()),
+        Some(Kind::NumberValue(value)) => serde_json::json!(value),
+        Some(Kind::BoolValue(value)) => Value::Bool(*value),
+        Some(Kind::StructValue(value)) => struct_to_json(value),
+        Some(Kind::ListValue(value)) => {
+            Value::Array(value.values.iter().map(struct_value_to_json).collect())
+        }
+        Some(Kind::NullValue(_)) | None => Value::Null,
+    }
+}
+
+/// Serialize Explain's protobuf messages, including implicit-presence defaults and Struct values.
+pub(crate) fn explain_metrics_to_json(metrics: &pb::ExplainMetrics) -> Value {
+    let mut out = serde_json::json!({});
+    if let Some(plan) = &metrics.plan_summary {
+        out["planSummary"] = serde_json::json!({});
+        if !plan.indexes_used.is_empty() {
+            out["planSummary"]["indexesUsed"] =
+                Value::Array(plan.indexes_used.iter().map(struct_to_json).collect());
+        }
+    }
+    if let Some(stats) = &metrics.execution_stats {
+        let mut execution = serde_json::json!({});
+        if stats.results_returned != 0 {
+            execution["resultsReturned"] = Value::String(stats.results_returned.to_string());
+        }
+        if stats.read_operations != 0 {
+            execution["readOperations"] = Value::String(stats.read_operations.to_string());
+        }
+        if let Some(duration) = &stats.execution_duration {
+            execution["executionDuration"] = Value::String(duration.to_string());
+        }
+        if let Some(debug) = &stats.debug_stats {
+            execution["debugStats"] = struct_to_json(debug);
+        }
+        out["executionStats"] = execution;
+    }
+    out
+}
+
 /// Parses the finite local `ExplainOptions` contract.
 pub fn explain_options_from_json(
     v: Option<&Value>,

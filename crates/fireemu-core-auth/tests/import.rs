@@ -121,6 +121,31 @@ fn an_imported_password_signs_in_and_is_written_back_in_the_emulator_form() {
 }
 
 #[test]
+fn trusted_artifact_import_preserves_a_password_longer_than_the_new_password_limit() {
+    let mut store = store();
+    let password = "a".repeat(AuthStore::MAX_PASSWORD_UTF16_UNITS + 1);
+    let imported = ImportedUser {
+        email: Some("legacy-long-password@example.com".to_owned()),
+        provider: Provider::Password,
+        password: Some(("legacy-salt".to_owned(), password.clone())),
+        ..account("legacy-long-password")
+    };
+    assert_eq!(
+        store.import_user(imported.clone()),
+        Err(ImportUserError::Account(AuthError::PasswordTooLong))
+    );
+    let uid = store
+        .import_user_trusted(imported)
+        .expect("a previously exported artifact restores exactly");
+    assert_eq!(
+        store
+            .verify_password("legacy-long-password@example.com", &password, t(0))
+            .expect("the restored long password signs in"),
+        uid
+    );
+}
+
+#[test]
 fn a_credential_created_through_the_api_has_no_emulator_form_to_export() {
     let mut store = store();
     let uid = store

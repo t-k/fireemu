@@ -5150,9 +5150,7 @@ fn batch_row_password(row: &Value) -> Result<Option<(String, String)>, JsonRespo
     let Some((salt, password)) = rest.split_once(":password=") else {
         return Ok(None);
     };
-    if AuthStore::validate_password(password).is_err() {
-        return Ok(None);
-    }
+    AuthStore::validate_password(password).map_err(|e| auth_error(&e))?;
     Ok(Some((salt.to_owned(), password.to_owned())))
 }
 

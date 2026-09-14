@@ -1334,7 +1334,12 @@ impl AuthStore {
         self.users.get(uid).and_then(|u| u.password.as_ref())
     }
 
-    /// Installs a user from an import artifact, exactly as it was recorded.
+    /// Installs a user from an import request, validating any supplied password.
+    pub fn import_user(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
+        self.import_user_with_password_policy(user, true)
+    }
+
+    /// Restores a user from a previously exported artifact, exactly as it was recorded.
     ///
     /// This is not [`Self::create_user`]: an import restores accounts that already existed,
     /// so the local id, the creation time, the last sign-in, the token revocation instant,
@@ -1345,7 +1350,18 @@ impl AuthStore {
     ///
     /// The listing order stays the artifact's: users keep the sequence they are imported in,
     /// and `next_sequence` moves past them so a later sign-up sorts after the import.
-    pub fn import_user(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
+    /// Password policy is deliberately not applied here: the artifact already contains a
+    /// credential accepted by an earlier runtime, and restoring it must not rewrite or reject
+    /// that credential as if it were a new password.
+    pub fn import_user_trusted(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
+        self.import_user_with_password_policy(user, false)
+    }
+
+    fn import_user_with_password_policy(
+        &mut self,
+        user: ImportedUser,
+        enforce_password_policy: bool,
+    ) -> Result<LocalId, ImportUserError> {
         if user.local_id.is_empty()
             || user.local_id.chars().count() > 128
             || user.local_id.chars().any(char::is_control)
@@ -1382,7 +1398,9 @@ impl AuthStore {
             .map_err(|e| ImportUserError::Account(AuthError::LimitExceeded(e)))?;
         let password = match user.password {
             Some((salt, plaintext)) => {
-                Self::validate_password(&plaintext).map_err(ImportUserError::Account)?;
+                if enforce_password_policy {
+                    Self::validate_password(&plaintext).map_err(ImportUserError::Account)?;
+                }
                 // The digest is fireemu's own; the emulator form is kept beside it so an
                 // export can write back exactly what it read.
                 let mut bytes = [0u8; 16];

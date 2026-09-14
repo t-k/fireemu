@@ -430,7 +430,7 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
     let users = std::mem::take(&mut auth.users);
     for user in users {
         let id = user.local_id.clone();
-        let uid = store.import_user(user).map_err(|e| {
+        let uid = store.import_user_trusted(user).map_err(|e| {
             ArtifactError::new(
                 "auth",
                 PathBuf::from(AUTH_PATH).join(ACCOUNTS_FILE),
@@ -472,7 +472,7 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
         tenant_store.set_config(auth.config_over(current));
         for user in users {
             let id = user.local_id.clone();
-            let uid = tenant_store.import_user(user).map_err(|e| {
+            let uid = tenant_store.import_user_trusted(user).map_err(|e| {
                 ArtifactError::new(
                     "auth",
                     PathBuf::from(AUTH_PATH).join(format!("accounts-{tenant}.json")),

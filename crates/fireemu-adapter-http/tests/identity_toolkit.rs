@@ -4603,6 +4603,137 @@ fn self_service_password_change_invalidates_an_existing_session_cookie() {
 }
 
 #[test]
+fn session_cookie_rejects_invalid_expired_revoked_deleted_and_disabled_id_tokens() {
+    for transition in ["invalid", "expired", "revoked", "deleted", "disabled"] {
+        let s = state();
+        let (status, signed_up) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "cookie-state@example.com", "password": "password1"}),
+        );
+        assert_eq!(status, 200);
+        let uid = signed_up["localId"].as_str().unwrap();
+        let mut token = signed_up["idToken"].clone();
+        match transition {
+            "invalid" => token = json!("not-a-token"),
+            "expired" => {
+                advance(&s, 3600);
+            }
+            "revoked" => {
+                advance(&s, 1);
+                assert_eq!(
+                    admin(
+                        &s,
+                        "POST",
+                        &format!("{ADMIN}/accounts:update"),
+                        &json!({"localId": uid, "validSince": "1788004861"})
+                    )
+                    .0,
+                    200
+                );
+            }
+            "deleted" => assert_eq!(
+                admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:delete"),
+                    &json!({"localId": uid})
+                )
+                .0,
+                200
+            ),
+            "disabled" => assert_eq!(
+                admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:update"),
+                    &json!({"localId": uid, "disableUser": true})
+                )
+                .0,
+                200
+            ),
+            _ => unreachable!(),
+        }
+        let before = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        let (status, rejected) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:createSessionCookie"),
+            &json!({"idToken": token, "validDuration": "300"}),
+        );
+        assert_eq!(status, 400, "case {transition}");
+        assert!(rejected.get("sessionCookie").is_none());
+        let after = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        assert_eq!(before, after, "cookie refusal must preserve account state");
+        if transition == "deleted" {
+            assert!(after.1.get("users").is_none());
+        }
+        if transition == "disabled" {
+            assert_eq!(after.1["users"][0]["disabled"], true);
+        }
+    }
+}
+
+#[test]
+fn session_cookie_rejects_wrong_project_tenant_issuer_and_audience_without_mutation() {
+    let s = state();
+    let (status, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "cookie-isolation@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200);
+    let decoded =
+        fireemu_core_auth::jwt::decode_unsigned(signed_up["idToken"].as_str().unwrap()).unwrap();
+    let original: Value = serde_json::from_str(&decoded.payload_json).unwrap();
+    let before = s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("cookie-isolation@example.com")
+        .unwrap()
+        .clone();
+    for field in ["project", "tenant", "issuer", "audience"] {
+        let mut payload = original.clone();
+        let mut path = format!("{ADMIN}:createSessionCookie");
+        match field {
+            "project" => path = path.replace("demo-app", "other-project"),
+            "tenant" => payload["firebase"]["tenant"] = json!("other-tenant"),
+            "issuer" => payload["iss"] = json!("https://session.firebase.google.com/demo-app"),
+            "audience" => payload["aud"] = json!("other-project"),
+            _ => unreachable!(),
+        }
+        let token = fireemu_core_auth::jwt::encode_payload_with(&payload.to_string(), None);
+        let (status, refused) = admin(
+            &s,
+            "POST",
+            &path,
+            &json!({"idToken": token, "validDuration": "300"}),
+        );
+        assert_eq!(status, 400, "case {field}");
+        assert!(refused.get("sessionCookie").is_none());
+        assert_eq!(
+            s.store
+                .lock()
+                .unwrap()
+                .user_by_email("cookie-isolation@example.com")
+                .unwrap(),
+            &before
+        );
+    }
+}
+
+#[test]
 fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
     let s = state();
     assert_eq!(
@@ -4878,6 +5009,66 @@ fn refresh_custom_token(state: &AuthState, body: &Value, tenant: &str) -> Value 
     refreshed
 }
 
+fn assert_custom_session_cookie_handoff(state: &AuthState, tenant: &str, token: &Value) {
+    let namespace = format!("{V1}/projects/worker-alpha/tenants/{tenant}");
+    let decoded = fireemu_core_auth::jwt::decode_unsigned(token.as_str().unwrap()).unwrap();
+    let mut expected: Value = serde_json::from_str(&decoded.payload_json).unwrap();
+    let uid = expected["sub"].clone();
+    let (status, cookie) = admin(
+        state,
+        "POST",
+        &format!("{namespace}:createSessionCookie"),
+        &json!({"idToken": token, "validDuration": "300"}),
+    );
+    assert_eq!(status, 200);
+    let cookie =
+        fireemu_core_auth::jwt::decode_unsigned(cookie["sessionCookie"].as_str().unwrap()).unwrap();
+    let actual: Value = serde_json::from_str(&cookie.payload_json).unwrap();
+    expected["iss"] = json!("https://session.firebase.google.com/worker-alpha");
+    expected["exp"] = json!(1_788_005_160);
+    assert_eq!(actual, expected);
+    let (status, looked_up) = post(
+        state,
+        &format!("{V1}/accounts:lookup?key=worker-key"),
+        &json!({"tenantId": tenant, "idToken": token}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(looked_up["users"][0]["localId"], uid);
+    let (status, stored) = admin(
+        state,
+        "POST",
+        &format!("{namespace}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert_eq!(status, 200);
+    let persisted: Value =
+        serde_json::from_str(stored["users"][0]["customAttributes"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        persisted,
+        json!({"role": "persistent", "persistedOnly": true})
+    );
+    for other in [
+        format!("{V1}/projects/worker-alpha:createSessionCookie"),
+        format!(
+            "{V1}/projects/worker-alpha/tenants/{}:createSessionCookie",
+            if tenant == "customer-a" {
+                "customer-b"
+            } else {
+                "customer-a"
+            }
+        ),
+    ] {
+        let (status, refused) = admin(
+            state,
+            "POST",
+            &other,
+            &json!({"idToken": token, "validDuration": "300"}),
+        );
+        assert_eq!(status, 400);
+        assert!(refused.get("sessionCookie").is_none());
+    }
+}
+
 fn assert_tenant_stores_after_sign_in(
     registry: &std::sync::Arc<fireemu_core_auth::store::AuthRegistry>,
 ) {
@@ -5025,8 +5216,12 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
     let b = sign_in_custom_token(&s, "customer-b", "custom-b");
     assert_tenant_stores_after_sign_in(&registry);
 
-    refresh_custom_token(&s, &a, "customer-a");
-    refresh_custom_token(&s, &b, "customer-b");
+    for (tenant, signed_in) in [("customer-a", &a), ("customer-b", &b)] {
+        assert_custom_session_cookie_handoff(&s, tenant, &signed_in["idToken"]);
+        let refreshed = refresh_custom_token(&s, signed_in, tenant);
+        assert_custom_session_cookie_handoff(&s, tenant, &refreshed["id_token"]);
+    }
+    assert_tenant_stores_after_sign_in(&registry);
 
     let before_a = registry
         .tenant_store("worker-alpha", "customer-a")

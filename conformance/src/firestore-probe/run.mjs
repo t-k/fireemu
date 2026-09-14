@@ -213,6 +213,34 @@ function canonical(value) {
   return JSON.stringify(sort(value));
 }
 
+/** Compare saved production decisions with a current normalized fireemu response. */
+export function compareProductionToFireemu({ production, fireemu, programDefinitions = PROGRAMS }) {
+  const rows = [];
+  for (const program of programDefinitions) {
+    for (const step of program.steps) {
+      const saved = production[program.id]?.steps?.[step.id]?.production ?? { missing: true };
+      const actual = fireemu[program.id]?.steps?.[step.id] ?? { missing: true };
+      const savedDecision = decision(saved);
+      const localDecision = decision(actual);
+      const comparison =
+        canonical(savedDecision) === canonical(localDecision) ? "match" : "mismatch";
+      rows.push({
+        id: step.id,
+        comparison,
+        production: savedDecision,
+        local: localDecision,
+      });
+    }
+  }
+  const matches = rows.filter((row) => row.comparison === "match").length;
+  return {
+    rowCount: rows.length,
+    matches,
+    mismatches: rows.length - matches,
+    rows,
+  };
+}
+
 const rowKey = (programId, stepId) => `${programId}#${stepId}`;
 
 /**

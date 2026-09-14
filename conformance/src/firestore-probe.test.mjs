@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildProductionPrograms } from "./firestore-probe/run.mjs";
+import { buildProductionPrograms, compareProductionToFireemu } from "./firestore-probe/run.mjs";
 
 describe("Firestore production recorder", () => {
   it("uses the live fireemu step even when the stored divergence disagrees", () => {
@@ -102,5 +102,61 @@ describe("Firestore production recorder", () => {
     assert.deepEqual(row.production, { missing: true });
     assert.deepEqual(row.fireemu, { missing: true });
     assert.equal(row.status, "unverified");
+  });
+
+  it("compares saved production decisions directly with current local responses", () => {
+    const result = compareProductionToFireemu({
+      production: {
+        sample: {
+          steps: {
+            read: {
+              production: { status: 200, code: "OK", body: { value: "production" } },
+            },
+            rejected: {
+              production: {
+                status: 400,
+                code: "INVALID_ARGUMENT",
+                message: "production diagnostic",
+              },
+            },
+          },
+        },
+      },
+      fireemu: {
+        sample: {
+          steps: {
+            read: { status: 200, code: "OK", body: { value: "production" } },
+            rejected: {
+              status: 400,
+              code: "INVALID_ARGUMENT",
+              message: "local diagnostic",
+            },
+          },
+        },
+      },
+      programDefinitions: [
+        {
+          id: "sample",
+          area: "queries",
+          steps: [{ id: "read" }, { id: "rejected" }],
+        },
+      ],
+    });
+
+    assert.equal(result.rowCount, 2);
+    assert.equal(result.matches, 2);
+    assert.equal(result.mismatches, 0);
+    assert.deepEqual(result.rows[0], {
+      id: "read",
+      comparison: "match",
+      production: { status: 200, code: "OK", body: { value: "production" } },
+      local: { status: 200, code: "OK", body: { value: "production" } },
+    });
+    assert.deepEqual(result.rows[1], {
+      id: "rejected",
+      comparison: "match",
+      production: { status: 400, code: "INVALID_ARGUMENT" },
+      local: { status: 400, code: "INVALID_ARGUMENT" },
+    });
   });
 });

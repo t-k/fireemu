@@ -140,6 +140,21 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
     parent = load_parent_manifest(parent_path)
     errors = []
     state_validation = None
+    repo_root = Path(__file__).parents[2]
+    evaluator_commit = ""
+    anchor_sha256 = ""
+    parent_hash = parent.get("parentManifestSha256")
+    try:
+        evaluator_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
+        ).strip()
+        anchor_sha256 = hashlib.sha256(
+            subprocess.check_output(
+                ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"], cwd=repo_root
+            )
+        ).hexdigest()
+    except (OSError, subprocess.CalledProcessError):
+        errors.append({"side": "evaluator", "reason": "evaluator source identity unavailable"})
     try:
         if candidate.get("kind") != "second45-production-candidate-summary-v1":
             raise ValueError("saved production candidate kind is not supported")
@@ -163,7 +178,6 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
         errors.append({"side": "production", "reason": str(error)})
 
     try:
-        parent_hash = parent.get("parentManifestSha256")
         unsigned_parent = {
             key: value for key, value in parent.items() if key != "parentManifestSha256"
         }
@@ -173,7 +187,6 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
         ):
             raise ValueError("parent manifest integrity binding is invalid")
         evaluator_commit = parent.get("executionCommit")
-        repo_root = Path(__file__).parents[2]
         def git_ok(arguments):
             process = subprocess.Popen(
                 arguments,
@@ -329,6 +342,11 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
         "localSourceSha256": digest(local),
         "historicalProductionReceiptSha256": candidate.get("productionReceiptFileSha256"),
         "historicalLocalReceiptSha256": candidate.get("localReceiptFileSha256"),
+        "runtimeSourceCommit": parent.get("executionCommit"),
+        "evaluatorCommit": evaluator_commit,
+        "evaluatorAnchorSha256": anchor_sha256,
+        "parentManifestSha256": parent_hash,
+        "mappedReceiptFileSha256": parent.get("mappedReceiptFileSha256"),
         "recordingComplete": candidate.get("recordingComplete") is True
         and local.get("recordingComplete") is True,
         "cleanupComplete": candidate.get("cleanupComplete") is True

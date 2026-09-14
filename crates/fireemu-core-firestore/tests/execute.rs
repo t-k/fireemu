@@ -385,6 +385,34 @@ fn nearest_vector_query_limit_and_threshold_are_applied() {
 }
 
 #[test]
+fn nearest_cosine_threshold_includes_small_distance_and_excludes_large_distance() {
+    let mut query = nearest(DistanceMeasure::Cosine, 3);
+    query.find_nearest.as_mut().unwrap().distance_threshold = Some(0.5);
+    let documents = vector_state()
+        .run_query(&query.canonicalize().unwrap(), None)
+        .unwrap();
+    let ids = documents
+        .into_iter()
+        .map(|document| document.path.document_id().as_str().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["near"]);
+}
+
+#[test]
+fn nearest_dot_product_threshold_includes_large_score_and_excludes_small_score() {
+    let mut query = nearest(DistanceMeasure::DotProduct, 3);
+    query.find_nearest.as_mut().unwrap().distance_threshold = Some(0.5);
+    let documents = vector_state()
+        .run_query(&query.canonicalize().unwrap(), None)
+        .unwrap();
+    let ids = documents
+        .into_iter()
+        .map(|document| document.path.document_id().as_str().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["near"]);
+}
+
+#[test]
 fn nearest_vector_query_retains_only_the_requested_top_k_candidates() {
     let mut state = FirestoreState::new();
     for index in 0..2_000 {

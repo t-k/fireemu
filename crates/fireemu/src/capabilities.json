@@ -498,7 +498,8 @@
   "FS-REST-1": {
     "notes": [
       "served on the Firestore port next to gRPC",
-      "readTime selectors are validated and served through REST, while findNearest is refused explicitly",
+      "readTime selectors are validated and served through REST, and local Standard/Native findNearest is served through REST :runQuery with projection, Euclidean/cosine/dot-product distance, finite thresholds and limits",
+      "the pinned official Firestore emulator refuses findNearest on REST; fireemu's local REST implementation is therefore not an official-emulator or production-parity claim",
       "conformance: firestore/rest-error-shapes, firestore/lite-rest-transport (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
       "REST wire shapes follow the measured production-compatible JSON: empty fields are left out, timestamps carry 0/3/6/9 fraction digits, the last RunQuery and RunAggregationQuery responses arrive without a synthetic done marker, the first carries skippedResults when an offset is applied, and an unknown route or method answers the plain-text 404 the official adapter answers"
     ],

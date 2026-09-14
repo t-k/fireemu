@@ -515,6 +515,14 @@ fn firestore_rest_capability_matches_the_served_production_wire() {
         "FS-REST-1 must not claim that readTime is refused: {text}"
     );
     assert!(
+        text.contains("local Standard/Native findNearest is served through REST :runQuery"),
+        "FS-REST-1 must describe local findNearest support: {text}"
+    );
+    assert!(
+        text.contains("pinned official Firestore emulator refuses findNearest on REST"),
+        "FS-REST-1 must keep the official-emulator limitation explicit: {text}"
+    );
+    assert!(
         !text.contains("the last RunQuery response says done"),
         "FS-REST-1 must not claim a done marker: {text}"
     );

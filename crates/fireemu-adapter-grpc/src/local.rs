@@ -3838,6 +3838,7 @@ impl LocalBackend {
                 return Ok((responses, authorization.warnings.clone(), selection));
             }
             let mut selection_stage = None;
+            let mut selection_matched = None;
             let selection = match selection {
                 Some(selection) => Some(selection),
                 None if execution_present
@@ -3856,6 +3857,9 @@ impl LocalBackend {
                         .db()
                         .run_query_paths_with_stats(&selection_query, version)
                         .map_err(|error| status_from_error(&error))?;
+                    if accepted.query.find_nearest.is_some() {
+                        selection_matched = Some(stats.matched);
+                    }
                     let selection =
                         QuerySelection::from_paths(paths, Arc::clone(&self.query_selection_bytes));
                     selection_stage = Some((
@@ -3900,9 +3904,13 @@ impl LocalBackend {
             let skipped = if after_document.is_some() {
                 0
             } else {
-                let available = selection.as_ref().map_or(stats.matched, |selection| {
-                    u64::try_from(selection.inner.paths.len()).unwrap_or(u64::MAX)
-                });
+                let available = if accepted.query.find_nearest.is_some() {
+                    selection_matched.unwrap_or(stats.matched)
+                } else {
+                    selection.as_ref().map_or(stats.matched, |selection| {
+                        u64::try_from(selection.inner.paths.len()).unwrap_or(u64::MAX)
+                    })
+                };
                 i32::try_from(u64::from(authorization.query.offset).min(available))
                     .unwrap_or(i32::MAX)
             };

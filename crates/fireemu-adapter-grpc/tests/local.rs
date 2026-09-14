@@ -1481,6 +1481,69 @@ async fn grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking() {
 }
 
 #[tokio::test]
+async fn grpc_find_nearest_skipped_results_use_pre_offset_matches() {
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("items/a", &[("embedding", vector(&[1.0, 0.0]))]),
+                update_write("items/b", &[("embedding", vector(&[-1.0, 0.0]))]),
+                update_write("items/c", &[("embedding", vector(&[0.0, 1.0]))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for (offset, expected_skipped, expected_ids) in [(2, 2, vec!["c"]), (5, 3, vec![])] {
+        let responses = collect_responses(
+            &mut client,
+            pb::RunQueryRequest {
+                parent: DOCS.to_owned(),
+                query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                    pb::StructuredQuery {
+                        from: vec![sq::CollectionSelector {
+                            collection_id: "items".to_owned(),
+                            ..Default::default()
+                        }],
+                        offset,
+                        limit: Some(2),
+                        find_nearest: Some(sq::FindNearest {
+                            vector_field: Some(sq::FieldReference {
+                                field_path: "embedding".to_owned(),
+                            }),
+                            query_vector: Some(vector(&[1.0, 0.0])),
+                            distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                            limit: Some(2),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            responses
+                .iter()
+                .map(|response| response.skipped_results)
+                .sum::<i32>(),
+            expected_skipped,
+            "offset {offset}"
+        );
+        let ids = responses
+            .iter()
+            .filter_map(|response| response.document.as_ref())
+            .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected_ids, "offset {offset}");
+    }
+    handle.abort();
+}
+
+#[tokio::test]
 async fn grpc_find_nearest_pages_from_one_snapshot() {
     let (mut client, _, handle) =
         start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;

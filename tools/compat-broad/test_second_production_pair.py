@@ -318,6 +318,14 @@ def test_other_parameters_and_invalid_headers_are_not_erased(left, right):
     )
 
 
+def test_saved_comparator_uses_current_runtime_anchor_path():
+    from second_production_pair import PARENT_RUNTIME_ANCHOR
+
+    assert PARENT_RUNTIME_ANCHOR == (
+        "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v2.json"
+    )
+
+
 def test_saved_candidate_rejects_self_hashed_fabricated_parent(
     production_inputs, tmp_path
 ):

@@ -4315,6 +4315,21 @@ impl LocalBackend {
         req: &pb::ListCollectionIdsRequest,
     ) -> Result<pb::ListCollectionIdsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument("page_size must not be negative"));
+        }
+        let now = self.write_time();
+        let selector = match &req.consistency_selector {
+            Some(pb::list_collection_ids_request::ConsistencySelector::ReadTime(ts)) => {
+                SnapshotSelector::ReadTime(self.read_time_selector(
+                    ts,
+                    now,
+                    self.read_time_horizon(&parent, now),
+                )?)
+            }
+            None => SnapshotSelector::Latest,
+        };
         let after: Option<String> = if req.page_token.is_empty() {
             None
         } else {
@@ -4331,8 +4346,10 @@ impl LocalBackend {
         } else {
             DEFAULT_LIST_PAGE_SIZE
         };
-        self.read_db(&parent, |db| {
-            let mut ids = db.list_collection_ids(parent.document.as_ref());
+        self.with_selected_snapshot(&parent, selector, now, |access| {
+            let mut ids = access
+                .db()
+                .list_collection_ids_at(parent.document.as_ref(), access.version()?);
             if let Some(after) = &after {
                 ids.retain(|id| id > after);
             }

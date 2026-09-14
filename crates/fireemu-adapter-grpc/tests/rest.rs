@@ -1619,6 +1619,57 @@ fn rest_list_rejects_duplicate_page_token_without_fault_or_state_change() {
 }
 
 #[test]
+fn rest_list_collection_ids_validates_body_and_honors_read_time() {
+    let (s, clock) = state_with_clock(None, TokenAcceptance::Verified);
+    let (status, first) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/first/doc"),
+        json!({"fields": {"value": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{first}");
+    let read_time = first["updateTime"].as_str().unwrap().to_owned();
+
+    clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+        .unwrap();
+    let (status, second) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/second/doc"),
+        json!({"fields": {"value": {"integerValue": "2"}}}),
+    );
+    assert_eq!(status, 200, "{second}");
+
+    let (status, latest) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), json!({}));
+    assert_eq!(status, 200, "{latest}");
+    assert_eq!(latest["collectionIds"], json!(["first", "second"]));
+    let (status, historical) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:listCollectionIds"),
+        json!({"readTime": read_time}),
+    );
+    assert_eq!(status, 200, "{historical}");
+    assert_eq!(historical["collectionIds"], json!(["first"]));
+
+    for body in [
+        json!({"unknown": true}),
+        json!({"pageSize": []}),
+        json!({"pageToken": 1}),
+        json!({"readTime": "not-a-timestamp"}),
+    ] {
+        let (status, _) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), body);
+        assert_eq!(status, 400);
+    }
+    let (status, after) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), json!({}));
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after, latest);
+}
+
+#[test]
 fn rest_negative_page_size_refusal_does_not_move_clock_or_change_state() {
     use fireemu_core_session::fault::{
         FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,

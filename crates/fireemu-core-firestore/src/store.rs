@@ -4048,11 +4048,29 @@ impl FirestoreState {
     /// Collection IDs directly under `parent` (root when `None`), sorted.
     #[must_use]
     pub fn list_collection_ids(&self, parent: Option<&DocumentPath>) -> Vec<String> {
+        self.list_collection_ids_at(parent, None)
+    }
+
+    /// Collection IDs directly under `parent` as of `version` (latest when `None`), sorted.
+    #[must_use]
+    pub fn list_collection_ids_at(
+        &self,
+        parent: Option<&DocumentPath>,
+        version: Option<CommitVersion>,
+    ) -> Vec<String> {
         self.listing_trie
             .collections_under(parent)
             .into_iter()
             .flat_map(|collections| collections.iter())
-            .filter(|(_, collection)| !collection.live_candidates.is_empty())
+            .filter(|(_, collection)| match version {
+                Some(version) => {
+                    let mut checks = 0;
+                    collection.documents.values().any(|document| {
+                        self.listing_node_visible_at(document, version, &mut checks)
+                    })
+                }
+                None => !collection.live_candidates.is_empty(),
+            })
             .map(|(collection_id, _)| collection_id.as_str().to_owned())
             .collect()
     }

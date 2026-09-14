@@ -821,9 +821,20 @@ impl RestState {
             "runAggregationQuery" => self.run_aggregation_query(principal, resource, body),
             "partitionQuery" => self.partition_query(principal, resource, body),
             "listCollectionIds" => {
+                json::strict_keys(
+                    body,
+                    &["pageSize", "pageToken", "readTime", "requestOptions"],
+                )
+                .map_err(|e| bad(&e))?;
                 if let Some(rules) = &self.rules {
                     rules.require_owner(principal, "listCollectionIds")?;
                 }
+                let read_time = body
+                    .get("readTime")
+                    .map(|value| json::read_time_from_json(&json!({"readTime": value})))
+                    .transpose()
+                    .map_err(|e| bad(&e))?
+                    .flatten();
                 let response = self
                     .local
                     .list_collection_ids(&pb::ListCollectionIdsRequest {
@@ -833,11 +844,17 @@ impl RestState {
                             .unwrap_or(0),
                         page_token: body
                             .get("pageToken")
-                            .and_then(Value::as_str)
+                            .map(|value| {
+                                value.as_str().ok_or_else(|| {
+                                    bad(&json::JsonError("pageToken must be a string".into()))
+                                })
+                            })
+                            .transpose()?
                             .unwrap_or_default()
                             .to_owned(),
                         request_options: None,
-                        consistency_selector: None,
+                        consistency_selector: read_time
+                            .map(pb::list_collection_ids_request::ConsistencySelector::ReadTime),
                     })?;
                 let mut out = json!({"collectionIds": response.collection_ids});
                 if !response.next_page_token.is_empty() {

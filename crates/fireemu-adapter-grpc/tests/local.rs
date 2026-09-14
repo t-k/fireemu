@@ -1896,6 +1896,58 @@ async fn commit_get_query_and_delete_round_trip() {
 }
 
 #[tokio::test]
+async fn list_collection_ids_supports_read_time_and_rejects_negative_page_size() {
+    let (mut client, clock, handle) = start().await;
+    let first = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("first/doc", &[("value", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let read_time = first.commit_time.unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(1))
+        .unwrap();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("second/doc", &[("value", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let historical = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            consistency_selector: Some(
+                pb::list_collection_ids_request::ConsistencySelector::ReadTime(read_time),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(historical.collection_ids, vec!["first"]);
+
+    let invalid = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            page_size: -1,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(invalid.code(), tonic::Code::InvalidArgument);
+    handle.abort();
+}
+
+#[tokio::test]
 async fn create_update_with_mask_transforms_and_preconditions() {
     let (mut client, _clock, handle) = start().await;
     let created = client

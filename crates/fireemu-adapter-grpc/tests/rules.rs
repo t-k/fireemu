@@ -33,6 +33,9 @@ use tokio_stream::StreamExt;
 use tonic::metadata::MetadataValue;
 use tonic::Request;
 
+#[path = "rules/auth_atomicity.rs"]
+mod auth_atomicity;
+
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
@@ -207,6 +210,8 @@ struct Harness {
     client: FirestoreClient<tonic::transport::Channel>,
     auth: Arc<Mutex<AuthStore>>,
     rules: Arc<RulesetSlot>,
+    backend: Arc<LocalBackend>,
+    registry: Arc<AuthRegistry>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -234,10 +239,14 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
         TotpPolicy::default(),
     )));
     let rules = Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap()));
+    let registry = Arc::new(AuthRegistry::new("demo-app", auth.clone()));
     let enforcer = Arc::new(
-        RulesEnforcer::new(rules.clone(), auth.clone(), clock).with_token_acceptance(acceptance),
+        RulesEnforcer::new(rules.clone(), auth.clone(), clock)
+            .with_token_acceptance(acceptance)
+            .with_registry(registry.clone()),
     );
-    let svc = FirestoreServer::new(GatewayService::local(gateway, backend).with_rules(enforcer));
+    let svc =
+        FirestoreServer::new(GatewayService::local(gateway, backend.clone()).with_rules(enforcer));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(svc)
@@ -254,6 +263,8 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
         client: FirestoreClient::new(channel),
         auth,
         rules,
+        backend,
+        registry,
         handle,
     }
 }

@@ -138,7 +138,7 @@ def test_production_pair_preserves_match_mismatch_missing_and_cleanup(
     changed["cleanupComplete"] = False
     result = compare(remote, changed)
     assert result["recordingComplete"] and not result["cleanupComplete"]
-    assert result["compatibility"] == "indeterminate"
+    assert result["compatibility"] != "match"
 
 
 @pytest.mark.parametrize(

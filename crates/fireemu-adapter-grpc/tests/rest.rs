@@ -1,6 +1,7 @@
 //! Firestore REST surface at the handler level: documents, queries, transactions, errors and
 //! rules (the JSON mapping is exercised end-to-end by tools/sdk-smoke/lite.mjs).
 
+use std::collections::BTreeMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,6 +18,8 @@ use fireemu_core_firestore::index::{
     IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
     PlanningContext,
 };
+use fireemu_core_firestore::size::document_size;
+use fireemu_core_firestore::value::Value as CoreValue;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
@@ -175,6 +178,149 @@ fn document_crud_over_rest() {
     );
     assert_eq!(status, 404, "{err}");
     assert_eq!(err[fireemu_adapter_grpc::rest::TEXT_KEY], "Not Found\n");
+}
+
+#[test]
+fn rest_round_trips_all_standard_value_types_and_preserves_refused_writes() {
+    let s = state(None);
+    let fields = json!({
+        "null": {"nullValue": null},
+        "bool": {"booleanValue": true},
+        "int": {"integerValue": "-42"},
+        "double": {"doubleValue": 1.5},
+        "nan": {"doubleValue": "NaN"},
+        "timestamp": {"timestampValue": "2020-03-04T05:06:07.008Z"},
+        "bytes": {"bytesValue": "AAEC/w=="},
+        "reference": {"referenceValue": "projects/demo-app/databases/(default)/documents/types/all"},
+        "geo": {"geoPointValue": {"latitude": 35.68, "longitude": 139.76}},
+        "array": {"arrayValue": {"values": [{"integerValue": "1"}, {"nullValue": null}]}},
+        "map": {"mapValue": {"fields": {"nested": {"booleanValue": false}}}},
+    });
+    let (status, created) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/types/all"),
+        json!({"fields": fields.clone()}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["fields"], fields);
+    assert_eq!(created["fields"]["null"]["nullValue"], Value::Null);
+    assert_eq!(created["fields"]["nan"]["doubleValue"], "NaN");
+    assert_eq!(created["fields"]["bytes"]["bytesValue"], "AAEC/w==");
+    assert_eq!(
+        created["fields"]["array"]["arrayValue"]["values"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let (status, masked) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/types/all?mask.fieldPaths=null&mask.fieldPaths=map.nested&mask.fieldPaths=missing"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{masked}");
+    assert_eq!(masked["fields"]["null"]["nullValue"], Value::Null);
+    assert_eq!(
+        masked["fields"]["map"]["mapValue"]["fields"]["nested"]["booleanValue"],
+        false
+    );
+    assert!(masked["fields"].get("missing").is_none());
+    assert!(masked["fields"].get("int").is_none());
+
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/types/all?currentDocument.exists=false"),
+        json!({"fields": {"int": {"integerValue": "0"}}}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"]["status"], "ALREADY_EXISTS");
+    let (status, after_refusal) = call(&s, "GET", &format!("{DOCS}/types/all"), Value::Null);
+    assert_eq!(status, 200, "{after_refusal}");
+    assert_eq!(after_refusal["fields"], fields);
+}
+
+#[test]
+fn rest_document_size_and_nesting_boundaries_refuse_without_publishing() {
+    let s = state(None);
+    let nested = |levels: usize| {
+        (0..levels).fold(
+            json!({"integerValue": "1"}),
+            |value, _| json!({"mapValue": {"fields": {"nested": value}}}),
+        )
+    };
+    let project = fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap();
+    let database = fireemu_core_types::ids::DatabaseId::try_new("(default)").unwrap();
+    let path =
+        fireemu_core_firestore::path::DocumentPath::parse(&project, &database, "limits/exact")
+            .unwrap();
+    let empty = BTreeMap::from([
+        ("a".to_owned(), CoreValue::String(String::new())),
+        ("b".to_owned(), CoreValue::String(String::new())),
+    ]);
+    let base = document_size(&path, &empty).unwrap().total;
+    let exact_payload = usize::try_from(1_048_576 - base).unwrap();
+    let first_len = exact_payload / 2;
+    let second_len = exact_payload - first_len;
+    let exact_core = BTreeMap::from([
+        ("a".to_owned(), CoreValue::String("x".repeat(first_len))),
+        ("b".to_owned(), CoreValue::String("x".repeat(second_len))),
+    ]);
+    assert_eq!(document_size(&path, &exact_core).unwrap().total, 1_048_576);
+    let exact_fields = json!({
+        "a": {"stringValue": "x".repeat(first_len)},
+        "b": {"stringValue": "x".repeat(second_len)},
+    });
+    let (status, accepted_size) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/limits/exact"),
+        json!({"fields": exact_fields}),
+    );
+    assert_eq!(status, 200, "{accepted_size}");
+
+    let over_fields = json!({
+        "a": {"stringValue": "x".repeat(first_len)},
+        "b": {"stringValue": "x".repeat(second_len + 1)},
+    });
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/limits/overx"),
+        json!({"fields": over_fields}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    let (status, exact) = call(&s, "GET", &format!("{DOCS}/limits/exact"), Value::Null);
+    assert_eq!(status, 200, "{exact}");
+    assert_eq!(
+        exact["fields"]["a"]["stringValue"].as_str().unwrap().len(),
+        first_len
+    );
+    let (status, missing) = call(&s, "GET", &format!("{DOCS}/limits/overx"), Value::Null);
+    assert_eq!(status, 404, "{missing}");
+
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/limits/too-deep"),
+        json!({"fields": {"value": nested(21)}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    let (status, missing) = call(&s, "GET", &format!("{DOCS}/limits/too-deep"), Value::Null);
+    assert_eq!(status, 404, "{missing}");
+
+    let (status, accepted) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/limits/deep"),
+        json!({"fields": {"value": nested(20)}}),
+    );
+    assert_eq!(status, 200, "{accepted}");
 }
 
 #[test]

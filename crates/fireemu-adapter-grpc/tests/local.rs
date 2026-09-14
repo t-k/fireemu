@@ -3495,6 +3495,120 @@ async fn list_documents_pages_by_name_with_opaque_tokens() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn grpc_batch_get_and_list_apply_masks_without_confusing_missing_and_null() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write(
+                "types/doc",
+                &[
+                    ("present", i(1)),
+                    (
+                        "nullable",
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::NullValue(0)),
+                        },
+                    ),
+                ],
+            )],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mask = pb::DocumentMask {
+        field_paths: vec!["nullable".to_owned(), "missing".to_owned()],
+    };
+    let got = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/types/doc"),
+            mask: Some(mask.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        got.fields
+            .get("nullable")
+            .and_then(|value| value.value_type.as_ref()),
+        Some(&pb::value::ValueType::NullValue(0))
+    );
+    assert!(!got.fields.contains_key("missing"));
+    assert!(!got.fields.contains_key("present"));
+
+    let mut stream = client
+        .batch_get_documents(pb::BatchGetDocumentsRequest {
+            database: DB.to_owned(),
+            documents: vec![format!("{DOCS}/types/doc"), format!("{DOCS}/types/missing")],
+            mask: Some(mask.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut results = Vec::new();
+    while let Some(response) = stream.next().await {
+        if let Some(result) = response.unwrap().result {
+            results.push(result);
+        }
+    }
+    assert_eq!(results.len(), 2);
+    let found = results
+        .iter()
+        .find_map(|result| match result {
+            pb::batch_get_documents_response::Result::Found(document) => Some(document),
+            pb::batch_get_documents_response::Result::Missing(_) => None,
+        })
+        .expect("one found response");
+    assert_eq!(found.name, format!("{DOCS}/types/doc"));
+    assert_eq!(
+        found
+            .fields
+            .get("nullable")
+            .and_then(|value| value.value_type.as_ref()),
+        Some(&pb::value::ValueType::NullValue(0))
+    );
+    assert!(!found.fields.contains_key("missing"));
+    assert!(!found.fields.contains_key("present"));
+    let missing_name = results
+        .iter()
+        .find_map(|result| match result {
+            pb::batch_get_documents_response::Result::Missing(name) => Some(name),
+            pb::batch_get_documents_response::Result::Found(_) => None,
+        })
+        .expect("one missing response");
+    let expected_missing = format!("{DOCS}/types/missing");
+    assert_eq!(missing_name, &expected_missing);
+
+    let page = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "types".to_owned(),
+            mask: Some(mask),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(page.documents.len(), 1);
+    assert_eq!(page.documents[0].name, format!("{DOCS}/types/doc"));
+    assert_eq!(
+        page.documents[0]
+            .fields
+            .get("nullable")
+            .and_then(|value| value.value_type.as_ref()),
+        Some(&pb::value::ValueType::NullValue(0))
+    );
+    assert!(page.documents[0].fields.contains_key("nullable"));
+    assert!(!page.documents[0].fields.contains_key("missing"));
+    assert!(!page.documents[0].fields.contains_key("present"));
+    handle.abort();
+}
+
+#[tokio::test]
 async fn ordered_list_pages_continue_across_present_and_missing_rows() {
     let (mut client, _clock, handle) = start().await;
     let mut writes = (0..5i64)

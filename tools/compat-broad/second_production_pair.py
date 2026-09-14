@@ -191,16 +191,22 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
         ):
             raise ValueError("parent execution commit does not bind evaluator source")
         anchor_raw = subprocess.check_output(
-            ["git", "show", f"{evaluator_commit}:{PARENT_RUNTIME_ANCHOR}"],
+            ["git", "show", f"HEAD:{PARENT_RUNTIME_ANCHOR}"],
             cwd=repo_root,
         )
         anchor = json.loads(anchor_raw)
         if (
             not isinstance(anchor, dict)
-            or anchor.get("artifactSha256") != parent.get("artifactSha256")
-            or anchor.get("configurationDigest") != parent.get("configurationDigest")
+            or anchor.get("parentManifestSha256") != parent_hash
+            or anchor.get("mappedReceiptFileSha256")
+            != parent.get("mappedReceiptFileSha256")
+            or anchor.get("runtimeIdentity") != {
+                "artifactSha256": parent.get("artifactSha256"),
+                "executionCommit": parent.get("executionCommit"),
+                "configurationDigest": parent.get("configurationDigest"),
+            }
         ):
-            raise ValueError("parent runtime identity is not bound to immutable source")
+            raise ValueError("parent evidence is not bound to immutable source anchor")
         if parent.get("status") != "completed":
             raise ValueError("parent execution manifest is incomplete")
         if parent.get("productionExecuted") is not False:

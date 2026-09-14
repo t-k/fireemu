@@ -216,6 +216,34 @@ pub enum Direction {
     Descending,
 }
 
+/// Distance metric for a Standard Native nearest-neighbor query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DistanceMeasure {
+    /// Square-rooted sum of squared component differences.
+    Euclidean,
+    /// One minus cosine similarity.
+    Cosine,
+    /// Sum of component products; larger values are nearer.
+    DotProduct,
+}
+
+/// Nearest-neighbor search applied after the ordinary query stages.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FindNearest {
+    /// Indexed vector field to search.
+    pub vector_field: FieldPath,
+    /// Query vector components.
+    pub query_vector: Vec<f64>,
+    /// Distance metric.
+    pub distance_measure: DistanceMeasure,
+    /// Maximum nearest neighbors to return (1 through 1000).
+    pub limit: u32,
+    /// Optional field receiving the calculated distance.
+    pub distance_result_field: Option<FieldPath>,
+    /// Optional inclusive distance threshold.
+    pub distance_threshold: Option<f64>,
+}
+
 impl Direction {
     /// The opposite direction.
     #[must_use]
@@ -264,6 +292,8 @@ pub struct Query {
     pub limit: Option<u32>,
     /// Projection.
     pub projection: Option<Vec<FieldPath>>,
+    /// Optional nearest-neighbor stage, applied after ordinary query stages.
+    pub find_nearest: Option<FindNearest>,
 }
 
 /// Structural validation errors found while canonicalizing.
@@ -298,6 +328,18 @@ pub enum QueryError {
     NameFilterValue,
     /// A key equality with other inequalities requires a key inequality too (Standard).
     KeyEqualityWithOtherInequalities,
+    /// `FindNearest` must use a stored field rather than the document name.
+    FindNearestVectorField,
+    /// `FindNearest` query vector is empty, too large, or contains NaN.
+    FindNearestQueryVector,
+    /// `FindNearest` limit must be between one and 1000.
+    FindNearestLimit,
+    /// `FindNearest` distance measure is unspecified.
+    FindNearestDistanceMeasure,
+    /// `FindNearest` threshold must be finite.
+    FindNearestDistanceThreshold,
+    /// `FindNearest` distance output field is invalid.
+    FindNearestDistanceResultField,
 }
 
 impl fmt::Display for QueryError {
@@ -331,6 +373,24 @@ impl fmt::Display for QueryError {
             Self::KeyEqualityWithOtherInequalities => f.write_str(
                 "Equality on key is not allowed if there are other inequality fields and key does not appear in inequalities.",
             ),
+            Self::FindNearestVectorField => {
+                f.write_str("findNearest vector field must be a stored field")
+            }
+            Self::FindNearestQueryVector => f.write_str(
+                "findNearest query vector must contain between 1 and 2048 finite dimensions",
+            ),
+            Self::FindNearestLimit => {
+                f.write_str("findNearest limit must be a positive integer no greater than 1000")
+            }
+            Self::FindNearestDistanceMeasure => {
+                f.write_str("findNearest distance measure is required")
+            }
+            Self::FindNearestDistanceThreshold => {
+                f.write_str("findNearest distance threshold must be finite")
+            }
+            Self::FindNearestDistanceResultField => {
+                f.write_str("findNearest distance result field must be a stored field")
+            }
         }
     }
 }
@@ -402,6 +462,7 @@ impl Query {
             offset: 0,
             limit: None,
             projection: None,
+            find_nearest: None,
         }
     }
 
@@ -416,6 +477,13 @@ impl Query {
     #[must_use]
     pub fn with_order(mut self, order: OrderClause) -> Self {
         self.order_by.push(order);
+        self
+    }
+
+    /// Sets the nearest-neighbor stage.
+    #[must_use]
+    pub fn with_find_nearest(mut self, find_nearest: FindNearest) -> Self {
+        self.find_nearest = Some(find_nearest);
         self
     }
 
@@ -440,6 +508,9 @@ impl Query {
             filter,
             ..self.clone()
         };
+        if let Some(find_nearest) = &q.find_nearest {
+            validate_find_nearest(find_nearest)?;
+        }
         let order = q.effective_order_by();
         // `__name__` is unique, so a clause after it could never decide anything; the
         // backend refuses such an ordering rather than silently ignoring the clause. It
@@ -721,6 +792,38 @@ fn check_name_filters(f: &FilterExpr) -> Result<(), QueryError> {
             children.iter().try_for_each(check_name_filters)
         }
     }
+}
+
+fn validate_find_nearest(find_nearest: &FindNearest) -> Result<(), QueryError> {
+    if find_nearest.vector_field.is_document_name() {
+        return Err(QueryError::FindNearestVectorField);
+    }
+    if find_nearest.query_vector.is_empty()
+        || find_nearest.query_vector.len() > 2048
+        || find_nearest
+            .query_vector
+            .iter()
+            .any(|component| !component.is_finite())
+    {
+        return Err(QueryError::FindNearestQueryVector);
+    }
+    if !(1..=1000).contains(&find_nearest.limit) {
+        return Err(QueryError::FindNearestLimit);
+    }
+    if find_nearest
+        .distance_threshold
+        .is_some_and(|threshold| !threshold.is_finite())
+    {
+        return Err(QueryError::FindNearestDistanceThreshold);
+    }
+    if find_nearest
+        .distance_result_field
+        .as_ref()
+        .is_some_and(FieldPath::is_document_name)
+    {
+        return Err(QueryError::FindNearestDistanceResultField);
+    }
+    Ok(())
 }
 
 fn canonicalize_filter(f: &FilterExpr) -> Result<FilterExpr, QueryError> {

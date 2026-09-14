@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::{
-    Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
+    Cursor, Direction, DistanceMeasure, FieldOp, FilterExpr, FindNearest, OrderClause, Query,
+    QueryScope, UnaryOp,
 };
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value, MAX_NESTING_DEPTH};
 use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
@@ -355,16 +356,60 @@ fn decode_cursor(cursor: &pb::Cursor) -> Result<Cursor, DecodeError> {
     })
 }
 
+fn decode_find_nearest(find_nearest: &sq::FindNearest) -> Result<FindNearest, DecodeError> {
+    let vector_field = field_path(Some(find_nearest.vector_field.as_ref().ok_or_else(
+        || DecodeError::InvalidQuery("findNearest.vectorField is required".into()),
+    )?))?;
+    let query_vector =
+        decode_value(find_nearest.query_vector.as_ref().ok_or_else(|| {
+            DecodeError::InvalidQuery("findNearest.queryVector is required".into())
+        })?)?;
+    let Value::Vector(query_vector) = query_vector else {
+        return Err(DecodeError::InvalidQuery(
+            "findNearest.queryVector must be a vector".into(),
+        ));
+    };
+    let distance_measure =
+        match sq::find_nearest::DistanceMeasure::try_from(find_nearest.distance_measure)
+            .map_err(|_| DecodeError::InvalidQuery("unknown findNearest distance measure".into()))?
+        {
+            sq::find_nearest::DistanceMeasure::Euclidean => DistanceMeasure::Euclidean,
+            sq::find_nearest::DistanceMeasure::Cosine => DistanceMeasure::Cosine,
+            sq::find_nearest::DistanceMeasure::DotProduct => DistanceMeasure::DotProduct,
+            sq::find_nearest::DistanceMeasure::Unspecified => {
+                return Err(DecodeError::InvalidQuery(
+                    "findNearest.distanceMeasure is required".into(),
+                ))
+            }
+        };
+    let limit = find_nearest
+        .limit
+        .ok_or_else(|| DecodeError::InvalidQuery("findNearest.limit is required".into()))?;
+    let limit = u32::try_from(limit)
+        .map_err(|_| DecodeError::InvalidQuery("findNearest.limit must be positive".into()))?;
+    let distance_result_field = if find_nearest.distance_result_field.is_empty() {
+        None
+    } else {
+        Some(
+            FieldPath::parse(&find_nearest.distance_result_field)
+                .map_err(|e| DecodeError::InvalidFieldPath(e.to_string()))?,
+        )
+    };
+    Ok(FindNearest {
+        vector_field,
+        query_vector,
+        distance_measure,
+        limit,
+        distance_result_field,
+        distance_threshold: find_nearest.distance_threshold,
+    })
+}
+
 /// Decodes a `StructuredQuery` under `parent` into the canonical query.
 pub fn decode_structured_query(
     parent: &Parent,
     query: &pb::StructuredQuery,
 ) -> Result<Query, DecodeError> {
-    if query.find_nearest.is_some() {
-        return Err(DecodeError::Unsupported(
-            "find_nearest (vector search) is not modelled by the strict gateway".into(),
-        ));
-    }
     let from = match query.from.as_slice() {
         [from] => from,
         [] => {
@@ -443,6 +488,9 @@ pub fn decode_structured_query(
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         );
+    }
+    if let Some(find_nearest) = &query.find_nearest {
+        q.find_nearest = Some(decode_find_nearest(find_nearest)?);
     }
     Ok(q)
 }
@@ -539,5 +587,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn structured_query_decodes_find_nearest_vector_search() {
+        let parent = parse_parent("projects/demo-app/databases/(default)/documents").unwrap();
+        let vector = pb::Value {
+            value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                fields: [
+                    (
+                        "__type__".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::StringValue(
+                                "__vector__".to_owned(),
+                            )),
+                        },
+                    ),
+                    (
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+                                values: vec![pb::Value {
+                                    value_type: Some(pb::value::ValueType::DoubleValue(1.0)),
+                                }],
+                            })),
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            })),
+        };
+        let query = decode_structured_query(
+            &parent,
+            &pb::StructuredQuery {
+                from: vec![pb::structured_query::CollectionSelector {
+                    collection_id: "items".to_owned(),
+                    ..Default::default()
+                }],
+                find_nearest: Some(pb::structured_query::FindNearest {
+                    vector_field: Some(pb::structured_query::FieldReference {
+                        field_path: "embedding".to_owned(),
+                    }),
+                    query_vector: Some(vector),
+                    distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                    limit: Some(2),
+                    distance_result_field: "distance".to_owned(),
+                    distance_threshold: Some(3.0),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let nearest = query.find_nearest.unwrap();
+        assert_eq!(nearest.vector_field.to_string(), "embedding");
+        assert_eq!(nearest.query_vector, vec![1.0]);
+        assert_eq!(nearest.limit, 2);
+        assert_eq!(nearest.distance_threshold, Some(3.0));
     }
 }

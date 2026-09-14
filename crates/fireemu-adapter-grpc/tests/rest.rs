@@ -516,6 +516,54 @@ fn commit_query_aggregation_and_transactions_over_rest() {
 }
 
 #[test]
+fn rest_run_query_supports_standard_find_nearest() {
+    let s = state(None);
+    let vector = |values: &[f64]| {
+        json!({
+            "mapValue": {"fields": {
+                "__type__": {"stringValue": "__vector__"},
+                "value": {"arrayValue": {"values": values.iter().map(|v| json!({"doubleValue": v})).collect::<Vec<_>>()}}
+            }}
+        })
+    };
+    for (id, embedding) in [("near", [1.0, 0.0]), ("far", [-1.0, 0.0])] {
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/items/{id}"),
+            json!({"fields": {"embedding": vector(&embedding)}}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, rows) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {
+            "from": [{"collectionId": "items"}],
+            "findNearest": {
+                "vectorField": {"fieldPath": "embedding"},
+                "queryVector": vector(&[1.0, 0.0]),
+                "distanceMeasure": "EUCLIDEAN",
+                "limit": 1,
+                "distanceResultField": "distance"
+            }
+        }}),
+    );
+    assert_eq!(status, 200, "{rows}");
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0]["document"]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with("/items/near"));
+    assert_eq!(
+        rows[0]["document"]["fields"]["distance"]["doubleValue"],
+        0.0
+    );
+}
+
+#[test]
 fn rest_requests_are_authorized_like_grpc() {
     let s = state(Some(
         "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /open/{id} { allow read, write: if true; } match /closed/{id} { allow read, write: if false; } } }",

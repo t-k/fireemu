@@ -28,7 +28,8 @@ use crate::field_path::FieldPath;
 use crate::limits;
 use crate::path::DocumentPath;
 use crate::query::{
-    Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
+    Cursor, Direction, DistanceMeasure, FieldOp, FilterExpr, OrderClause, Query, QueryScope,
+    UnaryOp,
 };
 use crate::size::{document_size, document_size_bytes};
 use crate::value::{normalize_fields_for_storage, stored_fields_eq, Timestamp, Value, ValueKind};
@@ -4090,10 +4091,77 @@ impl FirestoreState {
         query: &Query,
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        if query.find_nearest.is_some() {
+            return self.run_find_nearest_with_stats(query, version);
+        }
         let mut out: Vec<Document> = Vec::new();
         let mut stats = self.select(query, version, &[], Consumption::Ordered, |doc| {
             out.push(project_document(doc, query.projection.as_deref()));
         })?;
+        stats.cloned_documents = out.len() as u64;
+        stats.cloned_field_bytes = out
+            .iter()
+            .map(|document| fields_retained_bytes(&document.fields))
+            .fold(0u64, u64::saturating_add);
+        Ok((out, stats))
+    }
+
+    fn run_find_nearest_with_stats(
+        &self,
+        query: &Query,
+        version: Option<CommitVersion>,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        let Some(find_nearest) = query.find_nearest.as_ref() else {
+            unreachable!("nearest execution requires a findNearest stage");
+        };
+        let mut ordinary = query.clone();
+        ordinary.find_nearest = None;
+        ordinary.projection = None;
+        let mut candidates = Vec::new();
+        let mut stats = self.select(&ordinary, version, &[], Consumption::Ordered, |document| {
+            let Some(Value::Vector(vector)) =
+                get_field(&document.fields, &find_nearest.vector_field)
+            else {
+                return;
+            };
+            if vector.len() != find_nearest.query_vector.len() {
+                return;
+            }
+            let Some(distance) = vector_distance(
+                vector,
+                &find_nearest.query_vector,
+                find_nearest.distance_measure,
+            ) else {
+                return;
+            };
+            let admitted =
+                find_nearest.distance_threshold.is_none_or(|threshold| {
+                    match find_nearest.distance_measure {
+                        DistanceMeasure::DotProduct => distance >= threshold,
+                        DistanceMeasure::Euclidean | DistanceMeasure::Cosine => {
+                            distance <= threshold
+                        }
+                    }
+                });
+            if admitted {
+                candidates.push((distance, document));
+            }
+        })?;
+        candidates.sort_unstable_by(|(left, _), (right, _)| {
+            let ordering = left.partial_cmp(right).unwrap_or(Ordering::Equal);
+            match find_nearest.distance_measure {
+                DistanceMeasure::DotProduct => ordering.reverse(),
+                DistanceMeasure::Euclidean | DistanceMeasure::Cosine => ordering,
+            }
+        });
+        let mut out = Vec::new();
+        for (distance, document) in candidates.into_iter().take(find_nearest.limit as usize) {
+            let mut projected = project_document(document, query.projection.as_deref());
+            if let Some(field) = &find_nearest.distance_result_field {
+                set_field(&mut projected.fields, field, Value::Double(distance));
+            }
+            out.push(projected);
+        }
         stats.cloned_documents = out.len() as u64;
         stats.cloned_field_bytes = out
             .iter()
@@ -4112,6 +4180,14 @@ impl FirestoreState {
         query: &Query,
         version: Option<CommitVersion>,
     ) -> Result<(Vec<DocumentPath>, QueryStats), FirestoreError> {
+        if query.find_nearest.is_some() {
+            let (documents, stats) = self.run_find_nearest_with_stats(query, version)?;
+            let paths = documents
+                .into_iter()
+                .map(|document| document.path)
+                .collect();
+            return Ok((paths, stats));
+        }
         let mut paths = Vec::new();
         let stats = self.select(query, version, &[], Consumption::Ordered, |document| {
             paths.push(document.path.clone());
@@ -4163,7 +4239,7 @@ impl FirestoreState {
                 Some(version) => self.get_at(path, version),
                 None => self.get(path),
             })
-            .map(|document| project_document(document, query.projection.as_deref()))
+            .filter_map(|document| project_document_for_query(document, query))
             .collect()
     }
 
@@ -4175,6 +4251,11 @@ impl FirestoreState {
         version: Option<CommitVersion>,
         after: &DocumentPath,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        if query.find_nearest.is_some() {
+            return Err(FirestoreError::InvalidArgument(
+                "document continuation is not supported for findNearest queries".into(),
+            ));
+        }
         let order = query.effective_order_by();
         if order.len() != 1
             || !order[0].field.is_document_name()
@@ -4228,6 +4309,9 @@ impl FirestoreState {
     where
         I: IntoIterator<Item = &'a Document>,
     {
+        if query.find_nearest.is_some() {
+            return Ok(None);
+        }
         if query.limit.is_some()
             || query.offset != 0
             || query.start_at.is_some()
@@ -5350,6 +5434,68 @@ fn project_document(document: &Document, projection: Option<&[FieldPath]>) -> Do
         create_time: document.create_time,
         update_time: document.update_time,
         version: document.version,
+    }
+}
+
+fn project_document_for_query(document: &Document, query: &Query) -> Option<Document> {
+    if let Some(find_nearest) = &query.find_nearest {
+        let Value::Vector(vector) = get_field(&document.fields, &find_nearest.vector_field)? else {
+            return None;
+        };
+        if vector.len() != find_nearest.query_vector.len() {
+            return None;
+        }
+        let distance = vector_distance(
+            vector,
+            &find_nearest.query_vector,
+            find_nearest.distance_measure,
+        )?;
+        if !find_nearest.distance_threshold.is_none_or(|threshold| {
+            match find_nearest.distance_measure {
+                DistanceMeasure::DotProduct => distance >= threshold,
+                DistanceMeasure::Euclidean | DistanceMeasure::Cosine => distance <= threshold,
+            }
+        }) {
+            return None;
+        }
+        let mut projected = project_document(document, query.projection.as_deref());
+        if let Some(field) = &find_nearest.distance_result_field {
+            set_field(&mut projected.fields, field, Value::Double(distance));
+        }
+        Some(projected)
+    } else {
+        Some(project_document(document, query.projection.as_deref()))
+    }
+}
+
+fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) -> Option<f64> {
+    if vector.len() != query.len() {
+        return None;
+    }
+    let dot = vector
+        .iter()
+        .zip(query)
+        .map(|(left, right)| left * right)
+        .sum::<f64>();
+    match measure {
+        DistanceMeasure::Euclidean => Some(
+            vector
+                .iter()
+                .zip(query)
+                .map(|(left, right)| (left - right).powi(2))
+                .sum::<f64>()
+                .sqrt(),
+        ),
+        DistanceMeasure::Cosine => {
+            let left_norm = vector.iter().map(|value| value * value).sum::<f64>().sqrt();
+            let right_norm = query.iter().map(|value| value * value).sum::<f64>().sqrt();
+            if left_norm == 0.0 || right_norm == 0.0 {
+                None
+            } else {
+                Some(1.0 - dot / (left_norm * right_norm))
+            }
+        }
+        DistanceMeasure::DotProduct => Some(dot),
     }
 }
 

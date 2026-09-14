@@ -1303,6 +1303,129 @@ async fn collect_docs(
     out
 }
 
+fn vector(values: &[f64]) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: [
+                ("__type__".to_owned(), s("__vector__")),
+                (
+                    "value".to_owned(),
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+                            values: values
+                                .iter()
+                                .map(|value| pb::Value {
+                                    value_type: Some(pb::value::ValueType::DoubleValue(*value)),
+                                })
+                                .collect(),
+                        })),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        })),
+    }
+}
+
+#[tokio::test]
+async fn grpc_run_query_supports_standard_find_nearest() {
+    let (mut client, _, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("items/near", &[("embedding", vector(&[1.0, 0.0]))]),
+                update_write("items/far", &[("embedding", vector(&[-1.0, 0.0]))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let documents = collect_docs(
+        &mut client,
+        pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: "items".to_owned(),
+                        ..Default::default()
+                    }],
+                    find_nearest: Some(sq::FindNearest {
+                        vector_field: Some(sq::FieldReference {
+                            field_path: "embedding".to_owned(),
+                        }),
+                        query_vector: Some(vector(&[1.0, 0.0])),
+                        distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                        limit: Some(1),
+                        distance_result_field: "distance".to_owned(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(documents.len(), 1);
+    assert!(documents[0].name.ends_with("/items/near"));
+    assert!(matches!(
+        documents[0].fields["distance"].value_type,
+        Some(pb::value::ValueType::DoubleValue(value)) if value == 0.0
+    ));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn grpc_find_nearest_pages_from_one_snapshot() {
+    let (mut client, _, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..40)
+                .map(|index| {
+                    update_write(
+                        &format!("items/{index:02}"),
+                        &[("embedding", vector(&[1.0, 0.0]))],
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let documents = collect_docs(
+        &mut client,
+        pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: "items".to_owned(),
+                        ..Default::default()
+                    }],
+                    find_nearest: Some(sq::FindNearest {
+                        vector_field: Some(sq::FieldReference {
+                            field_path: "embedding".to_owned(),
+                        }),
+                        query_vector: Some(vector(&[1.0, 0.0])),
+                        distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                        limit: Some(40),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(documents.len(), 40);
+    handle.abort();
+}
+
 #[tokio::test]
 async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
     let (mut client, _, handle) = start().await;

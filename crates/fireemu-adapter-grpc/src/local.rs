@@ -2273,6 +2273,11 @@ impl LocalBackend {
         };
         self.fault(parent.project.as_str(), "firestore.read")?;
         let query = self.accepted_query(&parent, sq)?.query;
+        if query.find_nearest.is_some() {
+            return Err(Status::unimplemented(
+                "PartitionQuery does not support findNearest",
+            ));
+        }
         let name_ascending_only = query.order_by.iter().all(|o| {
             o.field.is_document_name()
                 && o.direction == fireemu_core_firestore::query::Direction::Ascending
@@ -3835,7 +3840,10 @@ impl LocalBackend {
             let mut selection_stage = None;
             let selection = match selection {
                 Some(selection) => Some(selection),
-                None if execution_present && accepted.query.effective_order_by().len() != 1 => {
+                None if execution_present
+                    && (accepted.query.find_nearest.is_some()
+                        || accepted.query.effective_order_by().len() != 1) =>
+                {
                     let mut selection_query = authorization.query.clone();
                     let original_offset = selection_query.offset;
                     selection_query.offset = 0;

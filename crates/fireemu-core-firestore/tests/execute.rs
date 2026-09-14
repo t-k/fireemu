@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::{
-    Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
+    Cursor, Direction, DistanceMeasure, FieldOp, FilterExpr, FindNearest, OrderClause, Query,
+    QueryScope, UnaryOp,
 };
 use fireemu_core_firestore::store::{Aggregation, FirestoreState, Write, WriteOp};
 use fireemu_core_firestore::value::Value;
@@ -99,6 +100,131 @@ fn seeded() -> FirestoreState {
         .unwrap();
     }
     s
+}
+
+fn vector_state() -> FirestoreState {
+    let mut state = FirestoreState::new();
+    for (index, (id, vector)) in [
+        ("near", vec![1.0, 0.0]),
+        ("mid", vec![0.0, 1.0]),
+        ("far", vec![-1.0, 0.0]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let fields = [("embedding".to_owned(), Value::Vector(vector))]
+            .into_iter()
+            .collect();
+        state
+            .commit(
+                &[Write {
+                    op: WriteOp::Set {
+                        path: path(&format!("items/{id}")),
+                        fields,
+                        update_mask: None,
+                    },
+                    precondition: None,
+                    transforms: vec![],
+                }],
+                None,
+                LogicalInstant::from_unix_seconds(2_000 + i64::try_from(index).unwrap()),
+            )
+            .unwrap();
+    }
+    state
+}
+
+fn nearest(measure: DistanceMeasure, limit: u32) -> Query {
+    Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("items").unwrap(),
+    ))
+    .with_find_nearest(FindNearest {
+        vector_field: fp("embedding"),
+        query_vector: vec![1.0, 0.0],
+        distance_measure: measure,
+        limit,
+        distance_result_field: Some(fp("distance")),
+        distance_threshold: None,
+    })
+}
+
+#[test]
+fn nearest_vector_query_orders_euclidean_cosine_and_dot_product() {
+    let state = vector_state();
+    let ids_for = |query: Query| {
+        state
+            .run_query(&query.canonicalize().unwrap(), None)
+            .unwrap()
+            .into_iter()
+            .map(|document| document.path.document_id().as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids_for(nearest(DistanceMeasure::Euclidean, 3)),
+        ["near", "mid", "far"]
+    );
+    assert_eq!(
+        ids_for(nearest(DistanceMeasure::Cosine, 3)),
+        ["near", "mid", "far"]
+    );
+    assert_eq!(
+        ids_for(nearest(DistanceMeasure::DotProduct, 3)),
+        ["near", "mid", "far"]
+    );
+}
+
+#[test]
+fn nearest_vector_query_excludes_wrong_dimensions_and_non_vectors_and_adds_distance() {
+    let mut state = vector_state();
+    for (id, value) in [
+        ("wrong", Value::Vector(vec![1.0])),
+        ("scalar", Value::Double(0.0)),
+    ] {
+        state
+            .commit(
+                &[Write {
+                    op: WriteOp::Set {
+                        path: path(&format!("items/{id}")),
+                        fields: [("embedding".to_owned(), value)].into_iter().collect(),
+                        update_mask: None,
+                    },
+                    precondition: None,
+                    transforms: vec![],
+                }],
+                None,
+                LogicalInstant::from_unix_seconds(2_100),
+            )
+            .unwrap();
+    }
+    let query = nearest(DistanceMeasure::Euclidean, 1)
+        .canonicalize()
+        .unwrap();
+    let before = state.current_version();
+    let documents = state.run_query(&query, None).unwrap();
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0].path.document_id().as_str(), "near");
+    assert_eq!(documents[0].fields["distance"], Value::Double(0.0));
+    assert_eq!(state.current_version(), before);
+}
+
+#[test]
+fn nearest_vector_query_limit_and_threshold_are_applied() {
+    let state = vector_state();
+    let mut query = nearest(DistanceMeasure::Euclidean, 3);
+    query.find_nearest.as_mut().unwrap().distance_threshold = Some(1.1);
+    query.find_nearest.as_mut().unwrap().limit = 1;
+    let documents = state
+        .run_query(&query.canonicalize().unwrap(), None)
+        .unwrap();
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0].path.document_id().as_str(), "near");
+    assert!(nearest(DistanceMeasure::Euclidean, 0)
+        .canonicalize()
+        .is_err());
+    assert!(nearest(DistanceMeasure::Euclidean, 1001)
+        .canonicalize()
+        .is_err());
 }
 fn tasks() -> Query {
     Query::new(QueryScope::collection(

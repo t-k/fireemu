@@ -903,6 +903,9 @@ fn set_run_query_page(req: &mut pb::RunQueryRequest, offset: i32, remaining: Opt
 }
 
 fn is_name_ordered_query(query: &Query) -> bool {
+    if query.find_nearest.is_some() {
+        return false;
+    }
     matches!(
         query.effective_order_by().as_slice(),
         [order]

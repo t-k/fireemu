@@ -793,6 +793,64 @@ pub fn int32(v: Option<&Value>, what: &str) -> Result<Option<i32>, JsonError> {
     }
 }
 
+fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNearest, JsonError> {
+    strict_keys(
+        raw,
+        &[
+            "vectorField",
+            "queryVector",
+            "distanceMeasure",
+            "limit",
+            "distanceResultField",
+            "distanceThreshold",
+        ],
+    )?;
+    let vector_field = field_reference(raw.get("vectorField"))?
+        .ok_or_else(|| JsonError("findNearest.vectorField is required".into()))?;
+    let query_vector = value_from_json(
+        raw.get("queryVector")
+            .ok_or_else(|| JsonError("findNearest.queryVector is required".into()))?,
+    )?;
+    let distance_measure = match raw
+        .get("distanceMeasure")
+        .and_then(Value::as_str)
+        .ok_or_else(|| JsonError("findNearest.distanceMeasure is required".into()))?
+    {
+        "EUCLIDEAN" => sq::find_nearest::DistanceMeasure::Euclidean,
+        "COSINE" => sq::find_nearest::DistanceMeasure::Cosine,
+        "DOT_PRODUCT" => sq::find_nearest::DistanceMeasure::DotProduct,
+        other => return err(format!("unknown distance measure {other:?}")),
+    };
+    let limit = int32(raw.get("limit"), "findNearest.limit")?
+        .ok_or_else(|| JsonError("findNearest.limit is required".into()))?;
+    let distance_result_field = raw
+        .get("distanceResultField")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| JsonError("findNearest.distanceResultField must be a string".into()))
+                .map(str::to_owned)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let distance_threshold = raw
+        .get("distanceThreshold")
+        .map(|value| {
+            value
+                .as_f64()
+                .ok_or_else(|| JsonError("findNearest.distanceThreshold must be a number".into()))
+        })
+        .transpose()?;
+    Ok(pb::structured_query::FindNearest {
+        vector_field: Some(vector_field),
+        query_vector: Some(query_vector),
+        distance_measure: distance_measure as i32,
+        limit: Some(limit),
+        distance_result_field,
+        distance_threshold,
+    })
+}
+
 /// JSON → structured query.
 pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, JsonError> {
     if !v.is_object() {
@@ -860,9 +918,10 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
                 .unwrap_or_default(),
         }),
     };
-    if v.get("findNearest").is_some() {
-        return err("findNearest (vector search) is not implemented");
-    }
+    let find_nearest = v
+        .get("findNearest")
+        .map(find_nearest_from_json)
+        .transpose()?;
     Ok(pb::StructuredQuery {
         select,
         from,
@@ -872,7 +931,7 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
         end_at: cursor_from_json(v.get("endAt"))?,
         offset: int32(v.get("offset"), "offset")?.unwrap_or(0),
         limit: int32(v.get("limit"), "limit")?,
-        find_nearest: None,
+        find_nearest,
     })
 }
 
@@ -1190,5 +1249,42 @@ mod tests {
         let error = value_from_json(&nested_map_with_vector(MAX_NESTING_DEPTH + 1))
             .expect_err("one enclosing map past the limit is rejected");
         assert!(error.0.contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
+    }
+
+    #[test]
+    fn structured_query_json_decodes_find_nearest() {
+        let query = structured_query_from_json(&json!({
+            "from": [{"collectionId": "items"}],
+            "findNearest": {
+                "vectorField": {"fieldPath": "embedding"},
+                "queryVector": {"mapValue": {"fields": {
+                    "__type__": {"stringValue": "__vector__"},
+                    "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}
+                }}},
+                "distanceMeasure": "COSINE",
+                "limit": 2,
+                "distanceResultField": "distance",
+                "distanceThreshold": 0.5
+            }
+        }))
+        .unwrap();
+        let nearest = query.find_nearest.unwrap();
+        assert_eq!(
+            nearest.distance_measure,
+            sq::find_nearest::DistanceMeasure::Cosine as i32
+        );
+        assert_eq!(nearest.limit, Some(2));
+        assert_eq!(nearest.distance_result_field, "distance");
+        assert_eq!(nearest.distance_threshold, Some(0.5));
+        assert!(query_vector_is_vector(
+            nearest.query_vector.as_ref().unwrap()
+        ));
+    }
+
+    fn query_vector_is_vector(value: &pb::Value) -> bool {
+        matches!(
+            &value.value_type,
+            Some(pb::value::ValueType::MapValue(map)) if map.fields.contains_key("__type__")
+        )
     }
 }

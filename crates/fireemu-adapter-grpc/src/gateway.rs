@@ -172,6 +172,11 @@ impl Gateway {
         indexes: &IndexSet,
         aggregations: Option<&[Aggregation]>,
     ) -> Result<AcceptedQuery, Rejection> {
+        if aggregations.is_some() && canonical.find_nearest.is_some() {
+            return Err(Rejection::Unsupported(
+                "findNearest is unsupported for aggregation queries".to_owned(),
+            ));
+        }
         let disjunctions = canonical.dnf_disjunction_count();
         if disjunctions > fireemu_core_firestore::query::MAX_MATERIALIZED_DISJUNCTIONS {
             return Err(Rejection::InvalidQuery(format!(

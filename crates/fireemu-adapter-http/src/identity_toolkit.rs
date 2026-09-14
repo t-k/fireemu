@@ -6879,6 +6879,7 @@ fn idp_response_base(
     info: &IdpUserInfo,
     oauth_id_token: Option<&String>,
     oauth_access_token_out: &str,
+    oauth_refresh_token: Option<&String>,
 ) -> IdpBase {
     vec![
         ("kind", json!("identitytoolkit#VerifyAssertionResponse")),
@@ -6897,6 +6898,7 @@ fn idp_response_base(
         ("emailVerified", json!(info.email_verified)),
         ("photoUrl", json!(info.photo_url)),
         ("rawUserInfo", json!(info.raw_user_info)),
+        ("oauthRefreshToken", json!(oauth_refresh_token.cloned())),
     ]
 }
 
@@ -6958,11 +6960,11 @@ fn validate_saml_response(raw: Option<&String>) -> Result<Option<Value>, JsonRes
 
 /// Parses and validates a `signInWithIdp` credential, or the error the official emulator raises.
 fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
-    if body.get("returnRefreshToken").is_some_and(|v| !v.is_null()) {
-        return Err(not_implemented(
-            "returnRefreshToken is not implemented yet.",
-        ));
-    }
+    let return_refresh_token = match body.get("returnRefreshToken") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
     if body.get("pendingIdToken").is_some_and(|v| !v.is_null()) {
         return Err(not_implemented("pendingIdToken is not implemented yet."));
     }
@@ -7009,7 +7011,21 @@ fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
         || format!("FirebaseAuthEmulatorFakeAccessToken_{provider_id}"),
         String::clone,
     );
-    let base = idp_response_base(&provider_id, &info, oauth_id_token, &oauth_access_token_out);
+    let oauth_refresh_token = return_refresh_token
+        .then(|| {
+            params
+                .get("refresh_token")
+                .filter(|token| !token.is_empty())
+                .cloned()
+        })
+        .flatten();
+    let base = idp_response_base(
+        &provider_id,
+        &info,
+        oauth_id_token,
+        &oauth_access_token_out,
+        oauth_refresh_token.as_ref(),
+    );
     Ok(ResolvedIdp {
         provider_id,
         info,

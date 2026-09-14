@@ -2680,6 +2680,47 @@ fn implicit_tenant_defaults_admit_password_anonymous_and_email_link_flows() {
 }
 
 #[test]
+fn fixture_idp_refresh_token_is_returned_only_when_requested() {
+    let s = state();
+    let claims = json!({
+        "sub": "refresh-token-subject",
+        "email": "refresh-token@example.com",
+        "email_verified": true
+    });
+    let id_token = idp_jwt(&claims);
+    let post_body = format!(
+        "id_token={}&providerId=oidc.local&refresh_token={}",
+        id_token, "provider-refresh-token"
+    );
+    let base = json!({
+        "requestUri": "http://localhost",
+        "postBody": post_body,
+        "returnSecureToken": true
+    });
+
+    let (status, without_request) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &base);
+    assert_eq!(status, 200, "{without_request}");
+    assert!(without_request.get("oauthRefreshToken").is_none());
+
+    let mut requested = base;
+    requested["returnRefreshToken"] = json!(true);
+    let (status, with_request) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &requested);
+    assert_eq!(status, 200, "{with_request}");
+    assert_eq!(with_request["oauthRefreshToken"], "provider-refresh-token");
+
+    let users_before_malformed = format!("{:?}", s.store.lock().unwrap().users_by_creation());
+    let mut malformed = requested;
+    malformed["returnRefreshToken"] = json!("true");
+    let (status, refused) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &malformed);
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_ARGUMENT");
+    assert_eq!(
+        format!("{:?}", s.store.lock().unwrap().users_by_creation()),
+        users_before_malformed
+    );
+}
+
+#[test]
 fn admin_v2_config_toggles_email_enumeration_protection_and_propagates_to_tenants() {
     use fireemu_core_auth::store::AuthRegistry;
 

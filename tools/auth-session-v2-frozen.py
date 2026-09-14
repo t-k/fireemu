@@ -2,17 +2,21 @@
 
 import hashlib
 import importlib.util
+import json
 import re
 import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 from evidence_common import runtime_inputs_at_commit
 
 _PUBLISHER_PATH = ROOT / "tools/publish-auth-session-v2.py"
+_APPROVAL_PATH = ROOT / "tools/auth-session-v2-approval.py"
+_APPROVAL_SOURCE_ANCHOR = "00ec446c34fba61090550de144f2281ac62a6d13"
 _publisher_spec = importlib.util.spec_from_file_location(
     "session_v2_historical_publisher", _PUBLISHER_PATH
 )
@@ -34,6 +38,42 @@ inputs = _publisher.inputs
 def _require(condition):
     if not condition:
         raise ValueError("Historical receipt binding is invalid")
+
+
+@lru_cache(maxsize=8)
+def _git_bytes(commit, name):
+    _require(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit))
+    try:
+        return subprocess.check_output(
+            ["git", "show", f"{commit}:{name}"],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError as error:
+        raise ValueError("Historical source file is unavailable") from error
+
+
+@lru_cache(maxsize=4)
+def _publication_contract_at_commit(commit):
+    return hashlib.sha256(
+        _git_bytes(commit, "tools/publish-auth-session-v2.py")
+    ).hexdigest()
+
+
+@lru_cache(maxsize=4)
+def _source_review_digest_at_commit(commit):
+    review = json.loads(
+        _git_bytes(commit, "spec/compatibility/evidence/auth-session-v2/source-review.json")
+    )
+    _require(isinstance(review, dict))
+    return digest(review)
+
+
+@lru_cache(maxsize=1)
+def _approval_source_digest():
+    return hashlib.sha256(
+        _git_bytes(_APPROVAL_SOURCE_ANCHOR, "tools/auth-session-v2-approval.py")
+    ).hexdigest()
 
 
 @lru_cache(maxsize=4)
@@ -105,22 +145,31 @@ def validate_frozen(value):
     _require(value.get("probeInputs") == expected_probe_inputs)
     local = value.get("local")
     _require(isinstance(local, dict))
-    _require(local.get("build", {}).get("inputs") == _runtime_inputs_at_commit(commit))
+    runtime_commit = local.get("runtimeSourceCommit")
+    _require(
+        isinstance(runtime_commit, str)
+        and re.fullmatch(r"[0-9a-f]{40}", runtime_commit)
+    )
+    _require(
+        local.get("build", {}).get("inputs") == _runtime_inputs_at_commit(runtime_commit)
+    )
+    _require(
+        value.get("publicationContractSha256")
+        == _publication_contract_at_commit(commit)
+    )
+    _require(
+        value.get("sourceReviewSha256") == _source_review_digest_at_commit(commit)
+    )
 
     original_inputs = _publisher.inputs
     original_runtime_inputs = _publisher.runtime_inputs
-    original_contract = _publisher.publication_contract_sha
     _publisher.inputs = lambda: value["probeInputs"]
-    _publisher.runtime_inputs = lambda root: value["local"]["build"]["inputs"]
-    _publisher.publication_contract_sha = lambda: value[
-        "publicationContractSha256"
-    ]
+    _publisher.runtime_inputs = lambda root: _runtime_inputs_at_commit(runtime_commit)
     try:
         _ORIGINAL_VALIDATE(value)
     finally:
         _publisher.inputs = original_inputs
         _publisher.runtime_inputs = original_runtime_inputs
-        _publisher.publication_contract_sha = original_contract
 
 
 def validate(value):
@@ -141,3 +190,31 @@ def render_frozen(value):
 def render(value):
     """Render a current receipt with the original strict publisher."""
     return _publisher.render(value)
+
+
+def render_approval_frozen(approval, value):
+    """Render the frozen approval using the source-bound receipt validator."""
+    _require(
+        hashlib.sha256(_APPROVAL_PATH.read_bytes()).hexdigest()
+        == _approval_source_digest()
+    )
+    approval_spec = importlib.util.spec_from_file_location(
+        "session_v2_historical_approval", _APPROVAL_PATH
+    )
+    _require(approval_spec is not None and approval_spec.loader is not None)
+    approval_module = importlib.util.module_from_spec(approval_spec)
+    approval_spec.loader.exec_module(approval_module)
+    publisher = SimpleNamespace(
+        BUNDLE=BUNDLE,
+        CASES=CASES,
+        comparison=comparison,
+        digest=digest,
+        round_controls=round_controls,
+        validate=validate_frozen,
+    )
+    original_publisher = approval_module.publisher
+    approval_module.publisher = publisher
+    try:
+        return approval_module.render(approval, value)
+    finally:
+        approval_module.publisher = original_publisher

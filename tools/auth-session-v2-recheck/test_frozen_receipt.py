@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,36 @@ def test_frozen_receipt_rejects_probe_input_tampering(frozen):
         frozen.validate_frozen(value)
 
 
+def test_frozen_receipt_rejects_publication_contract_tampering(frozen):
+    value = receipt(frozen)
+    value["publicationContractSha256"] = "0" * 64
+    with pytest.raises(ValueError):
+        frozen.validate_frozen(value)
+
+
+def test_frozen_receipt_rejects_runtime_source_drift(frozen):
+    value = receipt(frozen)
+    current = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    assert current != value["local"]["runtimeSourceCommit"]
+    value["local"]["runtimeSourceCommit"] = current
+    with pytest.raises(ValueError):
+        frozen.validate_frozen(value)
+
+
+def test_frozen_receipt_rejects_source_review_not_at_probe_commit(frozen, tmp_path, monkeypatch):
+    value = receipt(frozen)
+    review = json.loads(frozen._publisher.REVIEW.read_bytes())
+    review["reviewedAt"] = "2099-01-01"
+    changed = tmp_path / "source-review.json"
+    changed.write_text(json.dumps(review, sort_keys=True) + "\n")
+    monkeypatch.setattr(frozen._publisher, "REVIEW", changed)
+    value["sourceReviewSha256"] = frozen.digest(review)
+    with pytest.raises(ValueError):
+        frozen.validate_frozen(value)
+
+
 @pytest.mark.parametrize(
     "mutation",
     ["artifact", "case", "timing", "corpus", "approval", "secret", "control"],
@@ -75,11 +106,10 @@ def test_frozen_render_matches_published_page(frozen):
     assert frozen.PAGE.read_text() == frozen.render_frozen(value)
 
 
-def test_approval_uses_frozen_validation_without_modifying_approval_source(frozen):
+def test_approval_uses_bound_frozen_validation_adapter(frozen):
     approval_tool = module(
         ROOT / "tools/auth-session-v2-approval.py", "session_v2_approval"
     )
-    approval_tool.publisher.validate = frozen.validate_frozen
     value = receipt(frozen)
     approval = json.loads(approval_tool.APPROVAL.read_bytes())
-    assert approval_tool.PAGE.read_text() == approval_tool.render(approval, value)
+    assert approval_tool.PAGE.read_text() == frozen.render_approval_frozen(approval, value)

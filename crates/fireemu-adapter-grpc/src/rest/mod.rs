@@ -10,6 +10,8 @@ pub mod coverage;
 pub mod json;
 
 #[cfg(test)]
+mod admin_inventory_tests;
+#[cfg(test)]
 mod transaction_tests;
 
 use std::collections::BTreeMap;
@@ -236,6 +238,27 @@ fn query_params(query: &str) -> BTreeMap<String, Vec<String>> {
 
 fn first<'a>(params: &'a BTreeMap<String, Vec<String>>, key: &str) -> Option<&'a str> {
     params.get(key).and_then(|v| v.first()).map(String::as_str)
+}
+
+const ADMIN_PAGE_SIZE: usize = 20;
+const ADMIN_MAX_PAGE_SIZE: usize = 1000;
+
+fn admin_database_json(project: &str, database: &str, incarnation: u64) -> Value {
+    json!({
+        "name": format!("projects/{project}/databases/{database}"),
+        "uid": format!("fireemu-{incarnation:016x}"),
+        "locationId": "us-central1",
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "PESSIMISTIC",
+        "versionRetentionPeriod": "3600s",
+        "appEngineIntegrationMode": "DISABLED",
+        "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+        "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+        "databaseEdition": "STANDARD",
+        "freeTier": true,
+        "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+        "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+    })
 }
 
 fn single<'a>(
@@ -544,6 +567,92 @@ impl RestState {
         }
     }
 
+    fn admin_inventory_route(
+        &self,
+        req: &RestRequest,
+        path: &str,
+        params: &BTreeMap<String, Vec<String>>,
+    ) -> Result<RestResponse, Status> {
+        if !rules::is_owner_credential(req.authorization.as_deref()) {
+            return Err(Status::unauthenticated(
+                "Admin database inventory requires owner credentials",
+            ));
+        }
+        let segments: Vec<&str> = path.split('/').collect();
+        if segments.len() < 3
+            || segments[0] != "projects"
+            || segments[2] != "databases"
+            || segments[1].is_empty()
+            || (req.method == "GET" && !matches!(segments.len(), 3 | 4))
+            || (req.method == "GET" && segments.len() == 4 && segments[3].is_empty())
+        {
+            return Err(Status::invalid_argument(
+                "database resource must be projects/{project}/databases/{database}",
+            ));
+        }
+        let project = segments[1];
+        let catalog = self.local.database_catalog()?;
+        match (req.method.as_str(), segments.as_slice()) {
+            ("GET", ["projects", project_name, "databases"]) if *project_name == project => {
+                let page_size = match first(params, "pageSize") {
+                    None => ADMIN_PAGE_SIZE,
+                    Some(value) => value
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|n| *n > 0 && *n <= ADMIN_MAX_PAGE_SIZE)
+                        .ok_or_else(|| {
+                            Status::invalid_argument("pageSize must be between 1 and 1000")
+                        })?,
+                };
+                let offset = match first(params, "pageToken") {
+                    None => 0,
+                    Some(token) => {
+                        let mut parts = token.split('|');
+                        if parts.next() != Some("fireemu-admin-v1")
+                            || parts.next() != Some(project)
+                            || parts.next().and_then(|v| v.parse().ok()) != Some(page_size)
+                        {
+                            return Err(Status::invalid_argument("invalid pageToken"));
+                        }
+                        parts
+                            .next()
+                            .and_then(|v| v.parse().ok())
+                            .filter(|_| parts.next().is_none())
+                            .ok_or_else(|| Status::invalid_argument("invalid pageToken"))?
+                    }
+                };
+                let databases: Vec<Value> = catalog
+                    .into_iter()
+                    .filter(|((p, _), _)| p == project)
+                    .map(|((_, d), incarnation)| admin_database_json(project, &d, incarnation))
+                    .collect();
+                if offset > databases.len() {
+                    return Err(Status::invalid_argument("invalid pageToken"));
+                }
+                let end = offset.saturating_add(page_size).min(databases.len());
+                let mut body =
+                    json!({"databases": databases[offset..end].to_vec(), "unreachable": []});
+                if end < databases.len() {
+                    body["nextPageToken"] =
+                        json!(format!("fireemu-admin-v1|{project}|{page_size}|{end}"));
+                }
+                Ok(ok(body))
+            }
+            ("GET", ["projects", project_name, "databases", database])
+                if *project_name == project && !database.is_empty() && !database.contains('/') =>
+            {
+                let Some((_, incarnation)) = catalog
+                    .into_iter()
+                    .find(|((p, d), _)| p == project && d == database)
+                else {
+                    return Err(Status::not_found("database not found"));
+                };
+                Ok(ok(admin_database_json(project, database, incarnation)))
+            }
+            _ => Ok(not_found_text()),
+        }
+    }
+
     fn dispatch(&self, req: &RestRequest) -> Result<RestResponse, Status> {
         // The custom-method suffix is recognised on the raw path (an encoded colon inside a
         // document ID is data, not routing syntax); segments are decoded afterwards.
@@ -562,13 +671,13 @@ impl RestState {
         let Some(path) = decoded.strip_prefix("/v1/") else {
             return Ok(not_found_text());
         };
-        // Only the documents surface is served: `/v1/projects/{p}/databases` and the
-        // database resources are the Admin API, which the official emulator has no route
-        // for either.
+        let params = query_params(&req.query);
+        if path.starts_with("projects/") && path.split('/').nth(2) == Some("databases") {
+            return self.admin_inventory_route(req, path, &params);
+        }
         if !path.contains("/documents") {
             return Ok(not_found_text());
         }
-        let params = query_params(&req.query);
         // App Check, once the route and the target project are resolved and before the
         // Firebase Auth credential, Security Rules and every mutation (spec 7.4).
         self.admit_app_check(req, path, action)?;

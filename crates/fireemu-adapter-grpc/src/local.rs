@@ -147,6 +147,9 @@ struct DatabaseCell {
 #[derive(Clone)]
 pub struct DatabaseHandle(Arc<DatabaseEntry>);
 
+/// One attached catalog entry and its non-reused local incarnation.
+pub type DatabaseCatalogEntry = ((String, String), u64);
+
 impl std::fmt::Debug for DatabaseHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DatabaseHandle")
@@ -2482,6 +2485,20 @@ impl LocalBackend {
                 })
                 .clone(),
         ))
+    }
+
+    /// Returns the attached database catalog without creating entries or touching database
+    /// state. The adapter uses this for the read-only Admin inventory surface.
+    pub fn database_catalog(&self) -> Result<Vec<DatabaseCatalogEntry>, Status> {
+        let dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
+        dbs.iter()
+            .map(|(key, entry)| {
+                if entry.cell.read().map_err(|_| lock_poisoned())?.detached {
+                    return Err(Status::unavailable("database catalog entry is detached"));
+                }
+                Ok((key.clone(), entry.incarnation))
+            })
+            .collect()
     }
 
     fn with_db<T>(

@@ -169,11 +169,23 @@ def compare_saved(candidate_path, local, parent_path, *, local_source_sha256=Non
             or parent_hash != digest(unsigned_parent)
         ):
             raise ValueError("parent manifest integrity binding is invalid")
-        evaluator_commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parents[2], text=True
-        ).strip()
-        if parent.get("executionCommit") != evaluator_commit:
-            raise ValueError("parent execution commit is not the evaluator checkout")
+        evaluator_commit = parent.get("executionCommit")
+        repo_root = Path(__file__).parents[2]
+        if (
+            not isinstance(evaluator_commit, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", evaluator_commit)
+            or subprocess.run(
+                ["git", "cat-file", "-e", f"{evaluator_commit}^{{commit}}"],
+                cwd=repo_root,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
+            or subprocess.run(
+                ["git", "diff", "--quiet", evaluator_commit, "--", "tools/compat-broad"],
+                cwd=repo_root,
+            ).returncode
+        ):
+            raise ValueError("parent execution commit does not bind evaluator source")
         if parent.get("status") != "completed":
             raise ValueError("parent execution manifest is incomplete")
         if parent.get("productionExecuted") is not False:

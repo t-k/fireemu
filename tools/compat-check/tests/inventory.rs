@@ -157,6 +157,7 @@ fn generated_matrix_separates_implementation_from_execution() {
     assert!(overview.contains("FS-MONGODB"));
     assert!(overview.contains("incomplete"));
     assert!(overview.contains("not a release attestation"));
+    assert!(overview.contains("production-denominator.md"));
 }
 
 #[test]

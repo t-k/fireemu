@@ -41,6 +41,9 @@ fn main() -> ExitCode {
     report
         .problems
         .extend(compat_check::inventory::check(&root).problems);
+    report
+        .problems
+        .extend(compat_check::production_inventory::check(&root).problems);
     for note in &report.notes {
         println!("compatibility: {note}");
     }

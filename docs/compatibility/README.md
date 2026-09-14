@@ -23,11 +23,11 @@ Declared profiles: strict; emulator. These are scope dimensions, not a claim tha
 
 Known source entries: 25. Reviewed sources: 0. Enumerated seed surfaces: 20. Accepted feature execution receipts: 0. None of these counts is a product compatibility percentage.
 
-[Source inventory](sources.md) · [API surface seed](surfaces.md) · [Requirement mappings and debt](requirements.md) · [Evidence policy](evidence-policy.md) · [Gap ledger](gaps.md)
+[Production denominator](production-denominator.md) · [Source inventory](sources.md) · [API surface seed](surfaces.md) · [Requirement mappings and debt](requirements.md) · [Evidence policy](evidence-policy.md) · [Gap ledger](gaps.md)
 
 ## Existing authorities
 
-The [compatibility contract](../../spec/compatibility/contract.json) owns the pinned official-emulator claims. The [capability manifest](../../crates/fireemu/src/capabilities.json) owns implementation declarations. The [requirement ledger](../../verification/requirements/requirements.json) owns requirement status and artifact references. These generated pages do not replace them.
+The exact [production denominator](production-denominator.md) owns the pinned Identity Platform and Firestore Standard/Native API-definition set for the production-compatibility goal. The [compatibility contract](../../spec/compatibility/contract.json) owns the pinned official-emulator claims. The [capability manifest](../../crates/fireemu/src/capabilities.json) owns implementation declarations. The [requirement ledger](../../verification/requirements/requirements.json) owns requirement status and artifact references. These generated pages do not replace one another.
 
 Historical corpus comparisons: [Authentication](../../conformance/AUTH-PRODUCTION-MATRIX.md) and [Firestore](../../conformance/FIRESTORE-PRODUCTION-MATRIX.md). Read their artifact, source, profile and configuration identities; their row counts are not feature coverage and are not transferred to this source tree.
 

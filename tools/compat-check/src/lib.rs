@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 pub mod inventory;
+pub mod production_inventory;
 
 /// Where the contract lives, relative to the repository root.
 pub const CONTRACT_PATH: &str = "spec/compatibility/contract.json";

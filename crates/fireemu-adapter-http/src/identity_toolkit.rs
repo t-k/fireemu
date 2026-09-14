@@ -25,9 +25,9 @@ use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, CredentialNotice, FederatedIdentity, LocalId, NewUser, OobRequestType,
-    PendingSignInId, PhoneCodeUse, RoutedStoreInstall, SecondFactorAssertion, VerificationCode,
-    VerificationPurpose,
+    AuthError, AuthStore, CredentialNotice, FederatedIdentity, InboundSamlProviderConfig, LocalId,
+    NewUser, OAuthResponseType, OidcProviderConfig, OobRequestType, PendingSignInId, PhoneCodeUse,
+    RoutedStoreInstall, SecondFactorAssertion, VerificationCode, VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -2039,6 +2039,7 @@ pub fn handle_with(
             route,
             project: Some(project),
             tenant: None,
+            ..
         } if state.allow_routed_projects && route.class == routes::RouteClass::Admin => {
             Some(project)
         }
@@ -2172,6 +2173,7 @@ pub fn handle_with(
             route,
             project,
             tenant,
+            resource: _,
         } => (route, project, tenant),
         routes::Resolution::MethodNotAllowed { class, project, .. } => {
             if let Err(r) = privilege_check(state, class, project, headers, method, &store) {
@@ -2190,6 +2192,35 @@ pub fn handle_with(
     ) {
         drop(store);
         return project_config_management(state, route.handler, project, body);
+    }
+    if matches!(
+        route.handler,
+        routes::Handler::ProviderCreate
+            | routes::Handler::ProviderList
+            | routes::Handler::ProviderGet
+            | routes::Handler::ProviderUpdate
+            | routes::Handler::ProviderDelete
+    ) {
+        let resource = match resolution {
+            routes::Resolution::Matched { resource, .. } => resource,
+            _ => None,
+        };
+        let provider_kind = if path.contains("/oauthIdpConfigs") {
+            ProviderKind::Oidc
+        } else {
+            ProviderKind::Saml
+        };
+        drop(store);
+        return provider_config_management(
+            state,
+            route.handler,
+            provider_kind,
+            project,
+            tenant,
+            resource,
+            query,
+            body,
+        );
     }
     if matches!(
         route.handler,
@@ -2362,6 +2393,7 @@ impl From<&AuthState> for DispatchOptions {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn dispatch(
     handler: routes::Handler,
     store: &mut AuthStore,
@@ -2455,6 +2487,11 @@ fn dispatch(
         | Handler::TenantGet
         | Handler::TenantUpdate
         | Handler::TenantDelete
+        | Handler::ProviderCreate
+        | Handler::ProviderList
+        | Handler::ProviderGet
+        | Handler::ProviderUpdate
+        | Handler::ProviderDelete
         | Handler::AdminGetProjectConfig
         | Handler::AdminUpdateProjectConfig => error(500, "INTERNAL"),
         Handler::EmulatorOobCodes => emulator_route(store, "GET", "oobCodes", headers, body),
@@ -2530,6 +2567,516 @@ fn project_config_management(
         status: 200,
         body: project_config_json(config),
     }
+}
+
+#[derive(Clone, Copy)]
+enum ProviderKind {
+    Oidc,
+    Saml,
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn provider_config_management(
+    state: &AuthState,
+    handler: routes::Handler,
+    kind: ProviderKind,
+    project: Option<&str>,
+    tenant: Option<&str>,
+    resource: Option<&str>,
+    query: Option<&str>,
+    body: &Value,
+) -> JsonResponse {
+    use routes::Handler;
+    let Some(project) = project else {
+        return error(400, "INVALID_PROJECT_ID");
+    };
+    let store = match (tenant, state.registry.as_ref()) {
+        (Some(tenant), Some(registry)) => registry.tenant_store(project, tenant),
+        (Some(_), None) => None,
+        (None, Some(registry)) => registry.store_for(project),
+        (None, None) => state
+            .store
+            .lock()
+            .ok()
+            .and_then(|store| (store.project_id() == project).then(|| state.store.clone())),
+    };
+    let Some(store) = store else {
+        return error(
+            tenant.map_or(400, |_| 404),
+            if tenant.is_some() {
+                "TENANT_NOT_FOUND"
+            } else {
+                "INVALID_PROJECT_ID"
+            },
+        );
+    };
+    let path_prefix = format!("projects/{project}/");
+    let path_prefix = if let Some(tenant) = tenant {
+        format!("{path_prefix}tenants/{tenant}/")
+    } else {
+        path_prefix
+    };
+    let (collection, collection_key) = match kind {
+        ProviderKind::Oidc => ("oauthIdpConfigs", "oauthIdpConfigs"),
+        ProviderKind::Saml => ("inboundSamlConfigs", "inboundSamlConfigs"),
+    };
+    let name = |id: &str| format!("{path_prefix}{collection}/{id}");
+    let response = match (kind, handler) {
+        (ProviderKind::Oidc, Handler::ProviderCreate) => {
+            let Some(id) = query_params(query)
+                .get("oauthIdpConfigId")
+                .filter(|id| valid_provider_id(id))
+                .cloned()
+            else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let config = match parse_oidc(body, id) {
+                Ok(config) => config,
+                Err(response) => return response,
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            if !store.create_oidc_config(config.clone()) {
+                return error(409, "ALREADY_EXISTS");
+            }
+            JsonResponse {
+                status: 200,
+                body: oidc_json(&name(&config.id), &config),
+            }
+        }
+        (ProviderKind::Saml, Handler::ProviderCreate) => {
+            let Some(id) = query_params(query)
+                .get("inboundSamlConfigId")
+                .filter(|id| valid_provider_id(id))
+                .cloned()
+            else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let config = match parse_saml(body, id) {
+                Ok(config) => config,
+                Err(response) => return response,
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            if !store.create_saml_config(config.clone()) {
+                return error(409, "ALREADY_EXISTS");
+            }
+            JsonResponse {
+                status: 200,
+                body: saml_json(&name(&config.id), &config),
+            }
+        }
+        (ProviderKind::Oidc, Handler::ProviderList) => {
+            let Ok(store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let configs = store
+                .oidc_configs()
+                .map(|config| oidc_json(&name(&config.id), config))
+                .collect::<Vec<_>>();
+            let mut body = json!({});
+            body[collection_key] = json!(configs);
+            JsonResponse { status: 200, body }
+        }
+        (ProviderKind::Saml, Handler::ProviderList) => {
+            let Ok(store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let configs = store
+                .saml_configs()
+                .map(|config| saml_json(&name(&config.id), config))
+                .collect::<Vec<_>>();
+            let mut body = json!({});
+            body[collection_key] = json!(configs);
+            JsonResponse { status: 200, body }
+        }
+        (
+            ProviderKind::Oidc,
+            Handler::ProviderGet | Handler::ProviderUpdate | Handler::ProviderDelete,
+        ) => {
+            let Some(id) = resource.filter(|id| valid_provider_id(id)) else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let Some(existing) = store.oidc_config(id).cloned() else {
+                return error(404, "NOT_FOUND");
+            };
+            match handler {
+                Handler::ProviderGet => JsonResponse {
+                    status: 200,
+                    body: oidc_json(&name(id), &existing),
+                },
+                Handler::ProviderDelete => {
+                    store.delete_oidc_config(id);
+                    JsonResponse {
+                        status: 200,
+                        body: json!({}),
+                    }
+                }
+                Handler::ProviderUpdate => {
+                    let updated = match patch_oidc(existing, body, query) {
+                        Ok(updated) => updated,
+                        Err(response) => return response,
+                    };
+                    store.replace_oidc_config(updated.clone());
+                    JsonResponse {
+                        status: 200,
+                        body: oidc_json(&name(id), &updated),
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        (
+            ProviderKind::Saml,
+            Handler::ProviderGet | Handler::ProviderUpdate | Handler::ProviderDelete,
+        ) => {
+            let Some(id) = resource.filter(|id| valid_provider_id(id)) else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let Some(existing) = store.saml_config(id).cloned() else {
+                return error(404, "NOT_FOUND");
+            };
+            match handler {
+                Handler::ProviderGet => JsonResponse {
+                    status: 200,
+                    body: saml_json(&name(id), &existing),
+                },
+                Handler::ProviderDelete => {
+                    store.delete_saml_config(id);
+                    JsonResponse {
+                        status: 200,
+                        body: json!({}),
+                    }
+                }
+                Handler::ProviderUpdate => {
+                    let updated = match patch_saml(existing, body, query) {
+                        Ok(updated) => updated,
+                        Err(response) => return response,
+                    };
+                    store.replace_saml_config(updated.clone());
+                    JsonResponse {
+                        status: 200,
+                        body: saml_json(&name(id), &updated),
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        _ => error(500, "INTERNAL"),
+    };
+    response
+}
+
+fn valid_provider_id(id: &str) -> bool {
+    !id.is_empty() && !id.contains('/') && !id.chars().any(char::is_control)
+}
+
+fn required_string(body: &Value, field: &str) -> Result<String, JsonResponse> {
+    body.get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+}
+
+fn optional_string(body: &Value, field: &str) -> Result<Option<String>, JsonResponse> {
+    match body.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+fn optional_bool(body: &Value, field: &str, default: bool) -> Result<bool, JsonResponse> {
+    match body.get(field) {
+        None => Ok(default),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+fn parse_response_type(value: Option<&Value>) -> Result<OAuthResponseType, JsonResponse> {
+    let Some(value) = value else {
+        return Ok(OAuthResponseType::default());
+    };
+    let Some(object) = value.as_object() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let read = |field: &str| match object.get(field) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let response = OAuthResponseType {
+        id_token: read("idToken")?,
+        code: read("code")?,
+        token: read("token")?,
+    };
+    if response.id_token && response.code {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(response)
+}
+
+fn parse_oidc(body: &Value, id: String) -> Result<OidcProviderConfig, JsonResponse> {
+    Ok(OidcProviderConfig {
+        id,
+        display_name: optional_string(body, "displayName")?,
+        enabled: optional_bool(body, "enabled", false)?,
+        client_id: required_string(body, "clientId")?,
+        issuer: required_string(body, "issuer")?,
+        client_secret: optional_string(body, "clientSecret")?,
+        response_type: parse_response_type(body.get("responseType"))?,
+    })
+}
+
+fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, JsonResponse> {
+    let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let Some(sp) = body.get("spConfig").and_then(Value::as_object) else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let required_object_string = |object: &serde_json::Map<String, Value>, field: &str| {
+        object
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+    };
+    let certificates = match idp.get("idpCertificates") {
+        None => Vec::new(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .get("x509Certificate")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    Ok(InboundSamlProviderConfig {
+        id,
+        display_name: optional_string(body, "displayName")?,
+        enabled: optional_bool(body, "enabled", false)?,
+        idp_entity_id: required_object_string(idp, "idpEntityId")?,
+        sso_url: required_object_string(idp, "ssoUrl")?,
+        idp_certificates: certificates,
+        sign_request: match idp.get("signRequest") {
+            None => Ok(false),
+            Some(Value::Bool(value)) => Ok(*value),
+            Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+        }?,
+        sp_entity_id: required_object_string(sp, "spEntityId")?,
+        callback_uri: required_object_string(sp, "callbackUri")?,
+    })
+}
+
+fn selected_fields(body: &Value, query: Option<&str>) -> Vec<String> {
+    query_params(query).get("updateMask").map_or_else(
+        || {
+            body.as_object()
+                .map_or_else(Vec::new, |body| body.keys().cloned().collect())
+        },
+        |mask| {
+            mask.split(',')
+                .filter(|field| !field.is_empty())
+                .map(str::to_owned)
+                .collect()
+        },
+    )
+}
+
+fn patch_oidc(
+    mut current: OidcProviderConfig,
+    body: &Value,
+    query: Option<&str>,
+) -> Result<OidcProviderConfig, JsonResponse> {
+    for field in selected_fields(body, query) {
+        match field.as_str() {
+            "displayName" => current.display_name = optional_string(body, "displayName")?,
+            "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
+            "clientId" => current.client_id = required_string(body, "clientId")?,
+            "issuer" => current.issuer = required_string(body, "issuer")?,
+            "clientSecret" => current.client_secret = optional_string(body, "clientSecret")?,
+            "responseType" => {
+                current.response_type = parse_response_type(body.get("responseType"))?;
+            }
+            "responseType.idToken" => {
+                current.response_type.id_token = nested_bool(body, "responseType", "idToken")?;
+            }
+            "responseType.code" => {
+                current.response_type.code = nested_bool(body, "responseType", "code")?;
+            }
+            "responseType.token" => {
+                current.response_type.token = nested_bool(body, "responseType", "token")?;
+            }
+            "name" => {}
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    if current.response_type.id_token && current.response_type.code {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(current)
+}
+
+fn nested_bool(body: &Value, parent: &str, field: &str) -> Result<bool, JsonResponse> {
+    body.get(parent)
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(field))
+        .and_then(Value::as_bool)
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+}
+
+fn patch_saml(
+    mut current: InboundSamlProviderConfig,
+    body: &Value,
+    query: Option<&str>,
+) -> Result<InboundSamlProviderConfig, JsonResponse> {
+    for field in selected_fields(body, query) {
+        match field.as_str() {
+            "displayName" => current.display_name = optional_string(body, "displayName")?,
+            "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
+            "idpConfig"
+            | "idpConfig.idpEntityId"
+            | "idpConfig.ssoUrl"
+            | "idpConfig.idpCertificates"
+            | "idpConfig.signRequest" => {
+                let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                };
+                if field == "idpConfig" || field == "idpConfig.idpEntityId" {
+                    if let Some(value) = idp.get("idpEntityId") {
+                        current.idp_entity_id = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+                if field == "idpConfig" || field == "idpConfig.ssoUrl" {
+                    if let Some(value) = idp.get("ssoUrl") {
+                        current.sso_url = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+                if field == "idpConfig" || field == "idpConfig.idpCertificates" {
+                    if let Some(value) = idp.get("idpCertificates") {
+                        current.idp_certificates = parse_saml_certificates(value)?;
+                    }
+                }
+                if field == "idpConfig" || field == "idpConfig.signRequest" {
+                    if let Some(value) = idp.get("signRequest") {
+                        current.sign_request = value
+                            .as_bool()
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+            }
+            "spConfig" | "spConfig.spEntityId" | "spConfig.callbackUri" => {
+                let Some(sp) = body.get("spConfig").and_then(Value::as_object) else {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                };
+                if field == "spConfig" || field == "spConfig.spEntityId" {
+                    if let Some(value) = sp.get("spEntityId") {
+                        current.sp_entity_id = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+                if field == "spConfig" || field == "spConfig.callbackUri" {
+                    if let Some(value) = sp.get("callbackUri") {
+                        current.callback_uri = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+            }
+            "name" => {}
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    Ok(current)
+}
+
+fn parse_saml_certificates(value: &Value) -> Result<Vec<String>, JsonResponse> {
+    let Some(values) = value.as_array() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    values
+        .iter()
+        .map(|value| {
+            value
+                .get("x509Certificate")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+        })
+        .collect()
+}
+
+fn oidc_json(name: &str, config: &OidcProviderConfig) -> Value {
+    let mut body = json!({
+        "name": name,
+        "enabled": config.enabled,
+        "clientId": config.client_id,
+        "issuer": config.issuer,
+        "responseType": {
+            "idToken": config.response_type.id_token,
+            "code": config.response_type.code,
+            "token": config.response_type.token,
+        },
+    });
+    if let Some(display_name) = &config.display_name {
+        body["displayName"] = json!(display_name);
+    }
+    if let Some(client_secret) = &config.client_secret {
+        body["clientSecret"] = json!(client_secret);
+    }
+    body
+}
+
+fn saml_json(name: &str, config: &InboundSamlProviderConfig) -> Value {
+    let mut body = json!({
+        "name": name,
+        "enabled": config.enabled,
+        "idpConfig": {
+            "idpEntityId": config.idp_entity_id,
+            "ssoUrl": config.sso_url,
+            "idpCertificates": config.idp_certificates.iter().map(|certificate| json!({"x509Certificate": certificate})).collect::<Vec<_>>(),
+            "signRequest": config.sign_request,
+        },
+        "spConfig": {
+            "spEntityId": config.sp_entity_id,
+            "callbackUri": config.callback_uri,
+        },
+    });
+    if let Some(display_name) = &config.display_name {
+        body["displayName"] = json!(display_name);
+    }
+    body
 }
 
 fn tenant_metadata(body: &Value) -> fireemu_core_auth::store::TenantMetadata {

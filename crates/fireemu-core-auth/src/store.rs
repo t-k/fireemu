@@ -403,6 +403,59 @@ pub struct ProjectAuthConfig {
     pub enable_improved_email_privacy: bool,
 }
 
+/// The response mode requested from an OAuth/OIDC provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OAuthResponseType {
+    /// Whether the provider returns an ID token.
+    pub id_token: bool,
+    /// Whether the provider returns an authorization code.
+    pub code: bool,
+    /// The deprecated implicit token response mode.
+    pub token: bool,
+}
+
+/// A project or tenant OAuth/OIDC provider configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OidcProviderConfig {
+    /// Provider configuration ID.
+    pub id: String,
+    /// Developer supplied display name.
+    pub display_name: Option<String>,
+    /// Whether sign-in with this provider is enabled.
+    pub enabled: bool,
+    /// OAuth client ID.
+    pub client_id: String,
+    /// OIDC issuer URL.
+    pub issuer: String,
+    /// OAuth client secret, when supplied.
+    pub client_secret: Option<String>,
+    /// OAuth response mode.
+    pub response_type: OAuthResponseType,
+}
+
+/// A project or tenant inbound SAML provider configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundSamlProviderConfig {
+    /// Provider configuration ID.
+    pub id: String,
+    /// Developer supplied display name.
+    pub display_name: Option<String>,
+    /// Whether sign-in with this provider is enabled.
+    pub enabled: bool,
+    /// SAML identity provider entity ID.
+    pub idp_entity_id: String,
+    /// SAML identity provider SSO URL.
+    pub sso_url: String,
+    /// Identity provider certificates used to verify assertions.
+    pub idp_certificates: Vec<String>,
+    /// Whether outbound SAML requests are signed.
+    pub sign_request: bool,
+    /// SAML service provider entity ID.
+    pub sp_entity_id: String,
+    /// SAML assertion callback URI.
+    pub callback_uri: String,
+}
+
 /// Why an account an import artifact recorded was refused.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportUserError {
@@ -630,6 +683,10 @@ pub struct AuthStore {
     /// The project-level Auth configuration an import carried, kept so an export can write
     /// it back.
     config: ProjectAuthConfig,
+    /// OAuth/OIDC provider configurations in this namespace.
+    oidc_configs: BTreeMap<String, OidcProviderConfig>,
+    /// Inbound SAML provider configurations in this namespace.
+    saml_configs: BTreeMap<String, InboundSamlProviderConfig>,
 }
 
 /// What a phone verification code was issued for, as the official emulator names it in
@@ -813,6 +870,8 @@ impl AuthStore {
             deleted_users: Vec::new(),
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
+            oidc_configs: BTreeMap::new(),
+            saml_configs: BTreeMap::new(),
         }
     }
 
@@ -1158,6 +1217,74 @@ impl AuthStore {
     /// Records the project-level Auth configuration an import carried.
     pub fn set_config(&mut self, config: ProjectAuthConfig) {
         self.config = config;
+    }
+
+    /// Lists OAuth/OIDC configurations in stable ID order.
+    pub fn oidc_configs(&self) -> impl Iterator<Item = &OidcProviderConfig> {
+        self.oidc_configs.values()
+    }
+
+    /// Gets one OAuth/OIDC configuration by ID.
+    #[must_use]
+    pub fn oidc_config(&self, id: &str) -> Option<&OidcProviderConfig> {
+        self.oidc_configs.get(id)
+    }
+
+    /// Creates an OAuth/OIDC configuration. Returns `false` when its ID is already used.
+    pub fn create_oidc_config(&mut self, config: OidcProviderConfig) -> bool {
+        if self.oidc_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.oidc_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Replaces an OAuth/OIDC configuration. Returns `false` when its ID is unknown.
+    pub fn replace_oidc_config(&mut self, config: OidcProviderConfig) -> bool {
+        if !self.oidc_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.oidc_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Deletes an OAuth/OIDC configuration. Returns `false` when its ID is unknown.
+    pub fn delete_oidc_config(&mut self, id: &str) -> bool {
+        self.oidc_configs.remove(id).is_some()
+    }
+
+    /// Lists inbound SAML configurations in stable ID order.
+    pub fn saml_configs(&self) -> impl Iterator<Item = &InboundSamlProviderConfig> {
+        self.saml_configs.values()
+    }
+
+    /// Gets one inbound SAML configuration by ID.
+    #[must_use]
+    pub fn saml_config(&self, id: &str) -> Option<&InboundSamlProviderConfig> {
+        self.saml_configs.get(id)
+    }
+
+    /// Creates an inbound SAML configuration. Returns `false` when its ID is already used.
+    pub fn create_saml_config(&mut self, config: InboundSamlProviderConfig) -> bool {
+        if self.saml_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.saml_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Replaces an inbound SAML configuration. Returns `false` when its ID is unknown.
+    pub fn replace_saml_config(&mut self, config: InboundSamlProviderConfig) -> bool {
+        if !self.saml_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.saml_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Deletes an inbound SAML configuration. Returns `false` when its ID is unknown.
+    pub fn delete_saml_config(&mut self, id: &str) -> bool {
+        self.saml_configs.remove(id).is_some()
     }
 
     /// The password credential of a user, when it has one. An export reads it to write the

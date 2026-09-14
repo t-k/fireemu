@@ -1791,6 +1791,157 @@ fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_projec
 }
 
 #[test]
+fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    s.registry = Some(registry);
+    let project_collection =
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/oauthIdpConfigs";
+    let project_item = |id: &str| format!("{project_collection}/{id}");
+    let config = json!({
+        "clientId": "project-client",
+        "issuer": "https://issuer.project.example",
+        "displayName": "Project OIDC",
+        "enabled": true,
+        "responseType": {"idToken": true}
+    });
+
+    let created = handle_with(
+        &s,
+        "POST",
+        &format!("{project_collection}?oauthIdpConfigId=shared"),
+        &owner(),
+        &config,
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+    assert_eq!(
+        created.body["name"],
+        "projects/demo-app/oauthIdpConfigs/shared"
+    );
+    assert_eq!(created.body["enabled"], true);
+
+    let refused = handle_with(
+        &s,
+        "PATCH",
+        &format!("{}?updateMask=responseType", project_item("shared")),
+        &owner(),
+        &json!({"responseType": {"idToken": true, "code": true}}),
+    );
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    let unchanged = handle_with(&s, "GET", &project_item("shared"), &owner(), &json!({}));
+    assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+    assert_eq!(unchanged.body["responseType"]["idToken"], true);
+    assert_eq!(unchanged.body["responseType"]["code"], false);
+
+    let tenant_collection =
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/customer/oauthIdpConfigs";
+    let tenant_created = handle_with(
+        &s,
+        "POST",
+        &format!("{tenant_collection}?oauthIdpConfigId=shared"),
+        &owner(),
+        &json!({
+            "clientId": "tenant-client",
+            "issuer": "https://issuer.tenant.example",
+            "enabled": false
+        }),
+    );
+    assert_eq!(tenant_created.status, 200, "{}", tenant_created.body);
+    assert_eq!(
+        tenant_created.body["name"],
+        "projects/demo-app/tenants/customer/oauthIdpConfigs/shared"
+    );
+    let tenant_read = handle_with(
+        &s,
+        "GET",
+        &format!("{tenant_collection}/shared"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(tenant_read.status, 200, "{}", tenant_read.body);
+    assert_eq!(tenant_read.body["clientId"], "tenant-client");
+    let listed = handle_with(&s, "GET", project_collection, &owner(), &json!({}));
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    assert_eq!(listed.body["oauthIdpConfigs"].as_array().unwrap().len(), 1);
+    let deleted = handle_with(&s, "DELETE", &project_item("shared"), &owner(), &json!({}));
+    assert_eq!(deleted.status, 200, "{}", deleted.body);
+    assert_eq!(
+        handle_with(&s, "GET", &project_item("shared"), &owner(), &json!({})).status,
+        404
+    );
+    assert_eq!(
+        handle_with(&s, "GET", &project_item("missing"), &owner(), &json!({})).status,
+        404
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{tenant_collection}/missing"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        404
+    );
+}
+
+#[test]
+fn inbound_saml_provider_config_crud_preserves_configuration_and_rejects_bad_ids() {
+    let s = state();
+    let collection =
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/inboundSamlConfigs";
+    let item = |id: &str| format!("{collection}/{id}");
+    let created = handle_with(
+        &s,
+        "POST",
+        &format!("{collection}?inboundSamlConfigId=corp"),
+        &owner(),
+        &json!({
+            "displayName": "Corporate SAML",
+            "enabled": true,
+            "idpConfig": {
+                "idpEntityId": "https://idp.example/entity",
+                "ssoUrl": "https://idp.example/sso",
+                "idpCertificates": [{"x509Certificate": "CERT"}],
+                "signRequest": true
+            },
+            "spConfig": {
+                "spEntityId": "https://sp.example/entity",
+                "callbackUri": "https://sp.example/callback"
+            }
+        }),
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+    assert_eq!(
+        created.body["name"],
+        "projects/demo-app/inboundSamlConfigs/corp"
+    );
+    assert_eq!(
+        created.body["idpConfig"]["idpEntityId"],
+        "https://idp.example/entity"
+    );
+    assert_eq!(
+        created.body["spConfig"]["callbackUri"],
+        "https://sp.example/callback"
+    );
+
+    let malformed = handle_with(
+        &s,
+        "GET",
+        &format!("{collection}/bad/id"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(malformed.status, 404);
+    let still_there = handle_with(&s, "GET", &item("corp"), &owner(), &json!({}));
+    assert_eq!(still_there.status, 200, "{}", still_there.body);
+}
+
+#[test]
 fn admin_create_is_atomic_and_typed() {
     let s = state();
     // Weak password: nothing is created (the email / uid are not squatted).

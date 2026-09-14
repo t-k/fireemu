@@ -29,3 +29,7 @@ The local command was:
 ```sh
 uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/campaign_explain_shadow.py --output /absolute/private/explain-shadow
 ```
+
+## Later metadata preflight
+
+On 2026-09-14T15:54:15Z, a read-only preflight using ADC and the required `x-goog-user-project: fireemu-35fe6` header confirmed the project-number and API-key resource ownership expected by this campaign. The currently retrievable keyString did not match the accepted API-key digest bound to the frozen campaign input, so the admission was rejected and no campaign data request, account/document mutation or configuration change followed. The accepted baseline was not updated automatically. A new permission/input package or owner decision is required before this campaign can use the current key; the read result is not a production compatibility observation.

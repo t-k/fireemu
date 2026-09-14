@@ -78,6 +78,9 @@ class World:
         self.invalidate_null_continuity = options.pop(
             "invalidate_null_continuity", False
         )
+        self.non200_finalize_after_null = options.pop(
+            "non200_finalize_after_null", False
+        )
         self.ignore_compound_display = options.pop("ignore_compound_display", None)
         self.local = options.pop("local", False)
         self.dirty = options.pop("dirty", False)
@@ -282,6 +285,8 @@ class World:
                 if self.invalidate_null_continuity:
                     self.pendings.clear()
                     self.sessions.clear()
+                if self.non200_finalize_after_null:
+                    self.non200_finalize_after_null = "pending"
                 return 200, {"localId": user["localId"], "email": user["email"]}
             admin_fields = set(body) & set(local_contract.LOCAL_VALID_ACTIVE_FIELDS)
             if admin_fields:
@@ -340,7 +345,11 @@ class World:
                 )
         session["consumed"] = True
         self.pendings.pop(body["mfaPendingCredential"])
-        return 200, self.issue(user, True)
+        response = self.issue(user, True)
+        if self.non200_finalize_after_null == "pending":
+            self.non200_finalize_after_null = False
+            return 201, response
+        return 200, response
 
 
 def git(dirty):
@@ -479,6 +488,21 @@ def test_local_null_update_continuity_is_checked_after_the_update(
     assert row["disableStateUnchanged"] is True
     assert row["allAccountStateRestored"] is True
     assert row["heldMfaContinuity"]["idTokenPresent"] is False
+    assert not complete_local_v1(saved)
+
+
+def test_local_null_update_requires_successful_finalize_http_status(
+    tmp_path, monkeypatch
+):
+    w = world(tmp_path, local=True, non200_finalize_after_null=True)
+    report, saved = run(tmp_path, monkeypatch, w)
+    row = next(
+        row
+        for row in saved["localValidActiveToken"]["fields"]
+        if row["field"] == "disableUser:null" and row["account"] == "a"
+    )
+    assert report["status"] == "incomplete"
+    assert row["heldMfaContinuity"]["finalizeHttpStatus"] is False
     assert not complete_local_v1(saved)
 
 

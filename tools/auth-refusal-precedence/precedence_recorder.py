@@ -440,6 +440,11 @@ def observe(output, origin=None):
                 require(all(v is True for v in checks.values()))
             return checks
 
+        def local_finalize_checks(account, status, response):
+            checks = token_checks(account, response, diagnostic=True)
+            checks["finalizeHttpStatus"] = status == 200
+            return checks
+
         def fresh_finalize(name, account):
             credential = pending(account)
             session = start(account, credential)
@@ -620,7 +625,7 @@ def observe(output, origin=None):
                     continuity_credential, continuity_session, continuity_code
                 )
                 require(status == 200)
-                continuity_checks = token_checks(account, signed)
+                continuity_checks = local_finalize_checks(account, status, signed)
                 require(all(continuity_checks.values()))
                 observations.append(
                     {
@@ -675,9 +680,7 @@ def observe(output, origin=None):
                     null_continuity_session,
                     null_continuity_code,
                 )
-                null_continuity_checks = token_checks(
-                    account, signed, diagnostic=True
-                )
+                null_continuity_checks = local_finalize_checks(account, status, signed)
                 status, response = client(
                     "update", {"idToken": token, "displayName": account["marker"]}
                 )
@@ -904,8 +907,14 @@ def observe(output, origin=None):
                 and all(reenabled_b["checks"].values())
             )
             report["localValidActiveToken"]["heldCredentialsAndSessions"] = {
-                "a": reenabled_a["checks"],
-                "b": reenabled_b["checks"],
+                "a": {
+                    **reenabled_a["checks"],
+                    "finalizeHttpStatus": reenabled_a["httpStatus"] == 200,
+                },
+                "b": {
+                    **reenabled_b["checks"],
+                    "finalizeHttpStatus": reenabled_b["httpStatus"] == 200,
+                },
             }
 
         fresh_finalize("final-a-fresh-finalize", a)

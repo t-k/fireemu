@@ -624,9 +624,9 @@ def explain_response_valid(operation, status, value):
     ):
         return False
     if any("error" in row for row in value):
-        return status >= 400 and all(
-            set(row) == {"error"} and error_valid(row) for row in value
-        )
+        # Explain observations are a six-case success campaign; an error body
+        # is never a typed Explain response, regardless of HTTP status.
+        return False
     if status != 200:
         return False
     metrics_rows = [row["explainMetrics"] for row in value if "explainMetrics" in row]
@@ -641,10 +641,8 @@ def explain_response_valid(operation, status, value):
     indexes_used = plan.get("indexesUsed", [])
     if not isinstance(indexes_used, list) or not all(
         isinstance(index, dict)
-        and all(
-            isinstance(key, str) and isinstance(item, str)
-            for key, item in index.items()
-        )
+        and set(index) == {"properties", "query_scope"}
+        and all(isinstance(item, str) for item in index.values())
         for index in indexes_used
     ):
         return False
@@ -665,12 +663,23 @@ def explain_response_valid(operation, status, value):
         debug_stats = stats.get("debugStats")
         if not isinstance(debug_stats, dict):
             return False
+        if not {
+            "documents_scanned",
+            "index_entries_scanned",
+            "billing_details",
+        }.issubset(debug_stats):
+            return False
+        billing_details = debug_stats["billing_details"]
+        if not isinstance(billing_details, dict) or set(billing_details) != {
+            "documents_billable",
+            "index_entries_billable",
+            "min_query_cost",
+            "small_ops",
+        }:
+            return False
         for key, item in debug_stats.items():
             if key == "billing_details":
-                if not isinstance(item, dict) or not all(
-                    isinstance(name, str) and decimal_string(value)
-                    for name, value in item.items()
-                ):
+                if not all(decimal_string(value) for value in item.values()):
                     return False
             elif not decimal_string(item):
                 return False

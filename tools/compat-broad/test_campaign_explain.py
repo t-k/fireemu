@@ -60,15 +60,23 @@ def test_explain_validator_accepts_new_empty_analyze_protojson_shape():
         "missing-plan",
         "missing-stats",
         "wrong-index-entry",
+        "empty-index-entry",
+        "unknown-index-field",
         "missing-read-operations",
         "wrong-duration",
         "negative-duration",
         "wrong-debug-stat",
         "huge-debug-stat",
         "wrong-billing-detail",
+        "missing-billing-field",
+        "empty-debug-stats",
+        "negative-debug-stat",
+        "negative-billing-detail",
         "huge-results",
         "omitted-default-nonempty",
         "invalid-media",
+        "http-error-body",
+        "http-200-error-body",
         "wrong-error-status",
     ],
 )
@@ -82,6 +90,12 @@ def test_explain_validator_rejects_invalid_metric_and_error_shapes(mutation):
         body[0]["explainMetrics"].pop("executionStats")
     elif mutation == "wrong-index-entry":
         body[0]["explainMetrics"]["planSummary"]["indexesUsed"] = [1]
+    elif mutation == "empty-index-entry":
+        body[0]["explainMetrics"]["planSummary"]["indexesUsed"] = [{}]
+    elif mutation == "unknown-index-field":
+        body[0]["explainMetrics"]["planSummary"]["indexesUsed"] = [
+            {"properties": "x", "query_scope": "Collection", "extra": "x"}
+        ]
     elif mutation == "missing-read-operations":
         body[0]["explainMetrics"]["executionStats"].pop("readOperations")
     elif mutation == "wrong-duration":
@@ -96,12 +110,29 @@ def test_explain_validator_rejects_invalid_metric_and_error_shapes(mutation):
         ] = str(2**63)
     elif mutation == "wrong-billing-detail":
         body[0]["explainMetrics"]["executionStats"]["debugStats"]["billing_details"] = []
+    elif mutation == "missing-billing-field":
+        body[0]["explainMetrics"]["executionStats"]["debugStats"][
+            "billing_details"
+        ].pop("small_ops")
+    elif mutation == "empty-debug-stats":
+        body[0]["explainMetrics"]["executionStats"]["debugStats"] = {}
+    elif mutation == "negative-debug-stat":
+        body[0]["explainMetrics"]["executionStats"]["debugStats"][
+            "documents_scanned"
+        ] = "-1"
+    elif mutation == "negative-billing-detail":
+        body[0]["explainMetrics"]["executionStats"]["debugStats"][
+            "billing_details"
+        ]["small_ops"] = "-1"
     elif mutation == "huge-results":
         body[0]["explainMetrics"]["executionStats"]["resultsReturned"] = str(2**63)
     elif mutation == "omitted-default-nonempty":
         operation = explain_operation(empty=False)
     elif mutation == "invalid-media":
         operation["contentType"] = "text/html"
+    elif mutation in {"http-error-body", "http-200-error-body"}:
+        status = 400 if mutation == "http-error-body" else 200
+        body = [{"error": {"status": "FAILED_PRECONDITION"}}]
     else:
         status = 400
         body = [{"error": {"status": "bad status"}}]

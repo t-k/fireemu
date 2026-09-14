@@ -773,3 +773,55 @@ def test_uncertain_create_response_never_authorizes_delete(
     assert backend.target in backend.docs
     assert not backend.deletes
     assert receipt["cleanupComplete"] is False
+
+
+@pytest.mark.parametrize(
+    "scope,field",
+    [
+        ("envelope", "completed"),
+        ("envelope", "cleanupComplete"),
+        ("envelope", "recordingComplete"),
+        ("envelope", "stateVerified"),
+        ("envelope", "failure"),
+        ("receipt", "stateValidation"),
+        ("receipt", "stateVerified"),
+        ("receipt", "safety"),
+        ("receipt", "failure"),
+    ],
+)
+def test_rebound_lifecycle_flags_are_never_ignored(real_shadow, scope, field):
+    from campaign_explain import validate_envelope
+
+    local, _ = real_shadow
+    changed = copy.deepcopy(local)
+    target = changed if scope == "envelope" else changed["receipt"]
+    target[field] = "failure" if field == "failure" else False
+    rebind_responses(changed)
+    with pytest.raises(ValueError):
+        validate_envelope(changed, local=True)
+
+
+def test_both_sides_empty_explain_is_indeterminate_even_with_rebound_true_flags(
+    real_shadow,
+):
+    from campaign_explain import compare_production_local
+
+    original, _ = real_shadow
+    local = copy.deepcopy(original)
+    production = production_fixture(local)
+    for value in (local, production):
+        value["receipt"]["rows"][4]["body"] = []
+        value["receipt"].update(stateValidation=True, stateVerified=True, safety=True)
+        rebind_responses(value)
+    production["localRecordSha256"] = digest(local)
+    permission = production["permission"]
+    permission["localRecordSha256"] = digest(local)
+    production["permissionDigest"] = digest(permission)
+    production["gate"]["plan"]["permissionDigest"] = digest(permission)
+    production["gate"]["planDigest"] = digest(production["gate"]["plan"])
+    production["receipt"]["principalEvidence"].update(
+        permissionDigest=digest(permission), planDigest=production["gate"]["planDigest"]
+    )
+    assert (
+        compare_production_local(production, local)["compatibility"] == "indeterminate"
+    )

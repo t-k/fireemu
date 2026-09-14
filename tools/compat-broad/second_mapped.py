@@ -415,6 +415,7 @@ def execute_45(a, output, runtime_identity):
     users, rows, documents = {}, [], {}
     a.users = users
     from second_production_contract import binding as comparison_binding
+    from second_production_contract import manifest as comparison_manifest
     from second_production_contract import observer_digest as comparison_observer_digest
 
     result = {
@@ -424,7 +425,7 @@ def execute_45(a, output, runtime_identity):
         "productionExecuted": False,
         "runtimeIdentity": runtime_identity,
         "nonce": nonce,
-        "manifestDigest": digest(manifest()),
+        "manifestDigest": digest(comparison_manifest()),
         "comparisonContractDigest": digest(comparison_binding()),
         "observerDigest": comparison_observer_digest(),
         "bindings": users,

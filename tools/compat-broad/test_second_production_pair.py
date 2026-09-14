@@ -330,7 +330,7 @@ def test_saved_comparator_uses_current_runtime_anchor_path():
 
 def test_saved_mode_accepts_retained_second45_runtime_fixture(tmp_path):
     from broad_contract import ROOT
-    from second_production_pair import compare_saved
+    from second_production_pair import compare_saved, observed_value
 
     candidate = ROOT / "spec/compatibility/broad-runs/774e9d8b-second45-production-candidate.json"
     retained = os.environ.get("FIREEMU_SECOND45_RETAINED_RUN")
@@ -339,6 +339,7 @@ def test_saved_mode_accepts_retained_second45_runtime_fixture(tmp_path):
         parent = run / "parent-manifest.json"
         local = run / "mapped-receipt.json"
         anchor = None
+        candidate_expected_sha256 = "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73"
     else:
         local_value = current_local(receipt("mapped"))
         local_value["runtimeIdentity"]["executionCommit"] = subprocess.check_output(
@@ -346,8 +347,6 @@ def test_saved_mode_accepts_retained_second45_runtime_fixture(tmp_path):
         ).strip()
         local = tmp_path / "mapped-receipt.json"
         local.write_text(json.dumps(local_value))
-        from second_production_pair import observed_value
-
         candidate_value = {
             "kind": "second45-production-candidate-summary-v1",
             "manifestDigest": local_value["comparisonManifestDigest"],
@@ -365,6 +364,7 @@ def test_saved_mode_accepts_retained_second45_runtime_fixture(tmp_path):
         }
         candidate = tmp_path / "candidate.json"
         candidate.write_text(json.dumps(candidate_value))
+        candidate_expected_sha256 = hashlib.sha256(candidate.read_bytes()).hexdigest()
         parent_value = {
             "status": "completed",
             "productionExecuted": False,
@@ -386,27 +386,22 @@ def test_saved_mode_accepts_retained_second45_runtime_fixture(tmp_path):
         anchor_value = {
             "parentManifestSha256": parent_value["parentManifestSha256"],
             "mappedReceiptFileSha256": parent_value["mappedReceiptFileSha256"],
-                "runtimeIdentity": {
-                    "artifactSha256": parent_value["artifactSha256"],
-                    "executionCommit": parent_value["executionCommit"],
-                    "configurationDigest": parent_value["configurationDigest"],
-                },
+            "runtimeIdentity": {
+                "artifactSha256": parent_value["artifactSha256"],
+                "executionCommit": parent_value["executionCommit"],
+                "configurationDigest": parent_value["configurationDigest"],
+            },
         }
         anchor = tmp_path / "anchor.json"
         anchor.write_text(json.dumps(anchor_value))
-        candidate_expected_sha256 = None
-        if not retained:
-            candidate_expected_sha256 = hashlib.sha256(candidate.read_bytes()).hexdigest()
-        result = compare_saved(
-            candidate,
-        json.loads(local.read_text()),
-        parent,
-        local_source_sha256=hashlib.sha256(local.read_bytes()).hexdigest(),
-            anchor_path=anchor,
-            candidate_expected_sha256=candidate_expected_sha256
-            if candidate_expected_sha256 is not None
-            else "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73",
-        )
+    result = compare_saved(
+        candidate,
+            json.loads(local.read_text()),
+            parent,
+            local_source_sha256=hashlib.sha256(local.read_bytes()).hexdigest(),
+        anchor_path=anchor,
+        candidate_expected_sha256=candidate_expected_sha256,
+    )
     assert result["compatibility"] == "match"
     assert result["errors"] == []
 

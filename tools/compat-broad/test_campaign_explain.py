@@ -756,14 +756,23 @@ def test_fully_bound_mismatch_is_valid_collection(real_shadow):
     assert compare_production_local(production, local)["compatibility"] == "mismatch"
 
 
-def test_fully_bound_success_vs_structured_api_rejection_is_mismatch(real_shadow):
+@pytest.mark.parametrize(
+    ("status", "error_status"),
+    [
+        (400, "INVALID_ARGUMENT"),
+        (501, "UNIMPLEMENTED"),
+    ],
+)
+def test_fully_bound_success_vs_structured_api_rejection_is_mismatch(
+    real_shadow, status, error_status
+):
     from campaign_explain import compare_production_local
 
     original, _ = real_shadow
     local = copy.deepcopy(original)
-    local["receipt"]["rows"][4]["status"] = 501
+    local["receipt"]["rows"][4]["status"] = status
     local["receipt"]["rows"][4]["body"] = [
-        {"error": {"status": "UNIMPLEMENTED", "message": "not implemented"}}
+        {"error": {"status": error_status, "message": "request rejected"}}
     ]
     rebind_responses(local)
 

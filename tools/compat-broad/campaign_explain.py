@@ -166,10 +166,19 @@ def manifest() -> dict:
 
 def binding() -> dict:
     return {
-        "kind": "production-campaign-explain-01-comparison-v2",
+        "kind": "production-campaign-explain-01-comparison-v3",
         "manifestDigest": digest(manifest()),
         "observerSha256": campaign_observer_digest(),
-        "normalization": "shared-campaign-typed-json-v1",
+        "normalization": "shared-campaign-typed-json-v2",
+        "durationProjection": {
+            "scope": "successful analyze runQuery and runAggregationQuery responses",
+            "path": "explainMetrics.executionStats.executionDuration",
+            "marker": {
+                "type": "google.protobuf.Duration",
+                "nondeterministic": True,
+            },
+            "invalidValues": "rejected by the envelope validator",
+        },
         "requireSameObserver": True,
         "retainMismatch": True,
         "indeterminateOnIncompleteLifecycle": True,
@@ -353,8 +362,18 @@ def compare_production_local(production: dict, local: dict) -> dict:
         for before, after in zip(
             production["receipt"]["rows"], local["receipt"]["rows"], strict=True
         ):
-            left = normalize_response(before["body"], production["nonce"])
-            right = normalize_response(after["body"], local["nonce"])
+            left = normalize_response(
+                before["body"],
+                production["nonce"],
+                operation=before["request"],
+                status=before["status"],
+            )
+            right = normalize_response(
+                after["body"],
+                local["nonce"],
+                operation=after["request"],
+                status=after["status"],
+            )
             result["rows"].append(
                 {
                     "id": before["id"],
@@ -377,13 +396,47 @@ def compare_production_local(production: dict, local: dict) -> dict:
     return result
 
 
-def normalize_response(value, nonce):
+def normalize_response(value, nonce, *, operation=None, status=None):
     from batch_pair import normalize
 
     parent = f"projects/{PROJECT}/databases/(default)/documents/campaign/{nonce}"
-    return normalize(
+    result = normalize(
         value, {"firestoreParents": {"campaign": parent}}, service="firestore"
     )
+    if (
+        type(status) is int
+        and status == 200
+        and isinstance(operation, dict)
+        and operation.get("method") == "POST"
+        and operation.get("path", "").endswith((":runQuery", ":runAggregationQuery"))
+        and operation.get("body", {}).get("explainOptions") == {"analyze": True}
+    ):
+        _project_explain_duration(result)
+    return result
+
+
+def _project_explain_duration(value):
+    """Replace only valid Explain analyze durations with a typed marker."""
+    if not isinstance(value, list):
+        raise ValueError("Explain analyze response must be a list")
+    metrics_rows = [
+        row for row in value if isinstance(row, dict) and "explainMetrics" in row
+    ]
+    if len(metrics_rows) != 1:
+        raise ValueError("Explain analyze metrics row missing or repeated")
+    metrics = metrics_rows[0]["explainMetrics"]
+    if not isinstance(metrics, dict) or not isinstance(
+        metrics.get("executionStats"), dict
+    ):
+        raise ValueError("Explain analyze executionStats missing")
+    stats = metrics["executionStats"]
+    duration = stats.get("executionDuration")
+    if not isinstance(duration, str) or not _duration_valid(duration):
+        raise ValueError("Explain analyze executionDuration invalid")
+    stats["executionDuration"] = {
+        "type": "google.protobuf.Duration",
+        "nondeterministic": True,
+    }
 
 
 class Gate(SharedGate):
@@ -549,6 +602,19 @@ _COMPARABLE_EXPLAIN_ERRORS = {
 }
 
 
+def _duration_valid(value):
+    if not isinstance(value, str):
+        return False
+    match = re.fullmatch(r"(0|[1-9]\d*)(?:\.(\d{1,9}))?s", value)
+    if match is None:
+        return False
+    seconds = int(match.group(1))
+    fraction = match.group(2) or ""
+    return seconds < 315_576_000_000 or (
+        seconds == 315_576_000_000 and (not fraction or int(fraction) == 0)
+    )
+
+
 def explain_response_valid(operation, status, value):
     """Validate REST wire shape while retaining well-formed semantic differences."""
 
@@ -559,18 +625,6 @@ def explain_response_valid(operation, status, value):
             return int(value) <= 2**63 - 1
         except ValueError:
             return False
-
-    def duration_valid(value):
-        if not isinstance(value, str):
-            return False
-        match = re.fullmatch(r"(0|[1-9]\d*)(?:\.(\d{1,9}))?s", value)
-        if match is None:
-            return False
-        seconds = int(match.group(1))
-        fraction = match.group(2) or ""
-        return seconds < 315_576_000_000 or (
-            seconds == 315_576_000_000 and (not fraction or int(fraction) == 0)
-        )
 
     def int64_string(value):
         if not isinstance(value, str) or not re.fullmatch(r"\d+", value):
@@ -674,7 +728,7 @@ def explain_response_valid(operation, status, value):
             return False
         if not int64_string(stats.get("readOperations")):
             return False
-        if not duration_valid(stats.get("executionDuration")):
+        if not _duration_valid(stats.get("executionDuration")):
             return False
         debug_stats = stats.get("debugStats")
         if not isinstance(debug_stats, dict):

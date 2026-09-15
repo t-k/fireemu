@@ -2,6 +2,7 @@
 //! deny-by-default, budgets from the catalog, unsupported built-ins fail closed.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use fireemu_core_rules::eval::{
     evaluate_request, evaluate_request_traced_owned, Decision, DenyReason, Method, RequestContext,
@@ -159,6 +160,29 @@ fn user_function_does_not_capture_caller_match_bindings() {
 }
 
 #[test]
+fn user_function_lexical_capture_survives_caller_parameter_and_let() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents/users/{owner} {\n    function isOwner() { return request.auth.uid == owner; }\n    function gate(owner) { let owner = request.auth.uid; return isOwner(); }\n    allow get: if gate(request.auth.uid);\n  }\n}",
+    )
+    .unwrap();
+    let path = "/databases/(default)/documents/users/alice";
+    let alice = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, path, Some(auth("alice", false, None))),
+    );
+    let bob = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, path, Some(auth("bob", false, None))),
+    );
+
+    assert!(matches!(alice.decision, Decision::Allow), "{alice:?}");
+    assert!(
+        matches!(bob.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{bob:?}"
+    );
+}
+
+#[test]
 fn storage_function_calls_resolve_in_the_definition_scope() {
     let ruleset = parse_ruleset(
         "rules_version = '2';\nservice firebase.storage {\n  function decision() { return false; }\n  function gate() { return decision(); }\n  match /b/{bucket}/o/{path=**} {\n    function decision() { return true; }\n    allow read: if gate();\n  }\n}",
@@ -178,7 +202,7 @@ fn storage_function_calls_resolve_in_the_definition_scope() {
 fn nested_recursive_wildcards_are_bounded_by_match_work_budget() {
     let mut source = String::from("rules_version = '2';\nservice cloud.firestore {\n");
     for index in 0..8 {
-        source.push_str(&format!("  match /{{part{index}=**}} {{\n"));
+        let _ = writeln!(source, "  match /{{part{index}=**}} {{");
     }
     source.push_str("    match /never { allow read; }\n");
     for _ in 0..8 {

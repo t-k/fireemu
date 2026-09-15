@@ -11,3 +11,5 @@ The file supervisor reconciles the disk contents observed at startup with the ac
 These are local runtime repairs. They do not claim production Rules parity or production compiler/watch behavior.
 
 User-defined functions now restore the binding values captured at their declaration match as well as the declaration's function namespace. A caller's parameter or nested match capture cannot shadow a callee's lexical capture. The evaluator also visits recursive-wildcard path splits incrementally and charges a separate bounded matcher-work budget; it fails closed with an explicit evaluator budget reason instead of allocating every split up front. These local safety boundaries are not production limit claims.
+
+Function declarations in one lexical scope now share one immutable function environment. A function call switches to that shared declaration environment and returns to the caller without cloning the declaration list, removing the per-request quadratic reference table while preserving lexical name resolution. The local regression asserts pointer sharing across a generated declaration set; production memory and performance parity remain unobserved.

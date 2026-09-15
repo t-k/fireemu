@@ -267,11 +267,23 @@ struct Scope<'a> {
     functions: Vec<&'a FunctionDecl>,
     /// Functions visible from each declaration's lexical scope. The active `functions` stack
     /// tracks the call site, while this map restores the declaration environment for a call.
-    function_scopes: BTreeMap<usize, Vec<&'a FunctionDecl>>,
+    /// Environments are shared by declarations in the same lexical scope so the static table
+    /// does not retain a separate copy for every function.
+    function_scopes: BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
     /// Value bindings captured at each declaration site. Match captures are dynamic values, so
     /// this is populated while walking the matching block and restored for every call.
     function_bindings: BTreeMap<usize, Vec<(String, RulesValue)>>,
     bindings: Vec<Binding<'a>>,
+    /// The lexical function environment of the function currently being evaluated. `None`
+    /// means that resolution follows the active match/call-site stack in `functions`.
+    lexical_functions: Option<Arc<FunctionEnvironment<'a>>>,
+}
+
+/// Immutable lexical function declarations for one scope. Parent environments are linked rather
+/// than flattened so nested scopes do not copy all ancestor declarations.
+struct FunctionEnvironment<'a> {
+    parent: Option<Arc<FunctionEnvironment<'a>>>,
+    own: Vec<&'a FunctionDecl>,
 }
 
 struct Binding<'a> {
@@ -477,7 +489,7 @@ fn evaluate_prepared(
             continue;
         }
         let mut function_scopes = BTreeMap::new();
-        collect_function_scopes(&service.items, &[], &mut function_scopes);
+        collect_function_scopes(&service.items, None, &mut function_scopes);
         let functions = service
             .items
             .iter()
@@ -491,6 +503,7 @@ fn evaluate_prepared(
             function_scopes,
             function_bindings: BTreeMap::new(),
             bindings: Vec::new(),
+            lexical_functions: None,
         };
         let mut ev = Evaluator {
             nesting: 0,
@@ -656,8 +669,8 @@ fn function_key(function: &FunctionDecl) -> usize {
 
 fn collect_function_scopes<'a>(
     items: &'a [Item],
-    parent: &[&'a FunctionDecl],
-    scopes: &mut BTreeMap<usize, Vec<&'a FunctionDecl>>,
+    parent: Option<Arc<FunctionEnvironment<'a>>>,
+    scopes: &mut BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
 ) {
     let own: Vec<&'a FunctionDecl> = items
         .iter()
@@ -666,14 +679,13 @@ fn collect_function_scopes<'a>(
             Item::Match(_) => None,
         })
         .collect();
-    let mut visible = parent.to_vec();
-    visible.extend(own.iter().copied());
-    for function in &own {
-        scopes.insert(function_key(function), visible.clone());
+    let visible = Arc::new(FunctionEnvironment { parent, own });
+    for function in &visible.own {
+        scopes.insert(function_key(function), Arc::clone(&visible));
     }
     for item in items {
         if let Item::Match(block) = item {
-            collect_function_scopes(&block.items, &visible, scopes);
+            collect_function_scopes(&block.items, Some(Arc::clone(&visible)), scopes);
         }
     }
 }
@@ -723,8 +735,8 @@ fn walk_match<'a>(
             .bindings
             .iter()
             .filter_map(|binding| match &binding.state {
-                BindingState::Value(value) => Some((binding.name.clone(), value.clone())),
-                BindingState::Resolved {
+                BindingState::Value(value)
+                | BindingState::Resolved {
                     result: Ok(value), ..
                 } => Some((binding.name.clone(), value.clone())),
                 BindingState::Lazy(_)
@@ -1242,12 +1254,16 @@ impl<'a> Evaluator<'a> {
     }
 
     fn function(&self, name: &str) -> Option<&'a FunctionDecl> {
-        self.scope
-            .functions
-            .iter()
-            .rev()
-            .find(|f| f.name == name)
-            .copied()
+        if let Some(functions) = &self.scope.lexical_functions {
+            function_in_environment(functions, name)
+        } else {
+            self.scope
+                .functions
+                .iter()
+                .rev()
+                .find(|f| f.name == name)
+                .copied()
+        }
     }
 
     /// Evaluates `expr` behind a recursion guard: a tree deeper than
@@ -1883,14 +1899,8 @@ impl<'a> Evaluator<'a> {
             )));
         }
         self.budget.enter_call()?;
-        let caller_functions = self
-            .scope
-            .function_scopes
-            .get(&function_key(f))
-            .cloned()
-            .map(|definition_functions| {
-                std::mem::replace(&mut self.scope.functions, definition_functions)
-            });
+        let caller_lexical_functions = self.scope.lexical_functions.take();
+        self.scope.lexical_functions = self.scope.function_scopes.get(&function_key(f)).cloned();
         let caller_bindings = std::mem::take(&mut self.scope.bindings);
         let definition_bindings = self
             .scope
@@ -1917,12 +1927,28 @@ impl<'a> Evaluator<'a> {
             self.eval(&f.body)
         };
         self.scope.bindings = caller_bindings;
-        if let Some(caller_functions) = caller_functions {
-            self.scope.functions = caller_functions;
-        }
+        self.scope.lexical_functions = caller_lexical_functions;
         self.budget.leave_call();
         result
     }
+}
+
+fn function_in_environment<'a>(
+    environment: &FunctionEnvironment<'a>,
+    name: &str,
+) -> Option<&'a FunctionDecl> {
+    environment
+        .own
+        .iter()
+        .rev()
+        .find(|function| function.name == name)
+        .copied()
+        .or_else(|| {
+            environment
+                .parent
+                .as_deref()
+                .and_then(|parent| function_in_environment(parent, name))
+        })
 }
 
 // Int / float equality follows the Rules language (numeric comparison), so the widening cast
@@ -2705,4 +2731,43 @@ fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
     let (dp, dl) = ((lat2 - lat1).to_radians(), (lng2 - lng1).to_radians());
     let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
     2.0 * EARTH_RADIUS_KM * a.sqrt().asin()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{collect_function_scopes, function_key};
+    use crate::parse::parse_ruleset;
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+    use std::sync::Arc;
+
+    #[test]
+    fn declarations_in_one_lexical_scope_share_their_function_environment() {
+        let mut source = String::from("rules_version = '2';\nservice cloud.firestore {\n");
+        for index in 0..256 {
+            let _ = writeln!(source, "  function helper{index}() {{ return false; }}");
+        }
+        source.push_str(
+            "  match /databases/{db}/documents/{document=**} { allow read: if false; }\n}",
+        );
+        let ruleset = parse_ruleset(&source).expect("generated rules should parse");
+        let service = &ruleset.services[0];
+        let mut scopes = BTreeMap::new();
+        collect_function_scopes(service.items.as_slice(), None, &mut scopes);
+
+        assert_eq!(scopes.len(), 256);
+        let first = scopes
+            .values()
+            .next()
+            .expect("generated declarations should be indexed");
+        assert!(scopes.values().all(|scope| Arc::ptr_eq(scope, first)));
+        assert!(service
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                crate::ast::Item::Function(function) => Some(function),
+                crate::ast::Item::Match(_) => None,
+            })
+            .all(|function| scopes.contains_key(&function_key(function))));
+    }
 }

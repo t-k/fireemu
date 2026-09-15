@@ -481,6 +481,23 @@
       "requiresProductionChange": false
     },
     {
+      "id": "GAP-FS-RULES-006",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Rules evaluation built a separate copy of the visible function declarations for every declaration during each request, causing avoidable quadratic reference retention and per-call cloning.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/eval.rs"
+      ],
+      "nextAction": "Lexical function environments are shared by declaration scope and call_user switches the shared environment without cloning; production memory and performance parity remain unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
       "id": "FS-U05",
       "feature": "FS-RULES-INDEXES",
       "kind": "unmapped",

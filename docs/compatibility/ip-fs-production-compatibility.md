@@ -163,3 +163,7 @@ comparison-contract digests. State verification, cleanup, configuration preserva
 and process/listener shutdown passed. `productionExecuted` remains false; this is
 local evidence for the prepared campaign and does not promote Explain or the parent
 query/index group to production compatibility.
+
+## Latest local gap repair (`9e159414`)
+
+The Firestore REST `BatchWrite` adapter now validates `labels` as an object whose values are strings before publishing any writes. A malformed-label request is rejected atomically and the target remains absent. The REST, Identity Toolkit and Rules regression suites, package Clippy and formatting passed on the integrated source. This is a local contract repair; it does not change saved production receipts or promote the parent feature groups to `COMPAT_VERIFIED`.

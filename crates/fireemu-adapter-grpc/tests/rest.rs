@@ -446,7 +446,8 @@ fn batch_write_rest_rejects_non_array_writes_without_mutation() {
     let s = state(None);
     let target = "projects/demo-app/databases/(default)/documents/batch-shape/target";
 
-    for writes in [json!({"not": "an array"}), Value::Null] {
+    {
+        let writes = json!({"not": "an array"});
         let (status, body) = call(
             &s,
             "POST",
@@ -1562,7 +1563,7 @@ fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable(
         json!({"orderBy": [1]}),
         json!({"from": [{"collectionId": 1}]}),
         json!({"from": [{"allDescendants": "true"}]}),
-        json!({"orderBy": [{"direction": 1}]}),
+        json!({"orderBy": [{"direction": 3}]}),
         json!({"select": "not an object"}),
         json!({"select": {"fields": "not an array"}}),
         json!({"where": {"compositeFilter": {"op": "AND", "filters": "not an array"}}}),
@@ -1595,6 +1596,42 @@ fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable(
         json!({"structuredQuery": {"from": [{"collectionId": "q"}], "orderBy": []}}),
     );
     assert_eq!(status, 200, "{body}");
+}
+
+#[test]
+fn rest_protojson_null_fields_and_numeric_order_direction_follow_unset_rules() {
+    let s = state(None);
+    for query in [
+        json!({"from": null, "orderBy": null}),
+        json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 1}]}),
+        json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 2}]}),
+    ] {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": query}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": null, "labels": null}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, json!({}));
+
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": null}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, json!([]));
 }
 
 #[test]

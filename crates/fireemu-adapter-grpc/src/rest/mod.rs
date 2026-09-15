@@ -1113,7 +1113,7 @@ impl RestState {
         )
         .map_err(|e| bad(&e))?;
         let documents: Vec<String> = match body.get("documents") {
-            None => Vec::new(),
+            None | Some(Value::Null) => Vec::new(),
             Some(Value::Array(items)) => items
                 .iter()
                 .enumerate()
@@ -1444,7 +1444,7 @@ fn transaction_bytes(v: Option<&Value>) -> Result<Vec<u8>, Status> {
 
 fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
     match body.get("writes") {
-        None => Ok(Vec::new()),
+        None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Array(items)) => items
             .iter()
             .map(write_from_json)
@@ -1458,6 +1458,9 @@ fn labels_from_json(body: &Value) -> Result<std::collections::HashMap<String, St
     let Some(labels) = body.get("labels") else {
         return Ok(std::collections::HashMap::new());
     };
+    if labels.is_null() {
+        return Ok(std::collections::HashMap::new());
+    }
     let Some(labels) = labels.as_object() else {
         return Err(Status::invalid_argument("labels must be an object"));
     };

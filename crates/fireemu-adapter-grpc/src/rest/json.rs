@@ -959,6 +959,7 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
     }
     let from = v
         .get("from")
+        .filter(|value| !value.is_null())
         .map(|value| {
             value
                 .as_array()
@@ -996,6 +997,7 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
         .unwrap_or_default();
     let order_by = v
         .get("orderBy")
+        .filter(|value| !value.is_null())
         .map(|value| {
             value
                 .as_array()
@@ -1017,7 +1019,16 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
                             Some(other) => {
                                 return err(format!("unknown order direction {other:?}"))
                             }
-                            None => return err("orderBy.direction must be a string"),
+                            None => match value.as_i64() {
+                                Some(1) => sq::Direction::Ascending,
+                                Some(2) => sq::Direction::Descending,
+                                Some(other) => {
+                                    return err(format!("unknown order direction {other}"))
+                                }
+                                None => {
+                                    return err("orderBy.direction must be a string or enum number")
+                                }
+                            },
                         },
                     };
                     Ok(sq::Order {

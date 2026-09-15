@@ -217,6 +217,10 @@ The Auth/ListCollectionIds shadow now rejects embedded empty parent segments as 
 
 The current source was run through the existing first46 local adapter and compared with the immutable `ab7bd698`/`bc38f392` saved production observations. The new candidate [`7fbb3e85-first46-saved-recomparison.json`](../../spec/compatibility/broad-runs/7fbb3e85-first46-saved-recomparison.json) records valid bindings, complete recording, cleanup and 46 matching rows under the existing comparison contract. The original 35-match/11-mismatch comparison, its receipts and the later repaired candidates remain unchanged; this replay performed no production operation and does not promote `FS-DATA-WRITE` beyond its declared scope.
 
+## Current saved-reference replay (`4d51cb93`)
+
+The current feature artifact was run again through the existing first46 local adapter and compared with the immutable `ab7bd698`/`bc38f392` saved production observations. The new candidate [`4d51cb93-first46-saved-recomparison.json`](../../spec/compatibility/broad-runs/4d51cb93-first46-saved-recomparison.json) records a distinct local observer digest, valid bindings, complete recording, cleanup and 46 matching rows under the existing comparison contract. This is a new saved-reference comparison; the original 35-match/11-mismatch comparison and earlier candidates remain unchanged, and no production operation was performed.
+
 ## Current transaction and campaign validation (`9da3750a`)
 
 The Firestore REST `beginTransaction` decoder now validates the complete request shape before allocating transaction state. Unknown or null top-level bodies and unknown option members are rejected without side effects. ProtoJSON null oneof members are treated as unset, valid numeric and named `concurrencyMode` enum values are accepted, and valid `requestOptions.requestTags` are forwarded to the request model. The REST regression suite contains 51 tests for this path and passes on the current feature head; package Clippy and formatting also pass. This is local transport and state-safety evidence. Production transaction conflict, retention and SDK retry behavior remain unobserved.

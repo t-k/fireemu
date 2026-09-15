@@ -5787,6 +5787,79 @@ fn oob_link_flag_rejects_non_boolean_values_without_issuing_a_code() {
 }
 
 #[test]
+fn oob_link_flag_type_errors_are_atomic_on_project_and_tenant_admin_routes() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let (mut s, lines) = recording_state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer-a").unwrap();
+    s.registry = Some(registry);
+    let project_path = format!("{V1}/projects/demo-app/accounts:sendOobCode");
+    let tenant_path = format!("{V1}/projects/demo-app/tenants/customer-a/accounts:sendOobCode");
+    let project_email = "oob-project-type@example.com";
+    let tenant_email = "oob-tenant-type@example.com";
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({"email": project_email, "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/tenants/customer-a/accounts"),
+        &json!({"email": tenant_email, "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert!(drain(&lines).is_empty());
+
+    for (path, email) in [(project_path, project_email), (tenant_path, tenant_email)] {
+        for value in [json!("true"), json!(1), json!([]), json!({})] {
+            let body = json!({
+                "requestType": "PASSWORD_RESET",
+                "email": email,
+                "returnOobLink": value,
+            });
+            let before_codes = get(&s, &format!("{EMU}/oobCodes"));
+            let before_notices = drain(&lines);
+            let (status, response) = admin(&s, &path, &body);
+            assert_eq!(status, 400, "{response}");
+            assert_eq!(
+                response["error"]["message"],
+                "INVALID_ARGUMENT : returnOobLink must be a boolean"
+            );
+            assert_eq!(get(&s, &format!("{EMU}/oobCodes")), before_codes);
+            assert_eq!(drain(&lines), before_notices);
+        }
+    }
+}
+
+#[test]
+fn oob_link_flag_null_keeps_client_delivery_behavior() {
+    let (s, lines) = recording_state();
+    sign_up(&s, "oob-null@example.com");
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({
+            "requestType": "PASSWORD_RESET",
+            "email": "oob-null@example.com",
+            "returnOobLink": null,
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert!(response.get("oobCode").is_none());
+    assert!(response.get("oobLink").is_none());
+    assert_eq!(
+        get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(drain(&lines).len(), 1);
+}
+
+#[test]
 fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     let (s, lines) = recording_state();
     let user = sign_up(&s, "notice@example.com");

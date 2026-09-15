@@ -2542,6 +2542,9 @@ fn dispatch(
         Handler::AdminQuery => admin_query(store, body, options.query_limits),
         // Admin link generators: the code and link come back to the caller.
         Handler::AdminSendOobCode => {
+            if let Err(response) = opt_bool(body, "returnOobLink") {
+                return response;
+            }
             let mut with_link = body.clone();
             with_link["returnOobLink"] = json!(true);
             send_oob_code(store, &with_link, at, headers, true)

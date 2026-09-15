@@ -45,6 +45,14 @@ all completed. The artifact, observer, comparison-contract and lifecycle hashes 
 bound to this run. `productionExecuted` remains false, so this record is local evidence
 for the prepared campaign and is not a production compatibility result.
 
+The current feature head `b51430aec743b4fc78dbd32396e7ba66b1be616a` was shadowed with
+the same six cases and is recorded in
+[b51430ae-explain-local-shadow.json](../../spec/compatibility/broad-runs/b51430ae-explain-local-shadow.json).
+The run completed twelve observation rows and six recovery rows with state verification,
+cleanup, configuration preservation and process/listener shutdown complete. Its artifact,
+observer, comparison-contract and lifecycle hashes are bound to this run. No production
+request was made and the record remains local-only.
+
 ## Saved production re-evaluation
 
 The original production receipt and its original local shadow were validated

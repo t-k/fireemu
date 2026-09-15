@@ -1044,6 +1044,27 @@ fn collection_group_scope_is_not_ignored() {
 }
 
 #[test]
+fn collection_group_index_does_not_serve_collection_query() {
+    let q = tasks().with_filter(FilterExpr::And(vec![
+        field("done", FieldOp::Equal, Value::Boolean(false)),
+        field("owner", FieldOp::Equal, Value::String("u".to_owned())),
+    ]));
+    let mut group = IndexSet::default();
+    let mut index = composite(&[
+        ("done", IndexFieldMode::Ascending),
+        ("owner", IndexFieldMode::Ascending),
+    ]);
+    index.query_scope = IndexQueryScope::CollectionGroup;
+    group.set_default_single_field_indexes(&CollectionId::try_new("tasks").unwrap(), vec![]);
+    group.add_composite(index);
+
+    assert!(matches!(
+        decide(&q, &group, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+}
+
+#[test]
 fn array_mode_is_not_ignored() {
     let q = tasks().with_filter(FilterExpr::And(vec![
         field(

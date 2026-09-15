@@ -670,7 +670,7 @@ fn composite_serves(
         return false;
     }
     let scope_ok = match index.query_scope {
-        IndexQueryScope::CollectionGroup => true,
+        IndexQueryScope::CollectionGroup => group,
         IndexQueryScope::Collection => !group,
     };
     if !scope_ok {

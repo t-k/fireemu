@@ -9,3 +9,5 @@ Rules activation now validates the declared version and recursive-wildcard struc
 The file supervisor reconciles the disk contents observed at startup with the active generation and checks a content signature in addition to file metadata. This catches a change that occurs before the supervisor starts and replacements that preserve size and modification time while retaining the last-known-good behavior for invalid candidates.
 
 These are local runtime repairs. They do not claim production Rules parity or production compiler/watch behavior.
+
+User-defined functions now restore the binding values captured at their declaration match as well as the declaration's function namespace. A caller's parameter or nested match capture cannot shadow a callee's lexical capture. The evaluator also visits recursive-wildcard path splits incrementally and charges a separate bounded matcher-work budget; it fails closed with an explicit evaluator budget reason instead of allocating every split up front. These local safety boundaries are not production limit claims.

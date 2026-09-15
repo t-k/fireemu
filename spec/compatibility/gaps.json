@@ -395,7 +395,7 @@
       "id": "GAP-FS-RULES-001",
       "feature": "FS-RULES-INDEXES",
       "kind": "mismatch",
-      "scope": "Rules function calls resolved same-named declarations from the call-site match instead of the function definition scope, which could change an authorization decision for nested Firestore or Storage matches.",
+      "scope": "Rules user-defined functions could resolve same-named declarations from the call-site match and retain caller match bindings instead of the function definition scope, which could change an authorization decision for nested Firestore or Storage matches.",
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
       "productionObservationStatus": "none",
@@ -405,7 +405,7 @@
         "crates/fireemu-core-rules/src/eval.rs",
         "crates/fireemu-core-rules/tests/eval.rs"
       ],
-      "nextAction": "Local lexical-scope regressions pass for Firestore and Storage; production Rules parity and additional provider-specific scopes remain unobserved.",
+      "nextAction": "Local lexical function and binding regressions pass for Firestore and Storage; production Rules parity and additional provider-specific scopes remain unobserved.",
       "blockedReason": "",
       "requiresProductionChange": false
     },
@@ -459,6 +459,24 @@
         "crates/fireemu/src/main.rs"
       ],
       "nextAction": "Reload startup reconciliation and content-signature checks pass locally; production watcher parity remains unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-005",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Nested recursive-wildcard matching enumerated all prefix splits before evaluating rules, leaving matcher work outside the expression budget and allowing combinatorial CPU and allocation growth.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/eval.rs",
+        "crates/fireemu-core-rules/tests/eval.rs"
+      ],
+      "nextAction": "Local matcher work is visited incrementally and fails closed at an explicit evaluator safety bound; production matcher work and error parity remain unobserved.",
       "blockedReason": "",
       "requiresProductionChange": false
     },

@@ -1948,7 +1948,12 @@ fn exported_providers(
 ) -> Vec<ProviderUserInfo> {
     let mut providers = Vec::new();
     if let Some(email) = user.email.as_ref().filter(|_| {
-        matches!(&user.provider, Provider::Password) || has_password || email_link_signin
+        // A hashless password-shaped account has no credential signal after import, so retain
+        // its password provider only while it has no federated identity. A recycled account can
+        // otherwise retain a stale Password enum and incorrectly regain the provider on export.
+        (matches!(&user.provider, Provider::Password) && user.federated.is_empty())
+            || has_password
+            || email_link_signin
     }) {
         providers.push(ProviderUserInfo {
             provider_id: "password".to_owned(),
@@ -3210,5 +3215,43 @@ mod tests {
             .iter()
             .all(|provider| provider.provider_id != "password"));
         assert_eq!(exported.provider_user_info[0].provider_id, "phone");
+    }
+
+    #[test]
+    fn stale_password_provider_with_federated_identity_is_not_exported() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, FederatedIdentity, NewUser, Provider};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(14), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("stale-password@example.com"),
+                LogicalInstant::from_unix_seconds(100),
+            )
+            .expect("the account is created");
+        store
+            .link_federated(
+                &uid,
+                FederatedIdentity {
+                    provider_id: "google.com".to_owned(),
+                    raw_id: "google-stale-password".to_owned(),
+                    email: Some("stale-password@example.com".to_owned()),
+                    display_name: None,
+                    photo_url: None,
+                },
+            )
+            .expect("the IdP identity is linked");
+        // Model a stale provider classification from an account recycled by an older runtime.
+        store.user_mut(&uid).expect("the account exists").provider = Provider::Password;
+
+        let user = store.user(&uid).expect("the account exists");
+        assert!(!store.has_password(&uid));
+        let exported = super::exported_account(&store, user, None);
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .all(|provider| provider.provider_id != "password"));
+        assert_eq!(exported.provider_user_info[0].provider_id, "google.com");
     }
 }

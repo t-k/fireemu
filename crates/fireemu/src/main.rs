@@ -1519,6 +1519,15 @@ fn watched_file(path: &str) -> Result<(WatchedFileStamp, u64, Vec<u8>), String> 
     Ok((watched_file_stamp(path)?, signature, bytes))
 }
 
+fn watched_file_changed(
+    observed_stamp: Option<WatchedFileStamp>,
+    observed_signature: Option<u64>,
+    candidate_stamp: WatchedFileStamp,
+    candidate_signature: u64,
+) -> bool {
+    observed_stamp != Some(candidate_stamp) || observed_signature != Some(candidate_signature)
+}
+
 async fn watched_file_stamp_off_thread(path: &str) -> Result<WatchedFileStamp, String> {
     let path = path.to_owned();
     tokio::task::spawn_blocking(move || watched_file_stamp(&path))
@@ -1542,41 +1551,66 @@ fn start_rules_reload_supervisor(
     let weak = Arc::downgrade(rules);
     let barrier = barrier.clone();
     let initial = watched_file(&path).ok();
-    let mut observed_stamp = initial.as_ref().map(|(stamp, _, _)| *stamp);
-    let mut observed_signature = initial.as_ref().map(|(_, signature, _)| *signature);
+    let initial_differs = initial
+        .as_ref()
+        .and_then(|(_, _, bytes)| std::str::from_utf8(bytes).ok())
+        .is_some_and(|source| {
+            rules
+                .snapshot()
+                .ok()
+                .and_then(|snapshot| snapshot.source.clone())
+                .as_deref()
+                != Some(source)
+        });
+    let mut observed_stamp = initial
+        .as_ref()
+        .map(|(stamp, _, _)| *stamp)
+        .filter(|_| !initial_differs);
+    let mut observed_signature = initial
+        .as_ref()
+        .map(|(_, signature, _)| *signature)
+        .filter(|_| !initial_differs);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(750)).await;
             let Some(rules) = weak.upgrade() else {
                 return;
             };
-            let stamp = match watched_file_stamp_off_thread(&path).await {
-                Ok(stamp) if observed_stamp != Some(stamp) => stamp,
-                Ok(_) => continue,
-                Err(reason) => {
-                    eprintln!("warning: {label} reload scan failed: {reason}");
-                    continue;
-                }
-            };
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let (candidate_stamp, candidate_signature, bytes) =
+            let (candidate_stamp, candidate_signature, _) =
                 match watched_file_off_thread(&path).await {
                     Ok(candidate) => candidate,
-                    Err(error) => {
-                        eprintln!(
-                        "warning: {label} reload failed; keeping the last-known-good rules: {error}"
-                    );
+                    Err(reason) => {
+                        eprintln!("warning: {label} reload scan failed: {reason}");
                         continue;
                     }
                 };
-            if candidate_stamp != stamp {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let (stable_stamp, stable_signature, bytes) = match watched_file_off_thread(&path).await
+            {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    eprintln!(
+                        "warning: {label} reload failed; keeping the last-known-good rules: {error}"
+                    );
+                    continue;
+                }
+            };
+            if stable_stamp != candidate_stamp || stable_signature != candidate_signature {
                 continue;
             }
-            observed_stamp = Some(candidate_stamp);
-            if observed_signature == Some(candidate_signature) {
+            if !watched_file_changed(
+                observed_stamp,
+                observed_signature,
+                stable_stamp,
+                stable_signature,
+            ) {
                 continue;
             }
-            observed_signature = Some(candidate_signature);
+            observed_stamp = Some(stable_stamp);
+            if observed_signature == Some(stable_signature) {
+                continue;
+            }
+            observed_signature = Some(stable_signature);
             let source = match String::from_utf8(bytes) {
                 Ok(source) => source,
                 Err(error) => {
@@ -2369,6 +2403,17 @@ mod config_reload_tests {
     }
 
     #[test]
+    fn rules_reload_checks_content_when_file_metadata_is_unchanged() {
+        let stamp = WatchedFileStamp {
+            len: 42,
+            modified_nanos: 7,
+        };
+
+        assert!(watched_file_changed(Some(stamp), Some(1), stamp, 2));
+        assert!(!watched_file_changed(Some(stamp), Some(1), stamp, 1));
+    }
+
+    #[test]
     fn config_without_schema_version_rejects_canonical_keys_on_every_input_path() {
         let dir = scratch("missing-schema-version");
         let source = dir.join("settings.json");
@@ -2686,6 +2731,36 @@ mod config_reload_tests {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         assert_eq!(rules.snapshot().unwrap().source.as_deref(), Some(RULES_TWO));
+        drop(rules);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn rules_reload_reconciles_file_changed_before_supervisor_start() {
+        let dir = scratch("rules-before-supervisor");
+        let path = dir.join("firestore.rules");
+        std::fs::write(&path, RULES_TWO).unwrap();
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_rules_reload_supervisor(
+            path.to_string_lossy().into_owned(),
+            "Firestore rules",
+            &rules,
+            &barrier,
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if rules.snapshot().unwrap().source.as_deref() == Some(RULES_TWO) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the file present before supervisor start should reconcile");
         drop(rules);
         let _ = std::fs::remove_dir_all(dir);
     }

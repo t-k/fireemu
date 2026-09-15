@@ -428,6 +428,41 @@
       "requiresProductionChange": false
     },
     {
+      "id": "GAP-FS-RULES-003",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Rules activation accepted unknown rules_version values and invalid recursive-wildcard structure, including multiple recursive wildcards in one match and non-terminal wildcards under rules_version 1.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/runtime.rs",
+        "crates/fireemu-core-rules/tests/activation.rs"
+      ],
+      "nextAction": "Local activation rejects unknown versions and invalid wildcard structure; production compiler error parity remains unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-004",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Rules file reload could miss a file that changed before supervisor startup or a same-size, same-mtime replacement when metadata alone was unchanged.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu/src/main.rs"
+      ],
+      "nextAction": "Reload startup reconciliation and content-signature checks pass locally; production watcher parity remains unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
       "id": "FS-U05",
       "feature": "FS-RULES-INDEXES",
       "kind": "unmapped",

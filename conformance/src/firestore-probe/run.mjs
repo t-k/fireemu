@@ -442,6 +442,7 @@ async function check() {
   let failures = 0;
   let diverged = 0;
   let messageDrift = 0;
+  let localOnlyRows = 0;
   const drift = [];
   for (const program of matrix.programs) {
     const mine = got[program.id] ?? { missing: true };
@@ -452,11 +453,25 @@ async function check() {
     }
     for (const [stepId, recorded] of Object.entries(program.steps)) {
       rows += 1;
+      const definition = PROGRAMS.find((candidate) => candidate.id === program.id)?.steps.find(
+        (candidate) => candidate.id === stepId,
+      );
+      const actual = mine.steps?.[stepId];
+      if (definition?.localOnly) {
+        // Local-only extensions are not official-emulator compatibility claims. They still need
+        // a complete HTTP observation so a failed local run cannot disappear as a skip.
+        if (!isCompletedHttpObservation(actual)) {
+          failures += 1;
+          console.error(`\n${rowKey(program.id, stepId)} local-only observation is incomplete`);
+        } else {
+          localOnlyRows += 1;
+        }
+        continue;
+      }
       // The register in `divergences.mjs` is the source of truth; the copy stamped into
       // the matrix at record time is for the reader of the JSON.
       const row = { ...recorded, divergence: DIVERGENCES[rowKey(program.id, stepId)] };
       const expected = row.divergence ? row.divergence.fireemu : row.oracle;
-      const actual = mine.steps?.[stepId];
       // A divergence may pin a success by the digest of its body (the document names it
       // returns) rather than by the whole body, which keeps the register readable while
       // still pinning the result set.
@@ -502,8 +517,9 @@ async function check() {
   await writeFile(join(RUN_DIR, "message-drift.json"), `${JSON.stringify(drift, null, 2)}\n`);
   if (failures === 0) {
     console.log(
-      `ok: ${rows} rows agree with the recorded oracle ` +
+      `ok: ${rows - localOnlyRows} gated rows agree with the recorded oracle ` +
         `(${diverged} documented divergence${diverged === 1 ? "" : "s"}, ` +
+        `${localOnlyRows} local-only rows observed, ` +
         `${messageDrift} error messages differ; see .runs/firestore-probe/message-drift.json)`,
     );
     return 0;

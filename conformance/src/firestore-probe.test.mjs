@@ -2,8 +2,18 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { buildProductionPrograms, compareProductionToFireemu } from "./firestore-probe/run.mjs";
+import { PROGRAMS } from "./firestore-probe/programs.mjs";
 
 describe("Firestore production recorder", () => {
+  it("marks Admin inventory route rows as local-only checks", () => {
+    const program = PROGRAMS.find((candidate) => candidate.id === "emulator/routes");
+    assert.ok(program);
+    const localOnly = new Set(
+      program.steps.filter((step) => step.localOnly).map((step) => step.id),
+    );
+    assert.deepEqual(localOnly, new Set(["list-databases", "get-database", "get-named-database"]));
+  });
+
   it("uses the live fireemu step even when the stored divergence disagrees", () => {
     const result = buildProductionPrograms({
       production: {

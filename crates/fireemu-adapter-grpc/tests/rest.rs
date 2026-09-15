@@ -1709,6 +1709,26 @@ fn transaction_option_accepts_concurrency_mode_enum() {
 }
 
 #[test]
+fn begin_transaction_accepts_request_options_with_request_tags() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"requestOptions": {"requestTags": ["transaction-test"]}}),
+    );
+    assert_eq!(status, 200, "{response}");
+    let token = response["transaction"].as_str().unwrap();
+    let (status, rollback) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:rollback"),
+        json!({"transaction": token}),
+    );
+    assert_eq!(status, 200, "{rollback}");
+}
+
+#[test]
 fn rest_protojson_null_fields_and_numeric_order_direction_follow_unset_rules() {
     let s = state(None);
     for query in [

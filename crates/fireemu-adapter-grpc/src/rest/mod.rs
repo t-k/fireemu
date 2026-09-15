@@ -908,7 +908,7 @@ impl RestState {
             "batchWrite" => self.batch_write(principal, resource, body),
             "batchGet" => self.batch_get(principal, resource, body),
             "beginTransaction" => {
-                json::strict_keys(body, &["options"]).map_err(|e| bad(&e))?;
+                json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
                 let database = database_of(resource)?;
                 self.check_database_audience(principal, &database)?;
                 let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
@@ -916,7 +916,8 @@ impl RestState {
                     options: Some(
                         transaction_options_from_json(body.get("options")).map_err(|e| bad(&e))?,
                     ),
-                    request_options: None,
+                    request_options: request_options_from_json(body.get("requestOptions"))
+                        .map_err(|e| bad(&e))?,
                 })?;
                 Ok(ok(json!({"transaction": base64_encode(&token)})))
             }

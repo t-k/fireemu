@@ -341,6 +341,33 @@ def test_current_next_campaign_package_binds_current_artifact_result():
     assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
     assert artifact["artifactSha256"] == result["artifactSha256"]
     assert artifact["executionCommit"] == result["executionCommit"]
+    assert package["adapter"]["shadowSha256"] == "8c15512f1de689cc21e43819a98b5cc229e608e4dded691191434647ae6b6c28"
+    assert package["adapter"]["sourceSha256"] == "88e4c79839b4aa9ba6e47a9f0b75ab9505461ae31fb04ff9dd2a842b4f916ed0"
+    assert package["adapter"]["gateSha256"] == "7ac19bad00fc18df247105474cb51181a874b5f45a87a0fa196d454196381c1a"
+    assert package["adapter"]["shadowCommit"] == result["executionCommit"]
+    assert artifact["observerSha256"] == result["observerSha256"]
+    assert result["productionExecuted"] is False
+    assert artifact["observationRequests"] == 18
+    assert artifact["recoveryRequests"] == 19
+    assert artifact["totalRequests"] == 39
+    assert all(value is None for value in package["production"]["ownerInputs"].values())
+
+
+def test_v4_campaign_package_binds_integrated_artifact_result():
+    import hashlib
+
+    root = __import__("pathlib").Path(__file__).parents[3]
+    package_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v4.json"
+    result_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact-v4/result.json"
+    package = json.loads(package_path.read_bytes())
+    result = json.loads(result_path.read_bytes())
+    artifact = package["localShadow"]["ownedArtifact"]
+    assert package["kind"] == "production-campaign-auth-list-next-v4"
+    assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
+    assert artifact["artifactSha256"] == result["artifactSha256"]
+    assert artifact["observerSha256"] == result["observerSha256"]
+    assert artifact["parentManifestSha256"] == result["parentManifestSha256"]
+    assert artifact["executionCommit"] == result["executionCommit"]
     shadow_path = root / package["adapter"]["shadowPath"]
     source_path = root / package["adapter"]["path"]
     gate_path = root / package["adapter"]["gatePath"]
@@ -348,8 +375,9 @@ def test_current_next_campaign_package_binds_current_artifact_result():
     assert package["adapter"]["sourceSha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
     assert package["adapter"]["gateSha256"] == hashlib.sha256(gate_path.read_bytes()).hexdigest()
     assert package["adapter"]["shadowCommit"] == result["executionCommit"]
-    assert artifact["observerSha256"] == result["observerSha256"]
     assert result["productionExecuted"] is False
+    assert result["recordingComplete"] is True
+    assert result["stateValidation"] is True
     assert artifact["observationRequests"] == 18
     assert artifact["recoveryRequests"] == 19
     assert artifact["totalRequests"] == 39

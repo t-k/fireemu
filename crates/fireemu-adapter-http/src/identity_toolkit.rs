@@ -6445,6 +6445,7 @@ fn emulator_action(
         Some("verifyEmail") => action_apply(
             store,
             code,
+            OobRequestType::VerifyEmail,
             continue_url,
             at,
             ("verify your email", "Try verifying your email again."),
@@ -6453,6 +6454,7 @@ fn emulator_action(
         Some("verifyAndChangeEmail") => action_apply(
             store,
             code,
+            OobRequestType::VerifyAndChangeEmail,
             continue_url,
             at,
             ("change your email", "Try changing your email again."),
@@ -6537,11 +6539,18 @@ fn action_reset_password(
 fn action_apply(
     store: &mut AuthStore,
     code: &str,
+    expected: OobRequestType,
     continue_url: Option<&str>,
     at: LogicalInstant,
     (what, retry): (&str, &str),
     success: impl FnOnce(&Value) -> Value,
 ) -> JsonResponse {
+    if store
+        .oob_code(code)
+        .is_none_or(|entry| entry.request_type != expected)
+    {
+        return action_expired(what, retry);
+    }
     let response = apply_oob_code(store, code, at);
     if response.status != 200 {
         return if response.body["error"]["message"].as_str() == Some("INVALID_OOB_CODE") {

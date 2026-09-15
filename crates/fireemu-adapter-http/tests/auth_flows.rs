@@ -6683,6 +6683,29 @@ fn the_reset_password_link_needs_a_real_new_password_and_then_sets_it() {
 }
 
 #[test]
+fn action_mode_must_match_the_email_action_code_kind() {
+    let s = state();
+    let user = sign_up(&s, "mode-owner@example.com");
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": user["idToken"], "newEmail": "mode-new@example.com"}),
+    );
+    assert_eq!(status, 200);
+    let code = issued_code(&s, "VERIFY_AND_CHANGE_EMAIL");
+    let (status, response) = get(
+        &s,
+        &format!("/emulator/action?mode=verifyEmail&oobCode={code}&apiKey=fake-api-key"),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["authEmulator"]["error"],
+        "Your request to verify your email has expired or the link has already been used."
+    );
+    assert_eq!(issued_code(&s, "VERIFY_AND_CHANGE_EMAIL"), code);
+}
+
+#[test]
 fn action_links_with_a_continue_url_redirect_after_acting() {
     let s = state();
     let user = sign_up(&s, "redirect@example.com");

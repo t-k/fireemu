@@ -744,6 +744,25 @@ fn sign_up_sign_in_lookup_and_refresh() {
 }
 
 #[test]
+fn sign_up_omits_tokens_when_return_secure_token_is_false() {
+    let s = state();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "no-token-signup@example.com",
+            "password": "password1",
+            "returnSecureToken": false
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body.get("idToken").is_none(), "{body}");
+    assert!(body.get("refreshToken").is_none(), "{body}");
+    assert!(body.get("expiresIn").is_none(), "{body}");
+    assert_eq!(body["email"], "no-token-signup@example.com");
+}
+
+#[test]
 fn secure_token_refresh_preserves_authentication_time() {
     let s = state();
     let (status, created) = post(

@@ -655,6 +655,94 @@ fn batch_write_rest_continues_after_item_failures_and_preserves_suffix() {
 }
 
 #[test]
+fn batch_write_rest_reports_lock_contention_per_item_and_recovers_after_rollback() {
+    let s = state(None);
+    let locked = "projects/demo-app/databases/(default)/documents/rest-batch-contention/locked";
+    let prefix = "projects/demo-app/databases/(default)/documents/rest-batch-contention/prefix";
+    let suffix = "projects/demo-app/databases/(default)/documents/rest-batch-contention/suffix";
+
+    let (status, seeded) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/rest-batch-contention/locked"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{seeded}");
+
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let transaction = begun["transaction"].as_str().unwrap().to_owned();
+    let (status, held) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/rest-batch-contention/locked?transaction={transaction}"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{held}");
+
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [
+                {"update": {"name": prefix, "fields": {"v": {"integerValue": "2"}}}},
+                {"update": {"name": locked, "fields": {"v": {"integerValue": "3"}}}},
+                {"update": {"name": suffix, "fields": {"v": {"integerValue": "4"}}}}
+            ]
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["status"].as_array().map(Vec::len), Some(3), "{body}");
+    assert_eq!(
+        body["writeResults"].as_array().map(Vec::len),
+        Some(3),
+        "{body}"
+    );
+    assert_eq!(body["status"][0], json!({}));
+    assert_eq!(body["status"][1]["code"], 10);
+    assert_eq!(
+        body["status"][1]["message"],
+        "Too much contention on these documents. Please try again."
+    );
+    assert_eq!(body["writeResults"][1], json!({}));
+    assert_eq!(body["status"][2], json!({}));
+    assert!(body["writeResults"][0]["updateTime"].is_string());
+    assert!(body["writeResults"][2]["updateTime"].is_string());
+
+    for (path, expected) in [
+        ("rest-batch-contention/prefix", "2"),
+        ("rest-batch-contention/locked", "1"),
+        ("rest-batch-contention/suffix", "4"),
+    ] {
+        let (status, document) = call(&s, "GET", &format!("{DOCS}/{path}"), Value::Null);
+        assert_eq!(status, 200, "{document}");
+        assert_eq!(document["fields"]["v"]["integerValue"], expected);
+    }
+
+    let (status, rolled_back) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:rollback"),
+        json!({"transaction": transaction}),
+    );
+    assert_eq!(status, 200, "{rolled_back}");
+    let (status, recovered) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/rest-batch-contention/locked"),
+        json!({"fields": {"v": {"integerValue": "5"}}}),
+    );
+    assert_eq!(status, 200, "{recovered}");
+    assert_eq!(recovered["fields"]["v"]["integerValue"], "5");
+}
+
+#[test]
 fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() {
     let s = state(None);
     let mut read_time = String::new();

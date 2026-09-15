@@ -36,6 +36,15 @@ including state verification, cleanup and process shutdown. Its artifact and
 lifecycle hashes are distinct from earlier shadows; this record remains local-only
 and does not alter any saved production receipt.
 
+The current feature head `5fe5972c5b754454641edcebc9b965767751e105` has a further
+local shadow recorded in
+[5fe5972c-explain-local-shadow.json](../../spec/compatibility/broad-runs/5fe5972c-explain-local-shadow.json).
+It completed the same six cases with twelve observation rows and six recovery rows;
+state verification, cleanup, configuration preservation and process/listener shutdown
+all completed. The artifact, observer, comparison-contract and lifecycle hashes are
+bound to this run. `productionExecuted` remains false, so this record is local evidence
+for the prepared campaign and is not a production compatibility result.
+
 ## Saved production re-evaluation
 
 The original production receipt and its original local shadow were validated

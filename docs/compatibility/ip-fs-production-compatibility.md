@@ -152,3 +152,14 @@ The Rules evaluator now preserves an established allow when later, non-matching 
 - Auth Admin `accounts:lookup` now rejects malformed `federatedUserId` entries (non-object items, missing or non-string `providerId`/`rawId`) before lookup and returns no partial `users` result. The focused identity-toolkit suite passed 80 tests. The production error wording and SDK behavior remain unobserved. `CompatibilitySelection.json` was regenerated in `b0c32838`.
 - The next Auth refresh/ListCollectionIds campaign adapter was restored from immutable historical source and connected to a loopback-only shadow. Its package records 16 observation rows, 16 recovery requests, `completed: true`, `productionExecuted: false`, `processCleanup: true`, and evidence SHA-256 `c49e1012c4fd49c540ab0854dbede12f15093f510a4e8f8ff06654fe388f9874`. Owner, permission, execution window, nonce, current-environment inputs and production expectation remain unset; the shadow is not production compatibility evidence.
 - The shadow now restores the shared batch transport after completion, so a local campaign run cannot change the transport used by later compatibility tests. The regression asserts that the original transport is restored; the full compat-broad suite passed 603 tests with 10 documented skips.
+
+## Current Explain shadow (`5fe5972c`)
+
+The current feature head completed another local shadow of the six bounded Query
+Explain cases. The redacted record
+[`5fe5972c-explain-local-shadow.json`](../../spec/compatibility/broad-runs/5fe5972c-explain-local-shadow.json)
+binds twelve observation rows and six recovery rows to its artifact, observer and
+comparison-contract digests. State verification, cleanup, configuration preservation
+and process/listener shutdown passed. `productionExecuted` remains false; this is
+local evidence for the prepared campaign and does not promote Explain or the parent
+query/index group to production compatibility.

@@ -3,7 +3,7 @@
 
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig,
+    AuthError, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig, Provider,
 };
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -737,6 +737,10 @@ fn a_verified_email_recycles_an_unverified_account() {
     // The verified IdP email took over: the password is gone and the email is verified.
     assert!(!s.has_password(&uid));
     assert!(s.user(&uid).unwrap().email_verified);
+    assert_eq!(
+        s.user(&uid).unwrap().provider,
+        Provider::Federated("oidc.x".to_owned())
+    );
 }
 
 // ------------------------------------------------------------------------------------------

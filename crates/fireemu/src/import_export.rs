@@ -2993,4 +2993,61 @@ mod tests {
             fireemu_core_auth::store::Provider::Password
         );
     }
+
+    #[test]
+    fn removed_password_provider_is_not_reintroduced_by_export() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, FederatedIdentity, NewUser, Provider};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let created_at = LogicalInstant::from_unix_seconds(100);
+        let uid = store
+            .create_user(NewUser::email("switch@example.com"), created_at)
+            .expect("the password account is created");
+        store
+            .sign_in_with_idp(
+                FederatedIdentity {
+                    provider_id: "google.com".to_owned(),
+                    raw_id: "google-user".to_owned(),
+                    email: Some("switch@example.com".to_owned()),
+                    display_name: None,
+                    photo_url: None,
+                },
+                true,
+                LogicalInstant::from_unix_seconds(101),
+            )
+            .expect("the verified IdP sign-in succeeds");
+
+        let user = store
+            .user(&uid)
+            .expect("the account remains after recycling");
+        assert_eq!(user.provider, Provider::Federated("google.com".to_owned()));
+        assert!(!store.has_password(&uid));
+        let exported = super::exported_account(&store, user, None);
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .all(|provider| provider.provider_id != "password"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "google.com"));
+
+        let imported = super::imported_user(&exported, std::path::Path::new("offline.json"))
+            .expect("the exported account is importable");
+        let mut restored = AuthStore::new("demo-app", SplitMix64::new(8), TotpPolicy::default());
+        let restored_uid = restored.import_user(imported).expect("the account imports");
+        let reexported = super::exported_account(
+            &restored,
+            restored
+                .user_by_id(restored_uid.as_str())
+                .expect("the imported account exists"),
+            None,
+        );
+        assert!(reexported
+            .provider_user_info
+            .iter()
+            .all(|provider| provider.provider_id != "password"));
+    }
 }

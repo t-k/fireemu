@@ -2279,6 +2279,7 @@ impl AuthStore {
                             user.password = None;
                             user.phone_number = None;
                             user.federated.clear();
+                            user.provider = Provider::Federated(identity.provider_id.clone());
                             user.tokens_valid_after = Self::whole_second(now);
                             user.tokens_revoked = true;
                         }

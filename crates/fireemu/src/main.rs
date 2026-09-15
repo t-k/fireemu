@@ -2407,6 +2407,20 @@ mod config_reload_tests {
         dir
     }
 
+    fn write_rules_generation(
+        path: &std::path::Path,
+        source: &str,
+        modified: std::time::SystemTime,
+    ) {
+        std::fs::write(path, source).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
     fn index_backend(indexes: &str) -> Arc<LocalBackend> {
         let gateway = Gateway {
             enforce_limits: true,
@@ -3009,9 +3023,33 @@ mod config_reload_tests {
         assert!(authorize("(default)"));
         assert!(!authorize("staging"));
 
+        let deny_generation = named_rules.snapshot().unwrap().generation();
+        let deny_mtime = std::fs::metadata(&named_path).unwrap().modified().unwrap();
         std::fs::write(&named_path, "malformed rules").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&named_path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(deny_mtime + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
         assert!(authorize("(default)"));
+        assert!(!authorize("staging"));
+
+        write_rules_generation(&named_path, RULES_DENY_READ, deny_mtime);
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if named_rules.snapshot().unwrap().generation() > deny_generation {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the malformed named generation should be observed and retained");
         assert!(!authorize("staging"));
 
         std::fs::write(&named_path, RULES_ONE).unwrap();

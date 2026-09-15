@@ -1948,12 +1948,7 @@ fn exported_providers(
 ) -> Vec<ProviderUserInfo> {
     let mut providers = Vec::new();
     if let Some(email) = user.email.as_ref().filter(|_| {
-        // A hashless password-shaped account has no credential signal after import, so retain
-        // its password provider only while it has no federated identity. A recycled account can
-        // otherwise retain a stale Password enum and incorrectly regain the provider on export.
-        (matches!(&user.provider, Provider::Password) && user.federated.is_empty())
-            || has_password
-            || email_link_signin
+        matches!(&user.provider, Provider::Password) || has_password || email_link_signin
     }) {
         providers.push(ProviderUserInfo {
             provider_id: "password".to_owned(),
@@ -3057,39 +3052,163 @@ mod tests {
     }
 
     #[test]
-    fn stale_password_provider_with_federated_identity_is_not_exported() {
+    fn hashless_password_provider_with_federated_identity_is_preserved() {
         use fireemu_core_auth::mfa::TotpPolicy;
-        use fireemu_core_auth::store::{AuthStore, FederatedIdentity, NewUser, Provider};
+        use fireemu_core_auth::store::AuthStore;
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
         use fireemu_core_types::determinism::SplitMix64;
 
-        let mut store = AuthStore::new("demo-app", SplitMix64::new(9), TotpPolicy::default());
+        let record = UserRecord {
+            local_id: "hashless-linked".to_owned(),
+            email: Some("linked@example.com".to_owned()),
+            provider_user_info: vec![
+                ProviderUserInfo {
+                    provider_id: "password".to_owned(),
+                    raw_id: "linked@example.com".to_owned(),
+                    ..ProviderUserInfo::default()
+                },
+                ProviderUserInfo {
+                    provider_id: "google.com".to_owned(),
+                    raw_id: "google-linked".to_owned(),
+                    ..ProviderUserInfo::default()
+                },
+            ],
+            ..UserRecord::default()
+        };
+        let imported = super::imported_user(&record, std::path::Path::new("offline.json"))
+            .expect("the hashless account imports");
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(10), TotpPolicy::default());
+        let uid = store.import_user(imported).expect("the account imports");
+        let exported = super::exported_account(
+            &store,
+            store.user_by_id(uid.as_str()).expect("the account exists"),
+            None,
+        );
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "password"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "google.com"));
+    }
+
+    #[test]
+    fn hashless_password_provider_with_phone_identity_is_preserved() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::AuthStore;
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let record = UserRecord {
+            local_id: "hashless-phone".to_owned(),
+            email: Some("phone@example.com".to_owned()),
+            phone_number: Some("+15550000001".to_owned()),
+            provider_user_info: vec![ProviderUserInfo {
+                provider_id: "password".to_owned(),
+                raw_id: "phone@example.com".to_owned(),
+                ..ProviderUserInfo::default()
+            }],
+            ..UserRecord::default()
+        };
+        let imported = super::imported_user(&record, std::path::Path::new("offline.json"))
+            .expect("the hashless account imports");
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(11), TotpPolicy::default());
+        let uid = store.import_user(imported).expect("the account imports");
+        let exported = super::exported_account(
+            &store,
+            store.user_by_id(uid.as_str()).expect("the account exists"),
+            None,
+        );
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "password"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "phone"));
+    }
+
+    #[test]
+    fn explicit_email_link_provider_with_linked_identities_is_preserved() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::AuthStore;
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let record = UserRecord {
+            local_id: "email-link-linked".to_owned(),
+            email: Some("link-linked@example.com".to_owned()),
+            email_link_signin: true,
+            phone_number: Some("+15550000003".to_owned()),
+            provider_user_info: vec![
+                ProviderUserInfo {
+                    provider_id: "password".to_owned(),
+                    raw_id: "link-linked@example.com".to_owned(),
+                    ..ProviderUserInfo::default()
+                },
+                ProviderUserInfo {
+                    provider_id: "google.com".to_owned(),
+                    raw_id: "google-link-linked".to_owned(),
+                    ..ProviderUserInfo::default()
+                },
+            ],
+            ..UserRecord::default()
+        };
+        let imported = super::imported_user(&record, std::path::Path::new("offline.json"))
+            .expect("the email-link account imports");
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(13), TotpPolicy::default());
+        let uid = store.import_user(imported).expect("the account imports");
+        let exported = super::exported_account(
+            &store,
+            store.user_by_id(uid.as_str()).expect("the account exists"),
+            None,
+        );
+        assert!(exported.email_link_signin);
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "password"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "google.com"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "phone"));
+    }
+
+    #[test]
+    fn clear_password_retags_phone_provider_for_export() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser, Provider};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(12), TotpPolicy::default());
         let uid = store
             .create_user(
-                NewUser::email("recycled@example.com"),
+                NewUser::email("stale-phone@example.com"),
                 LogicalInstant::from_unix_seconds(100),
             )
             .expect("the account is created");
         store
-            .link_federated(
-                &uid,
-                FederatedIdentity {
-                    provider_id: "google.com".to_owned(),
-                    raw_id: "google-recycled".to_owned(),
-                    email: Some("recycled@example.com".to_owned()),
-                    display_name: None,
-                    photo_url: None,
-                },
-            )
-            .expect("the IdP identity is linked");
-        store.user_mut(&uid).expect("the account exists").provider = Provider::Password;
+            .set_phone_number(&uid, Some("+15550000002"))
+            .expect("the phone is linked");
+        store
+            .set_password(&uid, "hunter22", LogicalInstant::from_unix_seconds(101))
+            .expect("the password is set");
+        assert!(store.clear_password(&uid).expect("the password is cleared"));
 
         let user = store.user(&uid).expect("the account exists");
-        assert!(!store.has_password(&uid));
+        assert_eq!(user.provider, Provider::Phone);
         let exported = super::exported_account(&store, user, None);
         assert!(exported
             .provider_user_info
             .iter()
             .all(|provider| provider.provider_id != "password"));
-        assert_eq!(exported.provider_user_info[0].provider_id, "google.com");
+        assert_eq!(exported.provider_user_info[0].provider_id, "phone");
     }
 }

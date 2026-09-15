@@ -1632,6 +1632,83 @@ fn begin_transaction_rejects_unknown_transaction_option_without_creating_state()
 }
 
 #[test]
+#[allow(clippy::result_large_err)]
+fn begin_transaction_rejects_unknown_body_without_creating_state() {
+    let s = state(None);
+    let parent = fireemu_adapter_grpc::decode::parse_parent(&DOCS[4..]).unwrap();
+    let active_before = s
+        .local
+        .database_handle(&parent)
+        .unwrap()
+        .with(|db| Ok(db.transaction_bookkeeping_stats().active))
+        .unwrap();
+
+    for body in [json!({"unexpected": true}), json!([]), Value::Null] {
+        let (status, response) = call(&s, "POST", &format!("{DOCS}:beginTransaction"), body);
+        assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["status"], "INVALID_ARGUMENT",
+            "{response}"
+        );
+    }
+
+    let active_after = s
+        .local
+        .database_handle(&parent)
+        .unwrap()
+        .with(|db| Ok(db.transaction_bookkeeping_stats().active))
+        .unwrap();
+    assert_eq!(active_after, active_before);
+}
+
+#[test]
+fn transaction_option_null_oneof_members_are_unset() {
+    let s = state(None);
+    for options in [
+        json!({"readWrite": {}}),
+        json!({"readOnly": null, "readWrite": {}}),
+    ] {
+        let (status, response) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": options}),
+        );
+        assert_eq!(status, 200, "{response}");
+        let token = response["transaction"].as_str().unwrap();
+        let (status, rollback) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:rollback"),
+            json!({"transaction": token}),
+        );
+        assert_eq!(status, 200, "{rollback}");
+    }
+}
+
+#[test]
+fn transaction_option_accepts_concurrency_mode_enum() {
+    let s = state(None);
+    for mode in ["CONCURRENCY_MODE_UNSPECIFIED", "OPTIMISTIC", "PESSIMISTIC"] {
+        let (status, response) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {"concurrencyMode": mode}}}),
+        );
+        assert_eq!(status, 200, "{response}");
+        let token = response["transaction"].as_str().unwrap();
+        let (status, rollback) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:rollback"),
+            json!({"transaction": token}),
+        );
+        assert_eq!(status, 200, "{rollback}");
+    }
+}
+
+#[test]
 fn rest_protojson_null_fields_and_numeric_order_direction_follow_unset_rules() {
     let s = state(None);
     for query in [

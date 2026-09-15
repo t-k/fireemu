@@ -908,6 +908,7 @@ impl RestState {
             "batchWrite" => self.batch_write(principal, resource, body),
             "batchGet" => self.batch_get(principal, resource, body),
             "beginTransaction" => {
+                json::strict_keys(body, &["options"]).map_err(|e| bad(&e))?;
                 let database = database_of(resource)?;
                 self.check_database_audience(principal, &database)?;
                 let token = self.local.begin_transaction(&pb::BeginTransactionRequest {

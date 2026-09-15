@@ -1139,12 +1139,13 @@ pub fn transaction_options_from_json(
         return Ok(pb::TransactionOptions::default());
     };
     strict_keys(v, &["readOnly", "readWrite"])?;
-    if v.get("readOnly").is_some() && v.get("readWrite").is_some() {
+    let read_only = v.get("readOnly").filter(|value| !value.is_null());
+    let read_write = v.get("readWrite").filter(|value| !value.is_null());
+    if read_only.is_some() && read_write.is_some() {
         return err("readOnly and readWrite are mutually exclusive");
     }
-    let mode = match v {
-        o if o.get("readOnly").is_some() => {
-            let read_only = o.get("readOnly").unwrap();
+    let mode = match (read_only, read_write) {
+        (Some(read_only), None) => {
             strict_keys(read_only, &["readTime"])?;
             let read_time = read_only
                 .get("readTime")
@@ -1158,9 +1159,8 @@ pub fn transaction_options_from_json(
                 },
             ))
         }
-        o if o.get("readWrite").is_some() => {
-            let read_write = o.get("readWrite").unwrap();
-            strict_keys(read_write, &["retryTransaction"])?;
+        (None, Some(read_write)) => {
+            strict_keys(read_write, &["retryTransaction", "concurrencyMode"])?;
             let retry = match read_write
                 .get("retryTransaction")
                 .filter(|value| !value.is_null())
@@ -1171,10 +1171,37 @@ pub fn transaction_options_from_json(
                     .and_then(base64_decode)?,
                 None => Vec::new(),
             };
+            let concurrency_mode = match read_write
+                .get("concurrencyMode")
+                .filter(|value| !value.is_null())
+            {
+                None => 0,
+                Some(Value::String(value)) => {
+                    pb::transaction_options::ConcurrencyMode::from_str_name(value)
+                        .map(|mode| mode as i32)
+                        .ok_or_else(|| {
+                            JsonError("readWrite.concurrencyMode must be a valid enum".into())
+                        })?
+                }
+                Some(Value::Number(value)) => {
+                    let value = value
+                        .as_i64()
+                        .and_then(|value| i32::try_from(value).ok())
+                        .ok_or_else(|| {
+                            JsonError("readWrite.concurrencyMode must be a valid enum".into())
+                        })?;
+                    pb::transaction_options::ConcurrencyMode::try_from(value)
+                        .map(|mode| mode as i32)
+                        .map_err(|_| {
+                            JsonError("readWrite.concurrencyMode must be a valid enum".into())
+                        })?
+                }
+                Some(_) => return err("readWrite.concurrencyMode must be a string or integer"),
+            };
             Some(pb::transaction_options::Mode::ReadWrite(
                 pb::transaction_options::ReadWrite {
                     retry_transaction: retry,
-                    ..Default::default()
+                    concurrency_mode,
                 },
             ))
         }

@@ -298,17 +298,30 @@ def test_checked_in_manifest_matches_proposal():
     )
 
 
-def test_next_campaign_package_keeps_legacy_shadow_and_binds_artifact_result():
+def test_legacy_next_campaign_package_remains_immutable():
+    root = __import__("pathlib").Path(__file__).parents[3]
+    package_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v2.json"
+    package = json.loads(package_path.read_bytes())
+    assert package["status"] == "prepared-offline-blocked-owner"
+    assert package["localShadow"]["legacyFixture"]["productionExecuted"] is False
+    assert package["adapter"]["sourceCommit"] == "aad1a41de926fae244b42ac1bd2baa57bf2bcdde"
+    assert package["adapter"]["shadowCommit"] == "f050e9bb84b4202146c8d4d0a741350c73aa0c50"
+    assert package["adapter"]["sourceSha256"] == "aba4b0b9f306c021cd9b9786850a16d460adf336e993a4338155ecc807240427"
+    assert package["adapter"]["shadowSha256"] == "28667c98521c7762e52aad0c5b57535e440df4972a3cea033ea78e1bde16c424"
+    assert package["localShadow"]["ownedArtifact"]["executionCommit"] == "f050e9bb84b4202146c8d4d0a741350c73aa0c50"
+    assert all(value is None for value in package["production"]["ownerInputs"].values())
+
+
+def test_current_next_campaign_package_binds_current_artifact_result():
     import hashlib
 
     root = __import__("pathlib").Path(__file__).parents[3]
-    package_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v2.json"
-    result_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact/result.json"
+    package_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v3.json"
+    result_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact-v3/result.json"
     package = json.loads(package_path.read_bytes())
     result = json.loads(result_path.read_bytes())
-    assert package["status"] == "prepared-offline-blocked-owner"
-    assert package["localShadow"]["legacyFixture"]["productionExecuted"] is False
     artifact = package["localShadow"]["ownedArtifact"]
+    assert package["kind"] == "production-campaign-auth-list-next-v3"
     assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
     assert artifact["artifactSha256"] == result["artifactSha256"]
     assert artifact["executionCommit"] == result["executionCommit"]
@@ -319,6 +332,9 @@ def test_next_campaign_package_keeps_legacy_shadow_and_binds_artifact_result():
     assert package["adapter"]["shadowCommit"] == result["executionCommit"]
     assert artifact["observerSha256"] == result["observerSha256"]
     assert result["productionExecuted"] is False
+    assert artifact["observationRequests"] == 18
+    assert artifact["recoveryRequests"] == 19
+    assert artifact["totalRequests"] == 39
     assert all(value is None for value in package["production"]["ownerInputs"].values())
 
 

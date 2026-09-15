@@ -80,6 +80,10 @@ The Rules evaluator now isolates caller parameters and `let` bindings from the d
 
 The finite `G4-select-copy-local` child is integrated at `3a173cb0`. It exercises the real Enterprise Pipeline `select`/`limit` entry with 17-document and 257-document fixtures across one and nine pages, preserves aliases and integer types, and records projected copy totals of 612 and 9,252 field bytes. This is local measurement only; it does not establish Enterprise or Firestore Standard production compatibility, process RSS bounds or a global quota.
 
+## Current local checkpoint (`dccb9f6a`)
+
+The finite `G2-write-stream-transaction-local` child is integrated at `7fb94a56`. A Write stream write contending with an active read-write transaction is refused with `ABORTED` without publishing any item in its multi-write request; after rollback, a fresh stream writes the document successfully. The 27-stream-test suite, integrated 334-test adapter run (one existing skip), adapter Clippy and the independent review passed. This remains local evidence: production stream/transaction precedence, REST/SDK parity and error ordering are unobserved, and the parent `FS-DATA-WRITE`/`FS-TRANSACTION` groups remain open.
+
 ## Current verification checkpoint (`13c1cbe3`)
 
 The current feature head revalidated the existing compatibility surface without new production traffic. The official 14-model Quint refresh updated only source-bound digests for `AtomicExportPublication`, `AuthTotp` and the transitively affected `CompatibilitySelection`; all baseline, connect, mutation, evidence, traceability and atomic publication gates passed. Workspace nextest passed 2,290 tests with 81 documented skips, workspace Clippy passed with `-D warnings`, compat-broad passed 583 tests with 10 documented skips, and conformance passed 24 scenarios with 199 gated steps. Auth and Firestore dedicated probes remained at 23 and 326 saved-fixture rows respectively. These results refresh current local and saved-reference evidence only; they do not promote the remaining parent groups to `COMPAT_VERIFIED` or close production-observation gaps.

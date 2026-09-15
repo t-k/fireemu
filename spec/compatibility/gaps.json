@@ -839,6 +839,24 @@
       "nextAction": "Closed as a local provider-lifecycle repair for the covered transitions: verified IdP recycling and actual password removal retag the surviving provider, while hashless password export/import remains Password. Production lookup/export parity for these transitions is not claimed and remains outside this record.",
       "blockedReason": "",
       "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-007",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "A successful Rules allow could be overturned when unrelated sibling or nested match-path exploration later exhausted the independent matcher-work budget, even though the request already had a valid allow.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/eval.rs",
+        "crates/fireemu-core-rules/tests/eval.rs"
+      ],
+      "nextAction": "The evaluator preserves an established allow only across FIREEMU-RULES-MATCH-WORK exhaustion; expression, call-depth, unsupported-operation and other budget failures remain fail-closed. Firestore and Storage local regressions pass; production matcher-budget and allow-short-circuit parity remain unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
     }
   ]
 }

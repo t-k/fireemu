@@ -186,8 +186,11 @@ def test_checked_in_manifest_matches_proposal():
 
 
 def test_actual_shadow_uses_gate_adapter_and_closes_transport(tmp_path):
+    import batch_adapter
+
     from campaign_auth_list_shadow import run
 
+    original_wire = batch_adapter.wire
     result = run(tmp_path / "shadow")
     assert result["completed"] is True
     assert result["processCleanup"] is True
@@ -200,6 +203,7 @@ def test_actual_shadow_uses_gate_adapter_and_closes_transport(tmp_path):
     responses = (tmp_path / "shadow" / "worker" / "responses.jsonl").read_text()
     assert "id-secret-" not in responses
     assert "refresh-secret-" not in responses
+    assert batch_adapter.wire is original_wire
 
 
 def test_gate_dispatch_rejects_typed_bypass_before_transport(tmp_path):

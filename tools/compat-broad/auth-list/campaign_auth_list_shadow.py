@@ -218,6 +218,7 @@ def run(output: Path) -> dict:
     ShadowHandler.documents = {}
     ShadowHandler.tokens = {}
     ShadowHandler.token_counter = 0
+    original_wire = batch_adapter.wire
     output.mkdir(mode=0o700, parents=False, exist_ok=False)
     server = ThreadingHTTPServer(("127.0.0.1", 0), ShadowHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -306,6 +307,7 @@ def run(output: Path) -> dict:
             "failure": type(error).__name__ + ":" + str(error),
         }
     finally:
+        batch_adapter.wire = original_wire
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)

@@ -366,6 +366,167 @@ async fn write_stream_handshake_then_sequential_commits() {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
+async fn write_stream_refuses_active_transaction_contention_without_mutation() {
+    let (mut client, handle) = start(false).await;
+    let locked_name = format!("{DOCS}/open/locked");
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("open/locked", &[("v", s("before"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    // An uncontended stream write is the nearby positive control.
+    let (control_tx, control_rx) = mpsc::channel(8);
+    let mut control = client
+        .write(ReceiverStream::new(control_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    control_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let control_handshake = control.next().await.unwrap().unwrap();
+    control_tx
+        .send(pb::WriteRequest {
+            stream_token: control_handshake.stream_token,
+            writes: vec![set_write("open/control", &[("v", s("accepted"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        control.next().await.unwrap().unwrap().write_results.len(),
+        1
+    );
+    drop(control_tx);
+    drop(control);
+
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite::default(),
+                )),
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    client
+        .get_document(pb::GetDocumentRequest {
+            name: locked_name.clone(),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                transaction.clone(),
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let (contended_tx, contended_rx) = mpsc::channel(8);
+    let mut contended = client
+        .write(ReceiverStream::new(contended_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    contended_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let handshake = contended.next().await.unwrap().unwrap();
+    contended_tx
+        .send(pb::WriteRequest {
+            stream_token: handshake.stream_token,
+            writes: vec![
+                set_write("open/locked", &[("v", s("must-not-commit"))]),
+                set_write("open/contended-tail", &[("v", s("must-not-commit"))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let error = contended.next().await.unwrap().unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Aborted);
+    drop(contended_tx);
+    drop(contended);
+
+    let locked = client
+        .get_document(pb::GetDocumentRequest {
+            name: locked_name.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(locked.fields["v"], s("before"));
+    assert_eq!(
+        client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/open/contended-tail"),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+
+    client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let (released_tx, released_rx) = mpsc::channel(8);
+    let mut released = client
+        .write(ReceiverStream::new(released_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    released_tx
+        .send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let released_handshake = released.next().await.unwrap().unwrap();
+    released_tx
+        .send(pb::WriteRequest {
+            stream_token: released_handshake.stream_token,
+            writes: vec![set_write("open/locked", &[("v", s("after-rollback"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        released.next().await.unwrap().unwrap().write_results.len(),
+        1
+    );
+    drop(released_tx);
+    drop(released);
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn write_stream_tokens_are_bound_to_stream_and_stream_id() {
     let (mut client, handle) = start(false).await;
     let (first_tx, first_rx) = mpsc::channel(8);

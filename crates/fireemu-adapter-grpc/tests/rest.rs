@@ -1545,9 +1545,22 @@ fn malformed_batch_get_documents_is_rejected_without_starting_a_transaction() {
 }
 
 #[test]
+#[allow(clippy::result_large_err)]
 fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable() {
     let s = state(None);
-    for query in [json!({"from": "q"}), json!({"orderBy": {}})] {
+    let parent = fireemu_adapter_grpc::decode::parse_parent(&DOCS[4..]).unwrap();
+    let active_before = s
+        .local
+        .database_handle(&parent)
+        .unwrap()
+        .with(|db| Ok(db.transaction_bookkeeping_stats().active))
+        .unwrap();
+    for query in [
+        json!({"from": "q"}),
+        json!({"orderBy": {}}),
+        json!({"from": [null]}),
+        json!({"orderBy": [1]}),
+    ] {
         let (status, body) = call(
             &s,
             "POST",
@@ -1557,6 +1570,13 @@ fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable(
         assert_eq!(status, 400, "{body}");
         assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
     }
+    let active_after = s
+        .local
+        .database_handle(&parent)
+        .unwrap()
+        .with(|db| Ok(db.transaction_bookkeeping_stats().active))
+        .unwrap();
+    assert_eq!(active_after, active_before);
 
     let (status, body) = call(
         &s,

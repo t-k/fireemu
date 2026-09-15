@@ -949,6 +949,9 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
             items
                 .iter()
                 .map(|f| {
+                    if !f.is_object() {
+                        return err("from elements must be objects");
+                    }
                     Ok(sq::CollectionSelector {
                         collection_id: f
                             .get("collectionId")
@@ -977,6 +980,9 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
             items
                 .iter()
                 .map(|o| {
+                    if !o.is_object() {
+                        return err("orderBy elements must be objects");
+                    }
                     let direction = match o.get("direction").and_then(Value::as_str) {
                         None | Some("ASCENDING" | "DIRECTION_UNSPECIFIED") => {
                             sq::Direction::Ascending
@@ -1378,6 +1384,13 @@ mod tests {
             let error = structured_query_from_json(&json!({field: value}))
                 .expect_err("a present query list must be an array");
             assert!(error.0.contains(&format!("{field} must be an array")));
+        }
+        for (field, value) in [("from", json!([null])), ("orderBy", json!([1]))] {
+            let error = structured_query_from_json(&json!({field: value}))
+                .expect_err("a query list element must be an object");
+            assert!(error
+                .0
+                .contains(&format!("{field} elements must be objects")));
         }
     }
 

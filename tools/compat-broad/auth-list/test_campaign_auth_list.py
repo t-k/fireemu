@@ -195,6 +195,24 @@ def test_checked_in_manifest_matches_proposal():
     )
 
 
+def test_next_campaign_package_keeps_legacy_shadow_and_binds_artifact_result():
+    import hashlib
+
+    root = __import__("pathlib").Path(__file__).parents[3]
+    package_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v2.json"
+    result_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact/result.json"
+    package = json.loads(package_path.read_bytes())
+    result = json.loads(result_path.read_bytes())
+    assert package["status"] == "prepared-offline-blocked-owner"
+    assert package["localShadow"]["legacyFixture"]["productionExecuted"] is False
+    artifact = package["localShadow"]["ownedArtifact"]
+    assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
+    assert artifact["artifactSha256"] == result["artifactSha256"]
+    assert artifact["executionCommit"] == result["executionCommit"]
+    assert result["productionExecuted"] is False
+    assert all(value is None for value in package["production"]["ownerInputs"].values())
+
+
 def test_actual_shadow_uses_fixed_fireemu_artifact_and_closes_transport(tmp_path):
     from campaign_auth_list_shadow import run
 

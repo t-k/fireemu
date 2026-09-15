@@ -1563,6 +1563,8 @@ fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable(
         json!({"from": [{"collectionId": 1}]}),
         json!({"from": [{"allDescendants": "true"}]}),
         json!({"orderBy": [{"direction": 1}]}),
+        json!({"select": "not an object"}),
+        json!({"select": {"fields": "not an array"}}),
     ] {
         let (status, body) = call(
             &s,

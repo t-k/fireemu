@@ -1011,20 +1011,22 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
         .transpose()?
         .unwrap_or_default();
     let select = match v.get("select") {
-        None => None,
-        Some(s) => Some(sq::Projection {
-            fields: s
-                .get("fields")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|f| field_reference(Some(f)).map(Option::unwrap_or_default))
-                        .collect::<Result<Vec<_>, _>>()
-                })
-                .transpose()?
-                .unwrap_or_default(),
-        }),
+        None | Some(Value::Null) => None,
+        Some(s) => {
+            let Some(s) = s.as_object() else {
+                return err("select must be an object");
+            };
+            let fields = match s.get("fields") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(fields) => fields
+                    .as_array()
+                    .ok_or_else(|| JsonError("select.fields must be an array".into()))?
+                    .iter()
+                    .map(|f| field_reference(Some(f)).map(Option::unwrap_or_default))
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            Some(sq::Projection { fields })
+        }
     };
     let find_nearest = v
         .get("findNearest")

@@ -48,6 +48,7 @@ No target feature is moved to class B merely because it is unimplemented, unobse
 - G0 ran exactly once at fixed checkout `a35f85b4`, retaining the original 10/2 result and repaired 12/12 comparison. Its consumed permission and nonce authorize no rerun.
 - The final-runtime aggregation replay compares 23/23 valid saved production HTTP observations. Missing and transport-failed rows remain indeterminate, and the original production matrix is unchanged.
 - Local SDK, Rules, Listen, Query Explain and other invariants are not presented as production comparisons.
+- The bounded `reads/read-time` replay at `c9201bf6` reuses the immutable Firestore production reference and compares the current local artifact across ten read-time operations. All ten rows match with complete local recording, state readback and cleanup; this is saved-production-reference evidence only and does not promote the parent Firestore groups.
 - Raw observations, original mismatches, collector versions, hashes, approvals and failed execution records remain immutable. Re-evaluation creates a separate result.
 
 ## Current candidate verification

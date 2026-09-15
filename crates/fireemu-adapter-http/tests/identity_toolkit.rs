@@ -5864,6 +5864,22 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
     }
     assert_tenant_stores_after_sign_in(&registry);
 
+    // A tenant-scoped ID token must not be accepted when the client selects a
+    // different tenant, even though both tenants use the same project API key.
+    // Keep this separate from refresh-token routing: it verifies the subject's
+    // namespace binding at the user-facing lookup boundary.
+    let (status, refused_lookup) = post(
+        &s,
+        "/identitytoolkit.googleapis.com/v1/accounts:lookup?key=worker-key",
+        &json!({
+            "tenantId": "customer-b",
+            "idToken": a["idToken"],
+        }),
+    );
+    assert_eq!(status, 400, "{refused_lookup}");
+    assert_eq!(refused_lookup["error"]["message"], "INVALID_ID_TOKEN");
+    assert_tenant_stores_after_sign_in(&registry);
+
     let before_a = registry
         .tenant_store("worker-alpha", "customer-a")
         .unwrap()

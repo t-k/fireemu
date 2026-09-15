@@ -2392,6 +2392,7 @@ mod config_reload_tests {
 
     const RULES_ONE: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
     const RULES_TWO: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow write: if false; } } }";
+    const RULES_DENY_READ: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
     const STORAGE_ALLOW: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; } } }";
     const STORAGE_DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if false; } } }";
     const STORAGE_WRITE: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow write: if true; } } }";
@@ -2889,6 +2890,148 @@ mod config_reload_tests {
             private.snapshot().unwrap().source.as_deref(),
             Some(STORAGE_DENY)
         );
+    }
+
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn named_firestore_rules_reload_isolated_from_default_database() {
+        let dir = scratch("named-rules-isolation");
+        let default_path = dir.join("default.rules");
+        let named_path = dir.join("named.rules");
+        std::fs::write(&default_path, RULES_ONE).unwrap();
+        std::fs::write(&named_path, RULES_ONE).unwrap();
+
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            7,
+        ));
+        let default_rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let named_rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let database_rules =
+            std::collections::BTreeMap::from([("staging".to_owned(), named_rules.clone())]);
+        let cfg = RuntimeConfig {
+            firestore_databases: std::collections::BTreeMap::from([
+                (
+                    fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
+                    crate::config::FirestoreDatabaseFiles {
+                        rules: Some(default_path.display().to_string()),
+                        indexes: None,
+                    },
+                ),
+                (
+                    "staging".to_owned(),
+                    crate::config::FirestoreDatabaseFiles {
+                        rules: Some(named_path.display().to_string()),
+                        indexes: None,
+                    },
+                ),
+            ]),
+            ..RuntimeConfig::default()
+        };
+        let loaded_storage = LoadedStorageRules {
+            registry: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+                Arc::new(RulesetSlot::default()),
+            )),
+            watched: Vec::new(),
+        };
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_firestore_config_reload_supervisors(
+            &cfg,
+            &backend,
+            &default_rules,
+            &database_rules,
+            &loaded_storage,
+            &barrier,
+        );
+        let auth = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            fireemu_core_types::determinism::SplitMix64::new(7),
+            fireemu_core_auth::mfa::TotpPolicy::default(),
+        )));
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let enforcer =
+            fireemu_adapter_grpc::rules::RulesEnforcer::new(default_rules.clone(), auth, clock)
+                .with_database_rules(database_rules);
+        let project = fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap();
+        let authorize = |database: &str| {
+            let database_id = fireemu_core_types::ids::DatabaseId::try_new(database).unwrap();
+            let path = fireemu_core_firestore::path::DocumentPath::parse(
+                &project,
+                &database_id,
+                "items/a",
+            )
+            .unwrap();
+            let reader = fireemu_adapter_grpc::rules::LatestReader {
+                backend: backend.clone(),
+                parent: fireemu_adapter_grpc::decode::Parent {
+                    project: project.clone(),
+                    database: database_id,
+                    document: None,
+                },
+            };
+            enforcer
+                .authorize_get(
+                    &fireemu_adapter_grpc::rules::Principal::Anonymous,
+                    &path,
+                    None,
+                    &reader,
+                )
+                .is_ok()
+        };
+
+        assert!(authorize("(default)"));
+        assert!(authorize("staging"));
+        std::fs::write(&named_path, RULES_DENY_READ).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if named_rules.snapshot().unwrap().source.as_deref() == Some(RULES_DENY_READ) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("named rules should reload");
+        assert!(authorize("(default)"));
+        assert!(!authorize("staging"));
+
+        std::fs::write(&named_path, "malformed rules").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert!(authorize("(default)"));
+        assert!(!authorize("staging"));
+
+        std::fs::write(&named_path, RULES_ONE).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if named_rules.snapshot().unwrap().source.as_deref() == Some(RULES_ONE) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("named rules should recover");
+        assert!(authorize("(default)"));
+        assert!(authorize("staging"));
+        drop(enforcer);
+        drop(default_rules);
+        drop(named_rules);
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

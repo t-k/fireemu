@@ -385,6 +385,9 @@ const MATCH_PATH_WORK_MAX: u64 = 65_536;
 /// prefilter bound is exhausted, the candidate is treated as unknown and evaluated by the
 /// bounded matcher instead of being rejected solely by the prefilter.
 const MATCH_PATH_PREFILTER_WORK_MAX: u64 = 1_000_000;
+/// A request-local reachability cache must not grow without bound when a ruleset contains many
+/// distinct path shapes. Once full, the evaluator simply recomputes the bounded prefilter.
+const MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES: usize = 4_096;
 
 /// Evaluates a request against a ruleset without document access (`get()` / `exists()` are
 /// unsupported and fail closed).
@@ -738,6 +741,9 @@ fn pattern_reachable_offsets(
         }
         let result = pattern_reachable_offsets_uncached(pattern, segments, zero_or_more, work);
         if let Some(reachable) = &result {
+            if cache.len() >= MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES {
+                return result;
+            }
             cache.insert(key, reachable.clone());
         }
         return result;
@@ -3127,12 +3133,15 @@ fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_function_captures, collect_function_scopes, function_key, required_function_scope,
-        EvalError, FunctionBindings,
+        bind_function_captures, collect_function_scopes, function_key, pattern_reachable_offsets,
+        required_function_scope, EvalError, FunctionBindings,
+        MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES,
     };
+    use crate::ast::PathSegment;
     use crate::parse::parse_ruleset;
     use std::collections::BTreeMap;
     use std::fmt::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
 
     #[test]
@@ -3208,5 +3217,25 @@ mod tests {
             required_function_scope(&scopes, function),
             Err(EvalError::Unsupported(message)) if message == "function declaration scope metadata missing"
         ));
+    }
+
+    #[test]
+    fn path_reachability_cache_has_a_request_local_entry_cap() {
+        let mut cache = BTreeMap::new();
+        let work = AtomicU64::new(0);
+        for index in 0..(MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES + 512) {
+            let pattern = [PathSegment::Literal(format!("segment-{index}"))];
+            let reachable = pattern_reachable_offsets(
+                &pattern,
+                &["target".to_owned()],
+                true,
+                &work,
+                &mut cache,
+            )
+            .expect("literal reachability should remain decidable");
+            assert_eq!(reachable.len(), 2);
+        }
+        assert_eq!(cache.len(), MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES);
+        assert!(work.load(Ordering::Relaxed) > 0);
     }
 }

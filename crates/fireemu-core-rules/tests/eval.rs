@@ -271,42 +271,72 @@ fn loaded_rules_allow_after_structurally_impossible_siblings_is_reachable() {
 }
 
 #[test]
-fn loaded_rules_allow_after_equivalent_recursive_parent_children_is_reachable() {
-    let service_name = "cloud.firestore";
-    let mut source = format!("rules_version = '2'; service {service_name} {{\n  match /databases/{{database}}/documents {{\n");
-    for index in 0..750 {
-        writeln!(
-            source,
-            "    match /{{prefix{index}=**}} {{ match /{{suffix{index}=**}}/segment40 {{ allow read; }} }}"
-        )
-        .unwrap();
-    }
-    let allow_path = (0..90)
-        .map(|index| format!("segment{index}"))
-        .collect::<Vec<_>>()
-        .join("/");
-    writeln!(
-        source,
-        "    match /{allow_path} {{ allow read; }}\n  }}\n}}\n"
-    )
-    .unwrap();
+fn loaded_rules_allow_after_equivalent_parent_children_is_reachable() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        for version in ["1", "2"] {
+            let mut source =
+                format!("rules_version = '{version}'; service {service_name} {{\n  {root}\n");
+            if version == "2" {
+                for index in 0..750 {
+                    writeln!(
+                        source,
+                        "    match /{{prefix{index}=**}} {{ match /{{suffix{index}=**}}/segment40 {{ allow read; }} }}"
+                    )
+                    .unwrap();
+                }
+            } else {
+                // Version 1 requires recursive wildcards to be the final path segment, so use
+                // valid bounded parent/child patterns that cannot consume the full request.
+                let parent_path = (0..8)
+                    .map(|index| format!("segment{index}"))
+                    .collect::<Vec<_>>()
+                    .join("/");
+                for index in 0..128 {
+                    writeln!(
+                        source,
+                        "    match /{parent_path} {{ match /{{tail{index}}} {{ allow read; }} }}"
+                    )
+                    .unwrap();
+                }
+            }
+            let allow_path = (0..90)
+                .map(|index| format!("segment{index}"))
+                .collect::<Vec<_>>()
+                .join("/");
+            writeln!(
+                source,
+                "    match /{allow_path} {{ allow read; }}\n  }}\n}}\n"
+            )
+            .unwrap();
 
-    let loaded = LoadedRules::from_source(&source).unwrap();
-    let report = evaluate_request(
-        loaded.ruleset.as_ref().unwrap(),
-        &RequestContext {
-            service: RulesService::Firestore,
-            method: Method::Get,
-            path: long_request_path(RulesService::Firestore),
-            auth: None,
-            resource: None,
-            request_resource: None,
-            time_unix_nanos: 0,
-            abstract_path: false,
-            request_query: None,
-        },
-    );
-    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+            let loaded = LoadedRules::from_source(&source).unwrap();
+            let report = evaluate_request(
+                loaded.ruleset.as_ref().unwrap(),
+                &RequestContext {
+                    service,
+                    method: Method::Get,
+                    path: long_request_path(service),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: false,
+                    request_query: None,
+                },
+            );
+            assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+        }
+    }
 }
 
 #[test]

@@ -98,6 +98,25 @@ def _doc(path, value, *, operation_type="firestore-document-create"):
     }
 
 
+def _doc_read(path):
+    return {
+        "service": "firestore",
+        "path": "/v1/" + path,
+        "method": "GET",
+        "body": None,
+        "privileged": True,
+        "form": False,
+        "operationType": "firestore-document-read",
+        "principal": "owned-firestore-admin",
+        "resource": path,
+        "provenance": {
+            "source": "owned-firestore-fixture",
+            "resource": path,
+            "marker": "_campaignOwner",
+        },
+    }
+
+
 def campaign_cases():
     """Return the five accepted cases and explicit out-of-scope entries."""
     accepted = [
@@ -175,7 +194,7 @@ def campaign_manifest(nonce=NONCE):
     reference = "reference-" + nonce
     parents = {
         "root": root,
-        "missing": root + "/missing-parent-" + nonce + "/seed/child",
+        "missing": root + "/missing-parent-" + nonce + "/parent",
         "paged": root + "/paged-parent-" + nonce + "/rootdoc",
     }
     password = "LocalOnly-" + nonce
@@ -251,13 +270,14 @@ def campaign_manifest(nonce=NONCE):
             reference,
         ),
         _list(parents["root"], "root"),
+        _doc_read(parents["missing"]),
         _list(parents["missing"], "missing-document-parent"),
         _list(parents["paged"], "page-size-one"),
         _list(parents["paged"], "page-size-one", page_token="observed-token"),
     ]
     resources = [
         root + "/child-" + nonce + "/doc",
-        root + "/missing-parent-" + nonce + "/seed",
+        parents["missing"] + "/children/doc",
         parents["paged"],
         parents["paged"] + "/alpha/doc",
         parents["paged"] + "/beta/doc",
@@ -266,7 +286,7 @@ def campaign_manifest(nonce=NONCE):
         _doc(path, label)
         for path, label in zip(
             resources,
-            ["root", "missing-seed", "paged-parent", "alpha", "beta"],
+            ["root", "missing-child", "paged-parent", "alpha", "beta"],
             strict=True,
         )
     ]

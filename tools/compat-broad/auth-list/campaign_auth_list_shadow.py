@@ -256,6 +256,65 @@ def bind(gate, bindings, operation, body):
         gate.bind("pagedToken", body["nextPageToken"])
 
 
+def validate_list_observations(rows, nonce: str) -> None:
+    """Validate the list case outcomes and the intentionally missing parent."""
+    root = "projects/demo-firestore-probe/databases/(default)/documents"
+    missing_parent = root + "/missing-parent-" + nonce + "/parent"
+    paged_parent = root + "/paged-parent-" + nonce + "/rootdoc"
+    expected_rows = [
+        (root, [
+            "child-" + nonce,
+            "missing-parent-" + nonce,
+            "paged-parent-" + nonce,
+        ]),
+        (missing_parent, ["children"]),
+        (paged_parent, ["alpha"]),
+        (paged_parent, ["beta"]),
+    ]
+    parent_reads = [
+        row
+        for row in rows
+        if row.get("operationType") == "firestore-document-read"
+        and row.get("resource") == missing_parent
+    ]
+    if len(parent_reads) != 1:
+        raise ValueError("missing parent readback is missing or duplicated")
+    parent_read = parent_reads[0]
+    parent_body = parent_read.get("body")
+    if (
+        parent_read.get("status") != 404
+        or not isinstance(parent_body, dict)
+        or parent_body.get("error", {}).get("status") != "NOT_FOUND"
+    ):
+        raise ValueError("missing parent readback did not prove absence")
+
+    list_rows = [
+        row
+        for row in rows
+        if row.get("operationType") == "firestore-list-collection-ids"
+    ]
+    if len(list_rows) != len(expected_rows):
+        raise ValueError("listCollectionIds observation count mismatch")
+    for index, (row, (resource, expected_ids)) in enumerate(
+        zip(list_rows, expected_rows, strict=True)
+    ):
+        if row.get("resource") != resource or row.get("status") != 200:
+            raise ValueError(f"listCollectionIds row {index} has unexpected parent/status")
+        body = row.get("body")
+        if not isinstance(body, dict) or not isinstance(body.get("collectionIds"), list):
+            raise ValueError(f"listCollectionIds row {index} has no collectionIds")
+        ids = body["collectionIds"]
+        if any(not isinstance(value, str) for value in ids) or len(ids) != len(set(ids)):
+            raise ValueError(f"listCollectionIds row {index} has duplicate or invalid IDs")
+        if ids != expected_ids:
+            raise ValueError(f"listCollectionIds row {index} is missing or has unexpected IDs")
+        if index == 2:
+            if body.get("nextPageToken") != ShadowHandler.page_token:
+                raise ValueError("first page continuation token is missing")
+        elif "nextPageToken" in body:
+            raise ValueError("unexpected continuation token on complete page")
+
+
 def scrub(path):
     if path.exists():
         value = path.read_text()
@@ -484,11 +543,7 @@ def _real_child(output: Path, nonce: str) -> None:
             if body.get("user_id") != bindings[declared["resource"] + "Uid"]:
                 raise ValueError("refresh returned a different UID")
 
-    page_rows = [row for row in rows if row["operationType"] == "firestore-list-collection-ids"]
-    if len(page_rows) != 4:
-        raise ValueError("listCollectionIds observation count mismatch")
-    if not isinstance(page_rows[-2]["body"].get("nextPageToken"), str):
-        raise ValueError("page continuation was not issued")
+    validate_list_observations(rows, nonce)
 
     adapter.budget.recovery = True
     versions: dict[str, str] = {}

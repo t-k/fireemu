@@ -40,13 +40,28 @@ def test_manifest_has_exact_five_cases_and_fixed_local_entry():
     assert plan["maxConcurrency"] == 1
     assert plan["productionExecutable"] is False
     assert plan["costMicrousd"] < 100_000
-    assert plan["observationRequests"] == 17
+    assert plan["observationRequests"] == 18
     assert len(plan["jobs"]["auth-list"]["recovery"]) == 19
     assert all(
         "parent" not in operation["body"]
         for operation in plan["jobs"]["auth-list"]["observation"]
         if operation["operationType"] == "firestore-list-collection-ids"
     )
+    missing = next(
+        operation
+        for operation in plan["jobs"]["auth-list"]["observation"]
+        if operation["operationType"] == "firestore-list-collection-ids"
+        and operation["provenance"].get("case") == "missing-document-parent"
+    )
+    missing_segments = missing["resource"].split("/documents/", 1)[1].split("/")
+    assert len(missing_segments) % 2 == 0
+    assert missing_segments[-2:] == ["missing-parent-" + "a" * 32, "parent"]
+    child = next(
+        path
+        for path in plan["jobs"]["auth-list"]["resources"]
+        if "missing-parent-" in path
+    )
+    assert child.endswith("/parent/children/doc")
 
 
 def test_fresh_nonce_and_external_origin_fail_closed():
@@ -161,6 +176,72 @@ def test_comparator_keeps_mismatch_and_same_wrong_operation_visible():
     assert compare_rows(left, right)["compatibility"] == "match"
     right["rows"][0]["status"] = "different"
     assert compare_rows(left, right)["compatibility"] == "mismatch"
+
+
+def test_list_observation_validation_requires_expected_parent_and_pages():
+    plan = campaign_manifest("a" * 32)
+    operations = plan["jobs"]["auth-list"]["observation"]
+    list_operations = [
+        operation
+        for operation in operations
+        if operation["operationType"] == "firestore-list-collection-ids"
+    ]
+    root, missing, paged, continuation = list_operations
+    rows = [
+        {
+            "operationType": "firestore-document-read",
+            "resource": missing["resource"],
+            "status": 404,
+            "body": {"error": {"status": "NOT_FOUND"}},
+        },
+        {
+            "operationType": "firestore-list-collection-ids",
+            "resource": root["resource"],
+            "status": 200,
+            "body": {
+                "collectionIds": [
+                    "child-" + plan["nonce"],
+                    "missing-parent-" + plan["nonce"],
+                    "paged-parent-" + plan["nonce"],
+                ]
+            },
+        },
+        {
+            "operationType": "firestore-list-collection-ids",
+            "resource": missing["resource"],
+            "status": 200,
+            "body": {"collectionIds": ["children"]},
+        },
+        {
+            "operationType": "firestore-list-collection-ids",
+            "resource": paged["resource"],
+            "status": 200,
+            "body": {
+                "collectionIds": ["alpha"],
+                "nextPageToken": campaign_auth_list_shadow.ShadowHandler.page_token,
+            },
+        },
+        {
+            "operationType": "firestore-list-collection-ids",
+            "resource": continuation["resource"],
+            "status": 200,
+            "body": {"collectionIds": ["beta"]},
+        },
+    ]
+    campaign_auth_list_shadow.validate_list_observations(rows, plan["nonce"])
+
+    for mutation in ("bad-parent-status", "duplicate-page", "missing-page"):
+        broken = copy.deepcopy(rows)
+        if mutation == "bad-parent-status":
+            broken[0]["status"] = 400
+        elif mutation == "duplicate-page":
+            broken[-1]["body"]["collectionIds"] = ["alpha"]
+        else:
+            broken[-1]["body"]["collectionIds"] = []
+        with pytest.raises(ValueError):
+            campaign_auth_list_shadow.validate_list_observations(
+                broken, plan["nonce"]
+            )
 
 
 @pytest.mark.parametrize(

@@ -5762,6 +5762,31 @@ fn oob_authorization_preserves_delivery_and_authenticated_admin_generation() {
 }
 
 #[test]
+fn oob_link_flag_rejects_non_boolean_values_without_issuing_a_code() {
+    for strict in [false, true] {
+        let (s, lines) = oob_authorization_state(strict);
+        sign_up(&s, "oob-type@example.com");
+        for value in [json!("true"), json!(1), json!([]), json!({})] {
+            let body = json!({
+                "requestType": "PASSWORD_RESET",
+                "email": "oob-type@example.com",
+                "returnOobLink": value,
+            });
+            let before_codes = get(&s, &format!("{EMU}/oobCodes"));
+            let before_notices = drain(&lines);
+            let (status, response) = post(&s, &format!("{V1}/accounts:sendOobCode"), &body);
+            assert_eq!(status, 400, "{response}");
+            assert_eq!(
+                response["error"]["message"],
+                "INVALID_ARGUMENT : returnOobLink must be a boolean"
+            );
+            assert_eq!(get(&s, &format!("{EMU}/oobCodes")), before_codes);
+            assert_eq!(drain(&lines), before_notices);
+        }
+    }
+}
+
+#[test]
 fn email_action_links_are_announced_once_unless_the_link_is_returned() {
     let (s, lines) = recording_state();
     let user = sign_up(&s, "notice@example.com");

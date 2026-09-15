@@ -6054,9 +6054,14 @@ fn send_oob_code(
     headers: &RequestHeaders,
     privileged: bool,
 ) -> JsonResponse {
+    let return_oob_link = match opt_bool(body, "returnOobLink") {
+        Ok(Some(value)) => value,
+        Ok(None) => false,
+        Err(response) => return response,
+    };
     // Only the authenticated Admin route may return a credential to the caller.
     // Check before creating a code or emitting a delivery notice.
-    if !privileged && body.get("returnOobLink").and_then(Value::as_bool) == Some(true) {
+    if !privileged && return_oob_link {
         return error(400, "OPERATION_NOT_ALLOWED");
     }
     let request_type = match str_field(body, "requestType") {
@@ -6143,7 +6148,7 @@ fn send_oob_code(
     };
     let mut response =
         json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email});
-    if body.get("returnOobLink").and_then(Value::as_bool) == Some(true) {
+    if return_oob_link {
         response["oobCode"] = json!(code);
         response["oobLink"] = json!(oob_link(
             headers,

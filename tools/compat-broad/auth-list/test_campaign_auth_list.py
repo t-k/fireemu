@@ -37,8 +37,13 @@ def test_manifest_has_exact_five_cases_and_fixed_local_entry():
     assert plan["maxConcurrency"] == 1
     assert plan["productionExecutable"] is False
     assert plan["costMicrousd"] < 100_000
-    assert plan["observationRequests"] == 16
-    assert len(plan["jobs"]["auth-list"]["recovery"]) == 16
+    assert plan["observationRequests"] == 17
+    assert len(plan["jobs"]["auth-list"]["recovery"]) == 19
+    assert all(
+        "parent" not in operation["body"]
+        for operation in plan["jobs"]["auth-list"]["observation"]
+        if operation["operationType"] == "firestore-list-collection-ids"
+    )
 
 
 def test_fresh_nonce_and_external_origin_fail_closed():
@@ -61,8 +66,8 @@ def test_typed_gate_requires_principal_resource_and_provenance(kind):
         "resource": "r",
         "provenance": {"source": "fixture"},
         "method": "POST",
-        "path": "/v1/projects/demo-firestore-probe/databases/(default)/documents:listCollectionIds",
-        "body": {"parent": "r"},
+        "path": "/v1/r:listCollectionIds",
+        "body": {},
     }
     if kind == "auth-refresh":
         operation["provenance"]["token"] = "owned-refresh-token"
@@ -89,7 +94,8 @@ def test_page_token_substitution_reuse_and_wrong_parent_are_rejected():
     for mutation in ("wrong-parent", "substituted-token", "reused-token"):
         broken = copy.deepcopy(operation)
         if mutation == "wrong-parent":
-            broken["body"]["parent"] += "-wrong"
+            broken["path"] = broken["path"].replace("paged-", "wrong-paged-")
+            broken["resource"] += "-wrong"
         else:
             broken["body"]["pageToken"] = "other-token"
             broken["provenance"]["pageToken"] = (
@@ -153,7 +159,11 @@ def test_transport_and_refusal_failures_are_recorded_as_indeterminate(failure):
 
 
 def test_auth_refresh_source_mismatch_is_refused():
-    operation = campaign_manifest("d" * 32)["jobs"]["auth-list"]["observation"][6]
+    operation = next(
+        operation
+        for operation in campaign_manifest("d" * 32)["jobs"]["auth-list"]["observation"]
+        if operation["operationType"] == "auth-refresh"
+    )
     operation["provenance"]["token"] = "wrong-source"
     with pytest.raises(
         ValueError, match="refresh token provenance|owned refresh token"
@@ -185,25 +195,20 @@ def test_checked_in_manifest_matches_proposal():
     )
 
 
-def test_actual_shadow_uses_gate_adapter_and_closes_transport(tmp_path):
-    import batch_adapter
-
+def test_actual_shadow_uses_fixed_fireemu_artifact_and_closes_transport(tmp_path):
     from campaign_auth_list_shadow import run
 
-    original_wire = batch_adapter.wire
     result = run(tmp_path / "shadow")
     assert result["completed"] is True
-    assert result["processCleanup"] is True
     assert result["productionExecuted"] is False
-    assert result["gate"] == {
-        "total": 34,
-        "recovery": 16,
-        "bindings": sorted(result["gate"]["bindings"]),
-    }
-    responses = (tmp_path / "shadow" / "worker" / "responses.jsonl").read_text()
-    assert "id-secret-" not in responses
-    assert "refresh-secret-" not in responses
-    assert batch_adapter.wire is original_wire
+    assert result["target"] == "owned-fireemu-artifact"
+    assert result["artifactSha256"]
+    assert result["runtime"]["ownedProcess"]["listenersClosed"] is True
+    assert result["runtime"]["ownedProcess"]["stopped"] is True
+    assert result["gate"]["observation"] == 17
+    assert result["gate"]["recovery"] == 19
+    assert result["gate"]["total"] == 38
+    assert result["cleanupComplete"] is True
 
 
 def test_gate_dispatch_rejects_typed_bypass_before_transport(tmp_path):

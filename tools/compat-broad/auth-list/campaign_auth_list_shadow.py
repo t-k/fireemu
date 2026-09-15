@@ -48,7 +48,14 @@ class ShadowHandler(BaseHTTPRequestHandler):
     def do_PATCH(self):
         body = self.body()
         name = self.path.split("?", 1)[0].removeprefix("/v1/")
-        if "currentDocument.exists=false" not in self.path or name in self.documents:
+        segments = name.split("/documents/", 1)[-1].split("/")
+        if (
+            "currentDocument.exists=false" not in self.path
+            or name in self.documents
+            or len(segments) % 2 != 0
+            or not isinstance(body, dict)
+            or not isinstance(body.get("fields"), dict)
+        ):
             return self.reply(400, {"error": {"status": "FAILED_PRECONDITION"}})
         value = {
             "name": name,
@@ -74,8 +81,32 @@ class ShadowHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.body()
         if self.path.endswith(":listCollectionIds"):
-            value = {"collectionIds": ["beta"] if body.get("pageToken") else ["alpha"]}
-            if not body.get("pageToken"):
+            parent = self.path.split("?", 1)[0].removeprefix("/v1/")[: -len(":listCollectionIds")]
+            if "parent" in body or not parent.startswith("projects/demo-firestore-probe/databases/(default)/documents"):
+                return self.reply(400, {"error": {"status": "INVALID_ARGUMENT"}})
+            if body.get("pageToken") not in (None, self.page_token):
+                return self.reply(400, {"error": {"status": "INVALID_ARGUMENT"}})
+            if parent.endswith("/documents"):
+                ids = {
+                    path.split("/documents/", 1)[1].split("/", 1)[0]
+                    for path in self.documents
+                    if path.startswith(parent + "/")
+                }
+            else:
+                prefix = parent + "/"
+                ids = {
+                    path[len(prefix) :].split("/", 1)[0]
+                    for path in self.documents
+                    if path.startswith(prefix)
+                }
+            ordered = sorted(ids)
+            if body.get("pageToken"):
+                ordered = ordered[1:]
+            page_size = body.get("pageSize")
+            if page_size == 1:
+                ordered = ordered[:1]
+            value = {"collectionIds": ordered}
+            if body.get("pageToken") is None and page_size == 1 and len(ids) > 1:
                 value["nextPageToken"] = self.page_token
             return self.reply(200, value)
         if self.path.endswith("/token"):
@@ -103,8 +134,32 @@ class ShadowHandler(BaseHTTPRequestHandler):
                 if uid in ShadowHandler.accounts
                 else self.reply(404, {"error": {"status": "USER_NOT_FOUND"}})
             )
-        uid = f"uid-{len(ShadowHandler.accounts) + 1}"
-        ShadowHandler.accounts[uid] = body.get("email")
+        if self.path.endswith("accounts:signUp"):
+            email, password = body.get("email"), body.get("password")
+            if (
+                not isinstance(email, str)
+                or not isinstance(password, str)
+                or len(password) < 6
+                or any(record["email"] == email for record in ShadowHandler.accounts.values())
+            ):
+                return self.reply(400, {"error": {"status": "INVALID_ARGUMENT"}})
+            uid = f"uid-{len(ShadowHandler.accounts) + 1}"
+            ShadowHandler.accounts[uid] = {"email": email, "password": password}
+        elif self.path.endswith("accounts:signInWithPassword"):
+            email, password = body.get("email"), body.get("password")
+            match = next(
+                (
+                    (uid, record)
+                    for uid, record in ShadowHandler.accounts.items()
+                    if record["email"] == email
+                ),
+                None,
+            )
+            if match is None or match[1]["password"] != password:
+                return self.reply(400, {"error": {"status": "INVALID_PASSWORD"}})
+            uid = match[0]
+        else:
+            return self.reply(404, {"error": {"status": "NOT_FOUND"}})
         ShadowHandler.tokens[f"id-{uid}"] = uid
         ShadowHandler.tokens[f"refresh-{uid}"] = uid
         self.reply(
@@ -213,7 +268,7 @@ def scrub(path):
         path.write_text(value)
 
 
-def run(output: Path) -> dict:
+def run_fixture(output: Path) -> dict:
     ShadowHandler.accounts = {}
     ShadowHandler.documents = {}
     ShadowHandler.tokens = {}
@@ -329,8 +384,237 @@ def run(output: Path) -> dict:
     return result
 
 
+def _owned_instance(output: Path, nonce: str) -> dict:
+    """Verify the child is the fireemu artifact owned by this supervisor."""
+    from owned_runner import control_get, local_addresses
+
+    auth = "http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"]
+    firestore, control = local_addresses(
+        os.environ["FIRESTORE_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
+    )
+    token = os.environ["FIREEMU_CONTROL_TOKEN"]
+    status, resources = control_get(control, "/v1/sessions/default/resources", token)
+    wrong, _ = control_get(control, "/v1/sessions/default/resources", token + "-wrong")
+    if (
+        status != 200
+        or wrong != 403
+        or resources.get("project") != "demo-firestore-probe"
+        or os.environ.get("GOOGLE_CLOUD_PROJECT") != "demo-firestore-probe"
+    ):
+        raise ValueError("owned campaign instance identity mismatch")
+    parent_args = json.loads(
+        (output / "runner-parent.json").read_bytes()
+    ) if (output / "runner-parent.json").exists() else {}
+    instance = {
+        "pid": os.getpid(),
+        "parentPid": os.getppid(),
+        "argv": sys.argv,
+        "nonce": nonce,
+        "project": "demo-firestore-probe",
+        "authOrigin": auth,
+        "firestoreOrigin": firestore,
+        "controlOrigin": control,
+        "wrongTokenStatus": wrong,
+        "parentArgs": parent_args,
+    }
+    save(output / "instance.json", instance)
+    return instance
+
+
+def _real_child(output: Path, nonce: str) -> None:
+    """Run the fixed fireemu artifact through the campaign adapter on loopback."""
+    from owned_runner import control_get
+
+    _owned_instance(output, nonce)
+    origins = {
+        "auth": "http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"],
+        "firestore": "http://" + os.environ["FIRESTORE_EMULATOR_HOST"],
+    }
+    plan = campaign_manifest(nonce)
+    plan["localOrigins"] = origins
+    plan["observerSha256"] = batch_adapter.observer_digest()
+    create(output / "gate", plan)
+    gate = CampaignGate(output / "gate", "auth-list")
+    control = json.loads((output / "instance.json").read_bytes())["controlOrigin"]
+    token = os.environ["FIREEMU_CONTROL_TOKEN"]
+    gate.coordinator_call(0, lambda: control_get(control, "/v1/sessions/default/resources", token))
+    gate.coordinator_call(1, lambda: control_get(control, "/v1/sessions/default/resources", token))
+    gate.claim()
+    adapter = CampaignAdapter(
+        batch_adapter.candidate(), nonce, output / "worker", local_origins=origins
+    )
+    adapter.shared_gate = gate
+    bindings: dict[str, str] = {}
+    rows: list[dict] = []
+    for declared in plan["jobs"]["auth-list"]["observation"]:
+        operation = replace(declared, bindings)
+
+        def send(op=operation):
+            return adapter.request(
+                op["service"],
+                op["path"],
+                op.get("body"),
+                method=op["method"],
+                privileged=op["privileged"],
+                form=op["form"],
+                operationType=op["operationType"],
+                principal=op["principal"],
+                resource=op["resource"],
+                provenance=op["provenance"],
+            )
+
+        status, body = gate.adapter_request(adapter, operation, send)
+        rows.append(
+            {
+                "operationType": operation["operationType"],
+                "resource": operation["resource"],
+                "principal": operation["principal"],
+                "status": status,
+                "body": body,
+            }
+        )
+        bind(gate, bindings, declared, body)
+        if declared["operationType"] == "auth-sign-in":
+            if body.get("localId") != bindings[declared["resource"] + "Uid"]:
+                raise ValueError("sign-in returned a different UID")
+        if declared["operationType"] == "auth-refresh":
+            if body.get("user_id") != bindings[declared["resource"] + "Uid"]:
+                raise ValueError("refresh returned a different UID")
+
+    page_rows = [row for row in rows if row["operationType"] == "firestore-list-collection-ids"]
+    if len(page_rows) != 4:
+        raise ValueError("listCollectionIds observation count mismatch")
+    if not isinstance(page_rows[-2]["body"].get("nextPageToken"), str):
+        raise ValueError("page continuation was not issued")
+
+    adapter.budget.recovery = True
+    versions: dict[str, str] = {}
+    for declared in plan["jobs"]["auth-list"]["recovery"]:
+        operation = replace(declared, bindings)
+        source = operation.pop("versionFrom", None)
+        if source is not None:
+            version = versions.get(operation["resource"])
+            if version is None:
+                raise ValueError("missing same-run updateTime for cleanup")
+            operation["path"] += "?currentDocument.updateTime=" + __import__(
+                "urllib.parse"
+            ).parse.quote(version, safe="")
+
+        def send_recovery(op=operation):
+            return adapter.request(
+                op["service"],
+                op["path"],
+                op.get("body"),
+                method=op["method"],
+                privileged=op["privileged"],
+                form=op["form"],
+                operationType=op["operationType"],
+                principal=op["principal"],
+                resource=op["resource"],
+                provenance=op["provenance"],
+            )
+
+        status, body = gate.adapter_request(adapter, operation, send_recovery)
+        if operation["method"] == "GET" and status == 200 and isinstance(body, dict):
+            versions[operation["resource"]] = body.get("updateTime", "")
+
+    gate.finish()
+    state = gate.snapshot()
+    if set(state["jobs"]["auth-list"]["absent"]) != set(
+        state["jobs"]["auth-list"]["resources"]
+    ):
+        raise ValueError("owned resources remain after recovery")
+    report = {
+        "schemaVersion": 1,
+        "target": "owned-fireemu-artifact",
+        "productionExecuted": False,
+        "recordingComplete": True,
+        "stateValidation": True,
+        "cleanupComplete": True,
+        "rows": rows,
+        "gate": {
+            "total": state["total"],
+            "observation": state["observation"],
+            "recovery": state["recovery"],
+            "bindings": sorted(bindings),
+        },
+        "completed": True,
+        "failure": None,
+    }
+    # broad.supervise consumes this compact shape and retains it as a partial result.
+    save(
+        output / "cases.json",
+        {
+            "schemaVersion": 1,
+            "target": report["target"],
+            "project": "demo-firestore-probe",
+            "edition": "Standard Native",
+            "profile": "strict",
+            "productionExecuted": False,
+            "formalCompatibilityClaim": False,
+            "recordingComplete": True,
+            "cases": [
+                {
+                    "id": f"auth-list:{index}",
+                    "status": "observed",
+                    "family": row["operationType"],
+                    "basis": "local-fireemu-artifact",
+                }
+                for index, row in enumerate(rows)
+            ],
+            "localObservations": rows,
+            "requestStats": report["gate"],
+        },
+    )
+    save(output / "worker/result.json", report)
+
+
+def run(output: Path) -> dict:
+    """Run the campaign against a freshly built, owned fireemu artifact."""
+    import broad
+
+    report = broad.run(
+        output,
+        child_script=Path(__file__).resolve(),
+        project="demo-firestore-probe",
+        configuration={"daemon": {"authProjectNumbers": {}}},
+        execution_timeout=600,
+        recovery_grace=1,
+    )
+    worker = {}
+    worker_path = output / "worker/result.json"
+    if worker_path.exists():
+        worker = json.loads(worker_path.read_bytes())
+    result = {
+        "completed": report["status"] == "completed",
+        "productionExecuted": False,
+        "target": "owned-fireemu-artifact",
+        "runtime": report,
+        "recordingComplete": report.get("recordingComplete", False),
+        "cleanupComplete": report.get("ownedProcess", {}).get("listenersClosed") is True,
+        "stateValidation": report.get("recordingComplete", False),
+        "rows": report.get("localObservations", []),
+        "gate": worker.get("gate", {}),
+        "failure": report.get("failure") or report.get("stopReason"),
+        "artifactSha256": report.get("artifactSha256"),
+        "executionCommit": report.get("executionCommit"),
+    }
+    save(output / "result.json", result)
+    return result
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--child", type=Path)
+    parser.add_argument("--nonce")
+    parser.add_argument("--legacy-fixture", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(run(args.output.resolve())))
+    if args.child is not None:
+        if not args.nonce:
+            parser.error("--nonce is required with --child")
+        _real_child(args.child.resolve(), args.nonce)
+    elif args.output is not None:
+        print(json.dumps((run_fixture if args.legacy_fixture else run)(args.output.resolve())))
+    else:
+        parser.error("--output is required")

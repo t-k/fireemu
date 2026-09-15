@@ -39,12 +39,15 @@ def validate(operation):
         raise ValueError("typed Auth delete required")
     if kind == "firestore-list-collection-ids":
         body = operation.get("body")
-        if operation.get("method") != "POST" or not operation.get("path", "").endswith(
-            ":listCollectionIds"
+        resource = operation.get("resource")
+        if (
+            operation.get("method") != "POST"
+            or not isinstance(resource, str)
+            or operation.get("path") != "/v1/" + resource + ":listCollectionIds"
         ):
             raise ValueError("ListCollectionIds wire shape required")
-        if not isinstance(body, dict) or body.get("parent") != operation["resource"]:
-            raise ValueError("ListCollectionIds parent binding required")
+        if not isinstance(body, dict) or "parent" in body:
+            raise ValueError("ListCollectionIds parent must be in URL")
         if body.get("pageToken") is not None and (
             provenance.get("pageToken") != "observed-continuation"
             or provenance.get("tokenValue") != body["pageToken"]

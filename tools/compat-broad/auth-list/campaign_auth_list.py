@@ -44,10 +44,14 @@ def _auth(path, body, kind, resource, *, token=None):
 
 
 def _list(parent, case, *, page_token=None):
-    body = {"parent": parent}
+    # Firestore's parent is the resource path in the HTTP template, not a body
+    # field. Keep the request shape identical to the public REST contract.
+    body = {}
+    if case == "page-size-one":
+        body["pageSize"] = 1
     provenance = {"source": "owned-firestore-fixture", "case": case}
     if page_token is not None:
-        body.update(pageToken="$binding:pagedToken", pageSize=1)
+        body["pageToken"] = "$binding:pagedToken"
         provenance.update(
             pageToken="observed-continuation",
             tokenValue="$binding:pagedToken",
@@ -55,9 +59,7 @@ def _list(parent, case, *, page_token=None):
         )
     return {
         "service": "firestore",
-        "path": "/v1/projects/"
-        + PROJECT
-        + "/databases/(default)/documents:listCollectionIds",
+        "path": "/v1/" + parent + ":listCollectionIds",
         "method": "POST",
         "body": body,
         "privileged": True,
@@ -173,19 +175,28 @@ def campaign_manifest(nonce=NONCE):
     reference = "reference-" + nonce
     parents = {
         "root": root,
-        "missing": root + "/missing-parent-" + nonce,
-        "paged": root + "/paged-" + nonce,
+        "missing": root + "/missing-parent-" + nonce + "/seed/child",
+        "paged": root + "/paged-parent-" + nonce + "/rootdoc",
     }
+    password = "LocalOnly-" + nonce
     observation = [
         _auth(
             "/v1/accounts:signUp",
-            {"email": changed + "@example.invalid"},
+            {
+                "email": changed + "@example.invalid",
+                "password": password,
+                "returnSecureToken": True,
+            },
             "auth-sign-up",
             changed,
         ),
         _auth(
             "/v1/accounts:signInWithPassword",
-            {"email": changed + "@example.invalid"},
+            {
+                "email": changed + "@example.invalid",
+                "password": password,
+                "returnSecureToken": True,
+            },
             "auth-sign-in",
             changed,
         ),
@@ -206,13 +217,21 @@ def campaign_manifest(nonce=NONCE):
         ),
         _auth(
             "/v1/accounts:signUp",
-            {"email": reference + "@example.invalid"},
+            {
+                "email": reference + "@example.invalid",
+                "password": password,
+                "returnSecureToken": True,
+            },
             "auth-sign-up",
             reference,
         ),
         _auth(
             "/v1/accounts:signInWithPassword",
-            {"email": reference + "@example.invalid"},
+            {
+                "email": reference + "@example.invalid",
+                "password": password,
+                "returnSecureToken": True,
+            },
             "auth-sign-in",
             reference,
         ),
@@ -238,15 +257,18 @@ def campaign_manifest(nonce=NONCE):
     ]
     resources = [
         root + "/child-" + nonce + "/doc",
-        root + "/missing-parent-" + nonce + "/child/doc",
-        root + "/paged-" + nonce + "/alpha/doc",
-        root + "/paged-" + nonce + "/beta/doc",
+        root + "/missing-parent-" + nonce + "/seed",
+        parents["paged"],
+        parents["paged"] + "/alpha/doc",
+        parents["paged"] + "/beta/doc",
     ]
     observation[:0] = [
-        _doc(resources[0], "root"),
-        _doc(resources[1], "missing"),
-        _doc(resources[2], "alpha"),
-        _doc(resources[3], "beta"),
+        _doc(path, label)
+        for path, label in zip(
+            resources,
+            ["root", "missing-seed", "paged-parent", "alpha", "beta"],
+            strict=True,
+        )
     ]
     recovery = []
     for index, path in enumerate(resources):
@@ -318,8 +340,8 @@ def campaign_manifest(nonce=NONCE):
                 "recovery": recovery,
             }
         },
-        "wallSeconds": 300,
-        "recoverySeconds": 240,
+        "wallSeconds": 600,
+        "recoverySeconds": 300,
         "intervalSeconds": 0.25,
         "observationRequests": len(observation),
         "requestCostMicrousd": 100,

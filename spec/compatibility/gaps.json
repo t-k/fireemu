@@ -711,6 +711,25 @@
       "nextAction": "Candidate observation and comparison, not result-approved and not a runtime fix. Investigate the production/local start difference at 600/1800/3300 seconds without pinning a production TTL from the error name. A follow-up may sample shorter ages and confirm the same account/enrollment and fresh-pending success after refusal; any new production run requires separate approval. Keep revision 1 and its 300-second survival observation unchanged, and do not combine independent runs into a proven upper bound. AUTH-U03's expired-pending/independently-valid-code residual remains unobserved.",
       "blockedReason": "",
       "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-AUTH-008",
+      "feature": "AUTH-USERS",
+      "kind": "mismatch",
+      "scope": "Provider metadata could retain a stale Password classification after a verified IdP account-recycling transition or an explicit password credential removal. Export then reintroduced password provider metadata even though the live password credential was gone, while hashless API-created password accounts still need to retain their password classification.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/auth-account-lifecycle.md",
+        "crates/fireemu-core-auth/tests/store.rs",
+        "crates/fireemu/src/import_export.rs",
+        "crates/fireemu/tests/import_export.rs"
+      ],
+      "nextAction": "Closed as a local provider-lifecycle repair for the covered transitions: verified IdP recycling and actual password removal retag the surviving provider, while hashless password export/import remains Password. Production lookup/export parity for these transitions is not claimed and remains outside this record.",
+      "blockedReason": "",
+      "requiresProductionChange": false
     }
   ]
 }

@@ -125,6 +125,40 @@ fn user_function_calls_resolve_in_the_definition_scope() {
 }
 
 #[test]
+fn user_function_does_not_capture_caller_match_bindings() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents/users/{uid} {\n    function owner() { return request.auth.uid == uid; }\n    function delegate(uid) { return owner(); }\n    allow read: if delegate(request.auth.uid);\n  }\n}",
+    )
+    .unwrap();
+    let report = evaluate_request(
+        &ruleset,
+        &ctx(
+            Method::Get,
+            "/databases/(default)/documents/users/victim",
+            Some(auth("attacker", false, None)),
+        ),
+    );
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+
+    let owner_report = evaluate_request(
+        &ruleset,
+        &ctx(
+            Method::Get,
+            "/databases/(default)/documents/users/victim",
+            Some(auth("victim", false, None)),
+        ),
+    );
+    assert!(
+        matches!(owner_report.decision, Decision::Allow),
+        "{owner_report:?}"
+    );
+}
+
+#[test]
 fn storage_function_calls_resolve_in_the_definition_scope() {
     let ruleset = parse_ruleset(
         "rules_version = '2';\nservice firebase.storage {\n  function decision() { return false; }\n  function gate() { return decision(); }\n  match /b/{bucket}/o/{path=**} {\n    function decision() { return true; }\n    allow read: if gate();\n  }\n}",

@@ -267,6 +267,9 @@ struct Scope<'a> {
     /// Functions visible from each declaration's lexical scope. The active `functions` stack
     /// tracks the call site, while this map restores the declaration environment for a call.
     function_scopes: BTreeMap<usize, Vec<&'a FunctionDecl>>,
+    /// Value bindings captured at each declaration site. Match captures are dynamic values, so
+    /// this is populated while walking the matching block and restored for every call.
+    function_bindings: BTreeMap<usize, Vec<(String, RulesValue)>>,
     bindings: Vec<Binding<'a>>,
 }
 
@@ -477,6 +480,7 @@ fn evaluate_prepared(
         let scope = Scope {
             functions,
             function_scopes,
+            function_bindings: BTreeMap::new(),
             bindings: Vec::new(),
         };
         let mut ev = Evaluator {
@@ -703,6 +707,27 @@ fn walk_match<'a>(
                 .into_iter()
                 .map(|(name, value)| Binding::value(name, value)),
         );
+        let captured_bindings: Vec<(String, RulesValue)> = ev
+            .scope
+            .bindings
+            .iter()
+            .filter_map(|binding| match &binding.state {
+                BindingState::Value(value) => Some((binding.name.clone(), value.clone())),
+                BindingState::Resolved {
+                    result: Ok(value), ..
+                } => Some((binding.name.clone(), value.clone())),
+                BindingState::Lazy(_)
+                | BindingState::Evaluating
+                | BindingState::Resolved { .. } => None,
+            })
+            .collect();
+        for item in &block.items {
+            if let Item::Function(f) = item {
+                ev.scope
+                    .function_bindings
+                    .insert(function_key(f), captured_bindings.clone());
+            }
+        }
         let mut result: Result<bool, EvalError> = Ok(false);
         if rest.is_empty() {
             *matched_any = true;
@@ -1819,7 +1844,17 @@ impl<'a> Evaluator<'a> {
             .map(|definition_functions| {
                 std::mem::replace(&mut self.scope.functions, definition_functions)
             });
-        let bindings_before = self.scope.bindings.len();
+        let caller_bindings = std::mem::take(&mut self.scope.bindings);
+        let definition_bindings = self
+            .scope
+            .function_bindings
+            .get(&function_key(f))
+            .cloned()
+            .unwrap_or_default();
+        self.scope.bindings = definition_bindings
+            .into_iter()
+            .map(|(name, value)| Binding::value(name, value))
+            .collect();
         for (p, v) in f.params.iter().zip(values) {
             self.scope.bindings.push(Binding::value(p.clone(), v));
         }
@@ -1834,7 +1869,7 @@ impl<'a> Evaluator<'a> {
             }
             self.eval(&f.body)
         };
-        self.scope.bindings.truncate(bindings_before);
+        self.scope.bindings = caller_bindings;
         if let Some(caller_functions) = caller_functions {
             self.scope.functions = caller_functions;
         }

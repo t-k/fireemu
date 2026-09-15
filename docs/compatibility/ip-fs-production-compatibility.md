@@ -167,3 +167,9 @@ query/index group to production compatibility.
 ## Latest local gap repair (`9e159414`)
 
 The Firestore REST `BatchWrite` adapter now validates `labels` as an object whose values are strings before publishing any writes. A malformed-label request is rejected atomically and the target remains absent. The REST, Identity Toolkit and Rules regression suites, package Clippy and formatting passed on the integrated source. This is a local contract repair; it does not change saved production receipts or promote the parent feature groups to `COMPAT_VERIFIED`.
+
+## Latest input-shape repairs (`0f7ff7ee` / `a3c9baaa` / `f91f07bb` / `9ec439ff`)
+
+Auth import now refuses malformed provider, MFA, lifecycle and configuration members before startup instead of coercing them to defaults. Unknown account, providerUserInfo, MFA/TOTP and Auth config members are retained by the export-format parser for diagnostics but are refused by the live Auth import because the running store cannot preserve them. Import records are preflighted against cloned stores before replacing the live default or tenant store, so duplicate or otherwise invalid later records cannot leave a partial Auth state. These limitations and atomicity guarantees are recorded in the capability contract. Valid password, email-link, federated, MFA and lifecycle round trips remain covered.
+
+Firestore REST `BatchGet` now rejects a scalar `documents` member and non-string array entries before transaction state or reads begin. Structured query `from` and `orderBy` reject present non-array values and malformed array elements rather than defaulting to a kindless scan. Valid omitted and array forms remain covered. These are local transport-contract repairs; production REST and SDK parity remain unobserved, and historical receipts are unchanged.

@@ -50,7 +50,7 @@
   "digests": {
     ".github/workflows/quint.yml": "50d4edad3bc4122a6e76fbaf05b0e2e4fa2963951960e05d447b0a834d91a30e",
     "crates/fireemu-export-publication/src/lib.rs": "fb8be7314cb41250a89252b6a225b0c739096bf6770ee3e4f620f3bbe64c7123",
-    "crates/fireemu/src/import_export.rs": "1b0935f615fb6c7378003bd680c9207b7736e2791511eb71a61b08a73096ceac",
+    "crates/fireemu/src/import_export.rs": "d7188fa2554519d78096521468dbe2b7dae07d5970fbbd69931cef1a8300d7dc",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
     "verification/quint/bin/install-apalache": "31cdb73b00aa5ee20328f83ccec467f6c9d6b740dc4e5c806269c66347cac150",

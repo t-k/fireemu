@@ -850,12 +850,13 @@
       "auth_export/accounts.json as the identitytoolkit#DownloadAccountResponse the CLI streams to disk, with providers, custom claims, phone second factors, the reversible fakeHash:salt=<salt>:password=<plaintext> convention and auth_export/config.json",
       "Identity Platform tenant accounts in auth_export/accounts-<tenant>.json, imported and exported in isolated namespaces without mixing them into accounts.json",
       "storage_export/buckets.json, blobs/<id> and metadata/<id>.json, with the object bytes byte for byte and the recorded generation, metageneration, times, hashes, download tokens and custom metadata",
-      "a member the model does not know is carried through an import and written out again unchanged, so a newer emulator's field is never silently dropped",
+      "a member the model does not know is parsed and retained by the export-format model; live Auth import refuses an account containing that member before startup because the running store cannot retain it, so it is never silently dropped or partially imported",
       "a malformed section is refused with the byte offset or the member that caused it, never read short"
     ],
     "unimplemented": [
       "database_export (Realtime Database) and dataconnect_export (SQL Connect) are detected and refused with their deferred status; fireemu serves neither product",
-      "a passwordHash that is not the emulator's own reversible form (a real scrypt hash from a production export) is refused rather than installed as a credential nothing can sign in with"
+      "a passwordHash that is not the emulator's own reversible form (a real scrypt hash from a production export) is refused rather than installed as a credential nothing can sign in with",
+      "an account, providerUserInfo entry, MFA/TOTP entry or Auth config containing an unknown member is refused before startup because the live Auth store cannot preserve that member; the export-format parser retains it for diagnostics"
     ],
     "notes": [
       "the format is pinned by fixtures recorded from real runs of the official suite (crates/fireemu/tests/fixtures/export/, recorded by conformance/src/record-export.mjs)",

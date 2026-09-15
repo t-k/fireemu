@@ -321,6 +321,53 @@ fn loaded_rules_skip_partial_leaf_siblings_before_a_reachable_allow() {
 }
 
 #[test]
+fn loaded_rules_leaf_prefilter_preserves_v1_and_parent_children() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        let mut source = format!("rules_version = '1'; service {service_name} {{\n  {root}\n");
+        for index in 0..750 {
+            writeln!(
+                source,
+                "    match /segment0/{{tail{index}}} {{ allow read; }}"
+            )
+            .unwrap();
+        }
+        writeln!(
+            source,
+            "    match /segment0 {{ match /segment1/{{rest=**}} {{ allow read; }} }}"
+        )
+        .unwrap();
+        writeln!(source, "  }}\n}}\n").unwrap();
+
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let report = evaluate_request(
+            loaded.ruleset.as_ref().unwrap(),
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    }
+}
+
+#[test]
 fn loaded_rules_false_or_unresolved_expensive_matches_remain_denied() {
     let false_allow = rules_with_expensive_nonmatches("cloud.firestore", Some(": if false"), false);
     let loaded = LoadedRules::from_source(&false_allow).unwrap();

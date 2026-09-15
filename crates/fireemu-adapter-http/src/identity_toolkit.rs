@@ -3985,6 +3985,9 @@ fn sign_in_with_custom_token(
             }
         }
     }
+    if let Err(e) = extra.check_size() {
+        return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
+    }
     let (uid, is_new) = if let Some(u) = store.user_by_id(uid) {
         (u.local_id.clone(), false)
     } else {

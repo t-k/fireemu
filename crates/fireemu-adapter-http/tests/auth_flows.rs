@@ -320,6 +320,17 @@ fn custom_token(uid: &str) -> String {
     format!("{header}.{payload}.")
 }
 
+fn custom_token_with_claims(uid: &str, claims: &Value) -> String {
+    let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+    let payload = json!({
+        "aud": "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit",
+        "uid": uid,
+        "claims": claims,
+    });
+    let payload = base64url_encode(payload.to_string().as_bytes());
+    format!("{header}.{payload}.")
+}
+
 /// Marks the address verified through the Admin route: the pinned official emulator refuses
 /// phone-factor enrollment for an unverified password user (`UNVERIFIED_EMAIL`).
 fn verify_email(state: &AuthState, local_id: &str) {
@@ -2242,6 +2253,29 @@ fn compatibility_profile_routes_custom_token_exchanges_to_the_unique_existing_pr
             project
         );
     }
+}
+
+#[test]
+fn custom_token_claims_over_the_size_limit_are_rejected_before_account_creation() {
+    let s = state();
+    let claims = json!({"role": "x".repeat(995)});
+    let token = custom_token_with_claims("oversized-claims", &claims);
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": token}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(body["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.starts_with("INVALID_CUSTOM_TOKEN :")));
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("oversized-claims")
+        .is_none());
 }
 
 #[test]

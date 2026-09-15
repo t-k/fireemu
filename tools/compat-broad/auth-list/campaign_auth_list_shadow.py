@@ -423,6 +423,8 @@ def _owned_instance(output: Path, nonce: str) -> dict:
 
 def _real_child(output: Path, nonce: str) -> None:
     """Run the fixed fireemu artifact through the campaign adapter on loopback."""
+    # Import broad to install the repository's compat-inventory helper path.
+    import broad  # noqa: F401
     from owned_runner import control_get
 
     _owned_instance(output, nonce)

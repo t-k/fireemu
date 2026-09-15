@@ -74,9 +74,9 @@ On 2026-09-14, the revision-2 Auth session recorder completed a fresh bounded 34
 
 This goal reaches `READY_FOR_COMPATIBILITY_REVIEW` only when every target parent group is `COMPAT_VERIFIED`, all required CI and final-artifact checks pass, saved and new production evidence remains reproducible, independent reviews have no blocker, and owned resources and processes are reclaimed. Until then the repository reports `IN_PROGRESS`, `BLOCKED_OWNER` for the specific owner-dependent production actions, or `BLOCKED_TECHNICAL` for a concrete technical blocker.
 
-## Current local checkpoint (`2e140a26`)
+## Current local checkpoint (`23d7c3bd`)
 
-The Firestore `ListDocuments` adapter now rejects `showMissing=true` together with a non-empty `orderBy` before query execution, matching the public REST contract. The valid name-ordered missing-parent path remains covered separately, and page-token binding regressions still pass. This is a local contract correction; production listing behavior remains unobserved.
+The Firestore `ListDocuments` adapter now rejects `showMissing=true` together with any non-empty raw `orderBy` (including whitespace) immediately after parent parsing, before fault injection, consistency selection or page-token decoding. The valid name-ordered missing-parent path remains covered separately, and page-token binding regressions still pass. Source-bound Quint digests for the affected local adapter were regenerated and the evidence and traceability contracts pass. This is a local contract correction; production listing behavior remains unobserved.
 
 ## Current local checkpoint (`8126f8f3`)
 

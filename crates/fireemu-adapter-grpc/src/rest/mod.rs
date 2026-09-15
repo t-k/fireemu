@@ -1129,24 +1129,25 @@ impl RestState {
             Some(_) => return Err(Status::invalid_argument("documents must be an array")),
         };
         exclusive_selectors(body)?;
-        let consistency_selector = if let Some(t) = body.get("transaction") {
-            Some(
-                pb::batch_get_documents_request::ConsistencySelector::Transaction(
-                    transaction_bytes(Some(t))?,
-                ),
-            )
-        } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
-            Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(rt))
-        } else {
-            match body.get("newTransaction") {
-                Some(o) => Some(
-                    pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
-                        transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+        let consistency_selector =
+            if let Some(t) = body.get("transaction").filter(|value| !value.is_null()) {
+                Some(
+                    pb::batch_get_documents_request::ConsistencySelector::Transaction(
+                        transaction_bytes(Some(t))?,
                     ),
-                ),
-                None => None,
-            }
-        };
+                )
+            } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
+                Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(rt))
+            } else {
+                match body.get("newTransaction").filter(|value| !value.is_null()) {
+                    Some(o) => Some(
+                        pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                            transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                        ),
+                    ),
+                    None => None,
+                }
+            };
         let req = pb::BatchGetDocumentsRequest {
             database: database_of(resource)?,
             documents,
@@ -1202,20 +1203,21 @@ impl RestState {
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         exclusive_selectors(body)?;
-        let consistency_selector = if let Some(t) = body.get("transaction") {
-            Some(pb::run_query_request::ConsistencySelector::Transaction(
-                transaction_bytes(Some(t))?,
-            ))
-        } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
-            Some(pb::run_query_request::ConsistencySelector::ReadTime(rt))
-        } else {
-            match body.get("newTransaction") {
-                Some(o) => Some(pb::run_query_request::ConsistencySelector::NewTransaction(
-                    transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
-                )),
-                None => None,
-            }
-        };
+        let consistency_selector =
+            if let Some(t) = body.get("transaction").filter(|value| !value.is_null()) {
+                Some(pb::run_query_request::ConsistencySelector::Transaction(
+                    transaction_bytes(Some(t))?,
+                ))
+            } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
+                Some(pb::run_query_request::ConsistencySelector::ReadTime(rt))
+            } else {
+                match body.get("newTransaction").filter(|value| !value.is_null()) {
+                    Some(o) => Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+                        transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                    )),
+                    None => None,
+                }
+            };
         let req = pb::RunQueryRequest {
             parent: resource.to_owned(),
             explain_options,
@@ -1303,24 +1305,25 @@ impl RestState {
             ));
         }
         exclusive_selectors(body)?;
-        let consistency_selector = if let Some(t) = body.get("transaction") {
-            Some(
-                pb::run_aggregation_query_request::ConsistencySelector::Transaction(
-                    transaction_bytes(Some(t))?,
-                ),
-            )
-        } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
-            Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(rt))
-        } else {
-            match body.get("newTransaction") {
-                Some(o) => Some(
-                    pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
-                        transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+        let consistency_selector =
+            if let Some(t) = body.get("transaction").filter(|value| !value.is_null()) {
+                Some(
+                    pb::run_aggregation_query_request::ConsistencySelector::Transaction(
+                        transaction_bytes(Some(t))?,
                     ),
-                ),
-                None => None,
-            }
-        };
+                )
+            } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
+                Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(rt))
+            } else {
+                match body.get("newTransaction").filter(|value| !value.is_null()) {
+                    Some(o) => Some(
+                        pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                            transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                        ),
+                    ),
+                    None => None,
+                }
+            };
         let req = pb::RunAggregationQueryRequest {
             parent: resource.to_owned(),
             explain_options,

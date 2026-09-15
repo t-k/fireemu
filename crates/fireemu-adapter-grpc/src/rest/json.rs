@@ -1217,7 +1217,10 @@ pub fn transaction_options_from_json(
 
 /// `readTime` consistency selector value, if the request carries one.
 pub fn read_time_from_json(v: &Value) -> Result<Option<prost_types::Timestamp>, JsonError> {
-    v.get("readTime").map(timestamp_from_json).transpose()
+    v.get("readTime")
+        .filter(|value| !value.is_null())
+        .map(timestamp_from_json)
+        .transpose()
 }
 
 /// Optional RFC 3339 timestamp field → JSON (used for `readTime` / `commitTime`).

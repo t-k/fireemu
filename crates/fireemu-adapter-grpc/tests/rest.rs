@@ -1934,6 +1934,69 @@ fn rest_protojson_null_fields_and_numeric_order_direction_follow_unset_rules() {
 }
 
 #[test]
+fn rest_top_level_null_consistency_selectors_are_unset() {
+    let s = state(None);
+    let name = "projects/demo-app/databases/(default)/documents/null-selectors/doc";
+    let (status, _) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/null-selectors/doc"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200);
+
+    for action in ["batchGet", "runQuery"] {
+        let (status, omitted) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:{action}"),
+            if action == "batchGet" {
+                json!({"documents": [name]})
+            } else {
+                json!({"structuredQuery": {"from": [{"collectionId": "null-selectors"}]}})
+            },
+        );
+        assert_eq!(status, 200, "{action} omitted: {omitted}");
+        let (status, null) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:{action}"),
+            if action == "batchGet" {
+                json!({"documents": [name], "transaction": null, "newTransaction": null, "readTime": null})
+            } else {
+                json!({"structuredQuery": {"from": [{"collectionId": "null-selectors"}]}, "transaction": null, "newTransaction": null, "readTime": null})
+            },
+        );
+        assert_eq!(status, 200, "{action} null: {null}");
+        assert_eq!(null, omitted, "{action} null selectors differ");
+    }
+
+    let (status, omitted) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), json!({}));
+    assert_eq!(status, 200, "{omitted}");
+    let (status, null) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:listCollectionIds"),
+        json!({"readTime": null}),
+    );
+    assert_eq!(status, 200, "{null}");
+    assert_eq!(null, omitted);
+
+    for payload in [
+        json!({"documents": [name], "transaction": 1}),
+        json!({"documents": [name], "newTransaction": "invalid"}),
+        json!({"documents": [name], "readTime": 1}),
+    ] {
+        let (status, body) = call(&s, "POST", &format!("{DOCS}:batchGet"), payload);
+        assert_eq!(status, 400, "{body}");
+    }
+    for payload in [json!({"readTime": 1}), json!({"readTime": "invalid"})] {
+        let (status, body) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), payload);
+        assert_eq!(status, 400, "{body}");
+    }
+}
+
+#[test]
 fn rest_accepts_an_empty_document_mask_object() {
     let s = state(None);
     let (status, created) = call(

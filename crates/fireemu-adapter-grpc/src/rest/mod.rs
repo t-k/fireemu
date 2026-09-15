@@ -1084,7 +1084,7 @@ impl RestState {
         let req = pb::BatchWriteRequest {
             database: database_of(resource)?,
             writes: writes_from_json(body)?,
-            labels: std::collections::HashMap::new(),
+            labels: labels_from_json(body)?,
             request_options: None,
         };
         let guard = self.write_guard(principal);
@@ -1450,6 +1450,24 @@ fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
             .map_err(|e| bad(&e)),
         Some(_) => Err(Status::invalid_argument("writes must be an array")),
     }
+}
+
+fn labels_from_json(body: &Value) -> Result<std::collections::HashMap<String, String>, Status> {
+    let Some(labels) = body.get("labels") else {
+        return Ok(std::collections::HashMap::new());
+    };
+    let Some(labels) = labels.as_object() else {
+        return Err(Status::invalid_argument("labels must be an object"));
+    };
+    labels
+        .iter()
+        .map(|(key, value)| {
+            value
+                .as_str()
+                .map(|value| (key.clone(), value.to_owned()))
+                .ok_or_else(|| Status::invalid_argument("labels values must be strings"))
+        })
+        .collect()
 }
 
 fn precondition_from_params(

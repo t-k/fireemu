@@ -3922,6 +3922,7 @@ pub const CUSTOM_TOKEN_AUDIENCE: &str =
 
 /// `accounts:signInWithCustomToken`: the Admin SDK mints unsigned (`alg: none`) custom
 /// tokens against an emulator; the user is created on first sign-in.
+#[allow(clippy::too_many_lines)]
 fn sign_in_with_custom_token(
     store: &mut AuthStore,
     body: &Value,
@@ -3952,6 +3953,14 @@ fn sign_in_with_custom_token(
         }
         decoded.payload
     };
+    if let Some(tenant_id) = payload.get("tenant_id") {
+        let Some(tenant_id) = tenant_id.as_str() else {
+            return error(400, "INVALID_CUSTOM_TOKEN : tenant_id must be a string");
+        };
+        if store.tenant_id() != Some(tenant_id) {
+            return error(400, "TENANT_ID_MISMATCH");
+        }
+    }
     let uid = payload
         .get("uid")
         .or_else(|| payload.get("user_id"))

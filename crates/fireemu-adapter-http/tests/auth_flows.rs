@@ -2481,6 +2481,25 @@ fn client_tenant_id_selects_the_namespace_and_must_match_the_id_token() {
 }
 
 #[test]
+fn custom_token_tenant_id_must_match_the_target_tenant() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer-a").unwrap();
+    s.registry = Some(registry);
+    let token = json!({"uid": "tenant-custom-user", "tenant_id": "customer-b"}).to_string();
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"tenantId": "customer-a", "token": token}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "TENANT_ID_MISMATCH");
+}
+
+#[test]
 fn cross_tenant_update_credentials_leave_both_namespaces_unchanged() {
     use fireemu_core_auth::store::AuthRegistry;
 

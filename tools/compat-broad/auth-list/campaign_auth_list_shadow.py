@@ -83,7 +83,18 @@ class ShadowHandler(BaseHTTPRequestHandler):
         body = self.body()
         if self.path.endswith(":listCollectionIds"):
             parent = self.path.split("?", 1)[0].removeprefix("/v1/")[: -len(":listCollectionIds")]
-            if "parent" in body or not parent.startswith("projects/demo-firestore-probe/databases/(default)/documents"):
+            documents_root = "projects/demo-firestore-probe/databases/(default)/documents"
+            parent_suffix = parent.removeprefix(documents_root)
+            parent_segments = parent_suffix.strip("/").split("/") if parent_suffix else []
+            if (
+                "parent" in body
+                or not parent.startswith(documents_root)
+                or parent_segments
+                and (
+                    parent_suffix != "/" + "/".join(parent_segments)
+                    or len(parent_segments) % 2 != 0
+                )
+            ):
                 return self.reply(400, {"error": {"status": "INVALID_ARGUMENT"}})
             if body.get("pageToken") not in (None, self.page_token):
                 return self.reply(400, {"error": {"status": "INVALID_ARGUMENT"}})
@@ -314,6 +325,13 @@ def validate_list_observations(rows, nonce: str) -> None:
                 raise ValueError("first page continuation token is missing")
         elif "nextPageToken" in body:
             raise ValueError("unexpected continuation token on complete page")
+
+    pages = list_rows[2:]
+    if [row["resource"] for row in pages] != [paged_parent, paged_parent]:
+        raise ValueError("paged ListCollectionIds requests changed parent")
+    page_ids = [value for row in pages for value in row["body"]["collectionIds"]]
+    if page_ids != ["alpha", "beta"] or len(page_ids) != len(set(page_ids)):
+        raise ValueError("paged ListCollectionIds results contain duplicates or omissions")
 
 
 def scrub(path):

@@ -394,6 +394,16 @@ def test_legacy_shadow_fixture_rejects_invalid_auth_and_parent_shape():
             local=True,
         )
         assert status == 400
+        status, body, _content_type = wire(
+            origin
+            + "/v1/projects/demo-firestore-probe/databases/(default)/documents/collection:listCollectionIds",
+            "POST",
+            {},
+            {"Content-Type": "application/json"},
+            local=True,
+        )
+        assert status == 400
+        assert body["error"]["status"] == "INVALID_ARGUMENT"
         status, _body, _content_type = wire(
             origin
             + "/v1/projects/demo-firestore-probe/databases/(default)/documents:listCollectionIds",

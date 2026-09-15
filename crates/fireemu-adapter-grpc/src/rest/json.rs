@@ -783,6 +783,9 @@ fn unary_operator(name: &str) -> Result<i32, JsonError> {
 
 fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
     let filter_type = if let Some(c) = v.get("compositeFilter") {
+        if !c.is_object() {
+            return err("compositeFilter must be an object");
+        }
         let op = match c.get("op").and_then(Value::as_str) {
             Some("AND") => sq::composite_filter::Operator::And,
             Some("OR") => sq::composite_filter::Operator::Or,
@@ -790,12 +793,15 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
         };
         sq::filter::FilterType::CompositeFilter(sq::CompositeFilter {
             op: op as i32,
-            filters: c
-                .get("filters")
-                .and_then(Value::as_array)
-                .map(|items| items.iter().map(filter_from_json).collect::<Result<_, _>>())
-                .transpose()?
-                .unwrap_or_default(),
+            filters: match c.get("filters") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(filters) => filters
+                    .as_array()
+                    .ok_or_else(|| JsonError("compositeFilter.filters must be an array".into()))?
+                    .iter()
+                    .map(filter_from_json)
+                    .collect::<Result<_, _>>()?,
+            },
         })
     } else if let Some(f) = v.get("fieldFilter") {
         sq::filter::FilterType::FieldFilter(sq::FieldFilter {
@@ -819,15 +825,28 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
 
 fn cursor_from_json(v: Option<&Value>) -> Result<Option<pb::Cursor>, JsonError> {
     let Some(v) = v else { return Ok(None) };
-    Ok(Some(pb::Cursor {
-        values: v
-            .get("values")
-            .and_then(Value::as_array)
-            .map(|items| items.iter().map(value_from_json).collect::<Result<_, _>>())
-            .transpose()?
-            .unwrap_or_default(),
-        before: v.get("before").and_then(Value::as_bool).unwrap_or(false),
-    }))
+    if v.is_null() {
+        return Ok(None);
+    }
+    let Some(v) = v.as_object() else {
+        return err("cursor must be an object");
+    };
+    let values = match v.get("values") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(values) => values
+            .as_array()
+            .ok_or_else(|| JsonError("cursor.values must be an array".into()))?
+            .iter()
+            .map(value_from_json)
+            .collect::<Result<_, _>>()?,
+    };
+    let before = match v.get("before") {
+        None | Some(Value::Null) => false,
+        Some(before) => before
+            .as_bool()
+            .ok_or_else(|| JsonError("cursor.before must be a boolean".into()))?,
+    };
+    Ok(Some(pb::Cursor { values, before }))
 }
 
 /// Int32 from a JSON number, numeric string or `{"value": n}` wrapper.

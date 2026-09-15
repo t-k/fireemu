@@ -2737,9 +2737,29 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
         ("batch-bad-provider", "providerUserInfo", json!({})),
         ("batch-bad-mfa-entry", "mfaInfo", json!([null])),
         (
+            "batch-bad-mfa-string-entry",
+            "mfaInfo",
+            json!(["not-an-object"]),
+        ),
+        (
+            "batch-bad-mfa-array-entry",
+            "mfaInfo",
+            json!([["not-an-object"]]),
+        ),
+        (
             "batch-bad-provider-entry",
             "providerUserInfo",
             json!([null]),
+        ),
+        (
+            "batch-bad-provider-string-entry",
+            "providerUserInfo",
+            json!(["not-an-object"]),
+        ),
+        (
+            "batch-bad-provider-array-entry",
+            "providerUserInfo",
+            json!([["not-an-object"]]),
         ),
         ("batch-bad-created", "createdAt", json!("not-a-timestamp")),
         ("batch-bad-login", "lastLoginAt", json!(false)),
@@ -2771,6 +2791,33 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
         .lock()
         .unwrap()
         .user_by_id("batch-bad-overwrite")
+        .is_none());
+
+    // A malformed row is reported by index while neighboring valid rows are still imported.
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "users": [
+                {"localId": "batch-partial-valid", "email": "partial-valid@example.com"},
+                {"localId": "batch-partial-invalid", "mfaInfo": ["not-an-object"]}
+            ]
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["error"][0]["index"], 1, "{response}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-partial-valid")
+        .is_some());
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-partial-invalid")
         .is_none());
 }
 

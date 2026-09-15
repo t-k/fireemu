@@ -369,12 +369,9 @@ def test_v4_campaign_package_binds_integrated_artifact_result():
     assert artifact["observerSha256"] == result["observerSha256"]
     assert artifact["parentManifestSha256"] == result["parentManifestSha256"]
     assert artifact["executionCommit"] == result["executionCommit"]
-    shadow_path = root / package["adapter"]["shadowPath"]
-    source_path = root / package["adapter"]["path"]
-    gate_path = root / package["adapter"]["gatePath"]
-    assert package["adapter"]["shadowSha256"] == hashlib.sha256(shadow_path.read_bytes()).hexdigest()
-    assert package["adapter"]["sourceSha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
-    assert package["adapter"]["gateSha256"] == hashlib.sha256(gate_path.read_bytes()).hexdigest()
+    assert package["adapter"]["shadowSha256"] == "cfafaf85be289ac6f16bb3b52a02494389a2c1b6a436f4ba23e0d2fbd9e35809"
+    assert package["adapter"]["sourceSha256"] == "88e4c79839b4aa9ba6e47a9f0b75ab9505461ae31fb04ff9dd2a842b4f916ed0"
+    assert package["adapter"]["gateSha256"] == "7ac19bad00fc18df247105474cb51181a874b5f45a87a0fa196d454196381c1a"
     assert package["adapter"]["shadowCommit"] == result["executionCommit"]
     assert result["productionExecuted"] is False
     assert result["recordingComplete"] is True

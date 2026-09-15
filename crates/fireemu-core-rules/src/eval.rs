@@ -367,6 +367,9 @@ struct Evaluator<'a> {
     cause: Option<UndefinedCause>,
     /// Path matcher work is bounded independently from expression evaluation.
     match_path_work: Arc<AtomicU64>,
+    /// Reachability prefilter work is bounded independently from the matcher. Exhaustion keeps
+    /// the candidate conservative and lets the bounded matcher make the final decision.
+    match_prefilter_work: Arc<AtomicU64>,
 }
 
 const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
@@ -376,6 +379,10 @@ const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
 /// deeply nested set cannot allocate or recurse without limit. This is an evaluator safety
 /// bound, not a Firebase compatibility claim.
 const MATCH_PATH_WORK_MAX: u64 = 65_536;
+/// Maximum structural reachability transitions charged to one request. If this conservative
+/// prefilter bound is exhausted, the candidate is treated as unknown and evaluated by the
+/// bounded matcher instead of being rejected solely by the prefilter.
+const MATCH_PATH_PREFILTER_WORK_MAX: u64 = 1_000_000;
 
 /// Evaluates a request against a ruleset without document access (`get()` / `exists()` are
 /// unsupported and fail closed).
@@ -532,6 +539,7 @@ fn evaluate_prepared(
             coverage,
             cause: None,
             match_path_work: Arc::new(AtomicU64::new(0)),
+            match_prefilter_work: Arc::new(AtomicU64::new(0)),
         };
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
         absent_resource_used |= ev.absent_resource_used.get();
@@ -707,7 +715,8 @@ fn pattern_reachable_offsets(
     pattern: &[PathSegment],
     segments: &[String],
     zero_or_more: bool,
-) -> Vec<bool> {
+    work: &AtomicU64,
+) -> Option<Vec<bool>> {
     let mut reachable = vec![false; segments.len() + 1];
     reachable[0] = true;
 
@@ -716,6 +725,10 @@ fn pattern_reachable_offsets(
         for (offset, reachable) in reachable.iter().enumerate() {
             if !reachable {
                 continue;
+            }
+            let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+            if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                return None;
             }
             match segment {
                 PathSegment::Literal(literal) => {
@@ -738,6 +751,10 @@ fn pattern_reachable_offsets(
                 PathSegment::RecursiveWildcard { .. } => {
                     let minimum = usize::from(!zero_or_more);
                     for take in minimum..=(segments.len() - offset) {
+                        let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                        if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                            return None;
+                        }
                         if segments
                             .get(offset + take)
                             .is_some_and(|candidate| candidate == ABSTRACT_PREFIX)
@@ -755,7 +772,15 @@ fn pattern_reachable_offsets(
         reachable = next;
     }
 
-    reachable
+    Some(reachable)
+}
+
+#[derive(Clone, Copy)]
+struct BlockReachability {
+    /// The block or a descendant has a structurally reachable complete allow path.
+    can_reach_allow: bool,
+    /// The block's own path can consume the complete request, regardless of its items.
+    covers_path: bool,
 }
 
 /// Returns whether a match block or one of its descendants can consume the complete request.
@@ -764,23 +789,41 @@ fn pattern_reachable_offsets(
 /// matches may consume a prefix, but only when a child subtree can consume the remainder. This
 /// avoids spending the bounded matcher budget on parent branches that can never reach an
 /// applicable allow, while preserving partial matching for valid parent/child rules.
-fn block_can_match_segments(block: &MatchBlock, segments: &[String], zero_or_more: bool) -> bool {
-    let reachable = pattern_reachable_offsets(&block.path, segments, zero_or_more);
-    if !block.allows.is_empty() && reachable.get(segments.len()).copied().unwrap_or(false) {
-        return true;
-    }
+fn block_reachability(
+    block: &MatchBlock,
+    segments: &[String],
+    zero_or_more: bool,
+    work: &AtomicU64,
+) -> Option<BlockReachability> {
+    let reachable = pattern_reachable_offsets(&block.path, segments, zero_or_more, work)?;
+    let covers_path = reachable.get(segments.len()).copied().unwrap_or(false);
+    let mut can_reach_allow = !block.allows.is_empty() && covers_path;
 
     for item in &block.items {
         let Item::Match(child) = item else {
             continue;
         };
         for (offset, can_reach) in reachable.iter().copied().enumerate() {
-            if can_reach && block_can_match_segments(child, &segments[offset..], zero_or_more) {
-                return true;
+            if can_reach
+                && block_reachability(child, &segments[offset..], zero_or_more, work)
+                    .map(|reachability| reachability.can_reach_allow)
+                    .unwrap_or(false)
+            {
+                can_reach_allow = true;
+                break;
+            }
+            if can_reach && work.load(Ordering::Relaxed) > MATCH_PATH_PREFILTER_WORK_MAX {
+                return None;
             }
         }
+        if can_reach_allow {
+            break;
+        }
     }
-    false
+    Some(BlockReachability {
+        can_reach_allow,
+        covers_path,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -791,8 +834,21 @@ fn walk_match<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    if !block_can_match_segments(block, remaining, ev.wildcard_zero_or_more) {
-        return Ok(false);
+    let reachability = block_reachability(
+        block,
+        remaining,
+        ev.wildcard_zero_or_more,
+        &ev.match_prefilter_work,
+    );
+    if let Some(reachability) = reachability {
+        if !reachability.can_reach_allow {
+            if reachability.covers_path {
+                // Preserve the distinction between a covered path with no successful allow and a
+                // path for which no match block applies, even when its subtree is pruned.
+                *matched_any = true;
+            }
+            return Ok(false);
+        }
     }
     let mut outcome: Result<bool, EvalError> = Ok(false);
     let zero_or_more = ev.wildcard_zero_or_more;

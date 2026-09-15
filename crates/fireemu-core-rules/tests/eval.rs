@@ -459,6 +459,53 @@ fn loaded_rules_skip_partial_parent_siblings_before_a_reachable_allow() {
 }
 
 #[test]
+fn partial_subtree_prefilter_preserves_covered_path_denial() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents/{document=**} {"
+        } else {
+            "match /b/{bucket}/o/{path=**} {"
+        };
+        for version in ["1", "2"] {
+            let source = format!(
+                "rules_version = '{version}'; service {service_name} {{\n  {root}\n    match /never {{ allow read; }}\n  }}\n}}\n"
+            );
+            let loaded = LoadedRules::from_source(&source).unwrap();
+            let report = evaluate_request(
+                loaded.ruleset.as_ref().unwrap(),
+                &RequestContext {
+                    service,
+                    method: Method::Get,
+                    path: long_request_path(service),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: false,
+                    request_query: None,
+                },
+            );
+            assert!(
+                matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+                "{report:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_parent_reachability_preserves_abstract_query_matches() {
+    let rules = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents/{prefix=**} {\n    match /notes/{id} { allow list; }\n  }\n}";
+    let path = "/databases/(default)/documents/fireemu-any-prefix/notes/fireemu-placeholder";
+    assert!(allows(rules, &abstract_ctx(path, vec![])));
+}
+
+#[test]
 fn loaded_rules_leaf_prefilter_preserves_v1_and_parent_children() {
     for service_name in ["cloud.firestore", "firebase.storage"] {
         let service = if service_name == "cloud.firestore" {

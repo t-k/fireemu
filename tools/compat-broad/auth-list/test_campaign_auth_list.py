@@ -299,9 +299,14 @@ def test_checked_in_manifest_matches_proposal():
 
 
 def test_legacy_next_campaign_package_remains_immutable():
+    import hashlib
+
     root = __import__("pathlib").Path(__file__).parents[3]
     package_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v2.json"
     package = json.loads(package_path.read_bytes())
+    assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
+        "44471428cd147ac2b2104734e7d7f310b061a5650cdae6223ecfa4cb7979f45b"
+    )
     assert package["status"] == "prepared-offline-blocked-owner"
     assert package["localShadow"]["legacyFixture"]["productionExecuted"] is False
     assert package["adapter"]["sourceCommit"] == "aad1a41de926fae244b42ac1bd2baa57bf2bcdde"
@@ -327,8 +332,10 @@ def test_current_next_campaign_package_binds_current_artifact_result():
     assert artifact["executionCommit"] == result["executionCommit"]
     shadow_path = root / package["adapter"]["shadowPath"]
     source_path = root / package["adapter"]["path"]
+    gate_path = root / package["adapter"]["gatePath"]
     assert package["adapter"]["shadowSha256"] == hashlib.sha256(shadow_path.read_bytes()).hexdigest()
     assert package["adapter"]["sourceSha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
+    assert package["adapter"]["gateSha256"] == hashlib.sha256(gate_path.read_bytes()).hexdigest()
     assert package["adapter"]["shadowCommit"] == result["executionCommit"]
     assert artifact["observerSha256"] == result["observerSha256"]
     assert result["productionExecuted"] is False

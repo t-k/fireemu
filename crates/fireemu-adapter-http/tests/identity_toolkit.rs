@@ -2738,6 +2738,33 @@ fn batch_import_treats_null_optional_fields_as_unset() {
     assert!(imported.get("providerUserInfo").is_none());
     assert!(imported.get("mfaInfo").is_none());
     assert!(imported.get("lastLoginAt").is_none());
+
+    // `allowOverwrite: null` follows the omitted/default false path. A duplicate
+    // localId must be reported without replacing the already imported account.
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "allowOverwrite": null,
+            "users": [{
+                "localId": "batch-null-fields",
+                "email": "replacement@example.com",
+                "displayName": "must-not-replace"
+            }]
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["error"].as_array().map(Vec::len), Some(1), "{response}");
+    let (status, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["batch-null-fields"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["email"], "batch-null-fields@example.com");
+    assert_ne!(lookup["users"][0]["displayName"], "must-not-replace");
 }
 
 #[test]

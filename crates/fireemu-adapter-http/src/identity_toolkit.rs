@@ -3906,18 +3906,10 @@ fn sign_up(
     // was absent on lookup and invisible to a blocking hook); it stays ignored here.
     store.record_sign_in(&uid, at);
     let display_name = store.user(&uid).and_then(|u| u.display_name.clone());
-    let return_secure_token = body.get("returnSecureToken").and_then(Value::as_bool);
     match issue_tokens(store, &uid, None, at) {
         Ok(mut body) => {
             body["kind"] = json!("identitytoolkit#SignupNewUserResponse");
             body["displayName"] = json!(display_name);
-            if return_secure_token == Some(false) {
-                if let Some(object) = body.as_object_mut() {
-                    for field in ["idToken", "refreshToken", "expiresIn"] {
-                        object.remove(field);
-                    }
-                }
-            }
             JsonResponse { status: 200, body }
         }
         Err(r) => r,

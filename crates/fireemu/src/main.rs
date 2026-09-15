@@ -1535,6 +1535,29 @@ async fn watched_file_off_thread(path: &str) -> Result<(WatchedFileStamp, u64, V
         .map_err(|error| format!("watch worker failed: {error}"))?
 }
 
+#[cfg(test)]
+fn rules_reload_scan_counts() -> &'static Mutex<std::collections::BTreeMap<String, u64>> {
+    static SCANS: std::sync::OnceLock<Mutex<std::collections::BTreeMap<String, u64>>> =
+        std::sync::OnceLock::new();
+    SCANS.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
+}
+
+#[cfg(test)]
+fn note_rules_reload_scan(path: &str) {
+    if let Ok(mut scans) = rules_reload_scan_counts().lock() {
+        *scans.entry(path.to_owned()).or_default() += 1;
+    }
+}
+
+#[cfg(test)]
+fn rules_reload_scan_count(path: &str) -> u64 {
+    rules_reload_scan_counts()
+        .lock()
+        .ok()
+        .and_then(|scans| scans.get(path).copied())
+        .unwrap_or_default()
+}
+
 fn start_rules_reload_supervisor(
     path: String,
     label: &'static str,
@@ -1599,6 +1622,8 @@ fn start_rules_reload_supervisor(
             ) {
                 continue;
             }
+            #[cfg(test)]
+            note_rules_reload_scan(&path);
             observed_stamp = Some(stable_stamp);
             if observed_signature == Some(stable_signature) {
                 continue;
@@ -3025,6 +3050,8 @@ mod config_reload_tests {
 
         let deny_generation = named_rules.snapshot().unwrap().generation();
         let deny_mtime = std::fs::metadata(&named_path).unwrap().modified().unwrap();
+        let named_path_string = named_path.display().to_string();
+        let scans_before_malformed = rules_reload_scan_count(&named_path_string);
         std::fs::write(&named_path, "malformed rules").unwrap();
         std::fs::File::options()
             .write(true)
@@ -3035,7 +3062,16 @@ mod config_reload_tests {
                     .set_modified(deny_mtime + std::time::Duration::from_secs(1)),
             )
             .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if rules_reload_scan_count(&named_path_string) > scans_before_malformed {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the malformed named generation should be scanned");
         assert!(authorize("(default)"));
         assert!(!authorize("staging"));
 

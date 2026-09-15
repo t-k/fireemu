@@ -933,6 +933,7 @@ fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNeare
 }
 
 /// JSON → structured query.
+#[allow(clippy::too_many_lines)]
 pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, JsonError> {
     if !v.is_object() {
         return err("structuredQuery must be an object");
@@ -953,15 +954,21 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
                         return err("from elements must be objects");
                     }
                     Ok(sq::CollectionSelector {
-                        collection_id: f
-                            .get("collectionId")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                        all_descendants: f
-                            .get("allDescendants")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
+                        collection_id: match f.get("collectionId") {
+                            None => String::new(),
+                            Some(value) => value
+                                .as_str()
+                                .ok_or_else(|| {
+                                    JsonError("from.collectionId must be a string".into())
+                                })?
+                                .to_owned(),
+                        },
+                        all_descendants: match f.get("allDescendants") {
+                            None => false,
+                            Some(value) => value.as_bool().ok_or_else(|| {
+                                JsonError("from.allDescendants must be a boolean".into())
+                            })?,
+                        },
                     })
                 })
                 .collect::<Result<Vec<_>, JsonError>>()
@@ -983,12 +990,16 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
                     if !o.is_object() {
                         return err("orderBy elements must be objects");
                     }
-                    let direction = match o.get("direction").and_then(Value::as_str) {
-                        None | Some("ASCENDING" | "DIRECTION_UNSPECIFIED") => {
-                            sq::Direction::Ascending
-                        }
-                        Some("DESCENDING") => sq::Direction::Descending,
-                        Some(other) => return err(format!("unknown order direction {other:?}")),
+                    let direction = match o.get("direction") {
+                        None => sq::Direction::Ascending,
+                        Some(value) => match value.as_str() {
+                            Some("ASCENDING" | "DIRECTION_UNSPECIFIED") => sq::Direction::Ascending,
+                            Some("DESCENDING") => sq::Direction::Descending,
+                            Some(other) => {
+                                return err(format!("unknown order direction {other:?}"))
+                            }
+                            None => return err("orderBy.direction must be a string"),
+                        },
                     };
                     Ok(sq::Order {
                         field: field_reference(o.get("field"))?,

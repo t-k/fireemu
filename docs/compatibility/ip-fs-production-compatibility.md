@@ -78,6 +78,10 @@ This goal reaches `READY_FOR_COMPATIBILITY_REVIEW` only when every target parent
 
 The Firestore `ListDocuments` adapter now rejects `showMissing=true` together with any non-empty raw `orderBy` (including whitespace) immediately after parent parsing, before fault injection, consistency selection or page-token decoding. The valid name-ordered missing-parent path remains covered separately, and page-token binding regressions still pass. Source-bound Quint digests for the affected local adapter were regenerated and the evidence and traceability contracts pass. This is a local contract correction; production listing behavior remains unobserved.
 
+## Current local checkpoint (`0dbf7fef`)
+
+The current feature artifact completed a fresh local shadow of the six-case Query Explain campaign (query and aggregation plan-only, analyze and empty-analyze) with 12 observation rows and six recovery rows. Artifact, observer, comparison-contract and configuration digests are recorded in [`0dbf7fef-explain-local-shadow.json`](../../spec/compatibility/broad-runs/0dbf7fef-explain-local-shadow.json). The owned process and listeners stopped cleanly, cleanup and state verification passed, and `productionExecuted` remains false; this record is not production compatibility evidence.
+
 ## Current local checkpoint (`8126f8f3`)
 
 The Firestore local transaction adapter now expires an idle transaction before a contending write waits on its locks. The idle check and rollback occur under one database write lock, so a concurrent activity refresh cannot race with the stale decision. The new idle-holder regression, the existing busy-holder and rollback cases, the core transaction expiry test, adapter/core Clippy and formatting pass. This is local transaction semantics evidence; production conflict, retention and SDK retry behavior remain unobserved.

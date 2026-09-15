@@ -111,6 +111,9 @@ jobs:
           else
             uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator.py --check
           fi
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_production_denominator_v2.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator_v2.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator_v2_auth_time.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad -q
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_mutation_cargo.py -q
           uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --check-catalog

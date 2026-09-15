@@ -743,6 +743,53 @@ fn a_verified_email_recycles_an_unverified_account() {
     );
 }
 
+#[test]
+fn verified_idp_recycling_removes_all_old_credentials_and_indexes() {
+    use fireemu_core_auth::store::IdpSignIn;
+
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("recycle@example.com"), t0())
+        .unwrap();
+    s.set_password(&uid, "hunter22", t(0)).unwrap();
+    s.set_phone_number(&uid, Some("+15550000001")).unwrap();
+    s.link_federated(
+        &uid,
+        federated("oidc.old", "old-subject", Some("recycle@example.com")),
+    )
+    .unwrap();
+    let old_refresh = s.issue_refresh_token(&uid, t(1)).unwrap();
+
+    let outcome = s
+        .sign_in_with_idp(
+            federated("oidc.new", "new-subject", Some("recycle@example.com")),
+            true,
+            t(2),
+        )
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        IdpSignIn::SignedIn {
+            uid: ref signed,
+            is_new: false,
+            ..
+        } if signed == &uid
+    ));
+
+    let user = s.user(&uid).unwrap();
+    assert_eq!(user.provider, Provider::Federated("oidc.new".to_owned()));
+    assert!(!s.has_password(&uid));
+    assert!(user.phone_number.is_none());
+    assert!(user.federated.iter().all(|f| f.provider_id == "oidc.new"));
+    assert!(s.user_by_phone("+15550000001").is_none());
+    assert!(s.user_by_federated("oidc.old", "old-subject").is_none());
+    assert!(s.user_by_federated("oidc.new", "new-subject").is_some());
+    assert_eq!(
+        s.redeem_refresh_token(&old_refresh),
+        Err(AuthError::ExpiredRefreshToken)
+    );
+}
+
 // ------------------------------------------------------------------------------------------
 // Credential notices: the console lines the official emulator prints instead of sending mail
 // or SMS (firebase-tools/lib/emulator/auth/operations.js).

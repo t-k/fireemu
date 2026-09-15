@@ -428,6 +428,113 @@ async fn execute_pipeline_records_deterministic_small_and_large_page_stats() {
     }
 }
 
+#[tokio::test]
+async fn execute_pipeline_select_copies_only_projected_fields_across_pages() {
+    for count in [17, 257] {
+        let backend = test_backend();
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        let service = GatewayService::local(gateway, backend.clone());
+        let query = seeded_query(&backend, count, false);
+        backend
+            .commit(&pb::CommitRequest {
+                database: database_name_from_query_parent(&query.parent),
+                writes: (0..count)
+                    .map(|index| pb::Write {
+                        operation: Some(pb::write::Operation::Update(pb::Document {
+                            name: format!("{}/items/{index:03}", query.parent),
+                            fields: [
+                                (
+                                    "rank".to_owned(),
+                                    pb::Value {
+                                        value_type: Some(pb::value::ValueType::IntegerValue(
+                                            count - index,
+                                        )),
+                                    },
+                                ),
+                                (
+                                    "wide".to_owned(),
+                                    pb::Value {
+                                        value_type: Some(pb::value::ValueType::StringValue(
+                                            "x".repeat(4096),
+                                        )),
+                                    },
+                                ),
+                            ]
+                            .into_iter()
+                            .collect(),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let mut request = pipeline_request();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            request.pipeline_type.as_mut()
+        else {
+            unreachable!();
+        };
+        structured.pipeline.as_mut().unwrap().stages.extend([
+            pb::pipeline::Stage {
+                name: "select".to_owned(),
+                args: vec![pb::Value {
+                    value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                        fields: [(
+                            "value".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::FieldReferenceValue(
+                                    "rank".to_owned(),
+                                )),
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                    })),
+                }],
+                ..Default::default()
+            },
+            pb::pipeline::Stage {
+                name: "limit".to_owned(),
+                args: vec![pb::Value {
+                    value_type: Some(pb::value::ValueType::IntegerValue(count)),
+                }],
+                ..Default::default()
+            },
+        ]);
+        let mut stream = Firestore::execute_pipeline(&service, Request::new(request))
+            .await
+            .unwrap()
+            .into_inner();
+        let mut actual = Vec::new();
+        while let Some(response) = stream.next().await {
+            actual.extend(
+                response
+                    .unwrap()
+                    .results
+                    .into_iter()
+                    .map(|document| document.fields),
+            );
+        }
+        assert_eq!(actual.len(), usize::try_from(count).unwrap());
+        assert!(actual
+            .iter()
+            .all(|fields| fields.len() == 1 && fields.contains_key("value")));
+        assert_eq!(
+            actual[0]["value"].value_type,
+            Some(pb::value::ValueType::IntegerValue(count))
+        );
+        let (_, stats) = backend.latest_query_execution_stats().unwrap();
+        assert_eq!(
+            stats.pages.cloned_field_bytes,
+            u64::try_from(36 * count).unwrap()
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execute_pipeline_drop_before_first_delivery_releases_snapshot() {
     let backend = test_backend();

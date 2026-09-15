@@ -337,8 +337,18 @@ pub fn compile_supported(
         DocumentPath::resource_name,
     );
     let limit_i32 = limit.and_then(|value| i32::try_from(value).ok());
+    let select = projection
+        .as_ref()
+        .map(|aliases| pb::structured_query::Projection {
+            fields: aliases
+                .iter()
+                .map(|(_, field)| pb::structured_query::FieldReference {
+                    field_path: field.canonical(),
+                })
+                .collect(),
+        });
     let structured = pb::StructuredQuery {
-        select: None,
+        select,
         from: vec![pb::structured_query::CollectionSelector {
             collection_id: collection_id.to_string(),
             all_descendants: false,

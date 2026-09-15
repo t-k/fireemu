@@ -3534,11 +3534,11 @@ impl LocalBackend {
             && status.message() == fireemu_core_firestore::store::TOO_MUCH_CONTENTION
     }
 
-    /// Lease bookkeeping for a refused attempt: notes when each holder of a colliding lock
-    /// first blocked a writer and how active it was then, and rolls back a holder that has
-    /// blocked writers for the lock lease without driving its transaction in the meantime
-    /// (production expires an idle transaction; a busy one keeps its locks). `true` when a
-    /// holder was rolled back, so the attempt is worth repeating at once.
+    /// Lease bookkeeping for a refused attempt: rolls back colliding holders that have been
+    /// idle for the lock lease (production expires an idle transaction; a busy one keeps its
+    /// locks). The idle check and rollback share the database write lock, so a transaction that
+    /// resumes cannot be rolled back from a stale observation. `true` when a holder was rolled
+    /// back, so the attempt is worth repeating at once.
     pub fn expire_lock_leases(
         &self,
         handle: &DatabaseHandle,

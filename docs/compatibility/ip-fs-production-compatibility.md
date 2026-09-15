@@ -80,6 +80,10 @@ The Rules evaluator now isolates caller parameters and `let` bindings from the d
 
 The finite `G4-select-copy-local` child is integrated at `3a173cb0`. It exercises the real Enterprise Pipeline `select`/`limit` entry with 17-document and 257-document fixtures across one and nine pages, preserves aliases and integer types, and records projected copy totals of 612 and 9,252 field bytes. This is local measurement only; it does not establish Enterprise or Firestore Standard production compatibility, process RSS bounds or a global quota.
 
+## Current verification checkpoint (`9ee7f6c1`)
+
+The Rules matcher allow-budget repair and its source-bound Quint evidence are integrated. The workspace formal test gate ran `cargo nextest run --workspace --profile pr --no-fail-fast` with 2,309 passing tests and 81 documented skips after refreshing the `CompatibilitySelection`, `RegexAuthorization` and `RegexEvaluationCache` evidence digests. Workspace Clippy with `-D warnings`, rustfmt and the targeted Rules, REST/Rules, Storage and Auth regression suites passed. The new `GAP-FS-RULES-007` entry records that an established allow survives only matcher-work exhaustion; unsupported operations, expression and call-depth failures, and other budgets remain fail-closed. This is local evidence; production Rules compiler, matcher limits and user-token parity remain unobserved.
+
 ## Current local checkpoint (`dccb9f6a`)
 
 The finite `G2-write-stream-transaction-local` child is integrated at `7fb94a56`. A Write stream write contending with an active read-write transaction is refused with `ABORTED` without publishing any item in its multi-write request; after rollback, a fresh stream writes the document successfully. The 27-stream-test suite, integrated 334-test adapter run (one existing skip), adapter Clippy and the independent review passed. This remains local evidence: production stream/transaction precedence, REST/SDK parity and error ordering are unobserved, and the parent `FS-DATA-WRITE`/`FS-TRANSACTION` groups remain open.

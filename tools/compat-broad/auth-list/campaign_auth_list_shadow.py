@@ -621,7 +621,11 @@ def run(output: Path) -> dict:
             for row in report.get("localObservations", [])
         ],
         "gate": worker.get("gate", {}),
-        "failure": report.get("failure") or report.get("stopReason"),
+        # A normal child completion is lifecycle metadata, not a failed
+        # observation. Keep the stop reason separate so callers can distinguish
+        # an incomplete run from a completed one without losing the reason.
+        "failure": report.get("failure"),
+        "stopReason": report.get("stopReason"),
         "artifactSha256": report.get("artifactSha256"),
         "executionCommit": report.get("executionCommit"),
     }

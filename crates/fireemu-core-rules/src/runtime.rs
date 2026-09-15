@@ -82,7 +82,7 @@ impl LoadedRules {
                     diagnostic.maximum,
                     diagnostic.subject.as_deref().unwrap_or("the call chain")
                 ),
-                _ => continue,
+                _ => format!("{}: {}", diagnostic.limit_id, diagnostic.message),
             };
             let span = diagnostic.span.unwrap_or_default();
             return Err(ParseError {

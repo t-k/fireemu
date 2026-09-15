@@ -7,6 +7,13 @@ use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 const V1: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
 const V2: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
 
+fn oversized_ruleset() -> String {
+    let base = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }\n// ";
+    let mut source = base.to_owned();
+    source.push_str(&"x".repeat(262_144 - base.len()));
+    source
+}
+
 #[test]
 fn evaluation_snapshot_remains_on_v1_after_v2_activation() {
     let slot = RulesetSlot::new(LoadedRules::from_source(V1).unwrap());
@@ -30,6 +37,18 @@ fn invalid_candidate_preserves_active_snapshot_and_generation() {
 
     let after = slot.snapshot().unwrap();
     assert_eq!(after.generation(), 0);
+    assert!(Arc::ptr_eq(&before.loaded(), &after.loaded()));
+}
+
+#[test]
+fn lint_error_candidate_is_rejected_without_replacing_active_rules() {
+    let slot = RulesetSlot::new(LoadedRules::from_source(V1).unwrap());
+    let before = slot.snapshot().unwrap();
+
+    assert!(slot.replace_source(&oversized_ruleset()).is_err());
+
+    let after = slot.snapshot().unwrap();
+    assert_eq!(after.generation(), before.generation());
     assert!(Arc::ptr_eq(&before.loaded(), &after.loaded()));
 }
 

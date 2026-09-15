@@ -2633,8 +2633,9 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
     handle.abort();
 }
 
-/// Commit validates every write before publishing any of them. A late precondition failure
-/// therefore leaves both the existing document and the missing target unchanged.
+/// The local adapter validates every write before publishing any of them. A late precondition
+/// failure therefore leaves both the existing document and the missing target unchanged. This
+/// records local behavior; production parity is unobserved here.
 #[tokio::test]
 async fn commit_late_precondition_failure_is_atomic() {
     let (mut client, _clock, handle) = start().await;
@@ -2685,9 +2686,11 @@ async fn commit_late_precondition_failure_is_atomic() {
     handle.abort();
 }
 
-/// A failed transactional commit keeps the attempt available for rollback. Rollback releases
-/// its read locks so the same document can then be written by another request.
+/// The local adapter keeps a failed transactional commit available for rollback. Rollback
+/// releases its read locks so the same document can then be written by another request. This
+/// records local behavior; production parity is unobserved here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
 async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
     let (mut client, handle) = start_with_contention_wait(std::time::Duration::ZERO).await;
     client
@@ -2739,6 +2742,28 @@ async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
         .unwrap_err();
     assert_eq!(failed.code(), tonic::Code::NotFound);
 
+    // The failed transaction published neither staged write before rollback.
+    let unchanged = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/txn-failure/doc"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(unchanged.fields.get("value"), Some(&i(1)));
+    assert_eq!(
+        client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/txn-failure/missing"),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+
     let blocked = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -2777,8 +2802,9 @@ async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
     handle.abort();
 }
 
-/// `BatchWrite` reports a precondition failure for one write while publishing an independent
-/// later write, preserving its per-write status and result alignment.
+/// The local adapter's `BatchWrite` reports a precondition failure for one write while
+/// publishing an independent later write, preserving its per-write status and result alignment.
+/// Production parity is unobserved here.
 #[tokio::test]
 async fn batch_write_precondition_failure_is_per_write_and_later_writes_commit() {
     let (mut client, _clock, handle) = start().await;

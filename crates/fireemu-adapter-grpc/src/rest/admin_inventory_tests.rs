@@ -264,6 +264,139 @@ fn admin_get_is_read_only_and_unknown_database_is_not_found() {
 }
 
 #[test]
+fn admin_inventory_survives_clear_and_preserves_project_isolation() {
+    let state = state();
+    create_database(&state, "demo", "(default)");
+    create_database(&state, "demo", "analytics");
+    create_database(&state, "other", "(default)");
+
+    let before_list = call(&state, Some("Bearer owner"), "/v1/projects/demo/databases").1;
+    let before_default = call(
+        &state,
+        Some("Bearer owner"),
+        "/v1/projects/demo/databases/(default)",
+    )
+    .1;
+    let (status, body) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "POST",
+        "/v1/projects/demo/databases/(default)/documents/users?documentId=alice",
+        json!({"fields": {"name": {"stringValue": "Alice"}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "POST",
+        "/v1/projects/demo/databases/analytics/documents/users?documentId=carol",
+        json!({"fields": {"name": {"stringValue": "Carol"}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "POST",
+        "/v1/projects/other/databases/(default)/documents/users?documentId=bob",
+        json!({"fields": {"name": {"stringValue": "Bob"}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let (status, body) = call_request(
+        &state,
+        None,
+        "DELETE",
+        "/emulator/v1/projects/demo/databases/(default)/documents",
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{body}");
+
+    assert_eq!(
+        call(&state, Some("Bearer owner"), "/v1/projects/demo/databases").1,
+        before_list
+    );
+    assert_eq!(
+        call(
+            &state,
+            Some("Bearer owner"),
+            "/v1/projects/demo/databases/(default)",
+        )
+        .1,
+        before_default
+    );
+    let (status, body) = call(
+        &state,
+        Some("Bearer owner"),
+        "/v1/projects/demo/databases/missing",
+    );
+    assert_eq!(status, 404, "{body}");
+    for database in ["(default)", "analytics"] {
+        let (status, body) = call_request(
+            &state,
+            Some("Bearer owner"),
+            "GET",
+            &format!(
+                "/v1/projects/demo/databases/{database}/documents/users/{}",
+                if database == "(default)" {
+                    "alice"
+                } else {
+                    "carol"
+                }
+            ),
+            Value::Null,
+        );
+        assert_eq!(status, 404, "{body}");
+    }
+    let (status, body) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "GET",
+        "/v1/projects/other/databases/(default)/documents/users/bob",
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
+fn admin_inventory_survives_snapshot_restore_with_standard_native_metadata() {
+    let state = state();
+    create_database(&state, "demo", "(default)");
+    let before_list = call(&state, Some("Bearer owner"), "/v1/projects/demo/databases").1;
+    let before_database = call(
+        &state,
+        Some("Bearer owner"),
+        "/v1/projects/demo/databases/(default)",
+    )
+    .1;
+    let snapshot = state.local.snapshot_databases();
+
+    create_database(&state, "demo", "temporary");
+    state.local.restore_databases(snapshot).unwrap();
+
+    assert_eq!(
+        call(&state, Some("Bearer owner"), "/v1/projects/demo/databases").1,
+        before_list
+    );
+    assert_eq!(
+        call(
+            &state,
+            Some("Bearer owner"),
+            "/v1/projects/demo/databases/(default)",
+        )
+        .1,
+        before_database
+    );
+    assert_eq!(before_database["type"], "FIRESTORE_NATIVE");
+    assert_eq!(before_database["databaseEdition"], "STANDARD");
+    let (status, body) = call(
+        &state,
+        Some("Bearer owner"),
+        "/v1/projects/demo/databases/temporary",
+    );
+    assert_eq!(status, 404, "{body}");
+}
+
+#[test]
 fn admin_rejects_malformed_and_unsupported_routes() {
     let state = state();
     let (status, _) = call(&state, Some("Bearer owner"), "/v1/projects//databases");

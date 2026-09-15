@@ -74,6 +74,16 @@ On 2026-09-14, the revision-2 Auth session recorder completed a fresh bounded 34
 
 This goal reaches `READY_FOR_COMPATIBILITY_REVIEW` only when every target parent group is `COMPAT_VERIFIED`, all required CI and final-artifact checks pass, saved and new production evidence remains reproducible, independent reviews have no blocker, and owned resources and processes are reclaimed. Until then the repository reports `IN_PROGRESS`, `BLOCKED_OWNER` for the specific owner-dependent production actions, or `BLOCKED_TECHNICAL` for a concrete technical blocker.
 
+## Current local checkpoint (`11f2adb3`)
+
+The Firestore local transaction adapter now expires an idle transaction before a contending write waits on its locks. The idle check and rollback occur under one database write lock, so a concurrent activity refresh cannot race with the stale decision. The new idle-holder regression, the existing busy-holder and rollback cases, the core transaction expiry test, adapter/core Clippy and formatting pass. This is local transaction semantics evidence; production conflict, retention and SDK retry behavior remain unobserved.
+
+The Rules matcher regression suite also covers both positions of an allow rule relative to expensive non-matching recursive-wildcard siblings. Four targeted tests pass, including the fail-closed false/unresolved case. Structural non-match pruning and the established-allow budget exception remain in place; this does not claim production compiler or matcher-limit parity.
+
+A fresh current-head Query Explain shadow is recorded in
+[`11f2adb3-explain-local-shadow.json`](../../spec/compatibility/broad-runs/11f2adb3-explain-local-shadow.json).
+It completed the six bounded cases, twelve observation rows, six recovery rows, owned cleanup and process/listener shutdown with the current artifact. No production request was made. The existing campaign's API-key baseline remains separate and is not silently rebased by this shadow.
+
 ## Current local checkpoint (`41b81ecf`)
 
 The Rules evaluator now isolates caller parameters and `let` bindings from the declaration-time path captures used by a callee, while resolving function names through a shared parent-linked lexical environment. Declarations in one scope no longer create a per-request quadratic reference table. Firestore and Storage regressions cover caller shadowing, nested same-name declarations and environment sharing; the production compiler and memory/performance behavior remain unobserved. The independent correctness and Security reviews reported no blocking finding.

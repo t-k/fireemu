@@ -1548,6 +1548,7 @@
       "artifacts": {
         "integration": [
           "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "crates/fireemu-core-rules/tests/eval.rs",
           "crates/fireemu-adapter-http/tests/storage.rs"
         ],
         "conformance": "conformance/rules-programs.json"

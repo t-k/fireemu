@@ -187,3 +187,7 @@ The Auth-list campaign regressions now bind the current package test to the chec
 ## Current local checkpoint (`91addedf`)
 
 The immutable v2 campaign test now pins both referenced local receipts in addition to the complete package hash: the legacy fixture receipt is `c49e1012c4fd49c540ab0854dbede12f15093f510a4e8f8ff06654fe388f9874`, and the owned-artifact receipt is `91081dccb9718347847a76f9bb83340de3655fe09155487e1b392f8d2168b926`. The focused package-integrity tests pass (`2 passed`); this is a test-only evidence safeguard and does not rewrite either receipt or perform production communication.
+
+## Current evidence checkpoint (`6531ff86`)
+
+The v3 Auth/ListCollectionIds campaign package is now pinned by a complete SHA-256 assertion (`2aee67fe8d27d0e28ab623915eb7207b9f85f6948aad754fc7288e0b822d1c2b`) in its offline integrity test. The package, local artifact, observer and historical receipts remain immutable; the focused campaign suite passes 25 tests. This closes an evidence-envelope mutability gap only and does not add production observations or promote any parent feature group.

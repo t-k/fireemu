@@ -3041,6 +3041,42 @@ fn strict_admin_query_applies_the_production_page_contract() {
 }
 
 #[test]
+fn admin_lookup_rejects_malformed_federated_identifiers_without_lookup_results() {
+    let s = state();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({
+            "localId": "federated-lookup",
+            "email": "federated-lookup@example.test"
+        }),
+    );
+    assert_eq!(status, 200);
+
+    for identifier in [
+        json!({"rawId": "provider-user"}),
+        json!({"providerId": "google.com"}),
+        json!({"providerId": 7, "rawId": "provider-user"}),
+        json!({"providerId": "google.com", "rawId": false}),
+    ] {
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"federatedUserId": [identifier]}),
+        );
+        assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["message"],
+            "INVALID_ARGUMENT : federatedUserId items require string providerId and rawId",
+            "{response}"
+        );
+        assert!(response.get("users").is_none(), "{response}");
+    }
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic() {
     let s = state();

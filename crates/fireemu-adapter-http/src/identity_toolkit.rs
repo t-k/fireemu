@@ -4280,6 +4280,46 @@ fn id_list(body: &Value, key: &str) -> Result<Vec<String>, JsonResponse> {
     Ok(items)
 }
 
+fn federated_identifiers(body: &Value) -> Result<Vec<(String, String)>, JsonResponse> {
+    match body.get("federatedUserId") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                let object = item.as_object().ok_or_else(|| {
+                    error(
+                        400,
+                        "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
+                    )
+                })?;
+                let provider_id = object
+                    .get("providerId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        error(
+                            400,
+                            "INVALID_ARGUMENT : federatedUserId items require string providerId and rawId",
+                        )
+                    })?;
+                let raw_id = object
+                    .get("rawId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        error(
+                            400,
+                            "INVALID_ARGUMENT : federatedUserId items require string providerId and rawId",
+                        )
+                    })?;
+                Ok((provider_id.to_owned(), raw_id.to_owned()))
+            })
+            .collect(),
+        Some(_) => Err(error(
+            400,
+            "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
+        )),
+    }
+}
+
 fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> JsonResponse {
     if !admin {
         // Select the trust boundary before parsing any administrator search criteria.
@@ -4306,23 +4346,7 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         };
     }
     let lists = (|| -> Result<_, JsonResponse> {
-        let federated: Vec<(String, String)> =
-            match body.get("federatedUserId") {
-                None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(items)) if items.iter().all(Value::is_object) => items
-                    .iter()
-                    .map(|i| {
-                        (
-                            str_field(i, "providerId").unwrap_or("").to_owned(),
-                            str_field(i, "rawId").unwrap_or("").to_owned(),
-                        )
-                    })
-                    .collect(),
-                Some(_) => return Err(error(
-                    400,
-                    "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
-                )),
-            };
+        let federated = federated_identifiers(body)?;
         Ok((
             id_list(body, "localId")?,
             id_list(body, "email")?,

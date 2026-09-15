@@ -11,8 +11,11 @@
   "adapter": {
     "id": "auth-list-campaign-v1",
     "path": "tools/compat-broad/auth-list/campaign_auth_list.py",
-    "availability": "historical-adapter-reference-not-present-at-source-commit",
+    "availability": "restored-from-immutable-commit-9e6f9eab",
+    "sourceSha256": "16b86fae1f3ddaa15f2621ec8d6767379cb701b854703aedc2b5d51757de460a",
+    "shadowSha256": "afad8f18453ce35beda9c2d94e4b211a21c7556bd7843b82c00c3a1cfea26f38",
     "gate": "tools/compat-broad/auth-list/campaign_gate.py",
+    "gateSha256": "7ca7f354f2dfd11f6e40893f31b8ab99fc1f349c036327503465c66d7aeff50c",
     "gateContract": "shared-local-v2"
   },
   "cases": [
@@ -81,15 +84,23 @@
     "nonceTemplate": "{freshNonce}: fresh 32 lowercase hexadecimal value at execution time"
   },
   "localShadow": {
-    "status": "blocked",
+    "status": "passed-loopback",
+    "result": {
+      "path": "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-shadow/result.json",
+      "sha256": "c49e1012c4fd49c540ab0854dbede12f15093f510a4e8f8ff06654fe388f9874",
+      "completed": true,
+      "productionExecuted": false,
+      "processCleanup": true,
+      "observationRows": 16,
+      "recoveryRequests": 16
+    },
     "runner": "tools/compat-broad/auth-list/campaign_auth_list_shadow.py",
-    "blockers": [
-      "The runner and its campaign gate are not present at sourceCommit fc75cfc1; only the historical adapter reference exists in repository history.",
-      "No local shadow result can be produced without adding or restoring executable runner code, which is outside this docs/spec-only package.",
+    "command": "uv run --project tools/compat-inventory python tools/compat-broad/auth-list/campaign_auth_list_shadow.py --output spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-shadow",
+    "adapterSourceCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
+    "limitations": [
+      "The shadow is loopback-only and does not establish production parity.",
       "No production request, credential acquisition, owner approval, permission reference, nonce, or expected production response is supplied."
-    ],
-    "requiredCommandAfterAdapterIsAvailable": "python tools/compat-broad/auth-list/campaign_auth_list_shadow.py --help",
-    "evidence": null
+    ]
   },
   "production": {
     "productionExecuted": false,

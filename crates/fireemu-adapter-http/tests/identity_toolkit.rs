@@ -2755,7 +2755,11 @@ fn batch_import_treats_null_optional_fields_as_unset() {
         }),
     );
     assert_eq!(status, 200, "{response}");
-    assert_eq!(response["error"].as_array().map(Vec::len), Some(1), "{response}");
+    assert_eq!(
+        response["error"].as_array().map(Vec::len),
+        Some(1),
+        "{response}"
+    );
     let (status, lookup) = admin(
         &s,
         "POST",

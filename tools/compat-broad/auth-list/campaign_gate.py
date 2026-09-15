@@ -84,9 +84,16 @@ class CampaignGate(FrozenGate):
         normalized = self._template(normalized)
         # The frozen gate compares the closed recipe; typed metadata remains bound.
         result = super().dispatch(normalized, recovery, send)
-        if recovery and operation.get("operationType") == "auth-lookup":
+        if recovery and operation.get("operationType") in {"auth-delete", "auth-lookup"}:
             status, body = result or (None, None)
-            if status == 200 and isinstance(body, dict) and body.get("users", []) == []:
+            absent_ok = operation["operationType"] == "auth-delete" and status == 200
+            absent_ok = absent_ok or (
+                operation["operationType"] == "auth-lookup"
+                and status == 200
+                and isinstance(body, dict)
+                and body.get("users", []) == []
+            )
+            if absent_ok:
                 route = operation["path"].split("?", 1)[0].removeprefix("/v1/")
                 with self.locked() as state:
                     absent = state["jobs"][self.job]["absent"]

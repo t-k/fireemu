@@ -362,16 +362,19 @@
     {
       "id": "FS-U03",
       "feature": "FS-TRANSACTIONS",
-      "kind": "unmapped",
-      "scope": "Transactions and contention: concurrency mode of the real database, retry, timeout, ordering, state and resources after failure.",
-      "implementationStatus": "unknown",
-      "localTestStatus": "none",
+      "kind": "unobserved",
+      "scope": "Transactions and contention: concurrency mode of the real database, retry, timeout, ordering, state and resources after failure. Local REST and gRPC coverage now exercises rollback state retention, lock contention, lease expiry, BatchWrite per-item continuation and write-stream recovery; production concurrency and SDK behavior remain open.",
+      "implementationStatus": "implemented",
+      "localTestStatus": "passing",
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
-        "docs/compatibility/README.md"
+        "crates/fireemu-adapter-grpc/src/rest/transaction_tests.rs",
+        "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs",
+        "crates/fireemu-adapter-grpc/tests/local.rs",
+        "crates/fireemu-adapter-grpc/tests/streams.rs"
       ],
-      "nextAction": "Observe against production per condition; do not infer mode from the edition.",
+      "nextAction": "Compare the covered rollback, contention and recovery conditions against production, then add bounded SDK retry and timeout observations; do not infer mode from the edition.",
       "blockedReason": "",
       "requiresProductionChange": false
     },
@@ -844,7 +847,7 @@
       "id": "GAP-FS-RULES-007",
       "feature": "FS-RULES-INDEXES",
       "kind": "mismatch",
-      "scope": "A successful Rules allow could be overturned when unrelated sibling or nested match-path exploration later exhausted the independent matcher-work budget, even though the request already had a valid allow.",
+      "scope": "A successful Rules allow could be overturned when unrelated sibling or nested match-path exploration later exhausted the independent matcher-work budget, even though the request already had a valid allow. Structurally impossible sibling patterns could also consume that budget before a valid allow rule placed later.",
       "implementationStatus": "fixed",
       "localTestStatus": "passing",
       "productionObservationStatus": "none",
@@ -854,7 +857,7 @@
         "crates/fireemu-core-rules/src/eval.rs",
         "crates/fireemu-core-rules/tests/eval.rs"
       ],
-      "nextAction": "The evaluator preserves an established allow only across FIREEMU-RULES-MATCH-WORK exhaustion; expression, call-depth, unsupported-operation and other budget failures remain fail-closed. Firestore and Storage local regressions pass; production matcher-budget and allow-short-circuit parity remain unobserved.",
+      "nextAction": "The evaluator prefilters matcher-aligned unreachable patterns and preserves an established allow across FIREEMU-RULES-MATCH-WORK exhaustion; expression, call-depth, unsupported-operation and other budget failures remain fail-closed. Firestore and Storage local regressions pass; production matcher-budget and allow-short-circuit parity remain unobserved.",
       "blockedReason": "",
       "requiresProductionChange": false
     }

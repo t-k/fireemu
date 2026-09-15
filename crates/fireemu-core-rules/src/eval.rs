@@ -264,6 +264,9 @@ impl Budget {
 
 struct Scope<'a> {
     functions: Vec<&'a FunctionDecl>,
+    /// Functions visible from each declaration's lexical scope. The active `functions` stack
+    /// tracks the call site, while this map restores the declaration environment for a call.
+    function_scopes: BTreeMap<usize, Vec<&'a FunctionDecl>>,
     bindings: Vec<Binding<'a>>,
 }
 
@@ -461,15 +464,21 @@ fn evaluate_prepared(
         if service.name != ctx.service.name() {
             continue;
         }
-        let mut scope = Scope {
-            functions: Vec::new(),
+        let mut function_scopes = BTreeMap::new();
+        collect_function_scopes(&service.items, &[], &mut function_scopes);
+        let functions = service
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => Some(function),
+                Item::Match(_) => None,
+            })
+            .collect();
+        let scope = Scope {
+            functions,
+            function_scopes,
             bindings: Vec::new(),
         };
-        for item in &service.items {
-            if let Item::Function(f) = item {
-                scope.functions.push(f);
-            }
-        }
         let mut ev = Evaluator {
             nesting: 0,
             request: Arc::clone(request),
@@ -625,6 +634,34 @@ fn walk_items<'a>(
         }
     }
     Ok(allowed)
+}
+
+fn function_key(function: &FunctionDecl) -> usize {
+    std::ptr::from_ref(function) as usize
+}
+
+fn collect_function_scopes<'a>(
+    items: &'a [Item],
+    parent: &[&'a FunctionDecl],
+    scopes: &mut BTreeMap<usize, Vec<&'a FunctionDecl>>,
+) {
+    let own: Vec<&'a FunctionDecl> = items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            Item::Match(_) => None,
+        })
+        .collect();
+    let mut visible = parent.to_vec();
+    visible.extend(own.iter().copied());
+    for function in &own {
+        scopes.insert(function_key(function), visible.clone());
+    }
+    for item in items {
+        if let Item::Match(block) = item {
+            collect_function_scopes(&block.items, &visible, scopes);
+        }
+    }
 }
 
 fn walk_match<'a>(
@@ -1774,6 +1811,14 @@ impl<'a> Evaluator<'a> {
             )));
         }
         self.budget.enter_call()?;
+        let caller_functions = self
+            .scope
+            .function_scopes
+            .get(&function_key(f))
+            .cloned()
+            .map(|definition_functions| {
+                std::mem::replace(&mut self.scope.functions, definition_functions)
+            });
         let bindings_before = self.scope.bindings.len();
         for (p, v) in f.params.iter().zip(values) {
             self.scope.bindings.push(Binding::value(p.clone(), v));
@@ -1790,6 +1835,9 @@ impl<'a> Evaluator<'a> {
             self.eval(&f.body)
         };
         self.scope.bindings.truncate(bindings_before);
+        if let Some(caller_functions) = caller_functions {
+            self.scope.functions = caller_functions;
+        }
         self.budget.leave_call();
         result
     }

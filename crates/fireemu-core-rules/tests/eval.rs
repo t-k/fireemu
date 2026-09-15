@@ -108,6 +108,23 @@ fn doc(entries: &[(&str, RulesValue)]) -> RulesValue {
 }
 
 #[test]
+fn user_function_calls_resolve_in_the_definition_scope() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  function decision() { return false; }\n  function gate() { return decision(); }\n  match /databases/{db}/documents {\n    function decision() { return true; }\n    match /notes/{id} { allow read: if gate(); }\n  }\n}",
+    )
+    .unwrap();
+    let report = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, "/databases/(default)/documents/notes/n1", None),
+    );
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn owner_can_read_but_write_requires_totp() {
     let ruleset = parse_ruleset(RULES).unwrap();
     let r = evaluate_request(

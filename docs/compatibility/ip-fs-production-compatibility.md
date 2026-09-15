@@ -80,9 +80,7 @@ The Firestore local transaction adapter now expires an idle transaction before a
 
 The Rules matcher regression suite also covers both positions of an allow rule relative to expensive non-matching recursive-wildcard siblings. Four targeted tests pass, including the fail-closed false/unresolved case. Structural non-match pruning and the established-allow budget exception remain in place; this does not claim production compiler or matcher-limit parity.
 
-A fresh current-head Query Explain shadow is recorded in
-[`11f2adb3-explain-local-shadow.json`](../../spec/compatibility/broad-runs/11f2adb3-explain-local-shadow.json).
-It completed the six bounded cases, twelve observation rows, six recovery rows, owned cleanup and process/listener shutdown with the current artifact. No production request was made. The existing campaign's API-key baseline remains separate and is not silently rebased by this shadow.
+A fresh current-head Query Explain shadow is recorded in [`11f2adb3-explain-local-shadow.json`](../../spec/compatibility/broad-runs/11f2adb3-explain-local-shadow.json). It completed the six bounded cases, twelve observation rows, six recovery rows, owned cleanup and process/listener shutdown with the current artifact. No production request was made. The existing campaign's API-key baseline remains separate and is not silently rebased by this shadow.
 
 ## Current local checkpoint (`41b81ecf`)
 

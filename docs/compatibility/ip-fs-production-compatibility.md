@@ -122,3 +122,8 @@ The Rules evaluator now preserves an established allow when later, non-matching 
 
 - Firestore REST document classification and shared parent decoding now parse `projects/{project}/databases/{database}/documents` by positional path segments. Valid project/database identifiers containing the word `documents` no longer get split inside an identifier and sent to the wrong database.
 - End-to-end local coverage exercises create, get, list and `:commit` for `documents-db` and exact `documents` database identifiers, plus decoder coverage for a `documents-project` project. The existing route, authorization and custom-method tests remain passing; production REST parity is unobserved.
+
+## Latest REST malformed-resource follow-up (`7e569264`)
+
+- Decoder coverage now rejects a `documents-extra` suffix, and the real REST handler rejects empty document path segments such as `documents//items` and `documents/items/`. These checks preserve the positional route boundary without changing valid database-root trailing-slash behavior.
+- The adapter library suite passed 108 tests with one existing skip and the REST integration suite passed 41 tests. Workspace verification on this source passed 2,335 tests with 81 documented skips, workspace Clippy, rustfmt, the Quint evidence contract and traceability checks. This is local routing evidence; no production observation or historical receipt was changed.

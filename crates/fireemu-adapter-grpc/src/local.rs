@@ -1207,6 +1207,46 @@ impl DocumentSnapshot {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replace_database_indexes_reports_a_poisoned_catalog_lock() {
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+        )));
+        let backend = LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: fireemu_core_firestore::index::PlanningContext {
+                    edition: fireemu_core_types::edition::FirestoreEdition::Standard,
+                    api_mode: fireemu_core_types::edition::FirestoreApiMode::Native,
+                    policy: fireemu_core_firestore::index::IndexValidationPolicy::Production,
+                },
+                indexes: fireemu_core_firestore::index::IndexSet::default(),
+            },
+            clock,
+            7,
+        );
+        assert!(backend.replace_database_indexes(
+            "staging",
+            fireemu_core_firestore::index::IndexSet::default(),
+        ));
+        let lock = &backend.indexes;
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = lock.write().unwrap();
+            panic!("poison the index catalog lock");
+        }));
+        assert!(poisoned.is_err());
+
+        assert!(!backend.replace_database_indexes(
+            "staging",
+            fireemu_core_firestore::index::IndexSet::default(),
+        ));
+    }
+}
+
 impl LocalBackend {
     /// Creates a backend with the strict gateway and a shared clock.
     #[must_use]
@@ -2164,13 +2204,19 @@ impl LocalBackend {
     }
 
     /// Atomically replaces one database's index catalog.
+    ///
+    /// Returns `false` when the shared catalog lock is poisoned and the replacement is not
+    /// applied.
     pub fn replace_database_indexes(
         &self,
         database: &str,
         indexes: fireemu_core_firestore::index::IndexSet,
-    ) {
+    ) -> bool {
         if let Ok(mut current) = self.indexes.write() {
             current.insert((None, database.to_owned()), indexes);
+            true
+        } else {
+            false
         }
     }
 

@@ -1683,10 +1683,15 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
             };
             match control::parse_indexes(&path, &text) {
                 Ok(indexes) => {
-                    backend.replace_database_indexes(&database, indexes);
-                    observed_stamp = Some(stable_stamp);
-                    observed_signature = Some(stable_signature);
-                    eprintln!("note: reloaded Firestore indexes for {database} from {path}");
+                    if backend.replace_database_indexes(&database, indexes) {
+                        observed_stamp = Some(stable_stamp);
+                        observed_signature = Some(stable_signature);
+                        eprintln!("note: reloaded Firestore indexes for {database} from {path}");
+                    } else {
+                        eprintln!(
+                            "warning: Firestore index reload failed; keeping the last-known-good indexes: index catalog lock poisoned"
+                        );
+                    }
                 }
                 Err(error) => eprintln!(
                     "warning: Firestore index reload failed; keeping the last-known-good indexes: {error}"

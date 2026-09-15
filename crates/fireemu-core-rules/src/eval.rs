@@ -697,27 +697,65 @@ fn collect_function_scopes<'a>(
     }
 }
 
-/// Returns false only when a literal in the pattern cannot occur in the remaining path in the
-/// required order. Captures and recursive wildcards can consume arbitrary segments, so this is a
-/// sound rejection filter and never skips a potentially matching rule.
-fn pattern_can_match_segments(pattern: &[PathSegment], segments: &[String]) -> bool {
-    let mut next = 0;
+/// Returns whether `match_path` can reach the end of `pattern` for any prefix of `segments`.
+///
+/// This is a rejection-only filter: every transition mirrors the corresponding transition in
+/// `match_path`, so returning `false` never skips a potentially matching rule. Keeping the
+/// reachability check separate from the bounded matcher lets unrelated impossible patterns be
+/// discarded before they consume the shared path-work budget.
+fn pattern_can_match_segments(
+    pattern: &[PathSegment],
+    segments: &[String],
+    zero_or_more: bool,
+) -> bool {
+    let mut reachable = vec![false; segments.len() + 1];
+    reachable[0] = true;
+
     for segment in pattern {
-        let PathSegment::Literal(literal) = segment else {
-            continue;
-        };
-        if is_abstract_segment(literal) {
-            return false;
+        let mut next = vec![false; segments.len() + 1];
+        for (offset, reachable) in reachable.iter().enumerate() {
+            if !reachable {
+                continue;
+            }
+            match segment {
+                PathSegment::Literal(literal) => {
+                    if segments
+                        .get(offset)
+                        .is_some_and(|candidate| candidate == literal)
+                        && !is_abstract_segment(literal)
+                    {
+                        next[offset + 1] = true;
+                    }
+                }
+                PathSegment::Capture { .. } => {
+                    if segments
+                        .get(offset)
+                        .is_some_and(|candidate| candidate != ABSTRACT_PREFIX)
+                    {
+                        next[offset + 1] = true;
+                    }
+                }
+                PathSegment::RecursiveWildcard { .. } => {
+                    let minimum = usize::from(!zero_or_more);
+                    for take in minimum..=(segments.len() - offset) {
+                        if segments
+                            .get(offset + take)
+                            .is_some_and(|candidate| candidate == ABSTRACT_PREFIX)
+                        {
+                            continue;
+                        }
+                        next[offset + take] = true;
+                    }
+                }
+                // Match headers do not permit bindings. Preserve the runtime matcher behavior
+                // for manually constructed ASTs by treating one as unreachable here as well.
+                PathSegment::Binding(_) => {}
+            }
         }
-        let Some(offset) = segments[next..]
-            .iter()
-            .position(|segment| segment == literal)
-        else {
-            return false;
-        };
-        next += offset + 1;
+        reachable = next;
     }
-    true
+
+    reachable.into_iter().any(|reachable| reachable)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -728,7 +766,7 @@ fn walk_match<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    if !pattern_can_match_segments(&block.path, remaining) {
+    if !pattern_can_match_segments(&block.path, remaining, ev.wildcard_zero_or_more) {
         return Ok(false);
     }
     let mut outcome: Result<bool, EvalError> = Ok(false);

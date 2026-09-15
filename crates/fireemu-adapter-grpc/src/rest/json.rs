@@ -1020,7 +1020,7 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
                                 return err(format!("unknown order direction {other:?}"))
                             }
                             None => match value.as_i64() {
-                                Some(1) => sq::Direction::Ascending,
+                                Some(0 | 1) => sq::Direction::Ascending,
                                 Some(2) => sq::Direction::Descending,
                                 Some(other) => {
                                     return err(format!("unknown order direction {other}"))
@@ -1060,12 +1060,17 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
     };
     let find_nearest = v
         .get("findNearest")
+        .filter(|value| !value.is_null())
         .map(find_nearest_from_json)
         .transpose()?;
     Ok(pb::StructuredQuery {
         select,
         from,
-        r#where: v.get("where").map(filter_from_json).transpose()?,
+        r#where: v
+            .get("where")
+            .filter(|value| !value.is_null())
+            .map(filter_from_json)
+            .transpose()?,
         order_by,
         start_at: cursor_from_json(v.get("startAt"))?,
         end_at: cursor_from_json(v.get("endAt"))?,

@@ -3,11 +3,14 @@ import json
 import sys
 from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pytest
+import broad
+import campaign_auth_list_shadow
 from broad_contract import digest
 from campaign_auth_list import (
     campaign_cases,
@@ -126,6 +129,25 @@ def test_comparator_preserves_indeterminate_for_state_recording_cleanup_failures
     other = dict(base)
     other.update(flags)
     assert compare_rows(base, other)["compatibility"] == "indeterminate"
+
+
+def test_shadow_public_result_keeps_state_validation_independent(tmp_path):
+    report = {
+        "status": "completed",
+        "recordingComplete": True,
+        "stateValidation": False,
+        "ownedProcess": {"listenersClosed": True},
+        "localObservations": [],
+        "failure": None,
+        "stopReason": "child-completed",
+    }
+    worker = tmp_path / "worker"
+    worker.mkdir()
+    (worker / "result.json").write_text(json.dumps({"gate": {}}))
+    with patch("broad.run", return_value=report):
+        result = campaign_auth_list_shadow.run(tmp_path)
+    assert result["recordingComplete"] is True
+    assert result["stateValidation"] is False
 
 
 def test_comparator_keeps_mismatch_and_same_wrong_operation_visible():

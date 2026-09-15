@@ -1606,6 +1606,7 @@ fn rest_protojson_null_fields_and_numeric_order_direction_follow_unset_rules() {
         json!({"from": [{"collectionId": null, "allDescendants": null}], "orderBy": [{"field": {"fieldPath": "v"}, "direction": null}]}),
         json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 1}]}),
         json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 2}]}),
+        json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 0}], "where": null, "findNearest": null}),
     ] {
         let (status, body) = call(
             &s,

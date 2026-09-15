@@ -607,7 +607,7 @@ def run(output: Path) -> dict:
         "runtime": safe_runtime,
         "recordingComplete": report.get("recordingComplete", False),
         "cleanupComplete": report.get("ownedProcess", {}).get("listenersClosed") is True,
-        "stateValidation": report.get("recordingComplete", False),
+        "stateValidation": report.get("stateValidation", False),
         "rows": [
             {
                 "operationType": row.get("operationType"),

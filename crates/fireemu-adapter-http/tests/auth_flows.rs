@@ -14,7 +14,7 @@ use fireemu_core_auth::{base32, totp::totp_at};
 use fireemu_core_functions::manifest::{BlockingAuthEvent, BlockingAuthTokenPolicy};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{Clock, SplitMix64};
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
 const V1: &str = "/identitytoolkit.googleapis.com/v1";
@@ -5012,7 +5012,12 @@ impl AuthBlockingHook for MutateDuringHook {
                 store.delete_user_by_id(&self.uid).unwrap();
             }
             HookMutation::Revoke => {
-                let now = store.user(&uid).unwrap().created_at;
+                let now = store
+                    .user(&uid)
+                    .unwrap()
+                    .created_at
+                    .checked_add(LogicalDuration::from_seconds(2))
+                    .unwrap();
                 store.revoke_tokens(&uid, now).unwrap();
             }
             HookMutation::ReplaceFactor { phone } => {
@@ -5115,6 +5120,7 @@ fn pending_retry_survives_a_rejecting_hook_and_honors_a_disable_during_the_hook(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
     for mutation in [
         HookMutation::Delete,
@@ -5127,8 +5133,36 @@ fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
         let uid = user["localId"].as_str().unwrap().to_owned();
         let pending = pending_login(&s, "hook-mutation@example.com");
         let phone = start_phone_code(&s, &pending);
+        let original_id_token = user["idToken"].as_str().unwrap().to_owned();
+        let original_refresh_token = user["refreshToken"].as_str().unwrap().to_owned();
+        assert_eq!(
+            post(
+                &s,
+                &format!("{V1}/accounts:lookup"),
+                &json!({"idToken": original_id_token.clone()})
+            )
+            .0,
+            200,
+            "the original ID token is valid before the hook mutation"
+        );
+        assert_eq!(
+            post(
+                &s,
+                "/securetoken.googleapis.com/v1/token",
+                &json!({
+                    "grant_type": "refresh_token",
+                    "refresh_token": original_refresh_token.clone()
+                })
+            )
+            .0,
+            200,
+            "the original refresh token is valid before the hook mutation"
+        );
         let before_codes = get(&s, &format!("{EMU}/verificationCodes")).1;
         let before_pending = s.store.lock().unwrap().pending_sign_in_count();
+        if matches!(&mutation, HookMutation::Revoke) {
+            advance_clock(&s, 2);
+        }
         s.blocking = Some(Arc::new(MutateDuringHook {
             store: Arc::clone(&s.store),
             uid: uid.clone(),
@@ -5151,6 +5185,29 @@ fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
                     get(&s, &format!("{EMU}/verificationCodes")).1["verificationCodes"],
                     json!([]),
                     "deleting the account must remove its verification code"
+                );
+                assert_ne!(
+                    post(
+                        &s,
+                        &format!("{V1}/accounts:lookup"),
+                        &json!({"idToken": original_id_token})
+                    )
+                    .0,
+                    200,
+                    "an ID token from a deleted account must be rejected"
+                );
+                assert_ne!(
+                    post(
+                        &s,
+                        "/securetoken.googleapis.com/v1/token",
+                        &json!({
+                            "grant_type": "refresh_token",
+                            "refresh_token": original_refresh_token
+                        })
+                    )
+                    .0,
+                    200,
+                    "a refresh token from a deleted account must be rejected"
                 );
             }
             HookMutation::Revoke => {
@@ -5176,6 +5233,16 @@ fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
                         .user_by_id(&uid)
                         .unwrap()
                         .tokens_revoked
+                );
+                assert_ne!(
+                    post(
+                        &s,
+                        &format!("{V1}/accounts:lookup"),
+                        &json!({"idToken": original_id_token})
+                    )
+                    .0,
+                    200,
+                    "an ID token issued before revocation must be rejected"
                 );
             }
             HookMutation::ReplaceFactor { .. } => {

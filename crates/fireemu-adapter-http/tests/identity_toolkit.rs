@@ -2666,6 +2666,12 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
     for (local_id, field, value) in [
         ("batch-bad-mfa", "mfaInfo", json!("not-an-array")),
         ("batch-bad-provider", "providerUserInfo", json!({})),
+        ("batch-bad-mfa-entry", "mfaInfo", json!([null])),
+        (
+            "batch-bad-provider-entry",
+            "providerUserInfo",
+            json!([null]),
+        ),
         ("batch-bad-created", "createdAt", json!("not-a-timestamp")),
         ("batch-bad-login", "lastLoginAt", json!(false)),
     ] {
@@ -2769,6 +2775,56 @@ fn batch_import_treats_null_optional_fields_as_unset() {
     assert_eq!(status, 200, "{lookup}");
     assert_eq!(lookup["users"][0]["email"], "batch-null-fields@example.com");
     assert_ne!(lookup["users"][0]["displayName"], "must-not-replace");
+}
+
+#[test]
+fn batch_import_treats_omitted_null_and_empty_repeated_fields_consistently() {
+    let s = state();
+    for (local_id, extra) in [
+        ("batch-omitted-fields", json!({})),
+        (
+            "batch-null-fields-controls",
+            json!({"providerUserInfo": null, "mfaInfo": null, "createdAt": null, "lastLoginAt": null}),
+        ),
+        (
+            "batch-empty-fields-controls",
+            json!({"providerUserInfo": [], "mfaInfo": [], "createdAt": null, "lastLoginAt": null}),
+        ),
+    ] {
+        let mut row = json!({"localId": local_id, "email": format!("{local_id}@example.com")});
+        row.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [row]}),
+        );
+        assert_eq!(status, 200, "{response}");
+        assert_eq!(response["error"], json!([]), "{response}");
+    }
+
+    let (status, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [
+            "batch-omitted-fields",
+            "batch-null-fields-controls",
+            "batch-empty-fields-controls"
+        ]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    for user in lookup["users"].as_array().unwrap() {
+        assert!(user.get("providerUserInfo").is_none(), "{user}");
+        assert!(user.get("mfaInfo").is_none(), "{user}");
+        assert!(user.get("lastLoginAt").is_none(), "{user}");
+        assert!(
+            user.get("createdAt").and_then(Value::as_str).is_some(),
+            "{user}"
+        );
+    }
 }
 
 #[test]

@@ -5455,14 +5455,22 @@ fn millis_field(row: &Value, key: &str) -> Option<LogicalInstant> {
 
 fn validate_batch_row_shapes(row: &Value) -> Result<(), JsonResponse> {
     for key in ["mfaInfo", "providerUserInfo"] {
-        if row
-            .get(key)
-            .is_some_and(|value| !value.is_null() && !value.is_array())
-        {
-            return Err(error(
-                400,
-                &format!("INVALID_ARGUMENT : {key} must be an array"),
-            ));
+        match row.get(key) {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(items)) => {
+                if items.iter().any(|item| !item.is_object()) {
+                    return Err(error(
+                        400,
+                        &format!("INVALID_ARGUMENT : {key} entries must be objects"),
+                    ));
+                }
+            }
+            Some(_) => {
+                return Err(error(
+                    400,
+                    &format!("INVALID_ARGUMENT : {key} must be an array"),
+                ));
+            }
         }
     }
     for key in ["createdAt", "lastLoginAt"] {

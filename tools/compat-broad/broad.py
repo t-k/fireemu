@@ -425,6 +425,7 @@ def supervise(command, output, nonce, report, *, timeout=240, recovery_grace=0.2
                     "manifestDigest",
                     "auth",
                     "selectedPrograms",
+                    "stateValidation",
                     "historicalSources",
                     "localObservations",
                     "requestStats",

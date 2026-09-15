@@ -249,6 +249,7 @@ def test_actual_shadow_uses_fixed_fireemu_artifact_and_closes_transport(tmp_path
     assert result["gate"]["recovery"] == 19
     assert result["gate"]["total"] == 38
     assert result["cleanupComplete"] is True
+    assert result["stateValidation"] is True
     assert result["failure"] is None
     assert result["stopReason"] == "child-completed"
 

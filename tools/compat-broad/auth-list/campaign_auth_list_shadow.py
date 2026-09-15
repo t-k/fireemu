@@ -564,6 +564,7 @@ def _real_child(output: Path, nonce: str) -> None:
             "productionExecuted": False,
             "formalCompatibilityClaim": False,
             "recordingComplete": True,
+            "stateValidation": report["stateValidation"],
             "cases": [
                 {
                     "id": f"auth-list:{index}",

@@ -211,6 +211,41 @@ def test_actual_shadow_uses_fixed_fireemu_artifact_and_closes_transport(tmp_path
     assert result["cleanupComplete"] is True
 
 
+def test_legacy_shadow_fixture_rejects_invalid_auth_and_parent_shape():
+    from http.server import ThreadingHTTPServer
+    import threading
+
+    from campaign_auth_list_shadow import ShadowHandler, wire
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ShadowHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        origin = f"http://127.0.0.1:{server.server_port}"
+        status, _body, _content_type = wire(
+            origin + "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
+            "POST",
+            {"email": "owned@example.invalid"},
+            {"Content-Type": "application/json"},
+            local=True,
+        )
+        assert status == 400
+        status, _body, _content_type = wire(
+            origin
+            + "/v1/projects/demo-firestore-probe/databases/(default)/documents:listCollectionIds",
+            "POST",
+            {"parent": "projects/demo-firestore-probe/databases/(default)/documents"},
+            {"Content-Type": "application/json"},
+            local=True,
+        )
+        assert status == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
 def test_gate_dispatch_rejects_typed_bypass_before_transport(tmp_path):
     from campaign_gate import CampaignGate, create
 

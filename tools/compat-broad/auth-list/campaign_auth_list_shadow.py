@@ -596,15 +596,30 @@ def run(output: Path) -> dict:
     worker_path = output / "worker/result.json"
     if worker_path.exists():
         worker = json.loads(worker_path.read_bytes())
+    safe_runtime = dict(report)
+    # The private worker receipt retains full token-bearing responses. The checked-in
+    # campaign result is a public summary and must not copy those bodies.
+    safe_runtime.pop("localObservations", None)
     result = {
         "completed": report["status"] == "completed",
         "productionExecuted": False,
         "target": "owned-fireemu-artifact",
-        "runtime": report,
+        "runtime": safe_runtime,
         "recordingComplete": report.get("recordingComplete", False),
         "cleanupComplete": report.get("ownedProcess", {}).get("listenersClosed") is True,
         "stateValidation": report.get("recordingComplete", False),
-        "rows": report.get("localObservations", []),
+        "rows": [
+            {
+                "operationType": row.get("operationType"),
+                "resource": row.get("resource"),
+                "principal": row.get("principal"),
+                "status": row.get("status"),
+                "bodyKeys": sorted(row.get("body", {}))
+                if isinstance(row.get("body"), dict)
+                else [],
+            }
+            for row in report.get("localObservations", [])
+        ],
         "gate": worker.get("gate", {}),
         "failure": report.get("failure") or report.get("stopReason"),
         "artifactSha256": report.get("artifactSha256"),

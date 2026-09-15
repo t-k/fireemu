@@ -333,6 +333,9 @@ def test_current_next_campaign_package_binds_current_artifact_result():
     result_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact-v3/result.json"
     package = json.loads(package_path.read_bytes())
     result = json.loads(result_path.read_bytes())
+    assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
+        "2aee67fe8d27d0e28ab623915eb7207b9f85f6948aad754fc7288e0b822d1c2b"
+    )
     artifact = package["localShadow"]["ownedArtifact"]
     assert package["kind"] == "production-campaign-auth-list-next-v3"
     assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()

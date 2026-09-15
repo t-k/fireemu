@@ -1977,6 +1977,17 @@ fn firestore_request_shape_distinguishes_missing_members_from_null() {
         decision("request.query == null"),
         Decision::Deny(DenyReason::NoMatchingAllow)
     ));
+    // A missing member must not be materialized as a boolean false either. This
+    // control would allow if the evaluator substituted false for the missing map
+    // entry, so it distinguishes an evaluation error from an ordinary false value.
+    assert!(matches!(
+        decision("request.resource == false"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+    assert!(matches!(
+        decision("request.query == false"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
 
     // Anonymous callers have an explicitly present null auth member.
     assert!(matches!(decision("request.auth == null"), Decision::Allow));

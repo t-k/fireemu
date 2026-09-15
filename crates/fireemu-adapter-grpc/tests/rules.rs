@@ -443,6 +443,25 @@ service cloud.firestore {
         .await
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::PermissionDenied, "{error}");
+
+    // A missing member must not be coerced to boolean false. If it were, this
+    // rule would allow the read and Firestore would return NotFound instead.
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} { allow get: if request.resource == false; }
+  }
+}",
+        )
+        .unwrap();
+    let error = h
+        .client
+        .get_document(get("shape/missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::PermissionDenied, "{error}");
     h.handle.abort();
 }
 

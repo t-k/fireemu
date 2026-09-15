@@ -697,16 +697,19 @@ fn collect_function_scopes<'a>(
     }
 }
 
-/// Returns whether `match_path` can reach the end of `pattern` for any prefix of `segments`.
+/// Returns whether `match_path` can reach the end of `pattern` for `segments`.
 ///
 /// This is a rejection-only filter: every transition mirrors the corresponding transition in
-/// `match_path`, so returning `false` never skips a potentially matching rule. Keeping the
-/// reachability check separate from the bounded matcher lets unrelated impossible patterns be
-/// discarded before they consume the shared path-work budget.
+/// `match_path`, so returning `false` never skips a potentially matching rule. Parent match
+/// blocks may consume a prefix because their children can match the remaining path; leaf blocks
+/// must consume the complete request path. Keeping the reachability check separate from the
+/// bounded matcher lets unrelated impossible patterns be discarded before they consume the
+/// shared path-work budget.
 fn pattern_can_match_segments(
     pattern: &[PathSegment],
     segments: &[String],
     zero_or_more: bool,
+    allow_partial: bool,
 ) -> bool {
     let mut reachable = vec![false; segments.len() + 1];
     reachable[0] = true;
@@ -755,7 +758,10 @@ fn pattern_can_match_segments(
         reachable = next;
     }
 
-    reachable.into_iter().any(|reachable| reachable)
+    reachable
+        .into_iter()
+        .enumerate()
+        .any(|(offset, reachable)| reachable && (allow_partial || offset == segments.len()))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -766,7 +772,16 @@ fn walk_match<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    if !pattern_can_match_segments(&block.path, remaining, ev.wildcard_zero_or_more) {
+    let allow_partial = block
+        .items
+        .iter()
+        .any(|item| matches!(item, Item::Match(_)));
+    if !pattern_can_match_segments(
+        &block.path,
+        remaining,
+        ev.wildcard_zero_or_more,
+        allow_partial,
+    ) {
         return Ok(false);
     }
     let mut outcome: Result<bool, EvalError> = Ok(false);

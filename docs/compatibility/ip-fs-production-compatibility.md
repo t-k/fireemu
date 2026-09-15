@@ -234,3 +234,13 @@ Two bounded local repairs are integrated. Firestore composite index matching now
 The bound `CompatibilitySelection` Quint evidence was regenerated with the repository generator after the Auth changes. On this fixed head, workspace nextest passes 2,377 tests with 81 documented skips, workspace Clippy with `-D warnings`, rustfmt, Quint evidence and traceability pass, and the independent follow-up review reports no Must Fix or Should Fix findings for the final repairs.
 
 These results are local or saved-reference evidence only. Existing production receipts, original mismatches, approvals and comparison contracts remain immutable. No new production operation or Cloud read was made; the existing Explain campaign remains blocked by its fixed API-key digest baseline mismatch. All 14 parent groups remain below `COMPAT_VERIFIED`, so the top-level status remains `IN_PROGRESS` rather than `READY_FOR_COMPATIBILITY_REVIEW`.
+
+## Current local repair checkpoint (`ea1f700f`)
+
+The Auth pending-credential expiry matrix now separates SMS-code expiry from pending-credential expiry and checks a fresh-code control, independently valid code readback, no-token refusals and post-state cleanup under both the emulator and strict profiles. This is local evidence only; it does not infer a production lifetime or create a new production observation.
+
+Rules reachability now reuses request-local structural path results for equivalent recursive parent and child patterns, preventing repeated prefilter work from exhausting the matcher before a later valid allow. The new 750-branch regression passes through `LoadedRules::from_source()` and evaluation; the existing v1/v2, Storage, false-allow and bounded-failure controls remain covered. Production Rules compiler and matcher-limit parity remain unobserved.
+
+The reported Auth/ListCollectionIds state-validation and Auth `batchCreate` null/unset issues were rechecked through their real local paths: the campaign suite passed 28 tests, the Auth null/unset focused suite passed 3 tests, Firestore REST routing and ProtoJSON null regressions passed 3 tests, and the admin inventory coexistence unit tests passed 2 tests. No production operation or saved receipt rewrite occurred.
+
+The Auth test change required a generated `CompatibilitySelection` evidence digest refresh; it was regenerated with the repository Quint tool. The feature remains below `COMPAT_VERIFIED` for all 14 parent groups and the top-level status remains `IN_PROGRESS`.

@@ -28,6 +28,14 @@ shutdown from commit `b971b2a4c0851b2081705a7b8f367b5dd7b898c8`. The
 artifact, observer, comparison binding and lifecycle hashes are recorded in the
 summary. No production request is implied by this record.
 
+A fresh shadow from feature commit `9371199fabccfdc60f1ffc1f39ac9f151b3de2b3`
+is recorded separately in
+[9371199f-explain-local-shadow.json](../../spec/compatibility/broad-runs/9371199f-explain-local-shadow.json).
+It completed the same six cases with twelve observation rows and six recovery rows,
+including state verification, cleanup and process shutdown. Its artifact and
+lifecycle hashes are distinct from earlier shadows; this record remains local-only
+and does not alter any saved production receipt.
+
 ## Saved production re-evaluation
 
 The original production receipt and its original local shadow were validated

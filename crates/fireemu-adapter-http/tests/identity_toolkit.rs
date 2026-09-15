@@ -2661,6 +2661,70 @@ fn admin_create_is_atomic_and_typed() {
 }
 
 #[test]
+fn password_policy_admin_create_covers_maximum_and_invalid_password_inputs_atomically() {
+    for (units, expected_status) in [(4095, 200), (4096, 200), (4097, 400)] {
+        let s = state();
+        let uid = format!("admin-create-password-{units}");
+        let email = format!("admin-create-password-{units}@example.com");
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({
+                "localId": uid,
+                "email": email,
+                "password": password_with_utf16_units(units),
+                "displayName": "must-not-apply"
+            }),
+        );
+        assert_eq!(status, expected_status, "{response}");
+        if expected_status == 400 {
+            assert_eq!(
+                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                "{response}"
+            );
+            assert!(s.store.lock().unwrap().user_by_id(&uid).is_none());
+        } else {
+            let (_, lookup) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            );
+            assert_eq!(lookup["users"][0]["displayName"], "must-not-apply");
+        }
+    }
+
+    for (uid, password) in [
+        ("admin-create-control", json!("12345\u{0000}")),
+        ("admin-create-short", json!("12345")),
+        ("admin-create-wrong-type", json!(42)),
+    ] {
+        let s = state();
+        let email = format!("{uid}@example.com");
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid, "email": email, "password": password}),
+        );
+        assert_eq!(status, 400, "{response}");
+        if uid == "admin-create-wrong-type" {
+            assert_eq!(
+                response["error"]["message"],
+                "INVALID_ARGUMENT : password must be a string"
+            );
+        } else {
+            assert_eq!(
+                response["error"]["message"],
+                "WEAK_PASSWORD : Password should be at least 6 characters"
+            );
+        }
+        assert!(s.store.lock().unwrap().user_by_id(uid).is_none());
+    }
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn account_lifecycle_keeps_admin_and_client_post_state_consistent() {
     let s = strict_state();

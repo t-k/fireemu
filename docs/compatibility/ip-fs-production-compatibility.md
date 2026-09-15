@@ -138,7 +138,13 @@ The Rules evaluator now preserves an established allow when later, non-matching 
 
 - The prefilter now reports whether the block itself covers the request even when no descendant can reach an allow. This preserves `NoMatchingAllow` versus `NoMatchingRule` while still skipping impossible subtrees.
 - Structural prefilter transitions have their own bounded counter (`MATCH_PATH_PREFILTER_WORK_MAX`). On exhaustion the result is treated as unknown and sent through the existing matcher budget, so the prefilter cannot silently reject a potentially valid path. Added controls cover Rules versions 1 and 2 and an abstract query path through a recursive parent.
-- Independent correctness review found no remaining Must Fix or Should Fix after these changes. Rules production compiler, matcher-limit, and memory behavior remain unobserved.
+- Rules production compiler, matcher-limit, and memory behavior remain unobserved.
+
+## Rules parent endpoint follow-up (`adcc68b9` / `cf2b0b02`)
+
+- Parent blocks now retain the relative offsets where a descendant can consume the complete request. The matcher uses a bounded dynamic-programming table to skip recursive-wildcard splits that cannot reach those offsets, while direct allow-only leaves keep the existing matcher-work guard.
+- The new Firestore and Storage regression covers 750 parent `**` blocks with a child endpoint that can only complete at the final segment, Rules versions 1 and 2, and both true and false allow controls. Before the fix, the later exact allow was blocked by `FIREEMU-RULES-MATCH-WORK`; the focused and full 45-test Rules suites now pass.
+- The independent follow-up correctness review approved the covered-path classification, bounded prefilter fallback, and v1/v2 and abstract-path coverage. This remains local evaluator evidence; production Rules compiler and matcher-limit parity are unobserved.
 
 ## Current local repairs and campaign preparation (`abc21754`, `d1f1302c`, `c4bdf30a`)
 

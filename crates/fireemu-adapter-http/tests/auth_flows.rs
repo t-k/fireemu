@@ -6706,6 +6706,45 @@ fn action_mode_must_match_the_email_action_code_kind() {
 }
 
 #[test]
+fn verify_and_change_mode_rejects_a_verify_email_code_without_mutation() {
+    let s = state();
+    let user = sign_up(&s, "mode-verify-owner@example.com");
+    let local_id = user["localId"].as_str().unwrap().to_owned();
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": user["idToken"]}),
+    );
+    assert_eq!(status, 200);
+    let code = issued_code(&s, "VERIFY_EMAIL");
+    let before = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id]}),
+    )
+    .1;
+    let (status, response) = get(
+        &s,
+        &format!(
+            "/emulator/action?mode=verifyAndChangeEmail&oobCode={code}&apiKey=fake-api-key&continueUrl=https%3A%2F%2Fapp.example%2Fdone"
+        ),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["authEmulator"]["error"],
+        "Your request to change your email has expired or the link has already been used."
+    );
+    assert_eq!(issued_code(&s, "VERIFY_EMAIL"), code);
+    let after = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id]}),
+    )
+    .1;
+    assert_eq!(after, before);
+}
+
+#[test]
 fn action_links_with_a_continue_url_redirect_after_acting() {
     let s = state();
     let user = sign_up(&s, "redirect@example.com");

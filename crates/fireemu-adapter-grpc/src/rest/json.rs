@@ -488,7 +488,9 @@ fn fields_from_json_at(
     parent_depth: u32,
 ) -> Result<HashMap<String, pb::Value>, JsonError> {
     let mut out = HashMap::new();
-    let Some(v) = v else { return Ok(out) };
+    let Some(v) = v.filter(|value| !value.is_null()) else {
+        return Ok(out);
+    };
     let Some(obj) = v.as_object() else {
         return err("fields must be an object");
     };
@@ -539,7 +541,9 @@ pub fn document_from_json(v: &Value) -> Result<pb::Document, JsonError> {
 
 /// `{"fieldPaths": [...]}` → mask.
 pub fn mask_from_json(v: Option<&Value>) -> Result<Option<pb::DocumentMask>, JsonError> {
-    let Some(v) = v else { return Ok(None) };
+    let Some(v) = v.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
     strict_keys(v, &["fieldPaths"])?;
     let field_paths = match v.get("fieldPaths") {
         None => Vec::new(),
@@ -571,7 +575,9 @@ pub fn mask_from_paths(paths: &[String]) -> Option<pb::DocumentMask> {
 
 /// `{"exists": bool}` / `{"updateTime": ts}` → precondition.
 pub fn precondition_from_json(v: Option<&Value>) -> Result<Option<pb::Precondition>, JsonError> {
-    let Some(v) = v else { return Ok(None) };
+    let Some(v) = v.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
     strict_keys(v, &["exists", "updateTime"])?;
     if v.get("exists").is_some() && v.get("updateTime").is_some() {
         // A oneof carries one member.

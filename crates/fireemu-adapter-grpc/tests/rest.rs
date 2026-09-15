@@ -1977,7 +1977,6 @@ fn rest_rejects_non_object_and_unknown_document_masks() {
         json!([]),
         json!("invalid"),
         json!(true),
-        json!(null),
         json!({"fieldPath": []}),
     ] {
         let (status, _) = call(
@@ -1989,11 +1988,22 @@ fn rest_rejects_non_object_and_unknown_document_masks() {
         assert_eq!(status, 400, "mask={mask}");
     }
 
+    let (status, null_mask) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [name], "mask": null}),
+    );
+    assert_eq!(status, 200, "{null_mask}");
+    assert_eq!(
+        null_mask[0]["found"]["fields"]["kept"]["stringValue"], "value",
+        "a null message field is equivalent to an omitted mask"
+    );
+
     for update_mask in [
         json!([]),
         json!("invalid"),
         json!(true),
-        json!(null),
         json!({"fieldPath": []}),
     ] {
         let (status, _) = call(
@@ -2010,9 +2020,23 @@ fn rest_rejects_non_object_and_unknown_document_masks() {
         assert_eq!(status, 400, "updateMask={update_mask}");
     }
 
-    let (status, unchanged) = call(&s, "GET", &format!("{DOCS}/masked/strict"), json!({}));
-    assert_eq!(status, 200, "{unchanged}");
-    assert_eq!(unchanged["fields"]["kept"]["stringValue"], "value");
+    let (status, null_update_mask) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({
+            "writes": [{
+                "update": {"name": name, "fields": {"kept": {"stringValue": "changed"}}},
+                "updateMask": null,
+                "currentDocument": null
+            }]
+        }),
+    );
+    assert_eq!(status, 200, "{null_update_mask}");
+
+    let (status, changed) = call(&s, "GET", &format!("{DOCS}/masked/strict"), json!({}));
+    assert_eq!(status, 200, "{changed}");
+    assert_eq!(changed["fields"]["kept"]["stringValue"], "changed");
 
     let (status, empty_mask_write) = call(
         &s,
@@ -2028,7 +2052,7 @@ fn rest_rejects_non_object_and_unknown_document_masks() {
     assert_eq!(status, 200, "{empty_mask_write}");
     let (status, after_empty_mask) = call(&s, "GET", &format!("{DOCS}/masked/strict"), json!({}));
     assert_eq!(status, 200, "{after_empty_mask}");
-    assert_eq!(after_empty_mask["fields"]["kept"]["stringValue"], "value");
+    assert_eq!(after_empty_mask["fields"]["kept"]["stringValue"], "changed");
 }
 
 #[test]

@@ -1528,13 +1528,6 @@ fn watched_file_changed(
     observed_stamp != Some(candidate_stamp) || observed_signature != Some(candidate_signature)
 }
 
-async fn watched_file_stamp_off_thread(path: &str) -> Result<WatchedFileStamp, String> {
-    let path = path.to_owned();
-    tokio::task::spawn_blocking(move || watched_file_stamp(&path))
-        .await
-        .map_err(|error| format!("watch worker failed: {error}"))?
-}
-
 async fn watched_file_off_thread(path: &str) -> Result<(WatchedFileStamp, u64, Vec<u8>), String> {
     let path = path.to_owned();
     tokio::task::spawn_blocking(move || watched_file(&path))
@@ -1649,17 +1642,16 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
             let Some(backend) = weak.upgrade() else {
                 return;
             };
-            let stamp = match watched_file_stamp_off_thread(&path).await {
-                Ok(stamp) if observed_stamp != Some(stamp) => stamp,
-                Ok(_) => continue,
-                Err(reason) => {
-                    eprintln!("warning: Firestore index reload scan failed: {reason}");
-                    continue;
-                }
-            };
+            let (candidate_stamp, candidate_signature, _) =
+                match watched_file_off_thread(&path).await {
+                    Ok(candidate) => candidate,
+                    Err(reason) => {
+                        eprintln!("warning: Firestore index reload scan failed: {reason}");
+                        continue;
+                    }
+                };
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let (candidate_stamp, candidate_signature, bytes) = match watched_file_off_thread(&path)
-                .await
+            let (stable_stamp, stable_signature, bytes) = match watched_file_off_thread(&path).await
             {
                 Ok(candidate) => candidate,
                 Err(error) => {
@@ -1669,14 +1661,17 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
                     continue;
                 }
             };
-            if candidate_stamp != stamp {
+            if stable_stamp != candidate_stamp || stable_signature != candidate_signature {
                 continue;
             }
-            observed_stamp = Some(candidate_stamp);
-            if observed_signature == Some(candidate_signature) {
+            if !watched_file_changed(
+                observed_stamp,
+                observed_signature,
+                stable_stamp,
+                stable_signature,
+            ) {
                 continue;
             }
-            observed_signature = Some(candidate_signature);
             let text = match String::from_utf8(bytes) {
                 Ok(text) => text,
                 Err(error) => {
@@ -1689,6 +1684,8 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
             match control::parse_indexes(&path, &text) {
                 Ok(indexes) => {
                     backend.replace_database_indexes(&database, indexes);
+                    observed_stamp = Some(stable_stamp);
+                    observed_signature = Some(stable_signature);
                     eprintln!("note: reloaded Firestore indexes for {database} from {path}");
                 }
                 Err(error) => eprintln!(
@@ -2393,6 +2390,8 @@ mod config_reload_tests {
     const STORAGE_ALLOW: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; } } }";
     const STORAGE_DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if false; } } }";
     const STORAGE_WRITE: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow write: if true; } } }";
+    const INDEXES_ONE: &str = r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
+    const INDEXES_TWO: &str = r#"{"indexes":[{"collectionGroup":"other","queryScope":"COLLECTION","fields":[{"fieldPath":"c","order":"ASCENDING"},{"fieldPath":"d","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir =
@@ -2400,6 +2399,60 @@ mod config_reload_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn index_backend(indexes: &str) -> Arc<LocalBackend> {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            7,
+        ));
+        backend.replace_database_indexes(
+            "staging",
+            control::parse_indexes("indexes", indexes).unwrap(),
+        );
+        backend
+    }
+
+    fn write_index_generation(
+        path: &std::path::Path,
+        bytes: &[u8],
+        modified: std::time::SystemTime,
+    ) {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
+    async fn wait_for_index_collection(backend: &Arc<LocalBackend>, collection: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if backend
+                    .indexes_for_database("staging")
+                    .composites()
+                    .first()
+                    .is_some_and(|index| index.collection_group.as_str() == collection)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the valid index generation should reload");
     }
 
     #[test]
@@ -2887,6 +2940,88 @@ mod config_reload_tests {
                 .as_deref(),
             Some(STORAGE_WRITE)
         );
+    }
+
+    #[tokio::test]
+    async fn index_reload_retries_equal_length_malformed_json_and_recovers() {
+        assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());
+        let dir = scratch("indexes-equal-length-malformed-json");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let backend = index_backend(INDEXES_ONE);
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+
+        let mut malformed = INDEXES_TWO.as_bytes().to_vec();
+        let array_start = malformed.iter().position(|byte| *byte == b'[').unwrap();
+        malformed[array_start] = b'{';
+        write_index_generation(&path, &malformed, original_mtime);
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(
+            backend.indexes_for_database("staging").composites()[0]
+                .collection_group
+                .as_str(),
+            "items"
+        );
+
+        write_index_generation(&path, INDEXES_TWO.as_bytes(), original_mtime);
+        wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn index_reload_retries_equal_length_invalid_utf8_and_recovers() {
+        assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());
+        let dir = scratch("indexes-equal-length-invalid-utf8");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let backend = index_backend(INDEXES_ONE);
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+
+        let mut invalid_utf8 = INDEXES_TWO.as_bytes().to_vec();
+        invalid_utf8[0] = 0xff;
+        write_index_generation(&path, &invalid_utf8, original_mtime);
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(
+            backend.indexes_for_database("staging").composites()[0]
+                .collection_group
+                .as_str(),
+            "items"
+        );
+
+        write_index_generation(&path, INDEXES_TWO.as_bytes(), original_mtime);
+        wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn index_reload_recovers_from_malformed_json_with_changed_metadata() {
+        assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());
+        let dir = scratch("indexes-malformed-json");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let backend = index_backend(INDEXES_ONE);
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+
+        let mut malformed = INDEXES_TWO.as_bytes().to_vec();
+        let array_start = malformed.iter().position(|byte| *byte == b'[').unwrap();
+        malformed[array_start] = b'{';
+        std::fs::write(&path, malformed).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(
+            backend.indexes_for_database("staging").composites()[0]
+                .collection_group
+                .as_str(),
+            "items"
+        );
+
+        std::fs::write(&path, INDEXES_TWO).unwrap();
+        wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

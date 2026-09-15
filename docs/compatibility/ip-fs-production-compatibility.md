@@ -195,3 +195,11 @@ The v3 Auth/ListCollectionIds campaign package is now pinned by a complete SHA-2
 ## Current local checkpoint (`8cba48ab`)
 
 The Firestore index reload supervisor now compares stable file content even when size and modification time are unchanged, retains the last-known-good catalog across malformed JSON and invalid UTF-8, retries corrected generations, and records a generation only after the catalog replacement succeeds. The replacement API reports poisoned catalog locks so a failed update remains retryable. The configuration reload suite passes 17 tests, the adapter lock-failure regression passes, and package Clippy passes. This is local lifecycle evidence; production index behavior remains unobserved.
+
+## Current local checkpoint (`b37b78f9`)
+
+The Auth `batchCreate` path now treats ProtoJSON `null` for `allowOverwrite`, repeated `providerUserInfo`/`mfaInfo`, and optional timestamps as unset while rejecting malformed non-null values and null array elements. Real-handler regressions cover omitted, null and empty forms, duplicate local IDs with the default overwrite policy, lookup post-state and failed-row non-mutation. The identity-toolkit suite passed 83 tests and the focused package Clippy check passed. This is local Auth evidence; production import behavior remains unobserved.
+
+The Auth/ListCollectionIds local campaign now rejects malformed parent resource paths and validates the missing-document-parent case plus exact paged collection IDs, parent binding, duplicate pages and omissions before setting `stateValidation`. The historical v3 package remains immutable; a distinct v4 package and owned-artifact result bind the updated shadow source, observer, gate, manifest and result hashes. The focused campaign suite passed 26 tests, all with `productionExecuted: false`. This is local campaign evidence and does not promote a parent group to production compatibility.
+
+The named Firestore Rules reload regression verifies default and named database isolation, observes a malformed named generation through a test-only scan counter, retains the last-known-good generation, and confirms recovery without a fixed sleep. The targeted test and Firestore Clippy passed. This remains local publication and routing evidence; production Rules compiler and reload behavior remain unobserved.

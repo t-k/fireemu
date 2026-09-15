@@ -652,27 +652,27 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
     )?;
     let operation_count = ["update", "delete", "verify", "transform"]
         .iter()
-        .filter(|k| v.get(**k).is_some())
+        .filter(|k| v.get(**k).is_some_and(|value| !value.is_null()))
         .count();
     if operation_count != 1 {
         // A oneof carries one member.
         return err("Payload isn't valid for request.");
     }
-    let operation = if let Some(d) = v.get("update") {
+    let operation = if let Some(d) = v.get("update").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Update(document_from_json(d)?))
-    } else if let Some(n) = v.get("delete") {
+    } else if let Some(n) = v.get("delete").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Delete(
             n.as_str()
                 .ok_or_else(|| JsonError("delete must be a document name".into()))?
                 .to_owned(),
         ))
-    } else if let Some(n) = v.get("verify") {
+    } else if let Some(n) = v.get("verify").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Verify(
             n.as_str()
                 .ok_or_else(|| JsonError("verify must be a document name".into()))?
                 .to_owned(),
         ))
-    } else if let Some(t) = v.get("transform") {
+    } else if let Some(t) = v.get("transform").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Transform(pb::DocumentTransform {
             document: t
                 .get("document")

@@ -484,7 +484,64 @@ fn batch_write_rest_rejects_write_without_operation_before_dispatch() {
     assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
 
     let (status, after) = call(&s, "GET", target, Value::Null);
-    assert_eq!(status, 404, "a malformed write must not dispatch its valid suffix: {after}");
+    assert_eq!(
+        status, 404,
+        "a malformed write must not dispatch its valid suffix: {after}"
+    );
+}
+
+#[test]
+fn batch_write_rest_treats_null_oneof_members_as_unset() {
+    let null_members = ["update", "delete", "verify", "transform"];
+    for (index, member) in null_members.iter().enumerate() {
+        let s = state(None);
+        let target = format!("projects/demo-app/databases/(default)/documents/null-oneof/{index}");
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchWrite"),
+            json!({"writes": [{*member: null}]}),
+        );
+        assert_eq!(status, 400, "null-only {member} must be absent: {body}");
+        let target_path = format!("/v1/{target}");
+        let (status, after) = call(&s, "GET", &target_path, Value::Null);
+        assert_eq!(status, 404, "null-only {member} mutated state: {after}");
+
+        let valid = json!({
+            "update": {"name": target, "fields": {"v": {"integerValue": "1"}}}
+        });
+        let payload = if *member == "update" {
+            let (status, _) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}/null-oneof?documentId={index}"),
+                json!({"fields": {"v": {"integerValue": "0"}}}),
+            );
+            assert_eq!(status, 200);
+            json!({"update": null, "delete": target})
+        } else {
+            let mut value = valid.as_object().unwrap().clone();
+            value.insert((*member).to_owned(), Value::Null);
+            Value::Object(value)
+        };
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchWrite"),
+            json!({"writes": [payload]}),
+        );
+        assert_eq!(status, 200, "null-plus-valid {member} failed: {body}");
+        let (status, after) = call(&s, "GET", &target_path, Value::Null);
+        if *member == "update" {
+            assert_eq!(
+                status, 404,
+                "null update was treated as an operation: {after}"
+            );
+        } else {
+            assert_eq!(status, 200, "valid update was not dispatched: {after}");
+            assert_eq!(after["fields"]["v"]["integerValue"], "1");
+        }
+    }
 }
 
 #[test]

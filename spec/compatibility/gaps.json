@@ -491,7 +491,8 @@
       "comparisonStatus": "none",
       "evidenceRefs": [
         "docs/compatibility/firestore-rules-runtime-repairs.md",
-        "crates/fireemu-core-rules/src/eval.rs"
+        "crates/fireemu-core-rules/src/eval.rs",
+        "crates/fireemu-core-rules/tests/eval.rs"
       ],
       "nextAction": "Lexical function environments are shared by declaration scope and call_user switches the shared environment without cloning; production memory and performance parity remain unobserved.",
       "blockedReason": "",

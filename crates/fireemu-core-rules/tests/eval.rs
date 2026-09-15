@@ -183,6 +183,27 @@ fn user_function_lexical_capture_survives_caller_parameter_and_let() {
 }
 
 #[test]
+fn nested_recursive_match_keeps_parent_function_environment() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents/{prefix=**} {\n    function decision() { return false; }\n    function gate() { return decision(); }\n    match /users/{owner=**} {\n      function decision() { return true; }\n      allow read: if gate();\n    }\n  }\n}",
+    )
+    .unwrap();
+    let report = evaluate_request(
+        &ruleset,
+        &ctx(
+            Method::Get,
+            "/databases/(default)/documents/users/alice/profile",
+            Some(auth("alice", false, None)),
+        ),
+    );
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn storage_function_calls_resolve_in_the_definition_scope() {
     let ruleset = parse_ruleset(
         "rules_version = '2';\nservice firebase.storage {\n  function decision() { return false; }\n  function gate() { return decision(); }\n  match /b/{bucket}/o/{path=**} {\n    function decision() { return true; }\n    allow read: if gate();\n  }\n}",

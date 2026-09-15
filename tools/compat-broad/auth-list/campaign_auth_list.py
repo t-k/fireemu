@@ -335,7 +335,9 @@ def campaign_manifest(nonce=NONCE):
         },
         "jobs": {
             "auth-list": {
-                "resources": resources + [changed, reference],
+                # Firestore documents are journaled resources. Auth accounts are
+                # bound separately and verified by the delete/lookup pair.
+                "resources": resources,
                 "observation": observation,
                 "recovery": recovery,
             }

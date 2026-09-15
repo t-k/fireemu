@@ -520,6 +520,14 @@ def _real_child(output: Path, nonce: str) -> None:
         status, body = gate.adapter_request(adapter, operation, send_recovery)
         if operation["method"] == "GET" and status == 200 and isinstance(body, dict):
             versions[operation["resource"]] = body.get("updateTime", "")
+        if operation["operationType"] == "auth-delete" and status != 200:
+            raise ValueError("owned account deletion failed")
+        if operation["operationType"] == "auth-lookup" and (
+            status != 200
+            or not isinstance(body, dict)
+            or body.get("users") != []
+        ):
+            raise ValueError("owned account absence unconfirmed")
 
     gate.finish()
     state = gate.snapshot()

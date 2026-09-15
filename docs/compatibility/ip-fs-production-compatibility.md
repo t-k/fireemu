@@ -111,3 +111,9 @@ The current feature head revalidated the existing compatibility surface without 
 ## Current local checkpoint (`1cf58fe2`)
 
 The Rules evaluator now preserves an established allow when later, non-matching match-path exploration exhausts `FIREEMU-RULES-MATCH-WORK`. The same exception is applied when nested exploration is reached after a successful allow. Expression budgets, call-depth limits, unsupported operations and other evaluator failures remain fail-closed, and a request with no successful allow still reports the matcher budget denial. Firestore and Storage regressions load the rules through `LoadedRules::from_source()` and exercise a successful allow followed by 750 recursive-wildcard nonmatches. The 34-test Rules evaluation suite and Rules Clippy passed on the fixed source. This is local evaluator evidence; production Rules compiler and limit behavior remain unobserved.
+
+## Latest Rules leaf reachability follow-up (`87bfd54a`)
+
+- Added an end-to-end `LoadedRules::from_source()` regression for 750 leaf patterns that match an early prefix but cannot consume the complete request. Firestore and Storage keep a valid allow reachable regardless of whether it appears before or after those siblings; false allow controls remain denied.
+- The existing rejection-only leaf prefilter already prevents these partial leaves from entering `match_path`; no runtime change was required. A temporary mutation removing the full-consumption guard failed at the matcher-work budget, confirming the regression catches the prior order-dependent denial.
+- Focused Rules verification passed five related tests, including v1 parent/child traversal and fail-closed controls. This remains local evidence; production compiler and matcher-limit parity are unobserved.

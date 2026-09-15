@@ -5161,6 +5161,10 @@ fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
         let before_codes = get(&s, &format!("{EMU}/verificationCodes")).1;
         let before_pending = s.store.lock().unwrap().pending_sign_in_count();
         if matches!(&mutation, HookMutation::Revoke) {
+            // The default fixture uses the stateless refresh compatibility profile. Switch this
+            // mutation to the strict profile so the same hook-time revocation also covers the
+            // refresh-session cutoff without changing the documented default behavior.
+            s.stateless_refresh_tokens = false;
             advance_clock(&s, 2);
         }
         s.blocking = Some(Arc::new(MutateDuringHook {
@@ -5243,6 +5247,19 @@ fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
                     .0,
                     200,
                     "an ID token issued before revocation must be rejected"
+                );
+                assert_ne!(
+                    post(
+                        &s,
+                        "/securetoken.googleapis.com/v1/token",
+                        &json!({
+                            "grant_type": "refresh_token",
+                            "refresh_token": original_refresh_token
+                        })
+                    )
+                    .0,
+                    200,
+                    "the strict refresh profile must reject a pre-revocation refresh token"
                 );
             }
             HookMutation::ReplaceFactor { .. } => {

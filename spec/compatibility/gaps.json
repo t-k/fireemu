@@ -299,7 +299,7 @@
       "kind": "unobserved",
       "scope": "Production error details for the authorization fixes (lookup identifier search, update administrator-only fields, OOB link return): input types, null and empty values, multiple invalid conditions.",
       "implementationStatus": "unknown",
-      "localTestStatus": "none",
+      "localTestStatus": "passing",
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
@@ -307,7 +307,7 @@
         "tools/auth-oob-authorization/README.md",
         "tools/auth-update-authorization/README.md"
       ],
-      "nextAction": "Observe error classes per condition; keep the local authorization fixes.",
+      "nextAction": "Local regressions cover the recorded malformed and null OOB link flag conditions without side effects; observe production error classes for lookup, administrator-only fields and remaining empty/multiple-invalid combinations.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

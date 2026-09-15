@@ -22,6 +22,7 @@ The [official sendOobCode reference](https://docs.cloud.google.com/identity-plat
 | Ordinary delivery remains usable | All four OOB types; verification selects the token's owner despite a different request email |
 | Admin generation remains usable | All four types through the authenticated project route; absent credentials and user bearer tokens refused |
 | Route cannot be promoted by request data | Owner header on EndUser route does not enable link return |
+| Typed link-return flag | Client and project/tenant Admin routes reject string, number, array and object `returnOobLink` values before issuing a code; client `null` remains ordinary delivery and Admin link generation still forces a link after validation |
 | Action-code behavior remains usable | Existing verification/change-email application and refusal-without-code-consumption tests retained |
 
 The tests are in `crates/fireemu-adapter-http/tests/auth_flows.rs`, selected by `oob_authorization`, and run in compatibility CI. They use real in-process handlers and stores, not mocked authentication. They do not constitute a fresh live Firebase comparison, a full HTTP-server transport test, or exhaustive coverage of every Auth route.

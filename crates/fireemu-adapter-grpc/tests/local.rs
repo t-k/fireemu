@@ -4111,7 +4111,7 @@ async fn grpc_batch_get_and_list_apply_masks_without_confusing_missing_and_null(
 }
 
 #[tokio::test]
-async fn ordered_list_pages_continue_across_present_and_missing_rows() {
+async fn list_pages_include_missing_parents_in_name_order() {
     let (mut client, _clock, handle) = start().await;
     let mut writes = (0..5i64)
         .map(|value| update_write(&format!("mixed/d{value}"), &[("v", i(value))]))
@@ -4136,7 +4136,6 @@ async fn ordered_list_pages_continue_across_present_and_missing_rows() {
                 collection_id: "mixed".to_owned(),
                 page_size: 2,
                 page_token: token,
-                order_by: "v desc".to_owned(),
                 show_missing: true,
                 ..Default::default()
             })
@@ -4150,9 +4149,28 @@ async fn ordered_list_pages_continue_across_present_and_missing_rows() {
         token = page.next_page_token;
     }
 
-    let expected = ["d4", "d3", "d2", "d1", "d0", "m0", "m1", "m2"]
+    let expected = ["d0", "d1", "d2", "d3", "d4", "m0", "m1", "m2"]
         .map(|document| format!("{DOCS}/mixed/{document}"));
     assert_eq!(seen, expected);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn list_documents_rejects_show_missing_with_order_by() {
+    let (mut client, _clock, handle) = start().await;
+
+    let error = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "mixed".to_owned(),
+            order_by: "v desc".to_owned(),
+            show_missing: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+
     handle.abort();
 }
 

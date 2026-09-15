@@ -4135,6 +4135,11 @@ impl LocalBackend {
             .map(decode_document_name)
             .transpose()
             .map_err(status)?;
+        if req.show_missing && !req.order_by.trim().is_empty() {
+            return Err(Status::invalid_argument(
+                "show_missing cannot be used with order_by",
+            ));
+        }
         if after_path.as_ref().is_some_and(|path| {
             path.project() != &parent.project
                 || path.database() != &parent.database

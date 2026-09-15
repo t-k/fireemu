@@ -419,6 +419,40 @@ def test_v5_campaign_package_binds_manifest_source_commit():
     assert result["stateValidation"] is True
 
 
+def test_v6_campaign_package_binds_current_hashes():
+    import hashlib
+
+    root = __import__("pathlib").Path(__file__).parents[3]
+    package_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v6.json"
+    result_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact-v6/result.json"
+    package = json.loads(package_path.read_bytes())
+    result = json.loads(result_path.read_bytes())
+    artifact = package["localShadow"]["ownedArtifact"]
+    assert package["kind"] == "production-campaign-auth-list-next-v6"
+    assert package["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
+    assert package["adapter"]["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
+    assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
+    assert artifact["artifactSha256"] == result["artifactSha256"]
+    assert artifact["observerSha256"] == result["observerSha256"]
+    assert artifact["parentManifestSha256"] == result["parentManifestSha256"]
+    assert artifact["executionCommit"] == result["executionCommit"]
+    for field, relative_path in (
+        ("shadowSha256", package["adapter"]["shadowPath"]),
+        ("sourceSha256", package["adapter"]["path"]),
+        ("gateSha256", package["adapter"]["gatePath"]),
+    ):
+        assert package["adapter"][field] == hashlib.sha256(
+            (root / relative_path).read_bytes()
+        ).hexdigest()
+    assert package["adapter"]["shadowCommit"] == result["executionCommit"]
+    assert artifact["observationRequests"] == 18
+    assert artifact["recoveryRequests"] == 19
+    assert artifact["totalRequests"] == 39
+    assert result["productionExecuted"] is False
+    assert result["recordingComplete"] is True
+    assert result["stateValidation"] is True
+
+
 def test_actual_shadow_uses_fixed_fireemu_artifact_and_closes_transport(tmp_path):
     from campaign_auth_list_shadow import run
 

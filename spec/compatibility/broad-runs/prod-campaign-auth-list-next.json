@@ -1,0 +1,111 @@
+{
+  "kind": "production-campaign-auth-list-next-v1",
+  "status": "prepared-offline-blocked-local-shadow",
+  "sourceCommit": "fc75cfc1feb020b55a76f9afb911b2e8bd034ad8",
+  "denominator": {
+    "path": "spec/compatibility/denominators/ip-fs-standard-2026-09-14.v2-auth-time-listcollectionids.v1.json",
+    "version": "ip-fs-standard-2026-09-14.v2-auth-time-listcollectionids.v1",
+    "sha256": "c2bab56a23285068b64006af7c26ced71c7c73b0a5a0400f4b1957e8e78712d6"
+  },
+  "purpose": "Close a smallest-operation production-observation slice: bounded Secure Token refresh authTime comparison and REST listCollectionIds request/response coverage.",
+  "adapter": {
+    "id": "auth-list-campaign-v1",
+    "path": "tools/compat-broad/auth-list/campaign_auth_list.py",
+    "availability": "historical-adapter-reference-not-present-at-source-commit",
+    "gate": "tools/compat-broad/auth-list/campaign_gate.py",
+    "gateContract": "shared-local-v2"
+  },
+  "cases": [
+    {
+      "id": "auth/refresh/changed-refresh@0",
+      "sourceEvidence": "spec/compatibility/evidence/auth-session-v2/receipt.json",
+      "denominatorBinding": "auth-session-v2-refresh-auth-time",
+      "operations": ["sign-up", "sign-in", "refresh", "issued-id-lookup"],
+      "assertion": "Refresh succeeds and returned id_token authTime is recorded as bounded unsigned metadata for comparison."
+    },
+    {
+      "id": "auth/refresh/reference-refresh",
+      "sourceEvidence": "spec/compatibility/evidence/auth-session-continuity/receipt.json",
+      "denominatorBinding": "auth-session-continuity-refresh-auth-time",
+      "operations": ["sign-up", "sign-in", "refresh", "issued-id-lookup"],
+      "assertion": "Continuity refresh succeeds and returned id_token authTime is recorded as bounded unsigned metadata for comparison."
+    },
+    {
+      "id": "firestore/list-collection-ids/root",
+      "sourceEvidence": "spec/compatibility/broad-runs/a12183a0-second-current.json",
+      "denominatorBinding": "firestore-list-collection-ids",
+      "operations": ["conditional-create", "root-list", "readback", "cleanup"]
+    },
+    {
+      "id": "firestore/list-collection-ids/missing-document-parent",
+      "sourceEvidence": "spec/compatibility/broad-runs/a12183a0-second-current.json",
+      "denominatorBinding": "firestore-list-collection-ids",
+      "operations": ["conditional-create-subcollection", "missing-parent-list", "cleanup"]
+    },
+    {
+      "id": "firestore/list-collection-ids/page-size-one",
+      "sourceEvidence": "spec/compatibility/broad-runs/a12183a0-second-current.json",
+      "denominatorBinding": "firestore-list-collection-ids",
+      "operations": ["conditional-create-two-child-collections", "first-page", "consume-one-continuation", "cleanup"]
+    }
+  ],
+  "scope": {
+    "targetIds": [
+      "securetoken-v1:method:REST:securetoken.token",
+      "securetoken-v1:request:REST:securetoken.token/request",
+      "securetoken-v1:response:REST:securetoken.token/response",
+      "securetoken-v1:field:REST:schemas/GrantTokenResponse/properties/id_token",
+      "firestore-v1:method:REST:firestore.projects.databases.documents.listCollectionIds",
+      "firestore-v1:request:REST:firestore.projects.databases.documents.listCollectionIds/request",
+      "firestore-v1:response:REST:firestore.projects.databases.documents.listCollectionIds/response",
+      "firestore-v1:schema:REST:schemas/ListCollectionIdsRequest",
+      "firestore-v1:schema:REST:schemas/ListCollectionIdsResponse",
+      "firestore-v1:field:REST:firestore.projects.databases.documents.listCollectionIds/parameters/parent",
+      "firestore-v1:field:REST:schemas/ListCollectionIdsRequest/properties/pageSize",
+      "firestore-v1:field:REST:schemas/ListCollectionIdsResponse/properties/collectionIds"
+    ],
+    "excluded": ["MFA", "tenants", "Rules", "configuration changes", "SAML", "all other Auth methods"]
+  },
+  "executionPlan": {
+    "transport": "local-only-template; production transport is disabled",
+    "maxConcurrency": 1,
+    "observationRequests": 16,
+    "recoveryRequests": 16,
+    "logicalOwnedTargets": 6,
+    "wallSeconds": 300,
+    "recoverySeconds": 240,
+    "requestCostMicrousd": 100,
+    "fixedCostMicrousd": 6400,
+    "costCeilingMicrousd": 8000,
+    "costCeilingUsd": 0.008,
+    "nonceTemplate": "{freshNonce}: fresh 32 lowercase hexadecimal value at execution time"
+  },
+  "localShadow": {
+    "status": "blocked",
+    "runner": "tools/compat-broad/auth-list/campaign_auth_list_shadow.py",
+    "blockers": [
+      "The runner and its campaign gate are not present at sourceCommit fc75cfc1; only the historical adapter reference exists in repository history.",
+      "No local shadow result can be produced without adding or restoring executable runner code, which is outside this docs/spec-only package.",
+      "No production request, credential acquisition, owner approval, permission reference, nonce, or expected production response is supplied."
+    ],
+    "requiredCommandAfterAdapterIsAvailable": "python tools/compat-broad/auth-list/campaign_auth_list_shadow.py --help",
+    "evidence": null
+  },
+  "production": {
+    "productionExecuted": false,
+    "productionExecutable": false,
+    "ownerInputs": {
+      "owner": null,
+      "permissionReference": null,
+      "startsAt": null,
+      "endsAt": null,
+      "nonce": null,
+      "currentEnvironment": null
+    },
+    "approval": null
+  },
+  "historicalArtifacts": [
+    "spec/compatibility/broad-runs/prod-campaign-auth-list-01.json",
+    "docs/compatibility/production-campaign-auth-list-01.md"
+  ]
+}

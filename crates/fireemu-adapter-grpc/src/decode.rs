@@ -525,6 +525,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_parent_rejects_documents_suffix_that_is_not_a_resource_segment() {
+        let error = parse_parent("projects/demo/databases/(default)/documents-extra")
+            .expect_err("a documents-like suffix is not a document resource");
+        assert!(matches!(error, DecodeError::InvalidParent(_)));
+    }
+
     fn nested_map(levels: u32) -> pb::Value {
         let mut value = pb::Value {
             value_type: Some(pb::value::ValueType::IntegerValue(1)),

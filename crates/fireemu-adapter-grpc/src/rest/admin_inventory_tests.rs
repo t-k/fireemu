@@ -155,6 +155,18 @@ fn document_routes_preserve_database_ids_containing_documents() {
 }
 
 #[test]
+fn document_routes_reject_empty_path_segments() {
+    let state = state();
+    for path in [
+        "/v1/projects/demo/databases/(default)/documents//items",
+        "/v1/projects/demo/databases/(default)/documents/items/",
+    ] {
+        let (status, body) = call(&state, Some("Bearer owner"), path);
+        assert_eq!(status, 400, "{path}: {body}");
+    }
+}
+
+#[test]
 fn admin_inventory_does_not_claim_non_get_database_routes() {
     let state = state();
     for authorization in [None, Some("Bearer owner")] {

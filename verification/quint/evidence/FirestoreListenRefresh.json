@@ -55,7 +55,7 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "50d4edad3bc4122a6e76fbaf05b0e2e4fa2963951960e05d447b0a834d91a30e",
-    "crates/fireemu-adapter-grpc/src/local.rs": "829ddb4ad86614a38a63f9942bc1bb26da3cd21890ac23ec56ef1a11c053f639",
+    "crates/fireemu-adapter-grpc/src/local.rs": "f5d45555bea4f623e9bd0429018083f367726418f80c6c13fc21bed5e50b9132",
     "crates/fireemu-adapter-grpc/src/streams.rs": "5b3603e55a84aa7420b969826b90f6e706d13f30f560e17072e6227ee3de5c87",
     "crates/fireemu-core-firestore/src/query.rs": "610efd6b06bfc4f0948806e4d0efe6660e02ab407d244741bdc42a0fdbf3386b",
     "crates/fireemu-core-firestore/src/store.rs": "48392eb11f5932edac106db0a9286b20f4a10c56b435407b5b190e6dfd1a0c8c",

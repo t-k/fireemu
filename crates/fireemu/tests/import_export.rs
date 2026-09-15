@@ -1329,6 +1329,75 @@ fn api_created_password_account_keeps_password_provider_without_hash() {
 }
 
 #[test]
+fn removed_password_provider_is_not_reintroduced_by_export_round_trip() {
+    let dir = scratch("removed-password-auth-round-trip");
+    let source = copy_fixture("official-multiproduct", &dir);
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(
+            r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/projects/demo-export/accounts:update" -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' -d '{"localId":"user-password","deleteAttribute":["PASSWORD"]}'"#,
+        )
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = accounts["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["localId"] == "user-password")
+        .expect("the updated account is exported");
+    assert!(user.get("passwordHash").is_none(), "{user}");
+    assert!(user["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|provider| provider["providerId"] != "password"));
+    assert!(user["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|provider| provider["providerId"] == "phone"));
+
+    let again = dir.join("again");
+    let second = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .arg("--export-on-exit")
+        .arg(&again)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let second_log = text(&second);
+    assert!(second.status.success(), "{second_log}");
+    let reexport: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(again.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = reexport["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["localId"] == "user-password")
+        .expect("the updated account is re-exported");
+    assert!(user["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|provider| provider["providerId"] != "password"));
+}
+
+#[test]
 fn email_link_account_import_preserves_provider_and_export_marker() {
     let dir = scratch("email-link-auth-round-trip");
     let source = copy_fixture("official-multiproduct", &dir);

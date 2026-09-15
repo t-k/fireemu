@@ -2558,6 +2558,14 @@ impl AuthStore {
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
         let changed = user.password.take().is_some();
+        if changed && matches!(&user.provider, Provider::Password) {
+            user.provider = user
+                .federated
+                .first()
+                .map(|identity| Provider::Federated(identity.provider_id.clone()))
+                .or_else(|| user.phone_number.as_ref().map(|_| Provider::Phone))
+                .unwrap_or(Provider::Anonymous);
+        }
         self.activate_email_owner(uid);
         Ok(changed)
     }

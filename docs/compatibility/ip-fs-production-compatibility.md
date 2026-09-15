@@ -244,3 +244,9 @@ Rules reachability now reuses request-local structural path results for equivale
 The reported Auth/ListCollectionIds state-validation and Auth `batchCreate` null/unset issues were rechecked through their real local paths: the campaign suite passed 28 tests, the Auth null/unset focused suite passed 3 tests, Firestore REST routing and ProtoJSON null regressions passed 3 tests, and the admin inventory coexistence unit tests passed 2 tests. No production operation or saved receipt rewrite occurred.
 
 The Auth test change required a generated `CompatibilitySelection` evidence digest refresh; it was regenerated with the repository Quint tool. The feature remains below `COMPAT_VERIFIED` for all 14 parent groups and the top-level status remains `IN_PROGRESS`.
+
+## Rules reachability follow-up (`dd253e5a`)
+
+The request-local structural reachability cache now has an explicit 4,096-entry cap. When the cap is reached, the evaluator recomputes the bounded rejection-only prefilter instead of retaining unbounded path-shape data; matching semantics and the independent path-work budget are unchanged. The parent/child reachability regression now covers Firestore and Storage under both Rules v1 and v2. The v1 cases use valid bounded parent/child patterns because v1 rejects non-final recursive wildcards. A unit regression verifies the cache cap.
+
+The core Rules package suite passed 140 tests with no skips, including the new service/version matrix and cache-cap test. The integrated Rules, Identity Toolkit and Firestore adapter suite passed 860 tests with one documented skip. The Auth/ListCollectionIds campaign suite passed 28 tests and the Auth batchCreate null/unset focused suite passed 3 tests. These are local evidence and fixture checks; no production operation, saved receipt, historical comparison or prior artifact was changed. Production Rules compiler and matcher-limit parity remain unobserved, and all 14 parent groups remain below `COMPAT_VERIFIED`.

@@ -271,6 +271,45 @@ fn loaded_rules_allow_after_structurally_impossible_siblings_is_reachable() {
 }
 
 #[test]
+fn loaded_rules_allow_after_equivalent_recursive_parent_children_is_reachable() {
+    let service_name = "cloud.firestore";
+    let mut source = format!("rules_version = '2'; service {service_name} {{\n  match /databases/{{database}}/documents {{\n");
+    for index in 0..750 {
+        writeln!(
+            source,
+            "    match /{{prefix{index}=**}} {{ match /{{suffix{index}=**}}/segment40 {{ allow read; }} }}"
+        )
+        .unwrap();
+    }
+    let allow_path = (0..90)
+        .map(|index| format!("segment{index}"))
+        .collect::<Vec<_>>()
+        .join("/");
+    writeln!(
+        source,
+        "    match /{allow_path} {{ allow read; }}\n  }}\n}}\n"
+    )
+    .unwrap();
+
+    let loaded = LoadedRules::from_source(&source).unwrap();
+    let report = evaluate_request(
+        loaded.ruleset.as_ref().unwrap(),
+        &RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: long_request_path(RulesService::Firestore),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path: false,
+            request_query: None,
+        },
+    );
+    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+}
+
+#[test]
 fn loaded_rules_skip_partial_leaf_siblings_before_a_reachable_allow() {
     for service_name in ["cloud.firestore", "firebase.storage"] {
         let service = if service_name == "cloud.firestore" {

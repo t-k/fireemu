@@ -370,6 +370,8 @@ struct Evaluator<'a> {
     /// Reachability prefilter work is bounded independently from the matcher. Exhaustion keeps
     /// the candidate conservative and lets the bounded matcher make the final decision.
     match_prefilter_work: Arc<AtomicU64>,
+    /// Reachability results shared by structurally equivalent match paths in one request.
+    pattern_reachability_cache: BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
 }
 
 const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
@@ -540,6 +542,7 @@ fn evaluate_prepared(
             cause: None,
             match_path_work: Arc::new(AtomicU64::new(0)),
             match_prefilter_work: Arc::new(AtomicU64::new(0)),
+            pattern_reachability_cache: BTreeMap::new(),
         };
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
         absent_resource_used |= ev.absent_resource_used.get();
@@ -716,6 +719,37 @@ fn pattern_reachable_offsets(
     segments: &[String],
     zero_or_more: bool,
     work: &AtomicU64,
+    cache: &mut BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
+) -> Option<Vec<bool>> {
+    let shape = pattern
+        .iter()
+        .map(|segment| match segment {
+            PathSegment::Literal(value) => Some(format!("l:{value}")),
+            PathSegment::Capture { .. } => Some("c".to_owned()),
+            PathSegment::RecursiveWildcard { .. } => Some("r".to_owned()),
+            PathSegment::Binding(_) => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|parts| parts.join("/"));
+    if let Some(shape) = shape {
+        let key = (shape, segments.to_vec(), zero_or_more);
+        if let Some(cached) = cache.get(&key) {
+            return Some(cached.clone());
+        }
+        let result = pattern_reachable_offsets_uncached(pattern, segments, zero_or_more, work);
+        if let Some(reachable) = &result {
+            cache.insert(key, reachable.clone());
+        }
+        return result;
+    }
+    pattern_reachable_offsets_uncached(pattern, segments, zero_or_more, work)
+}
+
+fn pattern_reachable_offsets_uncached(
+    pattern: &[PathSegment],
+    segments: &[String],
+    zero_or_more: bool,
+    work: &AtomicU64,
 ) -> Option<Vec<bool>> {
     let mut reachable = vec![false; segments.len() + 1];
     reachable[0] = true;
@@ -750,18 +784,21 @@ fn pattern_reachable_offsets(
                 }
                 PathSegment::RecursiveWildcard { .. } => {
                     let minimum = usize::from(!zero_or_more);
-                    for take in minimum..=(segments.len() - offset) {
+                    for (target, next) in next
+                        .iter_mut()
+                        .enumerate()
+                        .skip(offset.saturating_add(minimum))
+                    {
                         let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
                         if current > MATCH_PATH_PREFILTER_WORK_MAX {
                             return None;
                         }
                         if segments
-                            .get(offset + take)
-                            .is_some_and(|candidate| candidate == ABSTRACT_PREFIX)
+                            .get(target)
+                            .is_none_or(|candidate| candidate != ABSTRACT_PREFIX)
                         {
-                            continue;
+                            *next = true;
                         }
-                        next[offset + take] = true;
                     }
                 }
                 // Match headers do not permit bindings. Preserve the runtime matcher behavior
@@ -797,8 +834,10 @@ fn block_reachability(
     segments: &[String],
     zero_or_more: bool,
     work: &AtomicU64,
+    cache: &mut BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
 ) -> Option<BlockReachability> {
-    let reachable = pattern_reachable_offsets(&block.path, segments, zero_or_more, work)?;
+    let reachable =
+        pattern_reachable_offsets(block.path.as_slice(), segments, zero_or_more, work, cache)?;
     let covers_path = reachable.get(segments.len()).copied().unwrap_or(false);
     let mut complete_offsets = vec![false; segments.len() + 1];
     if !block.allows.is_empty() && covers_path {
@@ -812,7 +851,7 @@ fn block_reachability(
         for (offset, can_reach) in reachable.iter().copied().enumerate() {
             if can_reach {
                 let child_reachability =
-                    block_reachability(child, &segments[offset..], zero_or_more, work)?;
+                    block_reachability(child, &segments[offset..], zero_or_more, work, cache)?;
                 if child_reachability.can_reach_allow {
                     complete_offsets[offset] = true;
                 }
@@ -843,6 +882,7 @@ fn walk_match<'a>(
         remaining,
         ev.wildcard_zero_or_more,
         &ev.match_prefilter_work,
+        &mut ev.pattern_reachability_cache,
     );
     if let Some(ref reachability) = reachability {
         if !reachability.can_reach_allow {

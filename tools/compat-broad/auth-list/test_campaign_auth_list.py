@@ -307,6 +307,14 @@ def test_legacy_next_campaign_package_remains_immutable():
     assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
         "44471428cd147ac2b2104734e7d7f310b061a5650cdae6223ecfa4cb7979f45b"
     )
+    legacy_fixture = root / package["localShadow"]["legacyFixture"]["path"]
+    owned_artifact = root / package["localShadow"]["ownedArtifact"]["path"]
+    assert hashlib.sha256(legacy_fixture.read_bytes()).hexdigest() == (
+        "c49e1012c4fd49c540ab0854dbede12f15093f510a4e8f8ff06654fe388f9874"
+    )
+    assert hashlib.sha256(owned_artifact.read_bytes()).hexdigest() == (
+        "91081dccb9718347847a76f9bb83340de3655fe09155487e1b392f8d2168b926"
+    )
     assert package["status"] == "prepared-offline-blocked-owner"
     assert package["localShadow"]["legacyFixture"]["productionExecuted"] is False
     assert package["adapter"]["sourceCommit"] == "aad1a41de926fae244b42ac1bd2baa57bf2bcdde"

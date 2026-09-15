@@ -394,6 +394,9 @@ def test_v5_campaign_package_binds_manifest_source_commit():
     package = json.loads(package_path.read_bytes())
     result = json.loads(result_path.read_bytes())
     artifact = package["localShadow"]["ownedArtifact"]
+    assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
+        "c78e9d9ffad56982ec660425487fc6ff7ce669e713348adfa273785d635778c9"
+    )
     assert package["kind"] == "production-campaign-auth-list-next-v5"
     assert package["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
     assert package["adapter"]["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
@@ -412,6 +415,8 @@ def test_v5_campaign_package_binds_manifest_source_commit():
     assert result["productionExecuted"] is False
     assert result["recordingComplete"] is True
     assert result["stateValidation"] is True
+    assert package["production"]["productionExecuted"] is False
+    assert all(value is None for value in package["production"]["ownerInputs"].values())
 
 
 def test_v6_campaign_package_binds_current_hashes():
@@ -423,6 +428,9 @@ def test_v6_campaign_package_binds_current_hashes():
     package = json.loads(package_path.read_bytes())
     result = json.loads(result_path.read_bytes())
     artifact = package["localShadow"]["ownedArtifact"]
+    assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
+        "576199d9e801569d0fd74687c9706f21fbd02f84619692353b4599653f1433bd"
+    )
     assert package["kind"] == "production-campaign-auth-list-next-v6"
     assert package["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
     assert package["adapter"]["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
@@ -446,6 +454,8 @@ def test_v6_campaign_package_binds_current_hashes():
     assert result["productionExecuted"] is False
     assert result["recordingComplete"] is True
     assert result["stateValidation"] is True
+    assert package["production"]["productionExecuted"] is False
+    assert all(value is None for value in package["production"]["ownerInputs"].values())
 
 
 def test_actual_shadow_uses_fixed_fireemu_artifact_and_closes_transport(tmp_path):

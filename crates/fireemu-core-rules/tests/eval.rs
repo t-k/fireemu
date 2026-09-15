@@ -175,6 +175,39 @@ fn storage_function_calls_resolve_in_the_definition_scope() {
 }
 
 #[test]
+fn nested_recursive_wildcards_are_bounded_by_match_work_budget() {
+    let mut source = String::from("rules_version = '2';\nservice cloud.firestore {\n");
+    for index in 0..8 {
+        source.push_str(&format!("  match /{{part{index}=**}} {{\n"));
+    }
+    source.push_str("    match /never { allow read; }\n");
+    for _ in 0..8 {
+        source.push_str("  }\n");
+    }
+    source.push('}');
+    let ruleset = parse_ruleset(&source).unwrap();
+    let path = format!(
+        "/{}",
+        (0..20)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/")
+    );
+    let report = evaluate_request(&ruleset, &ctx(Method::Get, &path, None));
+
+    assert!(
+        matches!(
+            report.decision,
+            Decision::Deny(DenyReason::BudgetExceeded {
+                limit_id: "FIREEMU-RULES-MATCH-WORK",
+                ..
+            })
+        ),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn owner_can_read_but_write_requires_totp() {
     let ruleset = parse_ruleset(RULES).unwrap();
     let r = evaluate_request(

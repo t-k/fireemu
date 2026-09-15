@@ -17,6 +17,7 @@
 //!   `firestore.get()` / `firestore.exists()` namespace of Storage rules.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use fireemu_core_limits::catalogs::FIREBASE_RULES_2026_08_25;
@@ -349,9 +350,17 @@ struct Evaluator<'a> {
     /// The innermost expression that raised while the current error propagates, so an
     /// `undefined` value names the cause rather than the outermost node.
     cause: Option<UndefinedCause>,
+    /// Path matcher work is bounded independently from expression evaluation.
+    match_path_work: Arc<AtomicU64>,
 }
 
 const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
+
+/// Maximum path-matcher steps charged to one request. Recursive wildcards are valid and may
+/// backtrack, but their work must be bounded independently from expression evaluation so a
+/// deeply nested set cannot allocate or recurse without limit. This is an evaluator safety
+/// bound, not a Firebase compatibility claim.
+const MATCH_PATH_WORK_MAX: u64 = 65_536;
 
 /// Evaluates a request against a ruleset without document access (`get()` / `exists()` are
 /// unsupported and fail closed).
@@ -504,6 +513,7 @@ fn evaluate_prepared(
             scope,
             coverage,
             cause: None,
+            match_path_work: Arc::new(AtomicU64::new(0)),
         };
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
         absent_resource_used |= ev.absent_resource_used.get();
@@ -675,9 +685,10 @@ fn walk_match<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    // Every way the pattern can consume the path is tried (`**` backtracks).
     let mut outcome: Result<bool, EvalError> = Ok(false);
-    for (rest, captures) in match_path(&block.path, remaining, ev.wildcard_zero_or_more) {
+    let zero_or_more = ev.wildcard_zero_or_more;
+    let match_work = Arc::clone(&ev.match_path_work);
+    let mut visit = |rest: Vec<String>, captures: Vec<(String, RulesValue)>| {
         // In a query proof only the segments standing for potential results are
         // undetermined; the database and any concrete ancestor segments stay known.
         let captures: Vec<(String, RulesValue)> = if ctx.abstract_path {
@@ -749,50 +760,77 @@ fn walk_match<'a>(
         ev.scope.functions.truncate(functions_before);
         ev.scope.bindings.truncate(bindings_before);
         match result {
-            Ok(true) => outcome = Ok(true),
-            Ok(false) => {}
-            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
+            Ok(true) => {
+                outcome = Ok(true);
+                Ok(true)
+            }
+            Ok(false) => Ok(false),
+            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => Err(e),
             Err(e) => {
                 if matches!(outcome, Ok(false)) {
                     outcome = Err(e);
                 }
+                Ok(false)
             }
         }
+    };
+    let matched = match_path(
+        &block.path,
+        remaining,
+        zero_or_more,
+        &match_work,
+        &mut visit,
+    )?;
+    if matched {
+        Ok(true)
+    } else {
+        outcome
     }
-    outcome
 }
-
-/// Unmatched remainder and captured bindings of a path match.
-type PathMatch = (Vec<String>, Vec<(String, RulesValue)>);
 
 /// Every way `pattern` matches the start of `segments` (a recursive wildcard consumes zero or
 /// more segments under rules version 2, one or more under version 1), each with its
 /// unmatched remainder and captured bindings.
-fn match_path(pattern: &[PathSegment], segments: &[String], zero_or_more: bool) -> Vec<PathMatch> {
+fn match_path(
+    pattern: &[PathSegment],
+    segments: &[String],
+    zero_or_more: bool,
+    work: &AtomicU64,
+    visit: &mut impl FnMut(Vec<String>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
+) -> Result<bool, EvalError> {
     fn go(
         pattern: &[PathSegment],
         segments: &[String],
         zero_or_more: bool,
         captures: &mut Vec<(String, RulesValue)>,
-        out: &mut Vec<PathMatch>,
-    ) {
+        work: &AtomicU64,
+        visit: &mut impl FnMut(Vec<String>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
+    ) -> Result<bool, EvalError> {
+        let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        if current > MATCH_PATH_WORK_MAX {
+            return Err(EvalError::Budget {
+                limit_id: "FIREEMU-RULES-MATCH-WORK",
+                current,
+                maximum: MATCH_PATH_WORK_MAX,
+            });
+        }
         let Some((seg, tail)) = pattern.split_first() else {
-            out.push((segments.to_vec(), captures.clone()));
-            return;
+            return visit(segments.to_vec(), captures.clone());
         };
         match seg {
             PathSegment::Literal(l) => {
                 // An undetermined segment is never equal to a literal.
                 if segments.first() == Some(l) && !is_abstract_segment(l) {
-                    go(tail, &segments[1..], zero_or_more, captures, out);
+                    return go(tail, &segments[1..], zero_or_more, captures, work, visit);
                 }
             }
             PathSegment::Capture { name, .. } => {
                 // The "any prefix" marker stands for zero or more segments: only `**` fits.
                 if let Some(v) = segments.first().filter(|v| v.as_str() != ABSTRACT_PREFIX) {
                     captures.push((name.clone(), RulesValue::String(v.clone())));
-                    go(tail, &segments[1..], zero_or_more, captures, out);
+                    let result = go(tail, &segments[1..], zero_or_more, captures, work, visit);
                     captures.pop();
+                    return result;
                 }
             }
             PathSegment::RecursiveWildcard { name, .. } => {
@@ -806,16 +844,25 @@ fn match_path(pattern: &[PathSegment], segments: &[String], zero_or_more: bool) 
                         continue;
                     }
                     captures.push((name.clone(), RulesValue::Path(segments[..take].to_vec())));
-                    go(tail, &segments[take..], zero_or_more, captures, out);
+                    let stop = go(tail, &segments[take..], zero_or_more, captures, work, visit)?;
                     captures.pop();
+                    if stop {
+                        return Ok(true);
+                    }
                 }
             }
             PathSegment::Binding(_) => {}
         }
+        Ok(false)
     }
-    let mut out = Vec::new();
-    go(pattern, segments, zero_or_more, &mut Vec::new(), &mut out);
-    out
+    go(
+        pattern,
+        segments,
+        zero_or_more,
+        &mut Vec::new(),
+        work,
+        visit,
+    )
 }
 
 fn evaluate_allows<'a>(

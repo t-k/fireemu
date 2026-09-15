@@ -231,6 +231,12 @@ def test_next_campaign_package_keeps_legacy_shadow_and_binds_artifact_result():
     assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
     assert artifact["artifactSha256"] == result["artifactSha256"]
     assert artifact["executionCommit"] == result["executionCommit"]
+    shadow_path = root / package["adapter"]["shadowPath"]
+    source_path = root / package["adapter"]["path"]
+    assert package["adapter"]["shadowSha256"] == hashlib.sha256(shadow_path.read_bytes()).hexdigest()
+    assert package["adapter"]["sourceSha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
+    assert package["adapter"]["shadowCommit"] == result["executionCommit"]
+    assert artifact["observerSha256"] == result["observerSha256"]
     assert result["productionExecuted"] is False
     assert all(value is None for value in package["production"]["ownerInputs"].values())
 

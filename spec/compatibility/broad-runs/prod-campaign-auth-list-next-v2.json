@@ -6,10 +6,10 @@
     "gateSha256": "7ac19bad00fc18df247105474cb51181a874b5f45a87a0fa196d454196381c1a",
     "id": "auth-list-campaign-v2",
     "path": "tools/compat-broad/auth-list/campaign_auth_list.py",
-    "shadowCommit": "7d8983edefa89c6adfa154e7d5c986148df29d03",
+    "shadowCommit": "f050e9bb84b4202146c8d4d0a741350c73aa0c50",
     "shadowPath": "tools/compat-broad/auth-list/campaign_auth_list_shadow.py",
-    "shadowSha256": "263f85c0151a98efd09087c6ecdc7852c751cca2e4168cb715e6eab786ff1a53",
-    "sourceCommit": "2521a4e0196076bf72eff4381d67a5daedb9ac20",
+    "shadowSha256": "28667c98521c7762e52aad0c5b57535e440df4972a3cea033ea78e1bde16c424",
+    "sourceCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
     "sourceSha256": "aba4b0b9f306c021cd9b9786850a16d460adf336e993a4338155ecc807240427"
   },
   "cases": [
@@ -105,17 +105,17 @@
       "status": "immutable-legacy-fixture"
     },
     "ownedArtifact": {
-      "artifactSha256": "a24eea35256d8153967553fddb2b9ef5f98fe82e066fbdf8b25f450dbd72460b",
+      "artifactSha256": "18dc3bd69178b344366ae28e78cb66bcaed0a4375f7a40dbfcdb075a9cc0a3ae",
       "cleanupComplete": true,
-      "executionCommit": "7d8983edefa89c6adfa154e7d5c986148df29d03",
+      "executionCommit": "f050e9bb84b4202146c8d4d0a741350c73aa0c50",
       "observationRequests": 17,
-      "observerSha256": "d3c86963fb3d5e919b16e37dc6117c309f4129096a2398a9b3a086d281ceb520",
+      "observerSha256": "c0a29be4f98e4d2993cb5c283219ce2b48e16bba1027698a2815a59d63ba6594",
       "path": "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact/result.json",
       "processCleanup": true,
       "productionExecuted": false,
       "recordingComplete": true,
       "recoveryRequests": 19,
-      "sha256": "8f5a327c5c9096527fb0c4cb3f63fe2b00bf670a148701a87faf11d104b0ba24",
+      "sha256": "91081dccb9718347847a76f9bb83340de3655fe09155487e1b392f8d2168b926",
       "stateValidation": true,
       "status": "passed-owned-loopback-artifact",
       "totalRequests": 38
@@ -147,6 +147,6 @@
     ]
   },
   "purpose": "Bounded Auth refresh and Firestore listCollectionIds campaign with a real owned-artifact local shadow; production execution remains owner-gated.",
-  "sourceCommit": "7d8983edefa89c6adfa154e7d5c986148df29d03",
+  "sourceCommit": "f050e9bb84b4202146c8d4d0a741350c73aa0c50",
   "status": "prepared-offline-blocked-owner"
 }

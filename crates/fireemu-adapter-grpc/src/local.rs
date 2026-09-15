@@ -1466,6 +1466,27 @@ impl LocalBackend {
         ));
     }
 
+    /// Clears every database of one project while preserving its catalog entries.
+    ///
+    /// This is the semantics of the emulator's `clearFirestore` route: document data is
+    /// dropped, but an existing database remains discoverable through the Admin inventory.
+    /// The exclusive admission guard makes catalog removal and recreation one operation, and
+    /// the range lookup avoids inspecting databases owned by other projects.
+    pub fn clear_project_documents(&self, project: &str) -> Result<(), Status> {
+        let _exclusive = self.barrier.exclusive();
+        let keys = self.take_project(project);
+        self.bump_generations(&keys);
+        self.announce_wipe(keys.clone());
+        for database in keys.into_iter().map(|(_, database)| database) {
+            let parent = parse_parent(&format!(
+                "projects/{project}/databases/{database}/documents"
+            ))
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            self.database_handle(&parent)?;
+        }
+        Ok(())
+    }
+
     /// Drops every database `scope` owns. The default session's scope also starts a new
     /// epoch (streams opened before it end like on a full reset); a project scope only
     /// bumps the generations of the databases it wiped.
@@ -1502,6 +1523,38 @@ impl LocalBackend {
             Err(_) => Vec::new(),
         };
         let keys: Vec<(String, String)> = removed
+            .into_iter()
+            .map(|(key, handle)| {
+                handle.detach();
+                key
+            })
+            .collect();
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for key in &keys {
+            ledger.remove_committed(key);
+        }
+        keys
+    }
+
+    fn take_project(&self, project: &str) -> Vec<(String, String)> {
+        let removed: Vec<((String, String), DatabaseHandle)> = match self.databases.lock() {
+            Ok(mut dbs) => {
+                let start = (project.to_owned(), String::new());
+                let keys: Vec<(String, String)> = dbs
+                    .range(start..)
+                    .take_while(|((p, _), _)| p == project)
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                keys.into_iter()
+                    .filter_map(|key| dbs.remove(&key).map(|entry| (key, DatabaseHandle(entry))))
+                    .collect()
+            }
+            Err(_) => Vec::new(),
+        };
+        let keys: Vec<_> = removed
             .into_iter()
             .map(|(key, handle)| {
                 handle.detach();

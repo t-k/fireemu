@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
@@ -394,6 +395,28 @@ fn admin_inventory_survives_snapshot_restore_with_standard_native_metadata() {
         "/v1/projects/demo/databases/temporary",
     );
     assert_eq!(status, 404, "{body}");
+}
+
+#[test]
+fn clear_waits_for_an_admitted_operation_before_replacing_the_project_catalog() {
+    let state = state();
+    create_database(&state, "demo", "(default)");
+    create_database(&state, "other", "(default)");
+    let barrier = state.local.barrier();
+    let admitted = barrier.admit();
+    let finished = Arc::new(AtomicBool::new(false));
+    let backend = Arc::clone(&state.local);
+    let finished_by_thread = Arc::clone(&finished);
+    let clearing = std::thread::spawn(move || {
+        backend.clear_project_documents("demo").unwrap();
+        finished_by_thread.store(true, Ordering::Release);
+    });
+    std::thread::yield_now();
+    assert!(!finished.load(Ordering::Acquire));
+    drop(admitted);
+    clearing.join().unwrap();
+    assert!(finished.load(Ordering::Acquire));
+    assert_eq!(state.local.database_catalog().unwrap().len(), 2);
 }
 
 #[test]

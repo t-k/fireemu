@@ -21,7 +21,6 @@ use fireemu_proto_firestore::google::firestore::v1 as pb;
 use serde_json::{json, Value};
 use tonic::{Code, Status};
 
-use crate::decode::parse_parent;
 use crate::encode::encode_instant;
 use crate::gateway::Gateway;
 use crate::local::LocalBackend;
@@ -469,21 +468,7 @@ impl RestState {
         // The wipe is per project: fireemu isolates a session's databases by project, so
         // clearing one never touches another session's data. ClearFirestore drops documents
         // while the Admin database catalog remains available for the existing databases.
-        let databases = self
-            .local
-            .database_catalog()?
-            .into_iter()
-            .filter(|((catalog_project, _), _)| catalog_project == project)
-            .map(|((_, database), _)| database)
-            .collect::<Vec<_>>();
-        self.local.reset_project(project);
-        for database in databases {
-            let parent = parse_parent(&format!(
-                "projects/{project}/databases/{database}/documents"
-            ))
-            .map_err(|error| Status::invalid_argument(error.to_string()))?;
-            self.local.database_handle(&parent)?;
-        }
+        self.local.clear_project_documents(project)?;
         Ok(ok(Value::Object(serde_json::Map::new())))
     }
 

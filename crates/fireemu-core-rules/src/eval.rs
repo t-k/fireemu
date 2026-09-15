@@ -271,13 +271,16 @@ struct Scope<'a> {
     /// does not retain a separate copy for every function.
     function_scopes: BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
     /// Value bindings captured at each declaration site. Match captures are dynamic values, so
-    /// this is populated while walking the matching block and restored for every call.
-    function_bindings: BTreeMap<usize, Vec<(String, RulesValue)>>,
+    /// this is populated while walking the matching block and restored for every call. Functions
+    /// declared in one block share the immutable request-local table.
+    function_bindings: BTreeMap<usize, FunctionBindings>,
     bindings: Vec<Binding<'a>>,
     /// The lexical function environment of the function currently being evaluated. `None`
     /// means that resolution follows the active match/call-site stack in `functions`.
     lexical_functions: Option<Arc<FunctionEnvironment<'a>>>,
 }
+
+type FunctionBindings = Arc<Vec<(String, RulesValue)>>;
 
 /// Immutable lexical function declarations for one scope. Parent environments are linked rather
 /// than flattened so nested scopes do not copy all ancestor declarations.
@@ -490,6 +493,8 @@ fn evaluate_prepared(
         }
         let mut function_scopes = BTreeMap::new();
         collect_function_scopes(&service.items, None, &mut function_scopes);
+        let mut function_bindings = BTreeMap::new();
+        initialize_function_bindings(&service.items, &mut function_bindings);
         let functions = service
             .items
             .iter()
@@ -501,7 +506,7 @@ fn evaluate_prepared(
         let scope = Scope {
             functions,
             function_scopes,
-            function_bindings: BTreeMap::new(),
+            function_bindings,
             bindings: Vec::new(),
             lexical_functions: None,
         };
@@ -733,27 +738,26 @@ fn walk_match<'a>(
                 .into_iter()
                 .map(|(name, value)| Binding::value(name, value)),
         );
-        let captured_bindings: Vec<(String, RulesValue)> = ev
-            .scope
-            .bindings
-            .iter()
-            .filter_map(|binding| match &binding.state {
-                BindingState::Value(value)
-                | BindingState::Resolved {
-                    result: Ok(value), ..
-                } => Some((binding.name.clone(), value.clone())),
-                BindingState::Lazy(_)
-                | BindingState::Evaluating
-                | BindingState::Resolved { .. } => None,
-            })
-            .collect();
-        for item in &block.items {
-            if let Item::Function(f) = item {
-                ev.scope
-                    .function_bindings
-                    .insert(function_key(f), captured_bindings.clone());
-            }
-        }
+        let captured_bindings: FunctionBindings = Arc::new(
+            ev.scope
+                .bindings
+                .iter()
+                .filter_map(|binding| match &binding.state {
+                    BindingState::Value(value)
+                    | BindingState::Resolved {
+                        result: Ok(value), ..
+                    } => Some((binding.name.clone(), value.clone())),
+                    BindingState::Lazy(_)
+                    | BindingState::Evaluating
+                    | BindingState::Resolved { .. } => None,
+                })
+                .collect(),
+        );
+        bind_function_captures(
+            &block.items,
+            &captured_bindings,
+            &mut ev.scope.function_bindings,
+        );
         let mut result: Result<bool, EvalError> = Ok(false);
         if rest.is_empty() {
             *matched_any = true;
@@ -1908,19 +1912,20 @@ impl<'a> Evaluator<'a> {
                 f.params.len()
             )));
         }
+        let definition_functions = required_function_scope(&self.scope.function_scopes, f)?;
+        let Some(definition_bindings) = self.scope.function_bindings.get(&function_key(f)).cloned()
+        else {
+            return Err(EvalError::Unsupported(
+                "function declaration bindings metadata missing".to_owned(),
+            ));
+        };
         self.budget.enter_call()?;
         let caller_lexical_functions = self.scope.lexical_functions.take();
-        self.scope.lexical_functions = self.scope.function_scopes.get(&function_key(f)).cloned();
+        self.scope.lexical_functions = Some(definition_functions);
         let caller_bindings = std::mem::take(&mut self.scope.bindings);
-        let definition_bindings = self
-            .scope
-            .function_bindings
-            .get(&function_key(f))
-            .cloned()
-            .unwrap_or_default();
         self.scope.bindings = definition_bindings
-            .into_iter()
-            .map(|(name, value)| Binding::value(name, value))
+            .iter()
+            .map(|(name, value)| Binding::value(name.clone(), value.clone()))
             .collect();
         for (p, v) in f.params.iter().zip(values) {
             self.scope.bindings.push(Binding::value(p.clone(), v));
@@ -1959,6 +1964,49 @@ fn function_in_environment<'a>(
                 .as_deref()
                 .and_then(|parent| function_in_environment(parent, name))
         })
+}
+
+fn required_function_scope<'a>(
+    scopes: &BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
+    function: &FunctionDecl,
+) -> Result<Arc<FunctionEnvironment<'a>>, EvalError> {
+    scopes.get(&function_key(function)).cloned().ok_or_else(|| {
+        EvalError::Unsupported("function declaration scope metadata missing".to_owned())
+    })
+}
+
+fn bind_function_captures(
+    items: &[Item],
+    captures: &FunctionBindings,
+    bindings: &mut BTreeMap<usize, FunctionBindings>,
+) {
+    for item in items {
+        if let Item::Function(function) = item {
+            bindings.insert(function_key(function), Arc::clone(captures));
+        }
+    }
+}
+
+fn initialize_function_bindings(items: &[Item], bindings: &mut BTreeMap<usize, FunctionBindings>) {
+    let empty = Arc::new(Vec::new());
+    initialize_function_bindings_with_empty(items, bindings, &empty);
+}
+
+fn initialize_function_bindings_with_empty(
+    items: &[Item],
+    bindings: &mut BTreeMap<usize, FunctionBindings>,
+    empty: &FunctionBindings,
+) {
+    for item in items {
+        match item {
+            Item::Function(function) => {
+                bindings.insert(function_key(function), Arc::clone(empty));
+            }
+            Item::Match(block) => {
+                initialize_function_bindings_with_empty(&block.items, bindings, empty);
+            }
+        }
+    }
 }
 
 // Int / float equality follows the Rules language (numeric comparison), so the widening cast
@@ -2745,7 +2793,10 @@ fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_function_scopes, function_key};
+    use super::{
+        bind_function_captures, collect_function_scopes, function_key, required_function_scope,
+        EvalError, FunctionBindings,
+    };
     use crate::parse::parse_ruleset;
     use std::collections::BTreeMap;
     use std::fmt::Write as _;
@@ -2779,5 +2830,50 @@ mod tests {
                 crate::ast::Item::Match(_) => None,
             })
             .all(|function| scopes.contains_key(&function_key(function))));
+    }
+
+    #[test]
+    fn declarations_in_one_match_share_their_request_capture_table() {
+        let mut source = String::from(
+            "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents/{owner} {\n",
+        );
+        for index in 0..256 {
+            let _ = writeln!(source, "    function helper{index}() {{ return false; }}");
+        }
+        source.push_str("    allow read: if true;\n  }\n}");
+        let ruleset = parse_ruleset(&source).expect("generated rules should parse");
+        let service = &ruleset.services[0];
+        let crate::ast::Item::Match(block) = &service.items[0] else {
+            panic!("generated scope should be a match block");
+        };
+        let captures: FunctionBindings = Arc::new(vec![(
+            "owner".to_owned(),
+            crate::value::RulesValue::String("alice".to_owned()),
+        )]);
+        let mut bindings = BTreeMap::new();
+        bind_function_captures(block.items.as_slice(), &captures, &mut bindings);
+
+        assert_eq!(bindings.len(), 256);
+        assert!(bindings.values().all(|table| Arc::ptr_eq(table, &captures)));
+    }
+
+    #[test]
+    fn missing_function_scope_metadata_is_fail_closed() {
+        let ruleset = parse_ruleset(
+            "service cloud.firestore { function helper() { return true; } match /databases/{db}/documents { allow read: if helper(); } }",
+        )
+        .expect("rules should parse");
+        let service = &ruleset.services[0];
+        let crate::ast::Item::Function(function) = &service.items[0] else {
+            panic!("generated declaration should be a function");
+        };
+        let mut scopes = BTreeMap::new();
+        collect_function_scopes(service.items.as_slice(), None, &mut scopes);
+        scopes.clear();
+
+        assert!(matches!(
+            required_function_scope(&scopes, function),
+            Err(EvalError::Unsupported(message)) if message == "function declaration scope metadata missing"
+        ));
     }
 }

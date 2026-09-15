@@ -251,6 +251,29 @@ fn user_function_lexical_capture_survives_caller_parameter_and_let() {
 }
 
 #[test]
+fn nested_function_call_uses_each_declaration_scope_after_caller_shadowing() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents/users/{owner} {\n    function isOwner() { return request.auth.uid == owner; }\n    match /notes/{note} {\n      function gate(owner) { let owner = 'bob'; return isOwner(); }\n      allow get: if gate('bob');\n    }\n  }\n}",
+    )
+    .unwrap();
+    let path = "/databases/(default)/documents/users/alice/notes/n1";
+    let alice = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, path, Some(auth("alice", false, None))),
+    );
+    let bob = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, path, Some(auth("bob", false, None))),
+    );
+
+    assert!(matches!(alice.decision, Decision::Allow), "{alice:?}");
+    assert!(
+        matches!(bob.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{bob:?}"
+    );
+}
+
+#[test]
 fn nested_recursive_match_keeps_parent_function_environment() {
     let ruleset = parse_ruleset(
         "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents/{prefix=**} {\n    function decision() { return false; }\n    function gate() { return decision(); }\n    match /users/{owner=**} {\n      function decision() { return true; }\n      allow read: if gate();\n    }\n  }\n}",

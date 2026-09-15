@@ -810,6 +810,75 @@ fn secure_token_refresh_preserves_authentication_time() {
 }
 
 #[test]
+fn strict_profile_token_expiration_matrix_preserves_account_state() {
+    for elapsed in [0, 3_600, 3_601] {
+        let s = strict_state();
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({
+                "email": format!("token-expiration-{elapsed}@example.com"),
+                "password": "hunter22",
+                "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200, "elapsed={elapsed}: {signed}");
+        let uid = signed["localId"].as_str().unwrap();
+        let id_token = signed["idToken"].clone();
+        let refresh_token = signed["refreshToken"].clone();
+        let account = || {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            )
+        };
+        let (status, before) = account();
+        assert_eq!(status, 200, "elapsed={elapsed}: {before}");
+
+        advance(&s, elapsed);
+        let (lookup_status, lookup_response) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": id_token}),
+        );
+        if elapsed < 3_600 {
+            assert_eq!(lookup_status, 200, "elapsed={elapsed}: {lookup_response}");
+        } else {
+            assert_eq!(lookup_status, 400, "elapsed={elapsed}: {lookup_response}");
+            assert_eq!(lookup_response["error"]["message"], "TOKEN_EXPIRED");
+            let (status, after) = account();
+            assert_eq!(status, 200, "elapsed={elapsed}: {after}");
+            assert_eq!(
+                after, before,
+                "expired lookup mutated account at elapsed={elapsed}"
+            );
+        }
+
+        let (refresh_status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token
+            }),
+        );
+        assert_eq!(refresh_status, 200, "elapsed={elapsed}: {refreshed}");
+        let (refreshed_lookup_status, refreshed_lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": refreshed["id_token"]}),
+        );
+        assert_eq!(
+            refreshed_lookup_status, 200,
+            "elapsed={elapsed}: {refreshed_lookup}"
+        );
+        assert_eq!(refreshed_lookup["users"][0]["localId"], uid);
+    }
+}
+
+#[test]
 fn refresh_authentication_time_remains_revocable_in_both_profiles() {
     for strict in [false, true] {
         let s = if strict { strict_state() } else { state() };

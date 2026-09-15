@@ -2633,6 +2633,210 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
     handle.abort();
 }
 
+/// Commit validates every write before publishing any of them. A late precondition failure
+/// therefore leaves both the existing document and the missing target unchanged.
+#[tokio::test]
+async fn commit_late_precondition_failure_is_atomic() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("atomic/existing", &[("value", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut missing_precondition = update_write("atomic/missing", &[("value", i(2))]);
+    missing_precondition.current_document = Some(pb::Precondition {
+        condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+    });
+    let first_write = update_write("atomic/existing", &[("value", i(9))]);
+    let error = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![first_write.clone(), missing_precondition],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::NotFound);
+
+    let existing = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/atomic/existing"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(existing.fields.get("value"), Some(&i(1)));
+    assert_eq!(
+        client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/atomic/missing"),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    handle.abort();
+}
+
+/// A failed transactional commit keeps the attempt available for rollback. Rollback releases
+/// its read locks so the same document can then be written by another request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
+    let (mut client, handle) = start_with_contention_wait(std::time::Duration::ZERO).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("txn-failure/doc", &[("value", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    client
+        .batch_get_documents(pb::BatchGetDocumentsRequest {
+            database: DB.to_owned(),
+            documents: vec![format!("{DOCS}/txn-failure/doc")],
+            consistency_selector: Some(
+                pb::batch_get_documents_request::ConsistencySelector::Transaction(
+                    transaction.clone(),
+                ),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut missing_precondition = update_write("txn-failure/missing", &[("value", i(2))]);
+    missing_precondition.current_document = Some(pb::Precondition {
+        condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+    });
+    let failed = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            transaction: transaction.clone(),
+            writes: vec![
+                update_write("txn-failure/doc", &[("value", i(9))]),
+                missing_precondition,
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(failed.code(), tonic::Code::NotFound);
+
+    let blocked = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("txn-failure/doc", &[("value", i(3))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(blocked.code(), tonic::Code::Aborted);
+
+    client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("txn-failure/doc", &[("value", i(3))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let document = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/txn-failure/doc"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(document.fields.get("value"), Some(&i(3)));
+    handle.abort();
+}
+
+/// `BatchWrite` reports a precondition failure for one write while publishing an independent
+/// later write, preserving its per-write status and result alignment.
+#[tokio::test]
+async fn batch_write_precondition_failure_is_per_write_and_later_writes_commit() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("batch-failure/existing", &[("value", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut wrong_precondition = update_write("batch-failure/existing", &[("value", i(9))]);
+    wrong_precondition.current_document = Some(pb::Precondition {
+        condition_type: Some(pb::precondition::ConditionType::Exists(false)),
+    });
+    let response = client
+        .batch_write(pb::BatchWriteRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                wrong_precondition,
+                update_write("batch-failure/later", &[("value", i(2))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.status.len(), 2);
+    assert_eq!(response.write_results.len(), 2);
+    assert_eq!(
+        response.status[0].code,
+        i32::from(tonic::Code::AlreadyExists)
+    );
+    assert_eq!(response.status[1].code, 0);
+    assert!(response.write_results[0].update_time.is_none());
+    assert!(response.write_results[1].update_time.is_some());
+
+    let existing = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/batch-failure/existing"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(existing.fields.get("value"), Some(&i(1)));
+    let later = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/batch-failure/later"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(later.fields.get("value"), Some(&i(2)));
+    handle.abort();
+}
+
 #[tokio::test]
 async fn aggregation_index_validation_rejects_unindexed_fields_before_transaction_observation() {
     let (mut client, _clock, backend, handle) =

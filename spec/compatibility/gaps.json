@@ -281,13 +281,15 @@
       "kind": "unobserved",
       "scope": "Password rules on other routes: signUp, reset, administrative update, import; minimum length, normalization, truncation, custom policies. The 4095/4096/4097 approval covers one route and ASCII/astral inputs.",
       "implementationStatus": "unknown",
-      "localTestStatus": "none",
+      "localTestStatus": "passing",
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
-        "docs/compatibility/auth-password-unicode-boundary-approval.md"
+        "docs/compatibility/auth-password-unicode-boundary-approval.md",
+        "docs/compatibility/auth-password-route-policy-local.md",
+        "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
       ],
-      "nextAction": "Per-route corpora reusing the maximum-password recorder.",
+      "nextAction": "The local route matrix now covers Admin create alongside the existing sign-up, client update, resetPassword and batch import checks for the recorded boundary and invalid-input classes. Production comparison for these routes, custom policies, normalization/truncation and tenant settings remains required.",
       "blockedReason": "",
       "requiresProductionChange": true
     },

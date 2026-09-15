@@ -4983,6 +4983,53 @@ struct DisableDuringHook {
     uid: String,
 }
 
+#[derive(Clone, Debug)]
+enum HookMutation {
+    Delete,
+    Revoke,
+    ReplaceFactor { phone: String },
+}
+
+struct MutateDuringHook {
+    store: Arc<Mutex<AuthStore>>,
+    uid: String,
+    mutation: HookMutation,
+}
+
+impl AuthBlockingHook for MutateDuringHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if event != BlockingAuthEvent::BeforeSignIn {
+            return Ok(json!({}));
+        }
+        let mut store = self.store.lock().unwrap();
+        let uid = store.user_by_id(&self.uid).unwrap().local_id.clone();
+        match &self.mutation {
+            HookMutation::Delete => {
+                store.delete_user_by_id(&self.uid).unwrap();
+            }
+            HookMutation::Revoke => {
+                let now = store.user(&uid).unwrap().created_at;
+                store.revoke_tokens(&uid, now).unwrap();
+            }
+            HookMutation::ReplaceFactor { phone } => {
+                let now = store.user(&uid).unwrap().created_at;
+                store
+                    .set_phone_factors(
+                        &uid,
+                        vec![(phone.clone(), Some("replacement".to_owned()))],
+                        now,
+                    )
+                    .unwrap();
+            }
+        }
+        Ok(json!({}))
+    }
+}
+
 impl AuthBlockingHook for DisableDuringHook {
     fn invoke(
         &self,
@@ -5065,6 +5112,94 @@ fn pending_retry_survives_a_rejecting_hook_and_honors_a_disable_during_the_hook(
     assert_eq!(status, 200, "{lookup}");
     assert_eq!(lookup["users"][0]["localId"], user["localId"]);
     assert_ne!(finalize_phone_step(&s, &pending, &phone).0, 200);
+}
+
+#[test]
+fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
+    for mutation in [
+        HookMutation::Delete,
+        HookMutation::Revoke,
+        HookMutation::ReplaceFactor {
+            phone: "+15559876544".to_owned(),
+        },
+    ] {
+        let (mut s, user) = pending_expiry_state(false, "hook-mutation@example.com");
+        let uid = user["localId"].as_str().unwrap().to_owned();
+        let pending = pending_login(&s, "hook-mutation@example.com");
+        let phone = start_phone_code(&s, &pending);
+        let before_codes = get(&s, &format!("{EMU}/verificationCodes")).1;
+        let before_pending = s.store.lock().unwrap().pending_sign_in_count();
+        s.blocking = Some(Arc::new(MutateDuringHook {
+            store: Arc::clone(&s.store),
+            uid: uid.clone(),
+            mutation: mutation.clone(),
+        }));
+
+        let (status, response) = finalize_phone_step(&s, &pending, &phone);
+        match mutation {
+            HookMutation::Delete => {
+                assert_ne!(status, 200, "deleted account unexpectedly issued tokens");
+                assert!(response.get("idToken").is_none(), "{response}");
+                assert!(response.get("refreshToken").is_none(), "{response}");
+                assert!(s.store.lock().unwrap().user_by_id(&uid).is_none());
+                assert_eq!(
+                    s.store.lock().unwrap().pending_sign_in_count(),
+                    0,
+                    "deleting the account must remove its pending credential"
+                );
+                assert_eq!(
+                    get(&s, &format!("{EMU}/verificationCodes")).1["verificationCodes"],
+                    json!([]),
+                    "deleting the account must remove its verification code"
+                );
+            }
+            HookMutation::Revoke => {
+                // Revocation invalidates prior sessions but does not block a fresh sign-in.
+                // The pending MFA credential remains usable, matching the saved local and
+                // production pending-revocation observations.
+                assert_eq!(status, 200, "{response}");
+                assert!(response["idToken"].is_string(), "{response}");
+                assert!(response["refreshToken"].is_string(), "{response}");
+                assert_eq!(
+                    s.store.lock().unwrap().pending_sign_in_count(),
+                    before_pending - 1
+                );
+                assert_eq!(
+                    get(&s, &format!("{EMU}/verificationCodes")).1["verificationCodes"],
+                    json!([]),
+                    "a successful finalize consumes its verification code"
+                );
+                assert!(
+                    s.store
+                        .lock()
+                        .unwrap()
+                        .user_by_id(&uid)
+                        .unwrap()
+                        .tokens_revoked
+                );
+            }
+            HookMutation::ReplaceFactor { .. } => {
+                assert_ne!(status, 200, "replaced factor unexpectedly issued tokens");
+                assert!(response.get("idToken").is_none(), "{response}");
+                assert!(response.get("refreshToken").is_none(), "{response}");
+                assert_eq!(
+                    s.store.lock().unwrap().pending_sign_in_count(),
+                    before_pending,
+                    "factor replacement must not consume the pending credential"
+                );
+                assert_eq!(
+                    get(&s, &format!("{EMU}/verificationCodes")).1,
+                    before_codes,
+                    "factor replacement must not consume the verification code"
+                );
+                let store = s.store.lock().unwrap();
+                assert_eq!(
+                    store.user_by_id(&uid).unwrap().mfa.phone_factors()[0].phone_number,
+                    "+15559876544"
+                );
+            }
+        }
+    }
 }
 
 #[test]

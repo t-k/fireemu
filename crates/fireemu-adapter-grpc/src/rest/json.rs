@@ -650,12 +650,11 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
             "currentDocument",
         ],
     )?;
-    if ["update", "delete", "verify", "transform"]
+    let operation_count = ["update", "delete", "verify", "transform"]
         .iter()
         .filter(|k| v.get(**k).is_some())
-        .count()
-        > 1
-    {
+        .count();
+    if operation_count != 1 {
         // A oneof carries one member.
         return err("Payload isn't valid for request.");
     }

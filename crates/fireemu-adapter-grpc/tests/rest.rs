@@ -466,6 +466,28 @@ fn batch_write_rest_rejects_non_array_writes_without_mutation() {
 }
 
 #[test]
+fn batch_write_rest_rejects_write_without_operation_before_dispatch() {
+    let s = state(None);
+    let target = "projects/demo-app/databases/(default)/documents/batch-shape/target";
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [
+                {},
+                {"update": {"name": target, "fields": {"v": {"integerValue": "1"}}}}
+            ]
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+
+    let (status, after) = call(&s, "GET", target, Value::Null);
+    assert_eq!(status, 404, "a malformed write must not dispatch its valid suffix: {after}");
+}
+
+#[test]
 fn batch_write_rest_rejects_malformed_labels_without_mutation() {
     let s = state(None);
     let target = "projects/demo-app/databases/(default)/documents/batch-labels/target";

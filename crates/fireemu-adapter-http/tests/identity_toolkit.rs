@@ -5833,6 +5833,7 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_namespace() {
     use fireemu_core_auth::store::AuthRegistry;
 

@@ -429,6 +429,7 @@ async fn execute_pipeline_records_deterministic_small_and_large_page_stats() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn execute_pipeline_select_copies_only_projected_fields_across_pages() {
     for count in [17, 257] {
         let backend = test_backend();

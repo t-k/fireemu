@@ -5455,7 +5455,10 @@ fn millis_field(row: &Value, key: &str) -> Option<LogicalInstant> {
 
 fn validate_batch_row_shapes(row: &Value) -> Result<(), JsonResponse> {
     for key in ["mfaInfo", "providerUserInfo"] {
-        if row.get(key).is_some_and(|value| !value.is_array()) {
+        if row
+            .get(key)
+            .is_some_and(|value| !value.is_null() && !value.is_array())
+        {
             return Err(error(
                 400,
                 &format!("INVALID_ARGUMENT : {key} must be an array"),
@@ -5467,6 +5470,7 @@ fn validate_batch_row_shapes(row: &Value) -> Result<(), JsonResponse> {
             continue;
         };
         let valid = match value {
+            Value::Null => true,
             Value::String(value) => value.parse::<i64>().is_ok(),
             Value::Number(value) => value.as_i64().is_some(),
             _ => false,
@@ -5651,7 +5655,7 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
         return error(400, "MISSING_USER_ACCOUNT");
     };
     let allow_overwrite = match body.get("allowOverwrite") {
-        None => false,
+        None | Some(Value::Null) => false,
         Some(Value::Bool(value)) => *value,
         Some(_) => return error(400, "INVALID_ARGUMENT : allowOverwrite must be a boolean"),
     };

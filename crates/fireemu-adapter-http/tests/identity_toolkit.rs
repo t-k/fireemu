@@ -2700,6 +2700,47 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
 }
 
 #[test]
+fn batch_import_treats_null_optional_fields_as_unset() {
+    let s = state();
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "allowOverwrite": null,
+            "users": [{
+                "localId": "batch-null-fields",
+                "email": "batch-null-fields@example.com",
+                "providerUserInfo": null,
+                "mfaInfo": null,
+                "createdAt": null,
+                "lastLoginAt": null
+            }]
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["error"], json!([]), "{response}");
+
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-null-fields")
+        .is_some());
+    let (status, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["batch-null-fields"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let imported = &lookup["users"][0];
+    assert!(imported.get("providerUserInfo").is_none());
+    assert!(imported.get("mfaInfo").is_none());
+    assert!(imported.get("lastLoginAt").is_none());
+}
+
+#[test]
 fn password_policy_admin_create_covers_maximum_and_invalid_password_inputs_atomically() {
     for (units, expected_status) in [(4095, 200), (4096, 200), (4097, 400)] {
         let s = state();

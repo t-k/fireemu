@@ -86,7 +86,7 @@ class CampaignGate(FrozenGate):
         result = super().dispatch(normalized, recovery, send)
         if recovery and operation.get("operationType") == "auth-lookup":
             status, body = result or (None, None)
-            if status == 200 and isinstance(body, dict) and body.get("users") == []:
+            if status == 200 and isinstance(body, dict) and body.get("users", []) == []:
                 route = operation["path"].split("?", 1)[0].removeprefix("/v1/")
                 with self.locked() as state:
                     absent = state["jobs"][self.job]["absent"]

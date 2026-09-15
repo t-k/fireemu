@@ -525,7 +525,7 @@ def _real_child(output: Path, nonce: str) -> None:
         if operation["operationType"] == "auth-lookup" and (
             status != 200
             or not isinstance(body, dict)
-            or body.get("users") != []
+            or body.get("users", []) != []
         ):
             raise ValueError("owned account absence unconfirmed")
 

@@ -331,7 +331,7 @@
       "id": "FS-U01",
       "feature": "FS-DATA",
       "kind": "unmapped",
-      "scope": "The broad REST and gRPC read, write and query denominator remains incomplete for per-method fields, oneofs and type boundaries. The existing local Standard/Native gRPC data slice is now decomposed into atomic obligations for FS-COMMIT (ordered results and atomic refusal), FS-BATCHWRITE (positional partial results and suffix continuation), FS-WRITE (handshake, acknowledgement/order, metadata and no-mutation refusals), and FS-FILTER-ENUM (ten executable operators plus unknown-value refusal). This local slice is not production, official-emulator, REST or SDK parity evidence.",
+      "scope": "The broad REST and gRPC read, write and query denominator remains incomplete for per-method fields, oneofs and type boundaries. The existing local Standard/Native gRPC data slice is now decomposed into atomic obligations for FS-COMMIT (ordered results and atomic refusal), FS-BATCHWRITE (positional partial results and suffix continuation), FS-WRITE (handshake, acknowledgement/order, metadata and no-mutation refusals), and FS-FILTER-ENUM (ten executable operators plus unknown-value refusal). A bounded first46 saved-reference replay matches the pinned production observations under its recorded comparison contract, but this does not cover the remaining denominator or promote the parent group.",
       "implementationStatus": "implemented",
       "localTestStatus": "passing",
       "productionObservationStatus": "none",
@@ -340,7 +340,8 @@
         "docs/compatibility/fs-data-grpc-local.md",
         "crates/fireemu-adapter-grpc/tests/local.rs",
         "crates/fireemu-adapter-grpc/tests/streams.rs",
-        "crates/fireemu-adapter-grpc/tests/gateway.rs"
+        "crates/fireemu-adapter-grpc/tests/gateway.rs",
+        "spec/compatibility/broad-runs/7fbb3e85-first46-saved-recomparison.json"
       ],
       "nextAction": "Expand the inventory from this finite local gRPC slice to the remaining protobuf fields, oneofs, value boundaries, REST and SDK transports, then observe each accepted scope against production before making a parity claim.",
       "blockedReason": "",

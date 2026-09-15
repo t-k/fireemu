@@ -87,7 +87,8 @@ class ShadowHandler(BaseHTTPRequestHandler):
             parent_suffix = parent.removeprefix(documents_root)
             parent_segments = parent_suffix.strip("/").split("/") if parent_suffix else []
             if (
-                "parent" in body
+                not isinstance(body, dict)
+                or "parent" in body
                 or not parent.startswith(documents_root)
                 or parent_segments
                 and (

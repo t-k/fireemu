@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pytest
 import broad
+import campaign_auth_list
 import campaign_auth_list_shadow
 from broad_contract import digest
 from campaign_auth_list import (
@@ -384,6 +385,15 @@ def test_v4_campaign_package_binds_integrated_artifact_result():
     assert all(value is None for value in package["production"]["ownerInputs"].values())
 
 
+def test_v5_campaign_package_binds_manifest_source_commit():
+    root = __import__("pathlib").Path(__file__).parents[3]
+    package = json.loads(
+        (root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v5.json").read_bytes()
+    )
+    assert package["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
+    assert package["adapter"]["sourceCommit"] == campaign_auth_list.SOURCE_COMMIT
+
+
 def test_actual_shadow_uses_fixed_fireemu_artifact_and_closes_transport(tmp_path):
     from campaign_auth_list_shadow import run
 
@@ -432,6 +442,30 @@ def test_legacy_shadow_fixture_rejects_invalid_auth_and_parent_shape():
         )
         assert status == 400
         assert body["error"]["status"] == "INVALID_ARGUMENT"
+        for invalid_parent in ("/collection//doc", "/collection/doc/"):
+            status, body, _content_type = wire(
+                origin
+                + "/v1/projects/demo-firestore-probe/databases/(default)/documents"
+                + invalid_parent
+                + ":listCollectionIds",
+                "POST",
+                {},
+                {"Content-Type": "application/json"},
+                local=True,
+            )
+            assert status == 400
+            assert body["error"]["status"] == "INVALID_ARGUMENT"
+        for invalid_body in ([], "null"):
+            status, body, _content_type = wire(
+                origin
+                + "/v1/projects/demo-firestore-probe/databases/(default)/documents:listCollectionIds",
+                "POST",
+                invalid_body,
+                {"Content-Type": "application/json"},
+                local=True,
+            )
+            assert status == 400
+            assert body["error"]["status"] == "INVALID_ARGUMENT"
         status, _body, _content_type = wire(
             origin
             + "/v1/projects/demo-firestore-probe/databases/(default)/documents:listCollectionIds",

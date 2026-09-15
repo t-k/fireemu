@@ -65,6 +65,11 @@ suite) needs, and what leaves the other smokes working without attaching a token
 - `firestore-contention.mjs`: twenty real Admin SDK transactions synchronize their first read,
   then each creates one unique item and increments one shared counter through SDK retries. The
   final item and counter totals must both be twenty.
+- `pending-switch.mjs`: the real client SDK keeps an active listener and one pending write while
+  signing out user A and signing in user B. It records cache versus server state, requires the
+  former listener to terminate on the B reconnect without changing A's document, and verifies
+  no callbacks occur during sign-out or after unsubscribe. Run it with
+  `fireemu exec --project demo-app --firestore-port 8080 --http-port 9099 -- sh -c 'cd tools/sdk-smoke && node pending-switch.mjs'`.
 - `listener-replacement.mjs`: the real client SDK with forced long polling unsubscribes from a
   query in its initial callback, immediately subscribes to the same query again, and verifies
   that the old listener receives no later snapshot while the replacement receives the initial

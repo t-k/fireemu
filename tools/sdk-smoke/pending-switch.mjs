@@ -112,7 +112,11 @@ try {
   result.writePromise.beforeSwitch = { ...writeState };
   assert.equal(writeState.status, "pending");
   phase = "sign-out-A";
+  const callbacksAtSignOut = callbacks;
   await bounded(() => signOut(auth), "sign out A");
+  await bounded(() => delay(100), "listener quiet after sign out");
+  assert.equal(callbacks, callbacksAtSignOut, "listener emitted during the sign-out transition");
+  result.listener.signOutQuietWindow = { windowMs: 100, callbacks: 0 };
   phase = "sign-in-B";
   const b = await bounded(() => createUserWithEmailAndPassword(auth, `g3-pending-b-${suffix}@example.test`, password), "create B");
   uidB = b.user.uid;

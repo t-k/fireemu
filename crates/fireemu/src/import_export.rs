@@ -33,7 +33,7 @@ use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
 use fireemu_core_auth::claims::CustomClaims;
 use fireemu_core_auth::mfa::{PhoneFactor, TotpFactor, TotpSecret};
 use fireemu_core_auth::store::{
-    AuthRegistry, FederatedIdentity, ImportedUser, ProjectAuthConfig, Provider,
+    AuthRegistry, AuthStore, FederatedIdentity, ImportedUser, ProjectAuthConfig, Provider,
 };
 use fireemu_core_export::auth::{
     fake_hash, AccountsFile, AuthConfig, MfaEnrollment, ProviderUserInfo, UserRecord,
@@ -423,6 +423,55 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
 }
 
 fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
+    // Build the replacement in memory first. `import_user_trusted` can still reject a
+    // syntactically valid record (for example, duplicate IDs or emails); doing this before
+    // clearing the live store keeps the import atomic across all account records.
+    let default_candidate = {
+        let store = endpoints.auth.default_store();
+        let store = store.lock().map_err(|_| {
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH),
+                "the Auth store is poisoned",
+            )
+        })?;
+        let mut candidate = store.clone();
+        candidate.clear();
+        candidate.set_config(auth.config_over(store.config()));
+        install_auth_users(
+            &mut candidate,
+            &auth.users,
+            &auth.password_updated_at,
+            None,
+            Path::new(ACCOUNTS_FILE),
+        )?;
+        candidate
+    };
+    // Tenant stores are rebuilt after the default store. Preflight each tenant against an
+    // empty store with the imported configuration before deleting any existing tenant.
+    // Tenant policy is inherited from the project, so the same trusted import checks apply.
+    {
+        let store = endpoints.auth.default_store();
+        let store = store.lock().map_err(|_| {
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH),
+                "the Auth store is poisoned",
+            )
+        })?;
+        for (tenant, users) in &auth.tenants {
+            let mut candidate = store.clone();
+            candidate.clear();
+            candidate.set_config(auth.config_over(store.config()));
+            install_auth_users(
+                &mut candidate,
+                users,
+                &auth.password_updated_at,
+                Some(tenant),
+                Path::new(&format!("accounts-{tenant}.json")),
+            )?;
+        }
+    }
     let store = endpoints.auth.default_store();
     let mut store = store.lock().map_err(|_| {
         ArtifactError::new(
@@ -431,23 +480,7 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
             "the Auth store is poisoned",
         )
     })?;
-    store.clear();
-    let current = store.config();
-    store.set_config(auth.config_over(current));
-    let users = std::mem::take(&mut auth.users);
-    for user in users {
-        let id = user.local_id.clone();
-        let uid = store.import_user_trusted(user).map_err(|e| {
-            ArtifactError::new(
-                "auth",
-                PathBuf::from(AUTH_PATH).join(ACCOUNTS_FILE),
-                format!("account {id}: {e}"),
-            )
-        })?;
-        if let Some(at) = auth.password_updated_at.get(&(None, id.clone())) {
-            store.set_password_updated_at(&uid, *at);
-        }
-    }
+    *store = default_candidate;
     // An import restores accounts that already existed; no Auth trigger fires for them.
     let _ = store.take_user_events();
     drop(store);
@@ -494,6 +527,29 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
             }
         }
         let _ = tenant_store.take_user_events();
+    }
+    Ok(())
+}
+
+fn install_auth_users(
+    store: &mut AuthStore,
+    users: &[ImportedUser],
+    password_updated_at: &BTreeMap<(Option<String>, String), LogicalInstant>,
+    tenant: Option<&str>,
+    filename: &Path,
+) -> Result<(), ArtifactError> {
+    for user in users {
+        let id = user.local_id.clone();
+        let uid = store.import_user_trusted(user.clone()).map_err(|e| {
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH).join(filename),
+                format!("account {id}: {e}"),
+            )
+        })?;
+        if let Some(at) = password_updated_at.get(&(tenant.map(str::to_owned), id)) {
+            store.set_password_updated_at(&uid, *at);
+        }
     }
     Ok(())
 }

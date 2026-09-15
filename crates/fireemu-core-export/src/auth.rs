@@ -34,6 +34,29 @@ pub const CONFIG_FILE: &str = "config.json";
 /// The `kind` member the Identity Toolkit answers with.
 pub const DOWNLOAD_KIND: &str = "identitytoolkit#DownloadAccountResponse";
 
+const KNOWN_CONFIG_MEMBERS: [&str; 2] = ["signIn", "emailPrivacyConfig"];
+const KNOWN_SIGN_IN_MEMBERS: [&str; 1] = ["allowDuplicateEmails"];
+const KNOWN_PRIVACY_MEMBERS: [&str; 1] = ["enableImprovedEmailPrivacy"];
+const KNOWN_PROVIDER_MEMBERS: [&str; 8] = [
+    "providerId",
+    "rawId",
+    "federatedId",
+    "email",
+    "displayName",
+    "photoUrl",
+    "phoneNumber",
+    "screenName",
+];
+const KNOWN_MFA_MEMBERS: [&str; 6] = [
+    "mfaEnrollmentId",
+    "displayName",
+    "phoneInfo",
+    "unobfuscatedPhoneInfo",
+    "enrolledAt",
+    "totpInfo",
+];
+const KNOWN_TOTP_MEMBERS: [&str; 1] = ["sharedSecretKey"];
+
 /// Why an Auth document was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthExportError(pub String);
@@ -167,6 +190,17 @@ impl AuthConfig {
         let value = parse(text).map_err(|e| AuthExportError(e.to_string()))?;
         if !matches!(value, JsonValue::Object(_)) {
             return refuse("the Auth config document is not a JSON object");
+        }
+        reject_unknown(&value, &KNOWN_CONFIG_MEMBERS, "Auth config")?;
+        if let Some(sign_in) = value.get("signIn") {
+            reject_unknown(sign_in, &KNOWN_SIGN_IN_MEMBERS, "Auth config signIn")?;
+        }
+        if let Some(privacy) = value.get("emailPrivacyConfig") {
+            reject_unknown(
+                privacy,
+                &KNOWN_PRIVACY_MEMBERS,
+                "Auth config emailPrivacyConfig",
+            )?;
         }
         Ok(Self {
             allow_duplicate_emails: bool_member(&value, "signIn", "allowDuplicateEmails")?
@@ -329,6 +363,7 @@ fn parse_provider(local_id: &str, value: &JsonValue) -> Result<ProviderUserInfo,
             "a providerUserInfo entry of the account {local_id:?} is not an object"
         ));
     }
+    reject_unknown(value, &KNOWN_PROVIDER_MEMBERS, "providerUserInfo entry")?;
     let provider_id = value
         .get("providerId")
         .and_then(JsonValue::as_str)
@@ -356,6 +391,7 @@ fn parse_enrollment(local_id: &str, value: &JsonValue) -> Result<MfaEnrollment, 
             "an mfaInfo entry of the account {local_id:?} is not an object"
         ));
     }
+    reject_unknown(value, &KNOWN_MFA_MEMBERS, "mfaInfo entry")?;
     Ok(MfaEnrollment {
         mfa_enrollment_id: string_member(value, "mfaEnrollmentId")?.unwrap_or_default(),
         display_name: string_member(value, "displayName")?,
@@ -365,7 +401,9 @@ fn parse_enrollment(local_id: &str, value: &JsonValue) -> Result<MfaEnrollment, 
         totp_shared_secret_key: match value.get("totpInfo") {
             None => None,
             Some(JsonValue::Object(_)) => {
-                string_member(value.get("totpInfo").unwrap(), "sharedSecretKey")?
+                let totp = value.get("totpInfo").unwrap();
+                reject_unknown(totp, &KNOWN_TOTP_MEMBERS, "mfaInfo.totpInfo")?;
+                string_member(totp, "sharedSecretKey")?
             }
             Some(_) => {
                 return refuse(format!(
@@ -374,6 +412,19 @@ fn parse_enrollment(local_id: &str, value: &JsonValue) -> Result<MfaEnrollment, 
             }
         },
     })
+}
+
+fn reject_unknown(value: &JsonValue, known: &[&str], subject: &str) -> Result<(), AuthExportError> {
+    let JsonValue::Object(members) = value else {
+        return refuse(format!("the {subject} is not an object"));
+    };
+    if let Some((key, _)) = members
+        .iter()
+        .find(|(key, _)| !known.contains(&key.as_str()))
+    {
+        return refuse(format!("the {subject} contains unsupported member {key:?}"));
+    }
+    Ok(())
 }
 
 fn string_member(value: &JsonValue, key: &str) -> Result<Option<String>, AuthExportError> {
@@ -752,6 +803,22 @@ mod tests {
     fn a_provider_entry_without_a_provider_id_is_refused() {
         assert!(
             AccountsFile::parse(r#"{"users":[{"localId":"u","providerUserInfo":[{}]}]}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn unsupported_nested_auth_members_are_refused() {
+        assert!(AccountsFile::parse(
+            r#"{"users":[{"localId":"u","providerUserInfo":[{"providerId":"google.com","future":true}]}]}"#
+        )
+        .is_err());
+        assert!(AccountsFile::parse(
+            r#"{"users":[{"localId":"u","mfaInfo":[{"mfaEnrollmentId":"f","totpInfo":{"future":true}}]}]}"#
+        )
+        .is_err());
+        assert!(
+            AuthConfig::parse(r#"{"signIn":{"allowDuplicateEmails":false,"future":true}}"#)
+                .is_err()
         );
     }
 

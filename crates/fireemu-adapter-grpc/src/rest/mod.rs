@@ -283,31 +283,45 @@ enum Target {
 }
 
 fn classify(resource: &str) -> Result<Target, Status> {
-    let Some((db, rest)) = resource.split_once("/documents") else {
+    let mut segments = resource.split('/');
+    let Some("projects") = segments.next() else {
         return Err(Status::not_found(format!("unknown resource {resource}")));
     };
-    let rest = rest.trim_start_matches('/');
+    let Some(project) = segments.next().filter(|segment| !segment.is_empty()) else {
+        return Err(Status::not_found(format!("unknown resource {resource}")));
+    };
+    if segments.next() != Some("databases") {
+        return Err(Status::not_found(format!("unknown resource {resource}")));
+    }
+    let Some(database) = segments.next().filter(|segment| !segment.is_empty()) else {
+        return Err(Status::not_found(format!("unknown resource {resource}")));
+    };
+    if segments.next() != Some("documents") {
+        return Err(Status::not_found(format!("unknown resource {resource}")));
+    }
+    let db = format!("projects/{project}/databases/{database}");
+    let mut rest: Vec<&str> = segments.collect();
+    // Preserve the existing acceptance of a trailing slash on the database root.
+    if rest == [""] {
+        rest.clear();
+    }
+    if rest.iter().any(|segment| segment.is_empty()) {
+        return Err(Status::invalid_argument("empty path segment"));
+    }
     if rest.is_empty() {
         return Ok(Target::Resource(format!("{db}/documents")));
     }
-    let segments: Vec<&str> = rest.split('/').collect();
-    if segments.iter().any(|s| s.is_empty()) {
-        return Err(Status::invalid_argument("empty path segment"));
-    }
-    if segments.len() % 2 == 0 {
+    if rest.len() % 2 == 0 {
         Ok(Target::Resource(resource.to_owned()))
     } else {
-        let parent = if segments.len() == 1 {
+        let parent = if rest.len() == 1 {
             format!("{db}/documents")
         } else {
-            format!(
-                "{db}/documents/{}",
-                segments[..segments.len() - 1].join("/")
-            )
+            format!("{db}/documents/{}", rest[..rest.len() - 1].join("/"))
         };
         Ok(Target::Collection {
             parent,
-            collection_id: segments[segments.len() - 1].to_owned(),
+            collection_id: rest[rest.len() - 1].to_owned(),
         })
     }
 }

@@ -105,6 +105,56 @@ fn admin_inventory_coexists_with_document_crud_commit_and_query_routes() {
 }
 
 #[test]
+fn document_routes_preserve_database_ids_containing_documents() {
+    let state = state();
+    for (project, database) in [("demo", "documents-db"), ("documents-project", "documents")] {
+        create_database(&state, project, database);
+        let documents = format!("/v1/projects/{project}/databases/{database}/documents");
+        let (status, created) = call_request(
+            &state,
+            Some("Bearer owner"),
+            "POST",
+            &format!("{documents}/users?documentId=alice"),
+            json!({"fields": {"name": {"stringValue": "Alice"}}}),
+        );
+        assert_eq!(status, 200, "{created}");
+        assert_eq!(
+            created["name"],
+            format!("projects/{project}/databases/{database}/documents/users/alice")
+        );
+
+        let (status, fetched) = call_request(
+            &state,
+            Some("Bearer owner"),
+            "GET",
+            &format!("{documents}/users/alice"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{fetched}");
+        assert_eq!(fetched["fields"]["name"]["stringValue"], "Alice");
+
+        let (status, listed) = call_request(
+            &state,
+            Some("Bearer owner"),
+            "GET",
+            &format!("{documents}/users"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{listed}");
+        assert_eq!(listed["documents"].as_array().map(Vec::len), Some(1));
+
+        let (status, committed) = call_request(
+            &state,
+            Some("Bearer owner"),
+            "POST",
+            &format!("{documents}:commit"),
+            json!({"writes": []}),
+        );
+        assert_eq!(status, 200, "{committed}");
+    }
+}
+
+#[test]
 fn admin_inventory_does_not_claim_non_get_database_routes() {
     let state = state();
     for authorization in [None, Some("Bearer owner")] {

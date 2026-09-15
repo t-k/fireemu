@@ -86,9 +86,15 @@ pub fn parse_parent(parent: &str) -> Result<Parent, DecodeError> {
     let (project, rest) = rest
         .split_once("/databases/")
         .ok_or_else(|| DecodeError::InvalidParent(parent.to_owned()))?;
-    let Some((database, tail)) = rest.split_once("/documents") else {
+    let Some((database, after_database)) = rest.split_once('/') else {
         return Err(DecodeError::InvalidParent(parent.to_owned()));
     };
+    let Some(tail) = after_database.strip_prefix("documents") else {
+        return Err(DecodeError::InvalidParent(parent.to_owned()));
+    };
+    if !tail.is_empty() && !tail.starts_with('/') {
+        return Err(DecodeError::InvalidParent(parent.to_owned()));
+    }
     let project =
         ProjectId::try_new(project).map_err(|e| DecodeError::InvalidParent(e.to_string()))?;
     // A database id production would never have created (uppercase letters, bad length) is a
@@ -502,6 +508,22 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn parse_parent_accepts_project_and_database_identifiers_containing_documents() {
+        for (project, database) in [("documents-project", "documents"), ("demo", "documents-db")] {
+            let parent = parse_parent(&format!(
+                "projects/{project}/databases/{database}/documents/items/alice"
+            ))
+            .expect("document resource should parse");
+            assert_eq!(parent.project.as_str(), project);
+            assert_eq!(parent.database.as_str(), database);
+            assert_eq!(
+                parent.document.as_ref().map(DocumentPath::relative),
+                Some("items/alice".to_owned())
+            );
+        }
+    }
 
     fn nested_map(levels: u32) -> pb::Value {
         let mut value = pb::Value {

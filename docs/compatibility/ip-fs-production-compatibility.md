@@ -127,3 +127,9 @@ The Rules evaluator now preserves an established allow when later, non-matching 
 
 - Decoder coverage now rejects a `documents-extra` suffix, and the real REST handler rejects empty document path segments such as `documents//items` and `documents/items/`. These checks preserve the positional route boundary without changing valid database-root trailing-slash behavior.
 - The adapter library suite passed 108 tests with one existing skip and the REST integration suite passed 41 tests. Workspace verification on this source passed 2,335 tests with 81 documented skips, workspace Clippy, rustfmt, the Quint evidence contract and traceability checks. This is local routing evidence; no production observation or historical receipt was changed.
+
+## Latest Rules subtree reachability follow-up (`pending`)
+
+- The Rules matcher prefilter now checks whether a match block or one of its descendant blocks can consume the complete request path before charging the bounded recursive-wildcard matcher. Parent blocks may still consume a prefix when a child can match the remainder, while a partial subtree with no complete allow path is skipped.
+- Firestore and Storage regressions cover 750 parent/child siblings whose headers reach only an early prefix, allow placement before and after those siblings, true and false allow controls, and the existing valid parent/child and leaf cases. The pre-fix regression reached `FIREEMU-RULES-MATCH-WORK` at 65,537 before the later allow; the fixed source keeps the order-independent allow and preserves denial when no allow succeeds.
+- This is local evaluator evidence only. Production Rules compiler and matcher-limit parity remain unobserved, and the change does not alter the established fail-closed handling for expression, call-depth, unsupported-operation, or other budget errors.

@@ -697,20 +697,17 @@ fn collect_function_scopes<'a>(
     }
 }
 
-/// Returns whether `match_path` can reach the end of `pattern` for `segments`.
+/// Returns every segment offset that `match_path` can reach after consuming `pattern`.
 ///
 /// This is a rejection-only filter: every transition mirrors the corresponding transition in
-/// `match_path`, so returning `false` never skips a potentially matching rule. Parent match
-/// blocks may consume a prefix because their children can match the remaining path; leaf blocks
-/// must consume the complete request path. Keeping the reachability check separate from the
-/// bounded matcher lets unrelated impossible patterns be discarded before they consume the
-/// shared path-work budget.
-fn pattern_can_match_segments(
+/// `match_path`, so an empty result never skips a potentially matching rule. The offsets are
+/// retained so a parent can prove that one of its descendants consumes the complete request,
+/// instead of treating every prefix-capable parent as a candidate.
+fn pattern_reachable_offsets(
     pattern: &[PathSegment],
     segments: &[String],
     zero_or_more: bool,
-    allow_partial: bool,
-) -> bool {
+) -> Vec<bool> {
     let mut reachable = vec![false; segments.len() + 1];
     reachable[0] = true;
 
@@ -759,9 +756,31 @@ fn pattern_can_match_segments(
     }
 
     reachable
-        .into_iter()
-        .enumerate()
-        .any(|(offset, reachable)| reachable && (allow_partial || offset == segments.len()))
+}
+
+/// Returns whether a match block or one of its descendants can consume the complete request.
+///
+/// A block with direct `allow` statements needs a complete path match. A block with nested
+/// matches may consume a prefix, but only when a child subtree can consume the remainder. This
+/// avoids spending the bounded matcher budget on parent branches that can never reach an
+/// applicable allow, while preserving partial matching for valid parent/child rules.
+fn block_can_match_segments(block: &MatchBlock, segments: &[String], zero_or_more: bool) -> bool {
+    let reachable = pattern_reachable_offsets(&block.path, segments, zero_or_more);
+    if !block.allows.is_empty() && reachable.get(segments.len()).copied().unwrap_or(false) {
+        return true;
+    }
+
+    for item in &block.items {
+        let Item::Match(child) = item else {
+            continue;
+        };
+        for (offset, can_reach) in reachable.iter().copied().enumerate() {
+            if can_reach && block_can_match_segments(child, &segments[offset..], zero_or_more) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[allow(clippy::too_many_lines)]
@@ -772,16 +791,7 @@ fn walk_match<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    let allow_partial = block
-        .items
-        .iter()
-        .any(|item| matches!(item, Item::Match(_)));
-    if !pattern_can_match_segments(
-        &block.path,
-        remaining,
-        ev.wildcard_zero_or_more,
-        allow_partial,
-    ) {
+    if !block_can_match_segments(block, remaining, ev.wildcard_zero_or_more) {
         return Ok(false);
     }
     let mut outcome: Result<bool, EvalError> = Ok(false);

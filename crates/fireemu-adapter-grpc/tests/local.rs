@@ -1896,6 +1896,7 @@ async fn commit_get_query_and_delete_round_trip() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn grpc_field_filter_enum_values_are_executable_and_unknown_values_refused() {
     let (mut client, _clock, handle) = start().await;
     client

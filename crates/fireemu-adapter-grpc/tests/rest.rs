@@ -1971,6 +1971,33 @@ fn rest_top_level_null_consistency_selectors_are_unset() {
         assert_eq!(null, omitted, "{action} null selectors differ");
     }
 
+    let aggregation = json!({
+        "structuredAggregationQuery": {
+            "structuredQuery": {"from": [{"collectionId": "null-selectors"}]},
+            "aggregations": [{"alias": "count", "count": {}}]
+        }
+    });
+    let (status, omitted) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runAggregationQuery"),
+        aggregation.clone(),
+    );
+    assert_eq!(status, 200, "aggregation omitted: {omitted}");
+    let (status, null) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runAggregationQuery"),
+        json!({
+            "structuredAggregationQuery": aggregation["structuredAggregationQuery"],
+            "transaction": null,
+            "newTransaction": null,
+            "readTime": null
+        }),
+    );
+    assert_eq!(status, 200, "aggregation null: {null}");
+    assert_eq!(null, omitted, "aggregation null selectors differ");
+
     let (status, omitted) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), json!({}));
     assert_eq!(status, 200, "{omitted}");
     let (status, null) = call(

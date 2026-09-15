@@ -125,6 +125,22 @@ fn user_function_calls_resolve_in_the_definition_scope() {
 }
 
 #[test]
+fn storage_function_calls_resolve_in_the_definition_scope() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice firebase.storage {\n  function decision() { return false; }\n  function gate() { return decision(); }\n  match /b/{bucket}/o/{path=**} {\n    function decision() { return true; }\n    allow read: if gate();\n  }\n}",
+    )
+    .unwrap();
+    let mut request = ctx(Method::Get, "/b/example/o/file.txt", None);
+    request.service = RulesService::Storage;
+    let report = evaluate_request(&ruleset, &request);
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn owner_can_read_but_write_requires_totp() {
     let ruleset = parse_ruleset(RULES).unwrap();
     let r = evaluate_request(

@@ -697,6 +697,29 @@ fn collect_function_scopes<'a>(
     }
 }
 
+/// Returns false only when a literal in the pattern cannot occur in the remaining path in the
+/// required order. Captures and recursive wildcards can consume arbitrary segments, so this is a
+/// sound rejection filter and never skips a potentially matching rule.
+fn pattern_can_match_segments(pattern: &[PathSegment], segments: &[String]) -> bool {
+    let mut next = 0;
+    for segment in pattern {
+        let PathSegment::Literal(literal) = segment else {
+            continue;
+        };
+        if is_abstract_segment(literal) {
+            return false;
+        }
+        let Some(offset) = segments[next..]
+            .iter()
+            .position(|segment| segment == literal)
+        else {
+            return false;
+        };
+        next += offset + 1;
+    }
+    true
+}
+
 #[allow(clippy::too_many_lines)]
 fn walk_match<'a>(
     block: &'a MatchBlock,
@@ -705,6 +728,9 @@ fn walk_match<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
+    if !pattern_can_match_segments(&block.path, remaining) {
+        return Ok(false);
+    }
     let mut outcome: Result<bool, EvalError> = Ok(false);
     let zero_or_more = ev.wildcard_zero_or_more;
     let match_work = Arc::clone(&ev.match_path_work);

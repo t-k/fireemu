@@ -95,7 +95,7 @@ fn balanced_and(leaves: usize) -> String {
     )
 }
 
-fn rules_with_allow_before_expensive_nonmatches(service: &str) -> String {
+fn rules_with_expensive_nonmatches(service: &str, allow: Option<&str>, allow_last: bool) -> String {
     let mut source = format!("rules_version = '2'; service {service} {{\n");
     if service == "cloud.firestore" {
         source.push_str("  match /databases/{database}/documents {\n");
@@ -106,14 +106,25 @@ fn rules_with_allow_before_expensive_nonmatches(service: &str) -> String {
         .map(|segment| format!("segment{segment}"))
         .collect::<Vec<_>>()
         .join("/");
-    writeln!(source, "    match /{exact_path} {{").unwrap();
-    source.push_str("      allow read;\n    }\n");
+    let exact = |source: &mut String| {
+        writeln!(source, "    match /{exact_path} {{").unwrap();
+        if let Some(condition) = allow {
+            writeln!(source, "      allow read{condition};").unwrap();
+        }
+        source.push_str("    }\n");
+    };
+    if !allow_last {
+        exact(&mut source);
+    }
     for index in 0..750 {
         writeln!(
             source,
-            "      match /{{rest{index}=**}}/never{index} {{ allow read; }}"
+            "    match /{{rest{index}=**}}/never{index} {{ allow read; }}"
         )
         .unwrap();
+    }
+    if allow_last {
+        exact(&mut source);
     }
     source.push_str("  }\n}\n");
     source
@@ -133,6 +144,24 @@ fn long_request_path(service: RulesService) -> String {
     )
 }
 
+fn rules_with_over_budget_no_allow(service: &str) -> String {
+    let mut source = format!("rules_version = '2'; service {service} {{\n");
+    if service == "cloud.firestore" {
+        source.push_str("  match /databases/{database}/documents {\n");
+    } else {
+        source.push_str("  match /b/{bucket}/o {\n");
+    }
+    for index in 0..750 {
+        writeln!(
+            source,
+            "    match /{{rest{index}=**}} {{ allow read: if false; }}"
+        )
+        .unwrap();
+    }
+    source.push_str("  }\n}\n");
+    source
+}
+
 #[test]
 fn loaded_rules_allow_survives_later_match_path_work_budget() {
     for service_name in ["cloud.firestore", "firebase.storage"] {
@@ -141,7 +170,7 @@ fn loaded_rules_allow_survives_later_match_path_work_budget() {
         } else {
             RulesService::Storage
         };
-        let source = rules_with_allow_before_expensive_nonmatches(service_name);
+        let source = rules_with_expensive_nonmatches(service_name, Some(""), false);
         let loaded = LoadedRules::from_source(&source).unwrap();
         let ruleset = loaded.ruleset.as_ref().unwrap();
         let report = evaluate_request(
@@ -159,6 +188,94 @@ fn loaded_rules_allow_survives_later_match_path_work_budget() {
             },
         );
         assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    }
+}
+
+#[test]
+fn loaded_rules_allow_after_expensive_siblings_is_still_reachable() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let source = rules_with_expensive_nonmatches(service_name, Some(""), true);
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let ruleset = loaded.ruleset.as_ref().unwrap();
+        let report = evaluate_request(
+            ruleset,
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    }
+}
+
+#[test]
+fn loaded_rules_false_or_unresolved_expensive_matches_remain_denied() {
+    let false_allow = rules_with_expensive_nonmatches("cloud.firestore", Some(": if false"), false);
+    let loaded = LoadedRules::from_source(&false_allow).unwrap();
+    let ruleset = loaded.ruleset.as_ref().unwrap();
+    let report = evaluate_request(
+        ruleset,
+        &RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: long_request_path(RulesService::Firestore),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path: false,
+            request_query: None,
+        },
+    );
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+
+    for service in [RulesService::Firestore, RulesService::Storage] {
+        let service_name = match service {
+            RulesService::Firestore => "cloud.firestore",
+            RulesService::Storage => "firebase.storage",
+        };
+        let source = rules_with_over_budget_no_allow(service_name);
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let ruleset = loaded.ruleset.as_ref().unwrap();
+        let report = evaluate_request(
+            ruleset,
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(
+            matches!(
+                report.decision,
+                Decision::Deny(DenyReason::BudgetExceeded {
+                    limit_id: "FIREEMU-RULES-MATCH-WORK",
+                    ..
+                })
+            ),
+            "{report:?}"
+        );
     }
 }
 

@@ -174,6 +174,26 @@ struct PreparedAuth {
     tenants: BTreeMap<String, Vec<ImportedUser>>,
 }
 
+fn preflight_auth_tenant_stores(auth: &AuthRegistry, project: &str) -> Result<(), ArtifactError> {
+    for tenant in auth.tenants(project) {
+        let Some(tenant_store) = auth.tenant_store(project, &tenant) else {
+            return Err(ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH),
+                format!("tenant {tenant:?} disappeared during import preflight"),
+            ));
+        };
+        let _tenant_guard = tenant_store.lock().map_err(|_| {
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH),
+                format!("tenant {tenant:?} store is poisoned"),
+            )
+        })?;
+    }
+    Ok(())
+}
+
 impl PreparedAuth {
     /// The configuration to install over `current`.
     fn config_over(&self, current: ProjectAuthConfig) -> ProjectAuthConfig {
@@ -422,7 +442,12 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
+    // Publication below clears the existing tenant namespaces after the default replacement.
+    // Probe every live tenant lock first so a poisoned tenant cannot turn that sequence into a
+    // partial import.
+    preflight_auth_tenant_stores(endpoints.auth, endpoints.project)?;
     // Build the replacement in memory first. `import_user_trusted` can still reject a
     // syntactically valid record (for example, duplicate IDs or emails); doing this before
     // clearing the live store keeps the import atomic across all account records.
@@ -3014,6 +3039,37 @@ mod tests {
         assert_eq!(std::fs::read_dir(&base).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(base);
     }
+    #[test]
+    fn auth_import_preflight_refuses_poisoned_tenant_before_default_mutation() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let default = std::sync::Arc::new(std::sync::Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let uid = default
+            .lock()
+            .unwrap()
+            .create_user(NewUser::anonymous(), LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+        let registry = AuthRegistry::new("demo-app", default.clone());
+        let tenant = registry.ensure_tenant("demo-app", "broken").unwrap();
+        let poison = std::thread::spawn(move || {
+            let _guard = tenant.lock().unwrap();
+            panic!("poison tenant for import preflight");
+        });
+        assert!(poison.join().is_err());
+
+        let error = super::preflight_auth_tenant_stores(&registry, "demo-app").unwrap_err();
+        assert!(error
+            .message
+            .contains("tenant \"broken\" store is poisoned"));
+        assert!(default.lock().unwrap().user_by_id(uid.as_str()).is_some());
+    }
+
     #[test]
     fn last_token_issuance_round_trips_without_lookup_time_fabrication() {
         use fireemu_core_auth::{

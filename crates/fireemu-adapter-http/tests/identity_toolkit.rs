@@ -2661,6 +2661,45 @@ fn admin_create_is_atomic_and_typed() {
 }
 
 #[test]
+fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
+    let s = state();
+    for (local_id, field, value) in [
+        ("batch-bad-mfa", "mfaInfo", json!("not-an-array")),
+        ("batch-bad-provider", "providerUserInfo", json!({})),
+        ("batch-bad-created", "createdAt", json!("not-a-timestamp")),
+        ("batch-bad-login", "lastLoginAt", json!(false)),
+    ] {
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{"localId": local_id, field: value}]}),
+        );
+        assert_eq!(status, 200, "{response}");
+        assert_eq!(
+            response["error"].as_array().map(Vec::len),
+            Some(1),
+            "{response}"
+        );
+        assert!(s.store.lock().unwrap().user_by_id(local_id).is_none());
+    }
+
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"allowOverwrite": "yes", "users": [{"localId": "batch-bad-overwrite"}]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-bad-overwrite")
+        .is_none());
+}
+
+#[test]
 fn password_policy_admin_create_covers_maximum_and_invalid_password_inputs_atomically() {
     for (units, expected_status) in [(4095, 200), (4096, 200), (4097, 400)] {
         let s = state();

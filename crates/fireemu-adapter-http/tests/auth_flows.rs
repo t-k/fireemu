@@ -2279,6 +2279,30 @@ fn custom_token_claims_over_the_size_limit_are_rejected_before_account_creation(
 }
 
 #[test]
+fn custom_token_claims_must_be_an_object() {
+    let s = state();
+    let claims = json!(["admin"]);
+    let token = custom_token_with_claims("malformed-claims", &claims);
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": token}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "INVALID_CUSTOM_TOKEN : claims must be an object"
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("malformed-claims")
+        .is_none());
+}
+
+#[test]
 fn compatibility_profile_rejects_ambiguous_custom_token_projects() {
     use fireemu_core_auth::store::AuthRegistry;
 

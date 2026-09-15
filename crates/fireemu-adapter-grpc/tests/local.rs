@@ -1896,6 +1896,157 @@ async fn commit_get_query_and_delete_round_trip() {
 }
 
 #[tokio::test]
+async fn grpc_field_filter_enum_values_are_executable_and_unknown_values_refused() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write(
+                    "enum/one",
+                    &[
+                        ("n", i(1)),
+                        (
+                            "tags",
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::ArrayValue(
+                                    pb::ArrayValue {
+                                        values: vec![s("a")],
+                                    },
+                                )),
+                            },
+                        ),
+                    ],
+                ),
+                update_write(
+                    "enum/two",
+                    &[
+                        ("n", i(2)),
+                        (
+                            "tags",
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::ArrayValue(
+                                    pb::ArrayValue {
+                                        values: vec![s("b")],
+                                    },
+                                )),
+                            },
+                        ),
+                    ],
+                ),
+                update_write(
+                    "enum/three",
+                    &[
+                        ("n", i(3)),
+                        (
+                            "tags",
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::ArrayValue(
+                                    pb::ArrayValue {
+                                        values: vec![s("a"), s("b")],
+                                    },
+                                )),
+                            },
+                        ),
+                    ],
+                ),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let array = |values: Vec<pb::Value>| pb::Value {
+        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue { values })),
+    };
+    let cases = [
+        ("n", sq::field_filter::Operator::LessThan, i(2), vec!["one"]),
+        (
+            "n",
+            sq::field_filter::Operator::LessThanOrEqual,
+            i(2),
+            vec!["one", "two"],
+        ),
+        (
+            "n",
+            sq::field_filter::Operator::GreaterThan,
+            i(2),
+            vec!["three"],
+        ),
+        (
+            "n",
+            sq::field_filter::Operator::GreaterThanOrEqual,
+            i(2),
+            vec!["three", "two"],
+        ),
+        ("n", sq::field_filter::Operator::Equal, i(2), vec!["two"]),
+        (
+            "n",
+            sq::field_filter::Operator::NotEqual,
+            i(2),
+            vec!["one", "three"],
+        ),
+        (
+            "n",
+            sq::field_filter::Operator::In,
+            array(vec![i(1), i(3)]),
+            vec!["one", "three"],
+        ),
+        (
+            "n",
+            sq::field_filter::Operator::NotIn,
+            array(vec![i(2)]),
+            vec!["one", "three"],
+        ),
+        (
+            "tags",
+            sq::field_filter::Operator::ArrayContains,
+            s("a"),
+            vec!["one", "three"],
+        ),
+        (
+            "tags",
+            sq::field_filter::Operator::ArrayContainsAny,
+            array(vec![s("b")]),
+            vec!["three", "two"],
+        ),
+    ];
+    for (field, operator, value, expected) in cases {
+        let mut rows = collect_docs(
+            &mut client,
+            query("enum", Some(field_op(field, operator, value))),
+        )
+        .await;
+        rows.sort_by(|a, b| a.name.cmp(&b.name));
+        let names = rows
+            .into_iter()
+            .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, expected, "operator {operator:?}");
+    }
+
+    let mut invalid = query(
+        "enum",
+        Some(field_op("n", sq::field_filter::Operator::Equal, i(1))),
+    );
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) = &mut invalid.query_type
+    {
+        if let Some(sq::filter::FilterType::FieldFilter(filter)) = query
+            .r#where
+            .as_mut()
+            .and_then(|filter| filter.filter_type.as_mut())
+        {
+            filter.op = 99;
+        }
+    }
+    assert_eq!(
+        client.run_query(invalid).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    handle.abort();
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn list_collection_ids_supports_read_time_and_rejects_negative_page_size() {
     use fireemu_core_session::fault::{

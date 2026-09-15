@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from shared_gate import Gate as FrozenGate
-from shared_gate import create
+from shared_gate import _save, create
 
 
 def validate(operation):
@@ -83,7 +83,17 @@ class CampaignGate(FrozenGate):
         normalized = copy.deepcopy(operation)
         normalized = self._template(normalized)
         # The frozen gate compares the closed recipe; typed metadata remains bound.
-        return super().dispatch(normalized, recovery, send)
+        result = super().dispatch(normalized, recovery, send)
+        if recovery and operation.get("operationType") == "auth-lookup":
+            status, body = result or (None, None)
+            if status == 200 and isinstance(body, dict) and body.get("users") == []:
+                route = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+                with self.locked() as state:
+                    absent = state["jobs"][self.job]["absent"]
+                    if route not in absent:
+                        absent.append(route)
+                        _save(self.path, state)
+        return result
 
     def adapter_request(self, adapter, operation, send):
         extra = getattr(adapter, "campaign_operation", {})

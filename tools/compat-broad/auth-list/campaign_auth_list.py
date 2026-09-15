@@ -324,6 +324,14 @@ def campaign_manifest(nonce=NONCE):
             ),
         ]
     )
+    auth_cleanup_resource = (
+        "identitytoolkit.googleapis.com/v1/projects/"
+        + PROJECT
+        + "/accounts:delete"
+    )
+    auth_lookup_resource = auth_cleanup_resource.replace(
+        "accounts:delete", "accounts:lookup"
+    )
     return {
         "contract": "shared-local-v2",
         "sourceCommit": SOURCE_COMMIT,
@@ -336,8 +344,10 @@ def campaign_manifest(nonce=NONCE):
         "jobs": {
             "auth-list": {
                 # Firestore documents are journaled resources. Auth accounts are
-                # bound separately and verified by the delete/lookup pair.
-                "resources": resources,
+                # bound separately and verified by the delete/lookup pair. The
+                # route sentinel lets the shared gate retain ownership of the
+                # privileged cleanup request without treating it as a document.
+                "resources": resources + [auth_cleanup_resource, auth_lookup_resource],
                 "observation": observation,
                 "recovery": recovery,
             }

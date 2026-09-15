@@ -191,3 +191,7 @@ The immutable v2 campaign test now pins both referenced local receipts in additi
 ## Current evidence checkpoint (`6531ff86`)
 
 The v3 Auth/ListCollectionIds campaign package is now pinned by a complete SHA-256 assertion (`2aee67fe8d27d0e28ab623915eb7207b9f85f6948aad754fc7288e0b822d1c2b`) in its offline integrity test. The package, local artifact, observer and historical receipts remain immutable; the focused campaign suite passes 25 tests. This closes an evidence-envelope mutability gap only and does not add production observations or promote any parent feature group.
+
+## Current local checkpoint (`8cba48ab`)
+
+The Firestore index reload supervisor now compares stable file content even when size and modification time are unchanged, retains the last-known-good catalog across malformed JSON and invalid UTF-8, retries corrected generations, and records a generation only after the catalog replacement succeeds. The replacement API reports poisoned catalog locks so a failed update remains retryable. The configuration reload suite passes 17 tests, the adapter lock-failure regression passes, and package Clippy passes. This is local lifecycle evidence; production index behavior remains unobserved.

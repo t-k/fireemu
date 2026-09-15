@@ -2801,11 +2801,17 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
         &json!({
             "users": [
                 {"localId": "batch-partial-valid", "email": "partial-valid@example.com"},
-                {"localId": "batch-partial-invalid", "mfaInfo": ["not-an-object"]}
+                {"localId": "batch-partial-invalid", "mfaInfo": ["not-an-object"]},
+                {"localId": "batch-partial-valid-after", "email": "partial-valid-after@example.com"}
             ]
         }),
     );
     assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["error"].as_array().map(Vec::len),
+        Some(1),
+        "{response}"
+    );
     assert_eq!(response["error"][0]["index"], 1, "{response}");
     assert!(s
         .store
@@ -2819,6 +2825,12 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
         .unwrap()
         .user_by_id("batch-partial-invalid")
         .is_none());
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-partial-valid-after")
+        .is_some());
 }
 
 #[test]

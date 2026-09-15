@@ -141,17 +141,7 @@ def session(service, selected, origin, output, *, current_wire=False):
                     process.wait()
 
 
-def bounded_firestore_program(program_id):
-    """Return the one historical program admitted by the bounded replay entry."""
-    if program_id != "reads/read-time":
-        raise ValueError("bounded replay only permits reads/read-time")
-    selected = [program for program in programs("firestore")[0] if program["id"] == program_id]
-    if len(selected) != 1:
-        raise ValueError("reads/read-time program is unavailable")
-    return selected
-
-
-def child(output, nonce, firestore_program=None):
+def child(output, nonce):
     auth = local_origin("http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"])
     firestore, control = local_addresses(
         os.environ["FIRESTORE_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
@@ -183,9 +173,6 @@ def child(output, nonce, firestore_program=None):
         "auth": definitions["auth"],
         "firestore": current_fs + generated_programs(),
     }
-    if firestore_program is not None:
-        selected["firestore"] = bounded_firestore_program(firestore_program)
-        legacy = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         jobs = {
             s: executor.submit(
@@ -568,7 +555,6 @@ def run(
     configuration=None,
     execution_timeout=240,
     recovery_grace=0.2,
-    firestore_program=None,
 ):
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise ValueError("freeze the checkout before artifact execution")
@@ -640,8 +626,6 @@ def run(
             "--nonce",
             nonce,
         ]
-        if firestore_program is not None:
-            command.extend(["--firestore-program", firestore_program])
         report.update(
             executionCommit=commit,
             artifactSha256=build["artifactSha256"],
@@ -688,7 +672,6 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--child", type=Path)
     parser.add_argument("--nonce")
-    parser.add_argument("--firestore-program")
     args = parser.parse_args()
     if args.write_catalog:
         save(CATALOG, catalog())
@@ -699,9 +682,9 @@ def main():
             historical(service)
         print("Broad inventory and historical corpus bindings checked")
     elif args.child:
-        child(args.child.resolve(), args.nonce, args.firestore_program)
+        child(args.child.resolve(), args.nonce)
     elif args.run and args.output:
-        report = run(args.output.resolve(), firestore_program=args.firestore_program)
+        report = run(args.output.resolve())
         print(json.dumps({"status": report["status"], "summary": report["summary"]}))
         return 0 if report["status"] == "completed" else 2
     else:

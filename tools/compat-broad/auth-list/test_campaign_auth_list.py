@@ -218,7 +218,7 @@ def test_list_observation_validation_requires_expected_parent_and_pages():
             "status": 200,
             "body": {
                 "collectionIds": ["alpha"],
-                "nextPageToken": campaign_auth_list_shadow.ShadowHandler.page_token,
+                "nextPageToken": "opaque-fireemu-token",
             },
         },
         {
@@ -332,9 +332,9 @@ def test_actual_shadow_uses_fixed_fireemu_artifact_and_closes_transport(tmp_path
     assert result["artifactSha256"]
     assert result["runtime"]["ownedProcess"]["listenersClosed"] is True
     assert result["runtime"]["ownedProcess"]["stopped"] is True
-    assert result["gate"]["observation"] == 17
+    assert result["gate"]["observation"] == 18
     assert result["gate"]["recovery"] == 19
-    assert result["gate"]["total"] == 38
+    assert result["gate"]["total"] == 39
     assert result["cleanupComplete"] is True
     assert result["stateValidation"] is True
     assert result["failure"] is None

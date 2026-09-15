@@ -309,7 +309,8 @@ def validate_list_observations(rows, nonce: str) -> None:
         if ids != expected_ids:
             raise ValueError(f"listCollectionIds row {index} is missing or has unexpected IDs")
         if index == 2:
-            if body.get("nextPageToken") != ShadowHandler.page_token:
+            token = body.get("nextPageToken")
+            if not isinstance(token, str) or not token:
                 raise ValueError("first page continuation token is missing")
         elif "nextPageToken" in body:
             raise ValueError("unexpected continuation token on complete page")

@@ -363,6 +363,9 @@ def test_v4_campaign_package_binds_integrated_artifact_result():
     package = json.loads(package_path.read_bytes())
     result = json.loads(result_path.read_bytes())
     artifact = package["localShadow"]["ownedArtifact"]
+    assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
+        "c5919b58a017b2a4bdc36bcfd2ea69bdae05197a640d74e1227695f245ed0a30"
+    )
     assert package["kind"] == "production-campaign-auth-list-next-v4"
     assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
     assert artifact["artifactSha256"] == result["artifactSha256"]
@@ -464,7 +467,11 @@ def test_legacy_shadow_fixture_rejects_invalid_auth_and_parent_shape():
         )
         assert status == 400
         assert body["error"]["status"] == "INVALID_ARGUMENT"
-        for invalid_parent in ("/collection//doc", "/collection/doc/"):
+        for invalid_parent in (
+            "/collection//doc",
+            "/collection/doc//sub",
+            "/collection/doc/",
+        ):
             status, body, _content_type = wire(
                 origin
                 + "/v1/projects/demo-firestore-probe/databases/(default)/documents"

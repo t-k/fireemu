@@ -93,6 +93,7 @@ class ShadowHandler(BaseHTTPRequestHandler):
                 or parent_segments
                 and (
                     parent_suffix != "/" + "/".join(parent_segments)
+                    or any(not segment for segment in parent_segments)
                     or len(parent_segments) % 2 != 0
                 )
             ):

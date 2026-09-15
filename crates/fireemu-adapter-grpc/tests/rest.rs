@@ -1599,6 +1599,39 @@ fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable(
 }
 
 #[test]
+#[allow(clippy::result_large_err)]
+fn begin_transaction_rejects_unknown_transaction_option_without_creating_state() {
+    let s = state(None);
+    let parent = fireemu_adapter_grpc::decode::parse_parent(&DOCS[4..]).unwrap();
+    let active_before = s
+        .local
+        .database_handle(&parent)
+        .unwrap()
+        .with(|db| Ok(db.transaction_bookkeeping_stats().active))
+        .unwrap();
+
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {"unknown": true}}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+
+    let active_after = s
+        .local
+        .database_handle(&parent)
+        .unwrap()
+        .with(|db| Ok(db.transaction_bookkeeping_stats().active))
+        .unwrap();
+    assert_eq!(
+        active_after, active_before,
+        "invalid options must not create a transaction"
+    );
+}
+
+#[test]
 fn rest_protojson_null_fields_and_numeric_order_direction_follow_unset_rules() {
     let s = state(None);
     for query in [

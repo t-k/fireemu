@@ -1135,11 +1135,20 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
 pub fn transaction_options_from_json(
     v: Option<&Value>,
 ) -> Result<pb::TransactionOptions, JsonError> {
+    let Some(v) = v.filter(|v| !v.is_null()) else {
+        return Ok(pb::TransactionOptions::default());
+    };
+    strict_keys(v, &["readOnly", "readWrite"])?;
+    if v.get("readOnly").is_some() && v.get("readWrite").is_some() {
+        return err("readOnly and readWrite are mutually exclusive");
+    }
     let mode = match v {
-        Some(o) if o.get("readOnly").is_some() => {
-            let read_time = o
-                .get("readOnly")
-                .and_then(|r| r.get("readTime"))
+        o if o.get("readOnly").is_some() => {
+            let read_only = o.get("readOnly").unwrap();
+            strict_keys(read_only, &["readTime"])?;
+            let read_time = read_only
+                .get("readTime")
+                .filter(|value| !value.is_null())
                 .map(timestamp_from_json)
                 .transpose()?;
             Some(pb::transaction_options::Mode::ReadOnly(
@@ -1149,14 +1158,19 @@ pub fn transaction_options_from_json(
                 },
             ))
         }
-        Some(o) if o.get("readWrite").is_some() => {
-            let retry = o
-                .get("readWrite")
-                .and_then(|r| r.get("retryTransaction"))
-                .and_then(Value::as_str)
-                .map(base64_decode)
-                .transpose()?
-                .unwrap_or_default();
+        o if o.get("readWrite").is_some() => {
+            let read_write = o.get("readWrite").unwrap();
+            strict_keys(read_write, &["retryTransaction"])?;
+            let retry = match read_write
+                .get("retryTransaction")
+                .filter(|value| !value.is_null())
+            {
+                Some(value) => value
+                    .as_str()
+                    .ok_or_else(|| JsonError("readWrite.retryTransaction must be a string".into()))
+                    .and_then(base64_decode)?,
+                None => Vec::new(),
+            };
             Some(pb::transaction_options::Mode::ReadWrite(
                 pb::transaction_options::ReadWrite {
                     retry_transaction: retry,

@@ -9,6 +9,7 @@ use fireemu_core_rules::eval::{
     RulesService,
 };
 use fireemu_core_rules::parse::parse_ruleset;
+use fireemu_core_rules::runtime::LoadedRules;
 use fireemu_core_rules::value::{AuthContext, RulesValue};
 
 const RULES: &str = r"
@@ -92,6 +93,73 @@ fn balanced_and(leaves: usize) -> String {
         balanced_and(left),
         balanced_and(leaves - left)
     )
+}
+
+fn rules_with_allow_before_expensive_nonmatches(service: &str) -> String {
+    let mut source = format!("rules_version = '2'; service {service} {{\n");
+    if service == "cloud.firestore" {
+        source.push_str("  match /databases/{database}/documents {\n");
+    } else {
+        source.push_str("  match /b/{bucket}/o {\n");
+    }
+    let exact_path = (0..90)
+        .map(|segment| format!("segment{segment}"))
+        .collect::<Vec<_>>()
+        .join("/");
+    writeln!(source, "    match /{exact_path} {{").unwrap();
+    source.push_str("      allow read;\n    }\n");
+    for index in 0..750 {
+        writeln!(
+            source,
+            "      match /{{rest{index}=**}}/never{index} {{ allow read; }}"
+        )
+        .unwrap();
+    }
+    source.push_str("  }\n}\n");
+    source
+}
+
+fn long_request_path(service: RulesService) -> String {
+    let prefix = match service {
+        RulesService::Firestore => "/databases/(default)/documents",
+        RulesService::Storage => "/b/demo/o",
+    };
+    format!(
+        "{prefix}/{}",
+        (0..90)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/")
+    )
+}
+
+#[test]
+fn loaded_rules_allow_survives_later_match_path_work_budget() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let source = rules_with_allow_before_expensive_nonmatches(service_name);
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let ruleset = loaded.ruleset.as_ref().unwrap();
+        let report = evaluate_request(
+            ruleset,
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    }
 }
 
 fn doc(entries: &[(&str, RulesValue)]) -> RulesValue {

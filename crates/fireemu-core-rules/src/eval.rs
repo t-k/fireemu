@@ -656,6 +656,8 @@ fn walk_items<'a>(
             match walk_match(block, remaining, ctx, ev, matched_any) {
                 Ok(true) => allowed = true,
                 Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
+                Err(EvalError::Budget { limit_id, .. })
+                    if allowed && limit_id == "FIREEMU-RULES-MATCH-WORK" => {}
                 Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
             }
         }
@@ -690,6 +692,7 @@ fn collect_function_scopes<'a>(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn walk_match<'a>(
     block: &'a MatchBlock,
     remaining: &[String],
@@ -762,6 +765,13 @@ fn walk_match<'a>(
         ) {
             let nested = walk_items(&block.items, &rest, ctx, ev, matched_any);
             result = match (result, nested) {
+                (
+                    Ok(true),
+                    Err(EvalError::Budget {
+                        limit_id: "FIREEMU-RULES-MATCH-WORK",
+                        ..
+                    }),
+                ) => Ok(true),
                 (Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))), _)
                 | (_, Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_)))) => Err(e),
                 (Ok(true), _) | (_, Ok(true)) => Ok(true),

@@ -183,3 +183,7 @@ The current REST decoder accepts ProtoJSON `null` for optional structured-query 
 ## Current local checkpoint (`40776482`)
 
 The Auth-list campaign regressions now bind the current package test to the checked-in shared-gate digest and assert the complete immutable SHA-256 of the legacy v2 package. The Auth batch-import null regression also retries an existing `localId` with `allowOverwrite: null` and verifies through the real lookup route that the existing account is not replaced; malformed non-null shapes remain rejected. The targeted Rust test and 25-case auth-list campaign suite pass, and GitHub Actions `ci` run `34996540907` passed. The compatibility-inventory workflow `34996540807` was still running at the checkpoint. These are local evidence and package-integrity protections; no production operation or historical receipt changed.
+
+## Current local checkpoint (`91addedf`)
+
+The immutable v2 campaign test now pins both referenced local receipts in addition to the complete package hash: the legacy fixture receipt is `c49e1012c4fd49c540ab0854dbede12f15093f510a4e8f8ff06654fe388f9874`, and the owned-artifact receipt is `91081dccb9718347847a76f9bb83340de3655fe09155487e1b392f8d2168b926`. The focused package-integrity tests pass (`2 passed`); this is a test-only evidence safeguard and does not rewrite either receipt or perform production communication.

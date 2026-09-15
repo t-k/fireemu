@@ -392,3 +392,18 @@ def test_recorded_update_scope_does_not_claim_current_or_enterprise_execution():
         u["unit"] == "read-only Pipeline execution" and u["status"] == "not-implemented"
         for u in enterprise
     )
+
+
+def test_bounded_firestore_selection_accepts_only_read_time():
+    import broad as runner
+
+    selected = runner.bounded_firestore_program("reads/read-time")
+    assert [program["id"] for program in selected] == ["reads/read-time"]
+
+
+@pytest.mark.parametrize("program_id", ["queries/filters", "writes/transforms", ""])
+def test_bounded_firestore_selection_rejects_other_programs(program_id):
+    import broad as runner
+
+    with pytest.raises(ValueError, match="reads/read-time"):
+        runner.bounded_firestore_program(program_id)

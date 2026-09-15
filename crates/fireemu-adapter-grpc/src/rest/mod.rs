@@ -1441,17 +1441,15 @@ fn transaction_bytes(v: Option<&Value>) -> Result<Vec<u8>, Status> {
 }
 
 fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
-    body.get("writes")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(write_from_json)
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()
-        .map_err(|e| bad(&e))
-        .map(Option::unwrap_or_default)
+    match body.get("writes") {
+        None => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(write_from_json)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| bad(&e)),
+        Some(_) => Err(Status::invalid_argument("writes must be an array")),
+    }
 }
 
 fn precondition_from_params(

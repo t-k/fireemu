@@ -442,6 +442,29 @@ fn batch_write_rest_unknown_transaction_rejects_before_writes() {
 }
 
 #[test]
+fn batch_write_rest_rejects_non_array_writes_without_mutation() {
+    let s = state(None);
+    let target = "projects/demo-app/databases/(default)/documents/batch-shape/target";
+
+    for writes in [json!({"not": "an array"}), Value::Null] {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchWrite"),
+            json!({"writes": writes}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    }
+
+    let (status, body) = call(&s, "GET", target, Value::Null);
+    assert_eq!(
+        status, 404,
+        "malformed batch requests must not mutate state: {body}"
+    );
+}
+
+#[test]
 fn batch_write_rest_continues_after_item_failures_and_preserves_suffix() {
     let s = state(None);
     for (failure_index, failure) in [

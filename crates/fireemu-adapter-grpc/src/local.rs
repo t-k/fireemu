@@ -3545,31 +3545,28 @@ impl LocalBackend {
         lease_writes: &[Write],
         own: Option<&TransactionId>,
     ) -> bool {
-        let holders: Vec<(TransactionId, bool)> = handle
-            .read(|db| {
-                db.lock_holders(lease_writes, own)
+        handle
+            .with(|db| {
+                // Recheck idleness and roll back under the same database write lock. A read
+                // followed by a later write lock could otherwise sample an idle holder, let a
+                // concurrent transaction operation refresh it, then incorrectly roll it back.
+                let expired: Vec<TransactionId> = db
+                    .lock_holders(lease_writes, own)
                     .into_iter()
-                    .filter_map(|id| {
-                        db.transaction_activity(&id)
-                            .map(|_| (id.clone(), db.transaction_idle_for(&id, self.lock_lease)))
-                    })
-                    .collect()
+                    .filter(|id| db.transaction_idle_for(id, self.lock_lease))
+                    .collect();
+                if expired.is_empty() {
+                    return Ok(false);
+                }
+                let mut rolled_back = false;
+                for id in &expired {
+                    if db.rollback(id).is_ok() {
+                        rolled_back = true;
+                    }
+                }
+                Ok(rolled_back)
             })
-            .unwrap_or_default();
-        let expired: Vec<TransactionId> = holders
-            .into_iter()
-            .filter_map(|(id, idle)| idle.then_some(id))
-            .collect();
-        if expired.is_empty() {
-            return false;
-        }
-        let _ = handle.with(|db| {
-            for id in &expired {
-                let _ = db.rollback(id);
-            }
-            Ok(())
-        });
-        true
+            .unwrap_or(false)
     }
 
     /// `Rollback`.

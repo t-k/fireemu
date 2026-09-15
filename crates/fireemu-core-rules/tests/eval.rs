@@ -459,6 +459,70 @@ fn loaded_rules_skip_partial_parent_siblings_before_a_reachable_allow() {
 }
 
 #[test]
+fn loaded_rules_skip_parent_subtrees_with_only_partial_child_endpoints() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        let allow_path = (0..90)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        for version in ["1", "2"] {
+            for allow in [false, true] {
+                let allow_clause = if allow {
+                    "allow read;"
+                } else {
+                    "allow read: if false;"
+                };
+                let mut source =
+                    format!("rules_version = '{version}'; service {service_name} {{\n  {root}\n");
+                for index in 0..750 {
+                    writeln!(
+                        source,
+                        "    match /{{prefix{index}=**}} {{ match /segment89 {{ allow read: if false; }} }}"
+                    )
+                    .unwrap();
+                }
+                writeln!(source, "    match /{allow_path} {{ {allow_clause} }}").unwrap();
+                writeln!(source, "  }}\n}}\n").unwrap();
+
+                let loaded = LoadedRules::from_source(&source).unwrap();
+                let report = evaluate_request(
+                    loaded.ruleset.as_ref().unwrap(),
+                    &RequestContext {
+                        service,
+                        method: Method::Get,
+                        path: long_request_path(service),
+                        auth: None,
+                        resource: None,
+                        request_resource: None,
+                        time_unix_nanos: 0,
+                        abstract_path: false,
+                        request_query: None,
+                    },
+                );
+                if allow {
+                    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+                } else {
+                    assert!(
+                        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+                        "{report:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn partial_subtree_prefilter_preserves_covered_path_denial() {
     for service_name in ["cloud.firestore", "firebase.storage"] {
         let service = if service_name == "cloud.firestore" {

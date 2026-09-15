@@ -775,12 +775,15 @@ fn pattern_reachable_offsets(
     Some(reachable)
 }
 
-#[derive(Clone, Copy)]
 struct BlockReachability {
     /// The block or a descendant has a structurally reachable complete allow path.
     can_reach_allow: bool,
     /// The block's own path can consume the complete request, regardless of its items.
     covers_path: bool,
+    /// Offsets after the block path where an allow in this block's subtree can consume the rest.
+    /// Parent matchers use this to avoid exploring wildcard splits that cannot reach a complete
+    /// descendant path.
+    complete_offsets: Vec<bool>,
 }
 
 /// Returns whether a match block or one of its descendants can consume the complete request.
@@ -797,32 +800,33 @@ fn block_reachability(
 ) -> Option<BlockReachability> {
     let reachable = pattern_reachable_offsets(&block.path, segments, zero_or_more, work)?;
     let covers_path = reachable.get(segments.len()).copied().unwrap_or(false);
-    let mut can_reach_allow = !block.allows.is_empty() && covers_path;
+    let mut complete_offsets = vec![false; segments.len() + 1];
+    if !block.allows.is_empty() && covers_path {
+        complete_offsets[segments.len()] = true;
+    }
 
     for item in &block.items {
         let Item::Match(child) = item else {
             continue;
         };
         for (offset, can_reach) in reachable.iter().copied().enumerate() {
-            if can_reach
-                && block_reachability(child, &segments[offset..], zero_or_more, work)
-                    .map(|reachability| reachability.can_reach_allow)
-                    .unwrap_or(false)
-            {
-                can_reach_allow = true;
-                break;
+            if can_reach {
+                let child_reachability =
+                    block_reachability(child, &segments[offset..], zero_or_more, work)?;
+                if child_reachability.can_reach_allow {
+                    complete_offsets[offset] = true;
+                }
             }
             if can_reach && work.load(Ordering::Relaxed) > MATCH_PATH_PREFILTER_WORK_MAX {
                 return None;
             }
         }
-        if can_reach_allow {
-            break;
-        }
     }
+    let can_reach_allow = complete_offsets.iter().copied().any(|reachable| reachable);
     Some(BlockReachability {
         can_reach_allow,
         covers_path,
+        complete_offsets,
     })
 }
 
@@ -840,7 +844,7 @@ fn walk_match<'a>(
         ev.wildcard_zero_or_more,
         &ev.match_prefilter_work,
     );
-    if let Some(reachability) = reachability {
+    if let Some(ref reachability) = reachability {
         if !reachability.can_reach_allow {
             if reachability.covers_path {
                 // Preserve the distinction between a covered path with no successful allow and a
@@ -850,9 +854,17 @@ fn walk_match<'a>(
             return Ok(false);
         }
     }
+    let endpoint_mask = reachability.as_ref().and_then(|reachability| {
+        block
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::Match(_)))
+            .then_some(reachability.complete_offsets.as_slice())
+    });
     let mut outcome: Result<bool, EvalError> = Ok(false);
     let zero_or_more = ev.wildcard_zero_or_more;
     let match_work = Arc::clone(&ev.match_path_work);
+    let prefilter_work = Arc::clone(&ev.match_prefilter_work);
     let mut visit = |rest: Vec<String>, captures: Vec<(String, RulesValue)>| {
         // In a query proof only the segments standing for potential results are
         // undetermined; the database and any concrete ancestor segments stay known.
@@ -950,6 +962,8 @@ fn walk_match<'a>(
         remaining,
         zero_or_more,
         &match_work,
+        endpoint_mask,
+        &prefilter_work,
         &mut visit,
     )?;
     if matched {
@@ -959,24 +973,117 @@ fn walk_match<'a>(
     }
 }
 
+/// Computes, for every pattern position and input offset, whether the suffix can reach one of
+/// the complete offsets supplied by the subtree prefilter. This is a bounded dynamic program;
+/// recursive wildcards use suffix aggregation instead of enumerating every split.
+fn endpoint_reachability(
+    pattern: &[PathSegment],
+    segments: &[String],
+    zero_or_more: bool,
+    endpoints: &[bool],
+    work: &AtomicU64,
+) -> Option<Vec<Vec<bool>>> {
+    let segment_count = segments.len();
+    let mut table = vec![vec![false; segment_count + 1]; pattern.len() + 1];
+    for (offset, allowed) in endpoints
+        .iter()
+        .copied()
+        .enumerate()
+        .take(segment_count + 1)
+    {
+        table[pattern.len()][offset] = allowed;
+    }
+
+    for (index, segment) in pattern.iter().enumerate().rev() {
+        let next_row = table[index + 1].clone();
+        match segment {
+            PathSegment::RecursiveWildcard { .. } => {
+                let mut eligible = vec![false; segment_count + 1];
+                for offset in (0..=segment_count).rev() {
+                    let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                    if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                        return None;
+                    }
+                    eligible[offset] = next_row[offset]
+                        && (offset == segment_count || segments[offset] != ABSTRACT_PREFIX);
+                }
+                let mut suffix_any = vec![false; segment_count + 2];
+                for offset in (0..=segment_count).rev() {
+                    suffix_any[offset] = eligible[offset] || suffix_any[offset + 1];
+                }
+                let minimum = usize::from(!zero_or_more);
+                for (offset, value) in table[index].iter_mut().enumerate() {
+                    let target = offset.saturating_add(minimum);
+                    *value = target <= segment_count && suffix_any[target];
+                }
+            }
+            PathSegment::Literal(literal) => {
+                for offset in (0..=segment_count).rev() {
+                    let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                    if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                        return None;
+                    }
+                    table[index][offset] = offset < segment_count
+                        && segments[offset] == *literal
+                        && !is_abstract_segment(literal)
+                        && next_row[offset + 1];
+                }
+            }
+            PathSegment::Capture { .. } => {
+                for offset in (0..=segment_count).rev() {
+                    let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                    if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                        return None;
+                    }
+                    table[index][offset] = segments
+                        .get(offset)
+                        .is_some_and(|candidate| candidate != ABSTRACT_PREFIX)
+                        && offset < segment_count
+                        && next_row[offset + 1];
+                }
+            }
+            PathSegment::Binding(_) => {
+                for offset in (0..=segment_count).rev() {
+                    let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                    if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                        return None;
+                    }
+                    table[index][offset] = false;
+                }
+            }
+        }
+    }
+    Some(table)
+}
+
 /// Every way `pattern` matches the start of `segments` (a recursive wildcard consumes zero or
 /// more segments under rules version 2, one or more under version 1), each with its
 /// unmatched remainder and captured bindings.
+#[allow(clippy::too_many_lines)]
 fn match_path(
     pattern: &[PathSegment],
     segments: &[String],
     zero_or_more: bool,
     work: &AtomicU64,
+    endpoints: Option<&[bool]>,
+    prefilter_work: &AtomicU64,
     visit: &mut impl FnMut(Vec<String>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
 ) -> Result<bool, EvalError> {
+    #[allow(clippy::too_many_arguments)]
     fn go(
         pattern: &[PathSegment],
         segments: &[String],
         zero_or_more: bool,
         captures: &mut Vec<(String, RulesValue)>,
+        pattern_index: usize,
+        consumed: usize,
+        endpoint_table: Option<&[Vec<bool>]>,
         work: &AtomicU64,
         visit: &mut impl FnMut(Vec<String>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
     ) -> Result<bool, EvalError> {
+        if endpoint_table.is_some_and(|table| !table[pattern_index][consumed]) {
+            return Ok(false);
+        }
         let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
         if current > MATCH_PATH_WORK_MAX {
             return Err(EvalError::Budget {
@@ -992,14 +1099,34 @@ fn match_path(
             PathSegment::Literal(l) => {
                 // An undetermined segment is never equal to a literal.
                 if segments.first() == Some(l) && !is_abstract_segment(l) {
-                    return go(tail, &segments[1..], zero_or_more, captures, work, visit);
+                    return go(
+                        tail,
+                        &segments[1..],
+                        zero_or_more,
+                        captures,
+                        pattern_index + 1,
+                        consumed + 1,
+                        endpoint_table,
+                        work,
+                        visit,
+                    );
                 }
             }
             PathSegment::Capture { name, .. } => {
                 // The "any prefix" marker stands for zero or more segments: only `**` fits.
                 if let Some(v) = segments.first().filter(|v| v.as_str() != ABSTRACT_PREFIX) {
                     captures.push((name.clone(), RulesValue::String(v.clone())));
-                    let result = go(tail, &segments[1..], zero_or_more, captures, work, visit);
+                    let result = go(
+                        tail,
+                        &segments[1..],
+                        zero_or_more,
+                        captures,
+                        pattern_index + 1,
+                        consumed + 1,
+                        endpoint_table,
+                        work,
+                        visit,
+                    );
                     captures.pop();
                     return result;
                 }
@@ -1014,8 +1141,23 @@ fn match_path(
                     {
                         continue;
                     }
+                    let next_consumed = consumed + take;
+                    if endpoint_table.is_some_and(|table| !table[pattern_index + 1][next_consumed])
+                    {
+                        continue;
+                    }
                     captures.push((name.clone(), RulesValue::Path(segments[..take].to_vec())));
-                    let stop = go(tail, &segments[take..], zero_or_more, captures, work, visit)?;
+                    let stop = go(
+                        tail,
+                        &segments[take..],
+                        zero_or_more,
+                        captures,
+                        pattern_index + 1,
+                        next_consumed,
+                        endpoint_table,
+                        work,
+                        visit,
+                    )?;
                     captures.pop();
                     if stop {
                         return Ok(true);
@@ -1026,11 +1168,17 @@ fn match_path(
         }
         Ok(false)
     }
+    let endpoint_table = endpoints.and_then(|endpoints| {
+        endpoint_reachability(pattern, segments, zero_or_more, endpoints, prefilter_work)
+    });
     go(
         pattern,
         segments,
         zero_or_more,
         &mut Vec::new(),
+        0,
+        0,
+        endpoint_table.as_deref(),
         work,
         visit,
     )

@@ -605,6 +605,7 @@ struct Transaction {
     /// Estimated bytes retained by the read-set documents and query execution descriptors.
     conflict_ledger_bytes: u64,
     last_activity: LogicalInstant,
+    wall_last_activity: std::time::Instant,
     state: TransactionState,
     /// Bumped on every operation the client drives through this transaction, so a waiter
     /// under a clock that does not move can still tell an idle holder from a busy one.
@@ -2166,6 +2167,7 @@ impl FirestoreState {
             queries: Vec::new(),
             conflict_ledger_bytes: 0,
             last_activity: now,
+            wall_last_activity: std::time::Instant::now(),
             state: TransactionState::Active,
             activity: 0,
             waiting_to_commit: false,
@@ -2399,11 +2401,21 @@ impl FirestoreState {
             .remove(&(previous_deadline, id.clone()));
         if let Some(transaction) = self.transactions.get_mut(id) {
             transaction.last_activity = now;
+            transaction.wall_last_activity = std::time::Instant::now();
             transaction.activity = transaction.activity.wrapping_add(1);
             self.active_transaction_deadlines
                 .insert((transaction_deadline(transaction), id.clone()));
         }
         Ok(())
+    }
+
+    /// Whether a transaction has been idle for at least the adapter's wall-clock lease.
+    #[must_use]
+    pub fn transaction_idle_for(&self, id: &TransactionId, lease: std::time::Duration) -> bool {
+        self.transactions
+            .get(id)
+            .filter(|transaction| transaction.state == TransactionState::Active)
+            .is_some_and(|transaction| transaction.wall_last_activity.elapsed() >= lease)
     }
 
     /// How many operations `id` has driven so far; `None` unless the transaction is active.

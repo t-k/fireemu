@@ -63,10 +63,6 @@ struct DatabaseEntry {
     cell: RwLock<DatabaseCell>,
     /// Wakes writers refused for lock contention when a transaction finishes.
     releases: TransactionReleases,
-    /// When each transaction first blocked a writer (wall clock). A transaction that keeps
-    /// writers blocked for the lock lease is rolled back the way production expires an idle
-    /// transaction, so a virtual clock that does not move cannot hold a lock forever.
-    blocking_since: Mutex<BTreeMap<TransactionId, (std::time::Instant, u64)>>,
 }
 
 impl DatabaseEntry {
@@ -79,7 +75,6 @@ impl DatabaseEntry {
                 state,
             }),
             releases: TransactionReleases::default(),
-            blocking_since: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -3550,46 +3545,21 @@ impl LocalBackend {
         lease_writes: &[Write],
         own: Option<&TransactionId>,
     ) -> bool {
-        let holders: Vec<(TransactionId, u64)> = handle
+        let holders: Vec<(TransactionId, bool)> = handle
             .read(|db| {
                 db.lock_holders(lease_writes, own)
                     .into_iter()
-                    .filter_map(|id| db.transaction_activity(&id).map(|activity| (id, activity)))
+                    .filter_map(|id| {
+                        db.transaction_activity(&id)
+                            .map(|_| (id.clone(), db.transaction_idle_for(&id, self.lock_lease)))
+                    })
                     .collect()
             })
             .unwrap_or_default();
-        let now = std::time::Instant::now();
-        let expired: Vec<TransactionId> = {
-            let Ok(mut since) = handle.0.blocking_since.lock() else {
-                return false;
-            };
-            // Forget holders that finished; keep the clock of every still-active holder, so
-            // writers with different write sets do not reset each other's lease.
-            let stale: Vec<TransactionId> = since
-                .keys()
-                .filter(|id| {
-                    !handle
-                        .read(|db| db.transaction_is_active(id))
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-            for id in stale {
-                since.remove(&id);
-            }
-            holders
-                .iter()
-                .filter(|(id, activity)| {
-                    let entry = since.entry(id.clone()).or_insert((now, *activity));
-                    if entry.1 != *activity {
-                        // The holder drove its transaction since: not idle, the lease restarts.
-                        *entry = (now, *activity);
-                    }
-                    now.duration_since(entry.0) >= self.lock_lease
-                })
-                .map(|(id, _)| id.clone())
-                .collect()
-        };
+        let expired: Vec<TransactionId> = holders
+            .into_iter()
+            .filter_map(|(id, idle)| idle.then_some(id))
+            .collect();
         if expired.is_empty() {
             return false;
         }
@@ -3599,11 +3569,6 @@ impl LocalBackend {
             }
             Ok(())
         });
-        if let Ok(mut since) = handle.0.blocking_since.lock() {
-            for id in &expired {
-                since.remove(id);
-            }
-        }
         true
     }
 
@@ -4931,6 +4896,60 @@ mod lock_tests {
             ))),
             7,
         ))
+    }
+
+    #[test]
+    fn an_already_idle_transaction_releases_its_lock_before_contention_wait() {
+        let backend = Arc::new(
+            LocalBackend::new(
+                backend().gateway.clone(),
+                Arc::new(Mutex::new(VirtualClock::new(
+                    LogicalInstant::from_unix_seconds(1_788_004_860),
+                ))),
+                7,
+            )
+            .with_lock_lease(Duration::from_millis(40))
+            .with_contention_wait(Duration::from_millis(120)),
+        );
+        let database = "projects/demo-app/databases/(default)";
+        let document = format!("{database}/documents/idle/doc");
+        let transaction = backend
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: database.to_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        backend
+            .get_document(
+                &pb::GetDocumentRequest {
+                    name: document.clone(),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(
+                            transaction.clone(),
+                        ),
+                    ),
+                    ..Default::default()
+                },
+                &crate::rules::allow_all_reads,
+            )
+            .unwrap_err();
+
+        std::thread::sleep(Duration::from_millis(80));
+        let result = backend.commit(&pb::CommitRequest {
+            database: database.to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: document,
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(
+            result.is_ok(),
+            "an already-idle holder must be expired: {result:?}"
+        );
     }
 
     fn collection_ids_request_with_token(backend: &LocalBackend) -> pb::ListCollectionIdsRequest {

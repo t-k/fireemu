@@ -975,7 +975,7 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
                     }
                     Ok(sq::CollectionSelector {
                         collection_id: match f.get("collectionId") {
-                            None => String::new(),
+                            None | Some(Value::Null) => String::new(),
                             Some(value) => value
                                 .as_str()
                                 .ok_or_else(|| {
@@ -984,7 +984,7 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
                                 .to_owned(),
                         },
                         all_descendants: match f.get("allDescendants") {
-                            None => false,
+                            None | Some(Value::Null) => false,
                             Some(value) => value.as_bool().ok_or_else(|| {
                                 JsonError("from.allDescendants must be a boolean".into())
                             })?,
@@ -1012,7 +1012,7 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
                         return err("orderBy elements must be objects");
                     }
                     let direction = match o.get("direction") {
-                        None => sq::Direction::Ascending,
+                        None | Some(Value::Null) => sq::Direction::Ascending,
                         Some(value) => match value.as_str() {
                             Some("ASCENDING" | "DIRECTION_UNSPECIFIED") => sq::Direction::Ascending,
                             Some("DESCENDING") => sq::Direction::Descending,

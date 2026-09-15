@@ -1112,17 +1112,19 @@ impl RestState {
             ],
         )
         .map_err(|e| bad(&e))?;
-        let documents: Vec<String> = body
-            .get("documents")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let documents: Vec<String> = match body.get("documents") {
+            None => Vec::new(),
+            Some(Value::Array(items)) => items
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    value.as_str().map(str::to_owned).ok_or_else(|| {
+                        Status::invalid_argument(format!("documents[{index}] must be a string"))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+            Some(_) => return Err(Status::invalid_argument("documents must be an array")),
+        };
         exclusive_selectors(body)?;
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(

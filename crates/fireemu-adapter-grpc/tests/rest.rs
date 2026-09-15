@@ -1507,6 +1507,67 @@ fn rest_listing_and_batch_get_follow_production() {
 }
 
 #[test]
+#[allow(clippy::result_large_err)]
+fn malformed_batch_get_documents_is_rejected_without_starting_a_transaction() {
+    let s = state(None);
+    let parent = fireemu_adapter_grpc::decode::parse_parent(&DOCS[4..]).unwrap();
+    let before = s
+        .local
+        .database_handle(&parent)
+        .unwrap()
+        .with(|db| Ok(db.transaction_bookkeeping_stats().active))
+        .unwrap();
+
+    for documents in [
+        json!("projects/demo-app/databases/(default)/documents/q/1"),
+        json!(["projects/demo-app/databases/(default)/documents/q/1", 7]),
+    ] {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchGet"),
+            json!({"documents": documents, "newTransaction": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    }
+
+    let after = s
+        .local
+        .database_handle(&parent)
+        .unwrap()
+        .with(|db| Ok(db.transaction_bookkeeping_stats().active))
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "shape validation must precede transaction creation"
+    );
+}
+
+#[test]
+fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable() {
+    let s = state(None);
+    for query in [json!({"from": "q"}), json!({"orderBy": {}})] {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": query, "newTransaction": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    }
+
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "q"}], "orderBy": []}}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
 fn rest_accepts_an_empty_document_mask_object() {
     let s = state(None);
     let (status, created) = call(

@@ -939,7 +939,12 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
     }
     let from = v
         .get("from")
-        .and_then(Value::as_array)
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| JsonError("from must be an array".into()))
+        })
+        .transpose()?
         .map(|items| {
             items
                 .iter()
@@ -962,7 +967,12 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
         .unwrap_or_default();
     let order_by = v
         .get("orderBy")
-        .and_then(Value::as_array)
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| JsonError("orderBy must be an array".into()))
+        })
+        .transpose()?
         .map(|items| {
             items
                 .iter()
@@ -1360,6 +1370,15 @@ mod tests {
         assert!(query_vector_is_vector(
             nearest.query_vector.as_ref().unwrap()
         ));
+    }
+
+    #[test]
+    fn structured_query_rejects_non_array_from_and_order_by() {
+        for (field, value) in [("from", json!("items")), ("orderBy", json!({}))] {
+            let error = structured_query_from_json(&json!({field: value}))
+                .expect_err("a present query list must be an array");
+            assert!(error.0.contains(&format!("{field} must be an array")));
+        }
     }
 
     fn query_vector_is_vector(value: &pb::Value) -> bool {

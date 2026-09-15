@@ -4742,6 +4742,76 @@ fn pending_retry_ends_when_the_pending_credential_expires() {
     }
 }
 
+#[test]
+fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
+    use fireemu_core_auth::store::{PENDING_SIGN_IN_TTL_SECONDS, SMS_CODE_TTL_SECONDS};
+
+    for strict in [false, true] {
+        let (s, user) = pending_expiry_state(strict, "expiry-matrix-fresh@example.com");
+        let pending = pending_login(&s, "expiry-matrix-fresh@example.com");
+        let phone = start_phone_code(&s, &pending);
+        let (status, signed) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 200, "{signed}");
+        assert!(signed["idToken"].is_string());
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        let (status, lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        assert_eq!(lookup["users"][0]["localId"], user["localId"]);
+
+        let (s, _) = pending_expiry_state(strict, "expiry-matrix-code@example.com");
+        let pending = pending_login(&s, "expiry-matrix-code@example.com");
+        let phone = start_phone_code(&s, &pending);
+        advance_clock(&s, SMS_CODE_TTL_SECONDS + 1);
+        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+        assert!(refused.get("idToken").is_none());
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 1);
+        let fresh = start_phone_code(&s, &pending);
+        let (status, signed) = finalize_phone_step(&s, &pending, &fresh);
+        assert_eq!(status, 200, "{signed}");
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+
+        let (s, _) = pending_expiry_state(strict, "expiry-matrix-pending@example.com");
+        let pending = pending_login(&s, "expiry-matrix-pending@example.com");
+        advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS - 1);
+        let phone = start_phone_code(&s, &pending);
+        advance_clock(&s, 2);
+        let at = s.clock.lock().unwrap().now_for_test();
+        assert!(s
+            .store
+            .lock()
+            .unwrap()
+            .check_phone_code(
+                phone["sessionInfo"].as_str().unwrap(),
+                phone["code"].as_str().unwrap(),
+                at,
+            )
+            .is_ok());
+        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+        assert!(refused.get("idToken").is_none());
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+
+        let (s, _) = pending_expiry_state(strict, "expiry-matrix-both@example.com");
+        let pending = pending_login(&s, "expiry-matrix-both@example.com");
+        let phone = start_phone_code(&s, &pending);
+        advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS + 1);
+        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+        assert!(refused.get("idToken").is_none());
+        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+    }
+}
+
 /// GAP-AUTH-005 (auth-mfa-start-disabled, recorded and approved 2026-09-12): production
 /// accepts `mfaSignIn:start` on an account disabled after its pending credential and issues
 /// the code, enforcing `USER_DISABLED` at finalize; the held pending survives re-enablement.

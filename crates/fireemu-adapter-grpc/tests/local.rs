@@ -4159,17 +4159,21 @@ async fn list_pages_include_missing_parents_in_name_order() {
 async fn list_documents_rejects_show_missing_with_order_by() {
     let (mut client, _clock, handle) = start().await;
 
-    let error = client
-        .list_documents(pb::ListDocumentsRequest {
-            parent: DOCS.to_owned(),
-            collection_id: "mixed".to_owned(),
-            order_by: "v desc".to_owned(),
-            show_missing: true,
-            ..Default::default()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    for (order_by, page_token) in [("v desc", ""), ("   ", ""), ("v desc", "%%%INVALID%%%")] {
+        let error = client
+            .list_documents(pb::ListDocumentsRequest {
+                parent: DOCS.to_owned(),
+                collection_id: "mixed".to_owned(),
+                order_by: order_by.to_owned(),
+                page_token: page_token.to_owned(),
+                show_missing: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.message(), "show_missing cannot be used with order_by");
+    }
 
     handle.abort();
 }

@@ -4083,6 +4083,11 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
     ) -> Result<pb::ListDocumentsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
+        if req.show_missing && !req.order_by.is_empty() {
+            return Err(Status::invalid_argument(
+                "show_missing cannot be used with order_by",
+            ));
+        }
         self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
@@ -4135,11 +4140,6 @@ impl LocalBackend {
             .map(decode_document_name)
             .transpose()
             .map_err(status)?;
-        if req.show_missing && !req.order_by.trim().is_empty() {
-            return Err(Status::invalid_argument(
-                "show_missing cannot be used with order_by",
-            ));
-        }
         if after_path.as_ref().is_some_and(|path| {
             path.project() != &parent.project
                 || path.database() != &parent.database

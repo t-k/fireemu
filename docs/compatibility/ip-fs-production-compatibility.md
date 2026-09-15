@@ -74,7 +74,7 @@ On 2026-09-14, the revision-2 Auth session recorder completed a fresh bounded 34
 
 This goal reaches `READY_FOR_COMPATIBILITY_REVIEW` only when every target parent group is `COMPAT_VERIFIED`, all required CI and final-artifact checks pass, saved and new production evidence remains reproducible, independent reviews have no blocker, and owned resources and processes are reclaimed. Until then the repository reports `IN_PROGRESS`, `BLOCKED_OWNER` for the specific owner-dependent production actions, or `BLOCKED_TECHNICAL` for a concrete technical blocker.
 
-## Current local checkpoint (`11f2adb3`)
+## Current local checkpoint (`8126f8f3`)
 
 The Firestore local transaction adapter now expires an idle transaction before a contending write waits on its locks. The idle check and rollback occur under one database write lock, so a concurrent activity refresh cannot race with the stale decision. The new idle-holder regression, the existing busy-holder and rollback cases, the core transaction expiry test, adapter/core Clippy and formatting pass. This is local transaction semantics evidence; production conflict, retention and SDK retry behavior remain unobserved.
 

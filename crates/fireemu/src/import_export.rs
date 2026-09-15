@@ -1202,8 +1202,15 @@ fn note_password_updated_at(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, ArtifactError> {
     let refuse = |message: String| ArtifactError::new("auth", path, message);
+    if let Some((member, _)) = record.extra.first() {
+        return Err(refuse(format!(
+            "account {} contains unsupported member {member:?}; fireemu cannot preserve it during import",
+            record.local_id
+        )));
+    }
     let custom_claims = match &record.custom_attributes {
         Some(text) if !text.is_empty() => CustomClaims::parse_attributes(text).map_err(|e| {
             refuse(format!(
@@ -1221,8 +1228,19 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
             hash.chars().take(24).collect::<String>()
         )));
     }
-    let created_at = millis_instant(record.created_at.as_deref())
-        .unwrap_or(LogicalInstant::from_unix_seconds(0));
+    if let Some(value) = record.password_updated_at {
+        if !(value.is_finite() && value.fract() == 0.0 && value.abs() < 9.007_199_254_740_992e15) {
+            return Err(refuse(format!(
+                "account {}: invalid passwordUpdatedAt",
+                record.local_id
+            )));
+        }
+    }
+    let created_at = match record.created_at.as_deref() {
+        Some(value) => millis_instant(Some(value))
+            .ok_or_else(|| refuse(format!("account {}: invalid createdAt", record.local_id)))?,
+        None => LogicalInstant::from_unix_seconds(0),
+    };
     let mut totp_factors = Vec::new();
     let mut phone_factors = Vec::new();
     for (index, enrollment) in record.mfa_info.iter().enumerate() {
@@ -1231,7 +1249,15 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         } else {
             enrollment.mfa_enrollment_id.clone()
         };
-        let enrolled_at = rfc3339_instant(enrollment.enrolled_at.as_deref()).unwrap_or(created_at);
+        let enrolled_at = match enrollment.enrolled_at.as_deref() {
+            Some(value) => rfc3339_instant(Some(value)).ok_or_else(|| {
+                refuse(format!(
+                    "account {}: invalid mfaInfo.enrolledAt",
+                    record.local_id
+                ))
+            })?,
+            None => created_at,
+        };
         if let Some(secret) = &enrollment.totp_shared_secret_key {
             let bytes = decode_base32(secret).ok_or_else(|| {
                 refuse(format!(
@@ -1286,14 +1312,24 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         provider: provider_of(record),
         custom_claims,
         created_at,
-        last_sign_in_at: millis_instant(record.last_login_at.as_deref()),
+        last_sign_in_at: match record.last_login_at.as_deref() {
+            Some(value) => Some(millis_instant(Some(value)).ok_or_else(|| {
+                refuse(format!("account {}: invalid lastLoginAt", record.local_id))
+            })?),
+            None => None,
+        },
         last_refresh_at: record
             .last_refresh_at
             .as_deref()
             .map(LogicalInstant::parse_rfc3339)
             .transpose()
             .map_err(|e| refuse(format!("invalid lastRefreshAt: {e}")))?,
-        tokens_valid_after: seconds_instant(record.valid_since.as_deref()).unwrap_or(created_at),
+        tokens_valid_after: match record.valid_since.as_deref() {
+            Some(value) => seconds_instant(Some(value)).ok_or_else(|| {
+                refuse(format!("account {}: invalid validSince", record.local_id))
+            })?,
+            None => created_at,
+        },
         federated: record
             .provider_user_info
             .iter()

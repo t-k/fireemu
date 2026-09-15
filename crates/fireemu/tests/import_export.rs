@@ -889,6 +889,90 @@ fn a_malformed_auth_section_refuses_the_whole_import() {
     assert_refused(&output, "auth", "accounts.json");
 }
 
+#[test]
+fn malformed_auth_types_are_refused_before_startup() {
+    let cases = [
+        (
+            "providerUserInfo",
+            r#"{"users":[{"localId":"u","providerUserInfo":{}}]}"#,
+        ),
+        (
+            "providerUserInfo-field",
+            r#"{"users":[{"localId":"u","providerUserInfo":[{"providerId":"google.com","email":false}]}]}"#,
+        ),
+        ("mfaInfo", r#"{"users":[{"localId":"u","mfaInfo":{}}]}"#),
+        (
+            "mfaInfo-field",
+            r#"{"users":[{"localId":"u","mfaInfo":[{"mfaEnrollmentId":"factor","enrolledAt":false}]}]}"#,
+        ),
+        (
+            "createdAt",
+            r#"{"users":[{"localId":"u","createdAt":false}]}"#,
+        ),
+        (
+            "lastLoginAt",
+            r#"{"users":[{"localId":"u","lastLoginAt":false}]}"#,
+        ),
+        (
+            "validSince",
+            r#"{"users":[{"localId":"u","validSince":false}]}"#,
+        ),
+    ];
+    for (name, accounts) in cases {
+        let dir = scratch(&format!("malformed-auth-{name}"));
+        let export = copy_fixture("official-multiproduct", &dir);
+        std::fs::write(export.join("auth_export/accounts.json"), accounts).unwrap();
+        let output = exec()
+            .args(["--import"])
+            .arg(&export)
+            .args(["--", "true"])
+            .output()
+            .unwrap();
+        assert_refused(&output, "auth", "accounts.json");
+    }
+}
+
+#[test]
+fn malformed_auth_config_boolean_is_refused_before_startup() {
+    let dir = scratch("malformed-auth-config-bool");
+    let export = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        export.join("auth_export/config.json"),
+        r#"{"signIn":{"allowDuplicateEmails":"false"}}"#,
+    )
+    .unwrap();
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "auth", "config.json");
+}
+
+#[test]
+fn an_unknown_auth_member_is_refused_instead_of_silently_dropped() {
+    let dir = scratch("unknown-auth-member");
+    let export = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        export.join("auth_export/accounts.json"),
+        r#"{"users":[{"localId":"u","futureField":{"preserve":true}}]}"#,
+    )
+    .unwrap();
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "auth", "accounts.json");
+    assert!(
+        text(&output).contains("unsupported member"),
+        "the refusal explains the unsupported data: {}",
+        text(&output)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_manifest_and_optional_auth_config_are_never_followed() {

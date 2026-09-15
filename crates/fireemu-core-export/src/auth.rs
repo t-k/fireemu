@@ -12,8 +12,8 @@
 //! (`auth/index.ts` `importData`), so the file *is* the API shape and nothing else.
 //!
 //! Every documented member is modelled; a member this crate does not know is kept in
-//! [`UserRecord::extra`] and written out again unchanged, so an import followed by an export
-//! never silently drops what a newer emulator wrote.
+//! [`UserRecord::extra`] and written out again unchanged. The CLI currently rejects such
+//! records because the live Auth store cannot retain unknown members across an import.
 //!
 //! # Sensitive material
 //!
@@ -169,15 +169,13 @@ impl AuthConfig {
             return refuse("the Auth config document is not a JSON object");
         }
         Ok(Self {
-            allow_duplicate_emails: value
-                .get("signIn")
-                .and_then(|s| s.get("allowDuplicateEmails"))
-                .and_then(JsonValue::as_bool)
+            allow_duplicate_emails: bool_member(&value, "signIn", "allowDuplicateEmails")?
                 .unwrap_or(false),
-            enable_improved_email_privacy: value
-                .get("emailPrivacyConfig")
-                .and_then(|s| s.get("enableImprovedEmailPrivacy"))
-                .and_then(JsonValue::as_bool),
+            enable_improved_email_privacy: bool_member(
+                &value,
+                "emailPrivacyConfig",
+                "enableImprovedEmailPrivacy",
+            )?,
         })
     }
 
@@ -269,12 +267,28 @@ fn parse_user(value: &JsonValue) -> Result<UserRecord, AuthExportError> {
         .ok_or_else(|| AuthExportError("an account has no string \"localId\"".to_owned()))?
         .to_owned();
     let mut provider_user_info = Vec::new();
+    if value
+        .get("providerUserInfo")
+        .is_some_and(|v| !matches!(v, JsonValue::Array(_)))
+    {
+        return refuse(format!(
+            "the providerUserInfo member of account {local_id:?} is not an array"
+        ));
+    }
     if let Some(JsonValue::Array(items)) = value.get("providerUserInfo") {
         for item in items {
             provider_user_info.push(parse_provider(&local_id, item)?);
         }
     }
     let mut mfa_info = Vec::new();
+    if value
+        .get("mfaInfo")
+        .is_some_and(|v| !matches!(v, JsonValue::Array(_)))
+    {
+        return refuse(format!(
+            "the mfaInfo member of account {local_id:?} is not an array"
+        ));
+    }
     if let Some(JsonValue::Array(items)) = value.get("mfaInfo") {
         for item in items {
             mfa_info.push(parse_enrollment(&local_id, item)?);
@@ -287,31 +301,22 @@ fn parse_user(value: &JsonValue) -> Result<UserRecord, AuthExportError> {
         .collect();
     Ok(UserRecord {
         local_id,
-        email: string_member(value, "email"),
-        email_verified: value
-            .get("emailVerified")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        display_name: string_member(value, "displayName"),
-        photo_url: string_member(value, "photoUrl"),
-        phone_number: string_member(value, "phoneNumber"),
-        disabled: value
-            .get("disabled")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        email_link_signin: value
-            .get("emailLinkSignin")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        password_hash: string_member(value, "passwordHash"),
-        salt: string_member(value, "salt"),
-        password_updated_at: number_member(value, "passwordUpdatedAt"),
-        valid_since: string_member(value, "validSince"),
-        created_at: string_member(value, "createdAt"),
-        last_login_at: string_member(value, "lastLoginAt"),
-        last_refresh_at: string_member(value, "lastRefreshAt"),
-        custom_attributes: string_member(value, "customAttributes"),
-        tenant_id: string_member(value, "tenantId"),
+        email: string_member(value, "email")?,
+        email_verified: bool_member(value, "", "emailVerified")?.unwrap_or(false),
+        display_name: string_member(value, "displayName")?,
+        photo_url: string_member(value, "photoUrl")?,
+        phone_number: string_member(value, "phoneNumber")?,
+        disabled: bool_member(value, "", "disabled")?.unwrap_or(false),
+        email_link_signin: bool_member(value, "", "emailLinkSignin")?.unwrap_or(false),
+        password_hash: string_member(value, "passwordHash")?,
+        salt: string_member(value, "salt")?,
+        password_updated_at: number_member(value, "passwordUpdatedAt")?,
+        valid_since: string_member(value, "validSince")?,
+        created_at: string_member(value, "createdAt")?,
+        last_login_at: string_member(value, "lastLoginAt")?,
+        last_refresh_at: string_member(value, "lastRefreshAt")?,
+        custom_attributes: string_member(value, "customAttributes")?,
+        tenant_id: string_member(value, "tenantId")?,
         provider_user_info,
         mfa_info,
         extra,
@@ -335,13 +340,13 @@ fn parse_provider(local_id: &str, value: &JsonValue) -> Result<ProviderUserInfo,
         .to_owned();
     Ok(ProviderUserInfo {
         provider_id,
-        raw_id: string_member(value, "rawId").unwrap_or_default(),
-        federated_id: string_member(value, "federatedId"),
-        email: string_member(value, "email"),
-        display_name: string_member(value, "displayName"),
-        photo_url: string_member(value, "photoUrl"),
-        phone_number: string_member(value, "phoneNumber"),
-        screen_name: string_member(value, "screenName"),
+        raw_id: string_member(value, "rawId")?.unwrap_or_default(),
+        federated_id: string_member(value, "federatedId")?,
+        email: string_member(value, "email")?,
+        display_name: string_member(value, "displayName")?,
+        photo_url: string_member(value, "photoUrl")?,
+        phone_number: string_member(value, "phoneNumber")?,
+        screen_name: string_member(value, "screenName")?,
     })
 }
 
@@ -352,35 +357,71 @@ fn parse_enrollment(local_id: &str, value: &JsonValue) -> Result<MfaEnrollment, 
         ));
     }
     Ok(MfaEnrollment {
-        mfa_enrollment_id: string_member(value, "mfaEnrollmentId").unwrap_or_default(),
-        display_name: string_member(value, "displayName"),
-        phone_info: string_member(value, "phoneInfo"),
-        unobfuscated_phone_info: string_member(value, "unobfuscatedPhoneInfo"),
-        enrolled_at: string_member(value, "enrolledAt"),
-        totp_shared_secret_key: value
-            .get("totpInfo")
-            .and_then(|t| t.get("sharedSecretKey"))
-            .and_then(JsonValue::as_str)
-            .map(str::to_owned),
+        mfa_enrollment_id: string_member(value, "mfaEnrollmentId")?.unwrap_or_default(),
+        display_name: string_member(value, "displayName")?,
+        phone_info: string_member(value, "phoneInfo")?,
+        unobfuscated_phone_info: string_member(value, "unobfuscatedPhoneInfo")?,
+        enrolled_at: string_member(value, "enrolledAt")?,
+        totp_shared_secret_key: match value.get("totpInfo") {
+            None => None,
+            Some(JsonValue::Object(_)) => {
+                string_member(value.get("totpInfo").unwrap(), "sharedSecretKey")?
+            }
+            Some(_) => {
+                return refuse(format!(
+                    "the totpInfo member of account {local_id:?} is not an object"
+                ))
+            }
+        },
     })
 }
 
-fn string_member(value: &JsonValue, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(JsonValue::as_str)
-        .map(str::to_owned)
+fn string_member(value: &JsonValue, key: &str) -> Result<Option<String>, AuthExportError> {
+    match value.get(key) {
+        None => Ok(None),
+        Some(JsonValue::String(s)) => Ok(Some(s.clone())),
+        Some(_) => refuse(format!("the Auth account member {key:?} is not a string")),
+    }
 }
 
-fn number_member(value: &JsonValue, key: &str) -> Option<f64> {
+fn number_member(value: &JsonValue, key: &str) -> Result<Option<f64>, AuthExportError> {
     match value.get(key) {
         // A millisecond timestamp is far inside the exactly representable range, so the
         // widening never rounds in practice; a hypothetical larger one is only ever written
         // back out again.
         #[allow(clippy::cast_precision_loss)]
-        Some(JsonValue::Int(i)) => Some(*i as f64),
-        Some(JsonValue::Float(f)) => Some(*f),
-        _ => None,
+        Some(JsonValue::Int(i)) => Ok(Some(*i as f64)),
+        Some(JsonValue::Float(f)) => Ok(Some(*f)),
+        None => Ok(None),
+        Some(_) => refuse(format!("the Auth account member {key:?} is not a number")),
+    }
+}
+
+fn bool_member(
+    value: &JsonValue,
+    parent: &str,
+    key: &str,
+) -> Result<Option<bool>, AuthExportError> {
+    let Some(container) = (if parent.is_empty() {
+        Some(value)
+    } else {
+        value.get(parent)
+    }) else {
+        return Ok(None);
+    };
+    if !matches!(container, JsonValue::Object(_)) {
+        return refuse(format!(
+            "the Auth config member {parent:?} is not an object"
+        ));
+    }
+    let Some(member) = container.get(key) else {
+        return Ok(None);
+    };
+    match member {
+        JsonValue::Bool(value) => Ok(Some(*value)),
+        _ => refuse(format!(
+            "the Auth config/account member {key:?} is not a boolean"
+        )),
     }
 }
 

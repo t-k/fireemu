@@ -401,6 +401,52 @@ service cloud.firestore {
 }
 
 #[tokio::test]
+async fn firestore_grpc_request_shape_has_anonymous_auth_and_omits_inapplicable_members() {
+    let mut h = start().await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} {
+      allow get: if request.auth == null
+                 && request.keys().hasOnly(['auth', 'method', 'path', 'time']);
+    }
+  }
+}",
+        )
+        .unwrap();
+
+    // The request passes Rules and reaches Firestore's not-found response, proving that
+    // anonymous auth is explicit null and that resource/query are absent from request.keys().
+    let error = h
+        .client
+        .get_document(get("shape/missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::NotFound, "{error}");
+
+    // Missing members are evaluation errors, rather than values equal to null.
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} { allow get: if request.resource == null; }
+  }
+}",
+        )
+        .unwrap();
+    let error = h
+        .client
+        .get_document(get("shape/missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::PermissionDenied, "{error}");
+    h.handle.abort();
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn owner_bypasses_rules_and_users_are_checked_per_method() {
     let mut h = start().await;

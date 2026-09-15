@@ -1955,6 +1955,44 @@ fn integers_and_doubles_compare_exactly_beyond_2_to_the_53() {
 }
 
 #[test]
+fn firestore_request_shape_distinguishes_missing_members_from_null() {
+    let request = ctx(
+        Method::Get,
+        "/databases/(default)/documents/notes/one",
+        None,
+    );
+    let decision = |condition: &str| {
+        let source = format!(
+            "rules_version = '2'; service cloud.firestore {{ match /databases/{{database}}/documents/notes/{{id}} {{ allow get: if {condition}; }} }}"
+        );
+        evaluate_request(&parse_ruleset(&source).unwrap(), &request).decision
+    };
+
+    // A missing request member is an evaluation error. It must not behave like null.
+    assert!(matches!(
+        decision("request.resource == null"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+    assert!(matches!(
+        decision("request.query == null"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+
+    // Anonymous callers have an explicitly present null auth member.
+    assert!(matches!(decision("request.auth == null"), Decision::Allow));
+
+    // The absent members are also absent from the request map's key set.
+    assert!(matches!(
+        decision("request.keys() == ['auth', 'method', 'path', 'time']"),
+        Decision::Allow
+    ));
+    assert!(matches!(
+        decision("request.keys().hasAny(['resource', 'query'])"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+}
+
+#[test]
 fn regex_step_budget_exhaustion_denies_replace() {
     let rules = r"
 rules_version = '2';

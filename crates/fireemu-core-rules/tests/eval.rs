@@ -1589,6 +1589,10 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
         "rules_version = '2';\nservice cloud.firestore { function number() { return float(resource.data.value); } function text() { return string(number()); } match /databases/{d}/documents { match /notes/{id} { allow list: if text() == '0'; } } }",
         &zero
     ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function pick(value) { return value.n; } function check(value) { return string(pick({'n': resource.data.value})) == '0'; } match /databases/{d}/documents { match /notes/{id} { allow list: if check({'n': 'unrelated'}); } } }",
+        &zero
+    ));
     for condition in ["{'0': true, '-0': false}[text()]", "['0'].hasAny([text()])"] {
         let nested_numeric_rules = format!(
             "rules_version = '2';\nservice cloud.firestore {{ function number() {{ return float(resource.data.value); }} function text() {{ return string(number()); }} match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"

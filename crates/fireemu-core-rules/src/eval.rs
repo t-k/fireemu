@@ -1748,31 +1748,14 @@ impl<'a> Evaluator<'a> {
                 .get(name.as_str())
                 .copied()
                 .unwrap_or(name == "resource"),
-            ExprKind::Member { object, .. } => {
-                let source = self.function_expression_query_numeric_source_only(
-                    object,
-                    numeric_locals,
-                    environment,
-                    visiting,
-                );
-                match self.query_static_value(expr) {
-                    Some(
-                        RulesValue::Int(_)
-                        | RulesValue::Float(_)
-                        | RulesValue::Map(_)
-                        | RulesValue::PartialMap(_)
-                        | RulesValue::PartialMapExcluding { .. }
-                        | RulesValue::List(_)
-                        | RulesValue::Set(_)
-                        | RulesValue::PartialList(_)
-                        | RulesValue::PartialListAny(_),
-                    )
-                    | None => source,
-                    Some(_) => false,
-                }
-            }
+            ExprKind::Member { object, .. } => self.function_expression_query_numeric_source_only(
+                object,
+                numeric_locals,
+                environment,
+                visiting,
+            ),
             ExprKind::Index { object, index } => {
-                let source = self.function_expression_query_numeric_source_only(
+                self.function_expression_query_numeric_source_only(
                     object,
                     numeric_locals,
                     environment,
@@ -1782,22 +1765,7 @@ impl<'a> Evaluator<'a> {
                     numeric_locals,
                     environment,
                     visiting,
-                );
-                match self.query_static_value(expr) {
-                    Some(
-                        RulesValue::Int(_)
-                        | RulesValue::Float(_)
-                        | RulesValue::Map(_)
-                        | RulesValue::PartialMap(_)
-                        | RulesValue::PartialMapExcluding { .. }
-                        | RulesValue::List(_)
-                        | RulesValue::Set(_)
-                        | RulesValue::PartialList(_)
-                        | RulesValue::PartialListAny(_),
-                    )
-                    | None => source,
-                    Some(_) => false,
-                }
+                )
             }
             ExprKind::Slice { object, start, end } => {
                 self.function_expression_query_numeric_source_only(

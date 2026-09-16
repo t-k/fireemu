@@ -372,4 +372,59 @@ mod tests {
             )]
         );
     }
+
+    #[test]
+    fn parsed_vector_indexes_drive_nearest_planning_and_filtered_queries_need_composites() {
+        use fireemu_core_firestore::index::{
+            decide, IndexDecision, IndexValidationPolicy, PlanningContext,
+        };
+        use fireemu_core_firestore::query::{
+            DistanceMeasure, FieldOp, FilterExpr, Query, QueryScope,
+        };
+        use fireemu_core_firestore::value::Value;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+
+        let config = json!({
+            "fieldOverrides": [{
+                "collectionGroup": "items",
+                "fieldPath": "embedding",
+                "indexes": [{"vectorConfig": {"dimension": 2, "flat": {}}}]
+            }]
+        });
+        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let context = PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        };
+        let nearest = || {
+            Query::new(QueryScope::collection(
+                None,
+                CollectionId::try_new("items").unwrap(),
+            ))
+            .with_find_nearest(fireemu_core_firestore::query::FindNearest {
+                vector_field: FieldPath::parse("embedding").unwrap(),
+                query_vector: vec![0.0, 1.0],
+                distance_measure: DistanceMeasure::Cosine,
+                limit: 5,
+                distance_result_field: None,
+                distance_threshold: None,
+            })
+        };
+
+        assert!(matches!(
+            decide(&nearest().canonicalize().unwrap(), &indexes, &context),
+            IndexDecision::UseIndex { .. }
+        ));
+
+        let filtered = nearest().with_filter(FilterExpr::Field {
+            field: FieldPath::parse("category").unwrap(),
+            op: FieldOp::Equal,
+            value: Value::String("book".to_owned()),
+        });
+        assert!(matches!(
+            decide(&filtered.canonicalize().unwrap(), &indexes, &context),
+            IndexDecision::MissingRequired { .. }
+        ));
+    }
 }

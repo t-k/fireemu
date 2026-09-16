@@ -26,13 +26,13 @@
     "packages": [
       {
         "codeSourceHead": "97ef1d3a8fb52938bbe26b1da9c85b9c5b430dd3",
-        "evidencePackageCommit": null,
+        "evidencePackageCommit": "c2b4588dacef4bfd156115dcc5677bdee7874bf5",
         "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v6.json",
         "sha256": "88faf4eb7cda190013b5ded17e7ae74e678e2504685d910a739c9933f9ebf0c1"
       },
       {
         "codeSourceHead": "97ef1d3a8fb52938bbe26b1da9c85b9c5b430dd3",
-        "evidencePackageCommit": null,
+        "evidencePackageCommit": "c2b4588dacef4bfd156115dcc5677bdee7874bf5",
         "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v6.json",
         "sha256": "cefe2f74fd63fc2ec05798ed0c27e73bb66b194c735cd86107335ed24c466afe"
       }
@@ -49,8 +49,8 @@
     "savedProductionReference": "historical receipts and replay retained without current-head promotion",
     "sdkLocal": "runner tests are source-bound; settings runner case-level execution remains pending"
   },
-  "evidencePackageCommit": null,
-  "evidencePackageCommitPolicy": "filled in the external binding report after the package commit; codeSourceHead remains the compatibility source identity",
+  "evidencePackageCommit": "c2b4588dacef4bfd156115dcc5677bdee7874bf5",
+  "evidencePackageCommitPolicy": "package files were committed in this commit; codeSourceHead remains the compatibility source identity; this report commit records the external package commit without self-reference",
   "frozenAt": "2026-09-16T22:45:00Z",
   "gitStatus": "clean at freeze",
   "id": "auth-core-oracle-preparation-current-head-20260917-v5",
@@ -98,7 +98,7 @@
   "rebindPackages": [
     {
       "codeSourceHead": "97ef1d3a8fb52938bbe26b1da9c85b9c5b430dd3",
-      "evidencePackageCommit": null,
+      "evidencePackageCommit": "c2b4588dacef4bfd156115dcc5677bdee7874bf5",
       "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v6.json",
       "prior": {
         "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v5.json",
@@ -110,7 +110,7 @@
     },
     {
       "codeSourceHead": "97ef1d3a8fb52938bbe26b1da9c85b9c5b430dd3",
-      "evidencePackageCommit": null,
+      "evidencePackageCommit": "c2b4588dacef4bfd156115dcc5677bdee7874bf5",
       "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v6.json",
       "prior": {
         "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v5.json",

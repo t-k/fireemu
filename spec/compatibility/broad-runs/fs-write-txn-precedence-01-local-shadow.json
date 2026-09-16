@@ -1,0 +1,83 @@
+{
+  "kind": "firestore-write-transaction-local-shadow-plan-v1",
+  "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
+  "status": "prepared-local-only",
+  "productionExecuted": false,
+  "sourceCommit": "d813c811945e262296b16fce7609f4d0a8698909",
+  "artifactSha256": "87b2c574667104ee284a4d4e801c06606b93667cfd73a9101cb6123e30459059",
+  "manifestSha256": "4788da1f38f1672988a59be816115cf6b8c077d0fdc95b86a5a457d271812015",
+  "execution": {
+    "runner": "existing shared_gate.py with the current Rust gRPC and REST integration harnesses",
+    "commands": [
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test streams --profile pr",
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test rest --profile pr",
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test local --profile pr"
+    ],
+    "network": "loopback only",
+    "productionCredentials": false,
+    "portLifecycle": "owned dynamic ports; stop the process and release the gate before completion"
+  },
+  "casePlans": [
+    {
+      "id": "stream-transaction-contention",
+      "localTests": [
+        "write_stream_refuses_active_transaction_contention_without_mutation",
+        "write_stream_handshake_then_sequential_commits"
+      ],
+      "controls": [
+        "uncontended stream write succeeds",
+        "contended stream request contains a locked write followed by an owned tail write",
+        "refusal is read from the stream and the stream is fully drained",
+        "guard remains at the pre-contention value and tail is absent",
+        "rollback releases the lock and a fresh stream write succeeds"
+      ],
+      "failureRehearsal": [
+        "inject incomplete stream response and classify as indeterminate",
+        "inject cleanup read failure and retain the ownership journal without DELETE",
+        "inject configuration drift before setup and stop before data mutation"
+      ],
+      "cleanupRehearsal": [
+        "bind updateTime from a typed readback",
+        "conditional DELETE only for the owned version",
+        "final absence readback for guard and tail",
+        "assert no owned process or gate remains"
+      ]
+    },
+    {
+      "id": "document-limit-boundaries",
+      "localTests": [
+        "rest_document_size_and_nesting_boundaries_refuse_without_publishing",
+        "rest_oversized_nested_values_report_canonical_paths_without_publishing"
+      ],
+      "controls": [
+        "exact document boundary is accepted",
+        "one-byte-over boundary is refused",
+        "nested over-boundary document is absent after refusal",
+        "valid nested control remains readable"
+      ],
+      "failureRehearsal": [
+        "inject a malformed body and ensure no document attempt is recorded as owned",
+        "inject a refusal readback failure and retain the recovery journal",
+        "inject an unexpected success and classify it as semantic mismatch rather than cleanup authority"
+      ],
+      "cleanupRehearsal": [
+        "read each present target and bind its updateTime",
+        "delete only owned versions",
+        "verify all targets absent"
+      ]
+    }
+  ],
+  "expectedLocalEvidence": {
+    "collectionComplete": true,
+    "stateValidation": true,
+    "cleanupComplete": true,
+    "compatibility": "not-observed",
+    "productionComparison": "not-run"
+  },
+  "evidenceBoundary": [
+    "local invariant",
+    "official-emulator-independent local runtime observation",
+    "production-required semantics remain unobserved"
+  ],
+  "notAProductionReceipt": true
+}

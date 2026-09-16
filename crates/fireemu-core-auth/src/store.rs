@@ -3778,6 +3778,7 @@ pub struct AuthExportSnapshot {
     project: String,
     default: AuthStore,
     tenants: Vec<(String, AuthStore)>,
+    tenant_metadata: BTreeMap<String, TenantMetadata>,
 }
 
 impl AuthExportSnapshot {
@@ -3798,6 +3799,13 @@ impl AuthExportSnapshot {
         self.tenants
             .iter()
             .map(|(tenant, store)| (tenant.as_str(), store))
+    }
+
+    /// The complete authorization metadata captured for a tenant, if it was published with the
+    /// tenant store.
+    #[must_use]
+    pub fn tenant_metadata(&self, tenant: &str) -> Option<&TenantMetadata> {
+        self.tenant_metadata.get(tenant)
     }
 }
 
@@ -5302,6 +5310,16 @@ impl AuthRegistry {
         if tenant_ids != metadata_tenants {
             return Err("tenant store and metadata membership differ");
         }
+        let tenant_metadata = tenant_entries
+            .iter()
+            .map(|(tenant, _)| {
+                metadata
+                    .get(&(project.to_owned(), tenant.clone()))
+                    .cloned()
+                    .map(|value| (tenant.clone(), value))
+                    .ok_or("tenant metadata disappeared during Auth export")
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
         let snapshot = AuthExportSnapshot {
             project: project.to_owned(),
             default: default_guard.clone(),
@@ -5310,6 +5328,7 @@ impl AuthRegistry {
                 .zip(&tenant_guards)
                 .map(|((tenant, _), store)| (tenant.clone(), (*store).clone()))
                 .collect(),
+            tenant_metadata,
         };
         Ok(Some(snapshot))
     }
@@ -7040,6 +7059,17 @@ mod compatibility_routing_tests {
         };
         default.lock().unwrap().set_config(initial_config);
         tenant.lock().unwrap().set_config(initial_config);
+        let initial_metadata = TenantMetadata {
+            display_name: Some("Customer tenant".to_owned()),
+            allow_password_signup: false,
+            enable_email_link_signin: false,
+            enable_anonymous_user: true,
+            disable_auth: false,
+            disabled_user_signup: true,
+            disabled_user_deletion: false,
+            enable_improved_email_privacy: true,
+        };
+        assert!(registry.update_tenant("demo-app", "customer", initial_metadata.clone()));
         let tenant_operation = tenant.lock().unwrap();
         let gate = registry.operation_gate("demo-app", None).unwrap();
         let operation = gate.lock().unwrap();
@@ -7116,6 +7146,10 @@ mod compatibility_routing_tests {
                 .find(|(id, _)| *id == "customer")
                 .map(|(_, store)| store.config()),
             Some(initial_config)
+        );
+        assert_eq!(
+            snapshot.tenant_metadata("customer"),
+            Some(&initial_metadata)
         );
     }
 

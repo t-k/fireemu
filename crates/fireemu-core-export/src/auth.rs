@@ -84,8 +84,18 @@ const KNOWN_PASSWORD_POLICY_MEMBERS: [&str; 9] = [
     "allowedNonAlphanumericCharacters",
 ];
 const KNOWN_AUTH_SETTINGS_MEMBERS: [&str; 4] = ["version", "projectId", "project", "namespaces"];
-const KNOWN_AUTH_SETTINGS_NAMESPACE_MEMBERS: [&str; 2] = ["tenantId", "settings"];
+const KNOWN_AUTH_SETTINGS_NAMESPACE_MEMBERS: [&str; 3] = ["tenantId", "settings", "metadata"];
 const KNOWN_AUTH_SETTINGS_RECORD_MEMBERS: [&str; 3] = ["config", "quota", "blocking"];
+const KNOWN_TENANT_METADATA_MEMBERS: [&str; 8] = [
+    "displayName",
+    "allowPasswordSignup",
+    "enableEmailLinkSignin",
+    "enableAnonymousUser",
+    "disableAuth",
+    "disabledUserSignup",
+    "disabledUserDeletion",
+    "enableImprovedEmailPrivacy",
+];
 const BLOCKING_DISCOVERY_EVENTS_MEMBER: &str = "__fireemuDiscoveryEvents";
 const KNOWN_QUOTA_MEMBERS: [&str; 5] = [
     "mode",
@@ -334,6 +344,37 @@ pub struct AuthSettingsNamespace {
     pub tenant_id: Option<String>,
     /// Settings for that namespace.
     pub settings: AuthSettingsRecord,
+    /// Complete tenant authorization metadata, when captured by fireemu.
+    ///
+    /// This is optional so an older artifact without the extension keeps the legacy import
+    /// behavior. When present, all boolean members are serialized, including explicit `false`
+    /// values.
+    pub metadata: Option<TenantMetadataRecord>,
+}
+
+/// Complete authorization metadata for one Identity Platform tenant.
+///
+/// The project ID is carried by the enclosing [`AuthSettings`] record. Keeping this DTO in the
+/// export crate avoids coupling the artifact format to the live Auth registry implementation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct TenantMetadataRecord {
+    /// Human-readable tenant name, if configured.
+    pub display_name: Option<String>,
+    /// Whether password sign-up and sign-in are enabled.
+    pub allow_password_signup: bool,
+    /// Whether email-link sign-in is enabled.
+    pub enable_email_link_signin: bool,
+    /// Whether anonymous sign-in is enabled.
+    pub enable_anonymous_user: bool,
+    /// Whether all authentication is disabled.
+    pub disable_auth: bool,
+    /// Whether end-user account creation is disabled in this tenant.
+    pub disabled_user_signup: bool,
+    /// Whether end-user self-deletion is disabled in this tenant.
+    pub disabled_user_deletion: bool,
+    /// Whether email enumeration protection is enabled in this tenant.
+    pub enable_improved_email_privacy: bool,
 }
 
 /// fireemu-only Auth settings retained next to the official export.
@@ -349,6 +390,26 @@ pub struct AuthSettings {
 }
 
 impl AuthSettings {
+    /// Rejects tenant metadata from a different Auth project while preserving the historical
+    /// behavior for older sidecars that carry no tenant metadata extension.
+    pub fn validate_tenant_metadata_project(
+        &self,
+        target_project: &str,
+    ) -> Result<(), AuthExportError> {
+        if self.project_id != target_project
+            && self
+                .namespaces
+                .iter()
+                .any(|namespace| namespace.metadata.is_some())
+        {
+            return refuse(format!(
+                "tenant metadata belongs to project {:?}, not the import target {:?}",
+                self.project_id, target_project
+            ));
+        }
+        Ok(())
+    }
+
     /// Parses the fireemu-only settings sidecar.
     pub fn parse(text: &str) -> Result<Self, AuthExportError> {
         let value = parse(text).map_err(|e| AuthExportError(e.to_string()))?;
@@ -410,9 +471,17 @@ impl AuthSettings {
                     })?,
                     "Auth settings namespace settings",
                 )?;
+                let metadata = match entry.get("metadata") {
+                    None | Some(JsonValue::Null) => None,
+                    Some(value) => Some(parse_tenant_metadata(
+                        value,
+                        &format!("Auth settings namespace {index}.metadata"),
+                    )?),
+                };
                 namespaces.push(AuthSettingsNamespace {
                     tenant_id: Some(tenant_id),
                     settings,
+                    metadata,
                 });
             }
         } else if let Some(value) = value.get("namespaces") {
@@ -446,6 +515,10 @@ impl AuthSettings {
                         namespace
                             .insert_some("tenantId", entry.tenant_id.as_ref().map(Json::string));
                         namespace.insert("settings", write_auth_settings_record(&entry.settings));
+                        namespace.insert_some(
+                            "metadata",
+                            entry.metadata.as_ref().map(write_tenant_metadata),
+                        );
                         namespace
                     })
                     .collect(),
@@ -453,6 +526,34 @@ impl AuthSettings {
         );
         doc.to_pretty()
     }
+}
+
+fn parse_tenant_metadata(
+    value: &JsonValue,
+    subject: &str,
+) -> Result<TenantMetadataRecord, AuthExportError> {
+    reject_unknown(value, &KNOWN_TENANT_METADATA_MEMBERS, subject)?;
+    let optional_string = match value.get("displayName") {
+        None | Some(JsonValue::Null) => None,
+        Some(JsonValue::String(value)) => Some(value.clone()),
+        Some(_) => return refuse(format!("{subject}.displayName is not a string or null")),
+    };
+    let boolean = |key: &str| {
+        value
+            .get(key)
+            .and_then(JsonValue::as_bool)
+            .ok_or_else(|| AuthExportError(format!("{subject}.{key} is not a boolean")))
+    };
+    Ok(TenantMetadataRecord {
+        display_name: optional_string,
+        allow_password_signup: boolean("allowPasswordSignup")?,
+        enable_email_link_signin: boolean("enableEmailLinkSignin")?,
+        enable_anonymous_user: boolean("enableAnonymousUser")?,
+        disable_auth: boolean("disableAuth")?,
+        disabled_user_signup: boolean("disabledUserSignup")?,
+        disabled_user_deletion: boolean("disabledUserDeletion")?,
+        enable_improved_email_privacy: boolean("enableImprovedEmailPrivacy")?,
+    })
 }
 
 fn parse_auth_settings_record(
@@ -681,6 +782,40 @@ fn write_auth_settings_record(settings: &AuthSettingsRecord) -> Json {
     doc.insert_some(
         "blocking",
         settings.blocking.as_ref().map(write_blocking_settings),
+    );
+    doc
+}
+
+fn write_tenant_metadata(metadata: &TenantMetadataRecord) -> Json {
+    let mut doc = Json::object();
+    doc.insert_some(
+        "displayName",
+        metadata.display_name.as_ref().map(Json::string),
+    );
+    doc.insert(
+        "allowPasswordSignup",
+        Json::Bool(metadata.allow_password_signup),
+    );
+    doc.insert(
+        "enableEmailLinkSignin",
+        Json::Bool(metadata.enable_email_link_signin),
+    );
+    doc.insert(
+        "enableAnonymousUser",
+        Json::Bool(metadata.enable_anonymous_user),
+    );
+    doc.insert("disableAuth", Json::Bool(metadata.disable_auth));
+    doc.insert(
+        "disabledUserSignup",
+        Json::Bool(metadata.disabled_user_signup),
+    );
+    doc.insert(
+        "disabledUserDeletion",
+        Json::Bool(metadata.disabled_user_deletion),
+    );
+    doc.insert(
+        "enableImprovedEmailPrivacy",
+        Json::Bool(metadata.enable_improved_email_privacy),
     );
     doc
 }
@@ -1498,7 +1633,7 @@ mod tests {
         AuthSettingsRecord, BlockingAuthForwardingRecord, BlockingAuthSelectionRecord,
         BlockingAuthSettingsRecord, MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace,
         PasswordPolicyRecord, ProviderUserInfo, QuotaSettingsRecord, TemporaryQuotaRecord,
-        UserRecord,
+        TenantMetadataRecord, UserRecord,
     };
     use std::collections::BTreeSet;
 
@@ -1855,6 +1990,16 @@ mod tests {
                     quota: None,
                     blocking: None,
                 },
+                metadata: Some(TenantMetadataRecord {
+                    display_name: Some("Tenant A".to_owned()),
+                    allow_password_signup: false,
+                    enable_email_link_signin: true,
+                    enable_anonymous_user: false,
+                    disable_auth: true,
+                    disabled_user_signup: true,
+                    disabled_user_deletion: false,
+                    enable_improved_email_privacy: true,
+                }),
             }],
         };
         let encoded = settings.to_json();
@@ -1870,6 +2015,124 @@ mod tests {
         }
         assert!(encoded.contains("fireemu://functions/demo-app/us-central1/checkRegistration"));
         assert!(!encoded.contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn tenant_metadata_requires_all_boolean_controls_and_preserves_explicit_false() {
+        let settings = r#"{
+          "version": 1,
+          "projectId": "demo-app",
+          "project": {},
+          "namespaces": [{
+            "tenantId": "tenant-a",
+            "settings": {},
+            "metadata": {
+              "displayName": null,
+              "allowPasswordSignup": false,
+              "enableEmailLinkSignin": false,
+              "enableAnonymousUser": true,
+              "disableAuth": false,
+              "disabledUserSignup": true,
+              "disabledUserDeletion": false,
+              "enableImprovedEmailPrivacy": true
+            }
+          }]
+        }"#;
+        let parsed = AuthSettings::parse(settings).expect("tenant metadata parses");
+        let metadata = parsed.namespaces[0]
+            .metadata
+            .as_ref()
+            .expect("metadata is present");
+        assert_eq!(metadata.display_name, None);
+        assert!(!metadata.allow_password_signup);
+        assert!(!metadata.enable_email_link_signin);
+        assert!(metadata.enable_anonymous_user);
+        assert!(!metadata.disable_auth);
+        assert!(metadata.disabled_user_signup);
+        assert!(!metadata.disabled_user_deletion);
+        assert!(metadata.enable_improved_email_privacy);
+        let encoded = parsed.to_json();
+        assert!(encoded.contains("\"allowPasswordSignup\": false"));
+        assert!(encoded.contains("\"enableEmailLinkSignin\": false"));
+        assert!(encoded.contains("\"disableAuth\": false"));
+        assert_eq!(AuthSettings::parse(&encoded).unwrap(), parsed);
+    }
+
+    #[test]
+    fn tenant_metadata_is_optional_for_legacy_settings_artifacts() {
+        let settings = AuthSettings::parse(
+            r#"{
+              "version": 1,
+              "projectId": "demo-app",
+              "project": {},
+              "namespaces": [{"tenantId": "tenant-a", "settings": {}}]
+            }"#,
+        )
+        .expect("legacy settings parse");
+        assert_eq!(settings.namespaces[0].metadata, None);
+    }
+
+    #[test]
+    fn tenant_metadata_rejects_incomplete_or_unknown_members() {
+        let missing = r#"{
+          "version": 1, "projectId": "demo-app", "project": {},
+          "namespaces": [{"tenantId": "tenant-a", "settings": {}, "metadata": {
+            "allowPasswordSignup": false,
+            "enableEmailLinkSignin": false,
+            "enableAnonymousUser": false,
+            "disabledUserSignup": false,
+            "disabledUserDeletion": false,
+            "enableImprovedEmailPrivacy": false
+          }}]
+        }"#;
+        assert!(AuthSettings::parse(missing).is_err());
+        let unknown = r#"{
+          "version": 1, "projectId": "demo-app", "project": {},
+          "namespaces": [{"tenantId": "tenant-a", "settings": {}, "metadata": {
+            "displayName": null,
+            "allowPasswordSignup": false,
+            "enableEmailLinkSignin": false,
+            "enableAnonymousUser": false,
+            "disableAuth": false,
+            "disabledUserSignup": false,
+            "disabledUserDeletion": false,
+            "enableImprovedEmailPrivacy": false,
+            "future": true
+          }}]
+        }"#;
+        assert!(AuthSettings::parse(unknown).is_err());
+    }
+
+    #[test]
+    fn tenant_metadata_from_another_project_is_refused() {
+        let settings = AuthSettings::parse(
+            r#"{
+              "version": 1,
+              "projectId": "source-project",
+              "project": {},
+              "namespaces": [{
+                "tenantId": "tenant-a",
+                "settings": {},
+                "metadata": {
+                  "displayName": null,
+                  "allowPasswordSignup": false,
+                  "enableEmailLinkSignin": false,
+                  "enableAnonymousUser": false,
+                  "disableAuth": false,
+                  "disabledUserSignup": false,
+                  "disabledUserDeletion": false,
+                  "enableImprovedEmailPrivacy": false
+                }
+              }]
+            }"#,
+        )
+        .expect("settings parse");
+        assert!(settings
+            .validate_tenant_metadata_project("destination-project")
+            .is_err());
+        assert!(settings
+            .validate_tenant_metadata_project("source-project")
+            .is_ok());
     }
 
     #[test]

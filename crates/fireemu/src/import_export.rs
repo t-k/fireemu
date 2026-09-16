@@ -44,8 +44,8 @@ use fireemu_core_export::auth::{
     fake_hash, AccountsFile, AuthConfig, AuthSettings, AuthSettingsNamespace, AuthSettingsRecord,
     BlockingAuthForwardingRecord, BlockingAuthSelectionRecord, BlockingAuthSettingsRecord,
     MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace, PasswordPolicyRecord,
-    ProviderUserInfo, QuotaSettingsRecord, TemporaryQuotaRecord, UserRecord, ACCOUNTS_FILE,
-    AUTH_SETTINGS_FILE, CONFIG_FILE, PASSWORD_POLICIES_FILE,
+    ProviderUserInfo, QuotaSettingsRecord, TemporaryQuotaRecord, TenantMetadataRecord, UserRecord,
+    ACCOUNTS_FILE, AUTH_SETTINGS_FILE, CONFIG_FILE, PASSWORD_POLICIES_FILE,
 };
 use fireemu_core_export::firestore::{
     for_each_output, write_output_to, ExportDocument, OverallMetadata, PartitionMetadata,
@@ -399,7 +399,7 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
                 }
                 prepared.firestore = Some(databases);
             }
-            Product::Auth => prepared.auth = Some(read_auth_section(dir, section)?),
+            Product::Auth => prepared.auth = Some(read_auth_section(dir, section, project)?),
             Product::Storage => prepared.storage = Some(read_storage_section(dir, section)?),
             Product::Database | Product::DataConnect => unreachable!("refused above"),
         }
@@ -593,16 +593,20 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
             })?;
         candidate.clear();
         candidate.set_config(auth.config_over(default_config));
-        let mut metadata = TenantMetadata {
-            allow_password_signup: true,
-            enable_email_link_signin: true,
-            enable_anonymous_user: true,
-            ..TenantMetadata::default()
-        };
+        let mut metadata =
+            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
+                .and_then(|settings| settings.metadata.as_ref())
+                .map(imported_tenant_metadata)
+                .unwrap_or_else(|| TenantMetadata {
+                    allow_password_signup: true,
+                    enable_email_link_signin: true,
+                    enable_anonymous_user: true,
+                    ..TenantMetadata::default()
+                });
         if let Some(settings) =
             settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
         {
-            if let Some(config) = &settings.config {
+            if let Some(config) = &settings.settings.config {
                 candidate.set_config(auth_config_from_settings(config, candidate.config()));
                 metadata.disabled_user_signup = config
                     .disabled_user_signup
@@ -614,7 +618,7 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
                     .enable_improved_email_privacy
                     .unwrap_or(metadata.enable_improved_email_privacy);
             }
-            if let Some(quota) = &settings.quota {
+            if let Some(quota) = &settings.settings.quota {
                 candidate
                     .set_signup_quota_config(imported_quota_settings(quota, &settings_path)?)
                     .map_err(|error| {
@@ -1512,7 +1516,11 @@ fn read_auth_password_policies(
 }
 
 #[allow(clippy::too_many_lines)]
-fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, ArtifactError> {
+fn read_auth_section(
+    dir: &Path,
+    section: &Section,
+    target_project: &str,
+) -> Result<PreparedAuth, ArtifactError> {
     let section_dir = dir.join(&section.path);
     scan_import_tree(
         dir,
@@ -1594,6 +1602,15 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
                 "the Auth settings sidecar has an empty projectId",
             ));
         }
+        settings
+            .validate_tenant_metadata_project(target_project)
+            .map_err(|error| {
+                ArtifactError::new(
+                    "auth",
+                    section_dir.join(AUTH_SETTINGS_FILE),
+                    error.to_string(),
+                )
+            })?;
         for namespace in &settings.namespaces {
             let tenant = namespace.tenant_id.as_deref().unwrap_or_default();
             if !tenants.contains_key(tenant) {
@@ -1604,6 +1621,37 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
                         "settings name tenant {tenant:?} has no matching accounts-{tenant}.json"
                     ),
                 ));
+            }
+            if let (Some(metadata), Some(config)) = (
+                namespace.metadata.as_ref(),
+                namespace.settings.config.as_ref(),
+            ) {
+                let conflicts = [
+                    (
+                        "disabledUserSignup",
+                        config.disabled_user_signup,
+                        metadata.disabled_user_signup,
+                    ),
+                    (
+                        "disabledUserDeletion",
+                        config.disabled_user_deletion,
+                        metadata.disabled_user_deletion,
+                    ),
+                    (
+                        "enableImprovedEmailPrivacy",
+                        config.enable_improved_email_privacy,
+                        metadata.enable_improved_email_privacy,
+                    ),
+                ];
+                if conflicts.iter().any(|(_, config_value, metadata_value)| {
+                    config_value.is_some_and(|value| value != *metadata_value)
+                }) {
+                    return Err(ArtifactError::new(
+                        "auth",
+                        section_dir.join(AUTH_SETTINGS_FILE),
+                        format!("tenant metadata conflicts with config for tenant {tenant:?}"),
+                    ));
+                }
             }
         }
     }
@@ -2082,11 +2130,38 @@ fn auth_config_from_settings(config: &AuthConfig, current: ProjectAuthConfig) ->
     }
 }
 
+fn exported_tenant_metadata(metadata: &TenantMetadata) -> TenantMetadataRecord {
+    TenantMetadataRecord {
+        display_name: metadata.display_name.clone(),
+        allow_password_signup: metadata.allow_password_signup,
+        enable_email_link_signin: metadata.enable_email_link_signin,
+        enable_anonymous_user: metadata.enable_anonymous_user,
+        disable_auth: metadata.disable_auth,
+        disabled_user_signup: metadata.disabled_user_signup,
+        disabled_user_deletion: metadata.disabled_user_deletion,
+        enable_improved_email_privacy: metadata.enable_improved_email_privacy,
+    }
+}
+
+fn imported_tenant_metadata(metadata: &TenantMetadataRecord) -> TenantMetadata {
+    TenantMetadata {
+        display_name: metadata.display_name.clone(),
+        allow_password_signup: metadata.allow_password_signup,
+        enable_email_link_signin: metadata.enable_email_link_signin,
+        enable_anonymous_user: metadata.enable_anonymous_user,
+        disable_auth: metadata.disable_auth,
+        disabled_user_signup: metadata.disabled_user_signup,
+        disabled_user_deletion: metadata.disabled_user_deletion,
+        enable_improved_email_privacy: metadata.enable_improved_email_privacy,
+        ..TenantMetadata::default()
+    }
+}
+
 fn settings_for_tenant<'a>(
     settings: Option<&'a AuthSettings>,
     target_project: &str,
     tenant: &str,
-) -> Option<&'a AuthSettingsRecord> {
+) -> Option<&'a AuthSettingsNamespace> {
     settings
         .filter(|settings| settings.project_id == target_project)
         .and_then(|settings| {
@@ -2094,7 +2169,6 @@ fn settings_for_tenant<'a>(
                 .namespaces
                 .iter()
                 .find(|namespace| namespace.tenant_id.as_deref() == Some(tenant))
-                .map(|namespace| &namespace.settings)
         })
 }
 
@@ -2821,6 +2895,13 @@ fn export_auth(
     let mut tenant_policies = Vec::new();
     let mut tenant_settings = Vec::new();
     for (tenant, tenant_store) in snapshot.tenant_stores() {
+        let tenant_metadata = snapshot.tenant_metadata(tenant).ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                &section_dir,
+                format!("tenant {tenant:?} has no captured authorization metadata"),
+            )
+        })?;
         let tenant_policy = exported_password_policy(tenant_store.password_policy());
         if tenant_policy != exported_password_policy(&PasswordPolicy::default()) {
             tenant_policies.push(PasswordPolicyNamespace {
@@ -2830,26 +2911,23 @@ fn export_auth(
         }
         let tenant_config = tenant_store.config();
         let tenant_quota = tenant_store.signup_quota().config().clone();
-        if tenant_config != ProjectAuthConfig::default()
-            || tenant_quota != SignupQuotaConfig::default()
-        {
-            tenant_settings.push(AuthSettingsNamespace {
-                tenant_id: Some(tenant.to_owned()),
-                settings: AuthSettingsRecord {
-                    config: Some(AuthConfig {
-                        allow_duplicate_emails: Some(tenant_config.allow_duplicate_emails),
-                        enable_improved_email_privacy: Some(
-                            tenant_config.enable_improved_email_privacy,
-                        ),
-                        disabled_user_signup: Some(tenant_config.disabled_user_signup),
-                        disabled_user_deletion: Some(tenant_config.disabled_user_deletion),
-                    }),
-                    quota: (tenant_quota != SignupQuotaConfig::default())
-                        .then(|| exported_quota_settings(&tenant_quota)),
-                    blocking: None,
-                },
-            });
-        }
+        tenant_settings.push(AuthSettingsNamespace {
+            tenant_id: Some(tenant.to_owned()),
+            settings: AuthSettingsRecord {
+                config: (tenant_config != ProjectAuthConfig::default()).then(|| AuthConfig {
+                    allow_duplicate_emails: Some(tenant_config.allow_duplicate_emails),
+                    enable_improved_email_privacy: Some(
+                        tenant_config.enable_improved_email_privacy,
+                    ),
+                    disabled_user_signup: Some(tenant_config.disabled_user_signup),
+                    disabled_user_deletion: Some(tenant_config.disabled_user_deletion),
+                }),
+                quota: (tenant_quota != SignupQuotaConfig::default())
+                    .then(|| exported_quota_settings(&tenant_quota)),
+                blocking: None,
+            },
+            metadata: Some(exported_tenant_metadata(tenant_metadata)),
+        });
         let mut file = AccountsFile::default();
         for user in tenant_store.users_by_creation() {
             file.users
@@ -3590,7 +3668,7 @@ mod tests {
         rfc3339_instant, rfc3339_text, scan_import_tree, UnmanagedCopyBudget,
         IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
-    use fireemu_core_auth::store::ProjectAuthConfig;
+    use fireemu_core_auth::store::{ProjectAuthConfig, TenantMetadata};
     use fireemu_core_export::auth::AuthConfig;
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
     use fireemu_export_publication::PublicationStage;
@@ -3790,6 +3868,22 @@ mod tests {
                 disabled_user_deletion: true,
             }
         );
+    }
+
+    #[test]
+    fn tenant_metadata_export_conversion_preserves_all_authorization_controls() {
+        let metadata = TenantMetadata {
+            display_name: Some("Tenant A".to_owned()),
+            allow_password_signup: false,
+            enable_email_link_signin: true,
+            enable_anonymous_user: false,
+            disable_auth: true,
+            disabled_user_signup: true,
+            disabled_user_deletion: false,
+            enable_improved_email_privacy: true,
+        };
+        let record = super::exported_tenant_metadata(&metadata);
+        assert_eq!(super::imported_tenant_metadata(&record), metadata);
     }
 
     #[test]

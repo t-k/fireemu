@@ -272,8 +272,8 @@ impl SignupQuota {
             window_start: window_start(now),
         };
         let limit = self.limit_at(now);
-        let bucket = if let Some(bucket) = self.buckets.get_mut(&key) {
-            bucket
+        let bucket_was_tracked = if self.buckets.contains_key(&key) {
+            true
         } else {
             if self.buckets.len() >= self.config.max_tracked_buckets {
                 return Err(QuotaError::BucketCapacity);
@@ -286,14 +286,22 @@ impl SignupQuota {
                     observed_over_limit: 0,
                 },
             );
-            self.buckets
-                .get_mut(&key)
-                .expect("the just-inserted quota bucket exists")
+            false
         };
-        let would_exceed = bucket.committed.saturating_add(bucket.reserved) >= limit;
+        let would_exceed = self
+            .buckets
+            .get(&key)
+            .is_some_and(|bucket| bucket.committed.saturating_add(bucket.reserved) >= limit);
         if would_exceed && self.config.mode == QuotaMode::Enforce {
+            if !bucket_was_tracked {
+                self.buckets.remove(&key);
+            }
             return Err(QuotaError::Exceeded);
         }
+        let bucket = self
+            .buckets
+            .get_mut(&key)
+            .expect("the quota bucket exists after capacity checks");
         bucket.reserved = bucket.reserved.saturating_add(1);
         if would_exceed {
             bucket.observed_over_limit = bucket.observed_over_limit.saturating_add(1);
@@ -341,7 +349,7 @@ impl SignupQuota {
             || reservation.limit != self.limit_at(now)
             || reservation.mode != self.config.mode
         {
-            self.release_tracked(&key, reservation.token)?;
+            self.release_tracked(&key, reservation.token, reservation.would_exceed)?;
             return Err(QuotaError::StaleReservation);
         }
         let Some(bucket) = self.buckets.get_mut(&key) else {
@@ -365,10 +373,15 @@ impl SignupQuota {
         let Some(key) = reservation.key else {
             return Ok(());
         };
-        self.release_tracked(&key, reservation.token)
+        self.release_tracked(&key, reservation.token, reservation.would_exceed)
     }
 
-    fn release_tracked(&mut self, key: &BucketKey, token: u64) -> Result<(), QuotaError> {
+    fn release_tracked(
+        &mut self,
+        key: &BucketKey,
+        token: u64,
+        would_exceed: bool,
+    ) -> Result<(), QuotaError> {
         if self.active_reservations.get(&token) != Some(key) {
             return Err(QuotaError::InvalidReservation);
         }
@@ -380,6 +393,9 @@ impl SignupQuota {
         }
         self.active_reservations.remove(&token);
         bucket.reserved -= 1;
+        if would_exceed {
+            bucket.observed_over_limit = bucket.observed_over_limit.saturating_sub(1);
+        }
         if bucket.committed == 0 && bucket.reserved == 0 && bucket.observed_over_limit == 0 {
             self.buckets.remove(key);
         }
@@ -442,6 +458,27 @@ mod tests {
     }
 
     #[test]
+    fn enforce_rejecting_a_new_over_limit_key_does_not_retain_a_bucket() {
+        let mut quota = SignupQuota::new(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 0,
+            max_tracked_buckets: 1,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+
+        assert_eq!(
+            quota.reserve("project", "192.0.2.1", T0),
+            Err(QuotaError::Exceeded)
+        );
+        assert_eq!(quota.tracked_bucket_count(), 0);
+
+        let other_key = quota.reserve("project", "192.0.2.2", T0);
+        assert_eq!(other_key, Err(QuotaError::Exceeded));
+        assert_eq!(quota.tracked_bucket_count(), 0);
+    }
+
+    #[test]
     fn observe_records_overage_without_rejecting() {
         let mut quota = quota(QuotaMode::Observe, 1);
         let first = quota.reserve("project", "192.0.2.1", T0).unwrap();
@@ -450,6 +487,29 @@ mod tests {
         assert!(second.would_exceed);
         quota.commit(second, T0).unwrap();
         assert_eq!(quota.usage("project", "192.0.2.1", T0), (2, 0));
+        assert_eq!(quota.buckets.values().next().unwrap().observed_over_limit, 1);
+    }
+
+    #[test]
+    fn observe_releasing_a_failed_over_limit_creation_reclaims_the_bucket() {
+        let mut quota = SignupQuota::new(SignupQuotaConfig {
+            mode: QuotaMode::Observe,
+            default_quota_per_hour: 0,
+            max_tracked_buckets: 1,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+
+        let failed = quota.reserve("project", "192.0.2.1", T0).unwrap();
+        assert!(failed.would_exceed);
+        quota.release(failed).unwrap();
+        assert_eq!(quota.tracked_bucket_count(), 0);
+        assert_eq!(quota.usage("project", "192.0.2.1", T0), (0, 0));
+
+        let retry = quota.reserve("project", "192.0.2.2", T0).unwrap();
+        assert!(retry.would_exceed);
+        quota.commit(retry, T0).unwrap();
+        assert_eq!(quota.tracked_bucket_count(), 1);
     }
 
     #[test]

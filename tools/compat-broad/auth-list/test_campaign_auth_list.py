@@ -262,12 +262,13 @@ def test_auth_lookup_validation_rejects_structured_error_and_wrong_shape():
 def test_deleted_lookup_validation_requires_explicit_empty_users():
     validate = campaign_auth_list_shadow.validate_deleted_lookup
     with pytest.raises(ValueError):
-        validate({"error": {"status": "INTERNAL"}})
+        validate(200, {"error": {"status": "INTERNAL"}})
     with pytest.raises(ValueError):
-        validate({})
+        validate(200, {})
     with pytest.raises(ValueError):
-        validate({"users": [{"localId": "still-present"}]})
-    validate({"users": []})
+        validate(200, {"users": [{"localId": "still-present"}]})
+    validate(200, {"users": []})
+    validate(404, {"error": {"status": "USER_NOT_FOUND"}})
 
 
 @pytest.mark.parametrize(

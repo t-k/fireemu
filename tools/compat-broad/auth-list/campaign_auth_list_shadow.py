@@ -281,9 +281,15 @@ def validate_auth_lookup(body, expected_uid: str) -> None:
         raise ValueError("owned account lookup did not return the bound user")
 
 
-def validate_deleted_lookup(body) -> None:
-    """Require the explicit empty-users acknowledgement after deletion."""
-    if not isinstance(body, dict) or body.get("users") != []:
+def validate_deleted_lookup(status: int, body) -> None:
+    """Require an explicit, typed acknowledgement that the account is absent."""
+    absent = status == 200 and isinstance(body, dict) and body.get("users") == []
+    not_found = (
+        status == 404
+        and isinstance(body, dict)
+        and body.get("error", {}).get("status") == "USER_NOT_FOUND"
+    )
+    if not (absent or not_found):
         raise ValueError("owned account absence unconfirmed")
 
 
@@ -621,9 +627,7 @@ def _real_child(output: Path, nonce: str) -> None:
         if operation["operationType"] == "auth-delete" and status != 200:
             raise ValueError("owned account deletion failed")
         if operation["operationType"] == "auth-lookup":
-            if status != 200:
-                raise ValueError("owned account absence unconfirmed")
-            validate_deleted_lookup(body)
+            validate_deleted_lookup(status, body)
 
     gate.finish()
     state = gate.snapshot()

@@ -383,3 +383,11 @@ The parent state is still `COMPAT_VERIFIED 0 / 14`, with no `REVIEW_READY` or `O
 The current-head Explain local shadow is also recorded as `spec/compatibility/broad-runs/3ab6dc85-explain-local-shadow.json`, bound to source `3ab6dc8581ea0a6c823caf3b80fb231511521738`, observer `9e5b2f61`, manifest `8f9ea90e`, comparison contract `b0f1a1d0` and artifact `b4ab486c`. It records 12 observed rows, six recovery rows, complete recording/state/cleanup and `productionExecuted: false`; it is not production evidence.
 
 The current feature head is `cfa8e796a0a39c571b971bbd5b0289d06cdce7c5`; this follow-up commit only binds the sanitized shadow projection and leaves the preceding runtime artifact source binding explicit.
+
+## Tenant policy and vector index closure checkpoint (2026-09-16)
+
+The Auth runtime now applies tenant `disableAuth`, password-signup and email-link policy checks to end-user lookup, OOB generation and password reset before dispatch. A focused real-handler regression verifies that a denied reset does not consume an existing OOB code, that the same code succeeds after policy restoration, that disabled tenants reject OOB generation, and that tenant admin batchGet remains available. These are local Auth observations; production policy propagation and delivery behavior remain unobserved.
+
+Firestore field override parsing now validates `vectorConfig.dimension` and `flat`, and Standard/Production `findNearest` planning consumes a matching single-field vector index when the query has only the vector field with exact scope and dimension. Additional filters continue to require a matching composite vector index. Parser-to-planner and planner regressions cover the positive and filtered cases. This is local Firestore evidence; production vector-index behavior remains unobserved.
+
+The integrated feature head passed the Auth `auth_flows` suite (114/114), Firestore index tests (33/33), and the `fireemu` package (332 passed, 28 documented skips). Independent strict review found no Must Fix finding in these changes. `COMPAT_VERIFIED` remains `0 / 14`; `FS-DATA-WRITE` is still the nearest parent and requires its owner-bound production campaign for stream/transaction precedence and bounded limits. No production operation or Cloud read occurred, and historical receipts, comparisons, artifacts and nonce bindings remain immutable.

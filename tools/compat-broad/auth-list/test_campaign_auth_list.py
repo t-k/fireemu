@@ -540,6 +540,39 @@ def test_v7_campaign_package_binds_current_shadow_and_result():
     assert all(value is None for value in package["production"]["ownerInputs"].values())
 
 
+def test_v8_campaign_package_binds_final_feature_artifact():
+    import hashlib
+
+    root = __import__("pathlib").Path(__file__).parents[3]
+    package_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v8.json"
+    result_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact-v8/result.json"
+    package = json.loads(package_path.read_bytes())
+    result = json.loads(result_path.read_bytes())
+    artifact = package["localShadow"]["ownedArtifact"]
+    assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
+        "cff20c69f2dd0f9bfd7b0c08a15ec2749296155036934722d4570f6d51018146"
+    )
+    assert package["kind"] == "production-campaign-auth-list-next-v8"
+    assert package["adapter"]["shadowCommit"] == result["executionCommit"]
+    for field, relative_path in (
+        ("shadowSha256", package["adapter"]["shadowPath"]),
+        ("sourceSha256", package["adapter"]["path"]),
+        ("gateSha256", package["adapter"]["gatePath"]),
+    ):
+        assert package["adapter"][field] == hashlib.sha256(
+            (root / relative_path).read_bytes()
+        ).hexdigest()
+    assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
+    assert artifact["artifactSha256"] == result["artifactSha256"]
+    assert artifact["observerSha256"] == result["observerSha256"]
+    assert artifact["parentManifestSha256"] == result["parentManifestSha256"]
+    assert result["productionExecuted"] is False
+    assert result["recordingComplete"] is True
+    assert result["stateValidation"] is True
+    assert package["production"]["productionExecuted"] is False
+    assert all(value is None for value in package["production"]["ownerInputs"].values())
+
+
 def test_actual_shadow_uses_fixed_fireemu_artifact_and_closes_transport(tmp_path):
     from campaign_auth_list_shadow import run
 

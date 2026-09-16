@@ -1772,12 +1772,14 @@ impl<'a> Evaluator<'a> {
                     return source;
                 }
                 match self.query_static_value(expr) {
-                    Some(RulesValue::Int(_) | RulesValue::Float(_)) | None => source,
                     Some(
-                        RulesValue::Map(_)
+                        RulesValue::Int(_)
+                        | RulesValue::Float(_)
+                        | RulesValue::Map(_)
                         | RulesValue::PartialMap(_)
                         | RulesValue::PartialMapExcluding { .. },
-                    ) => source,
+                    )
+                    | None => source,
                     Some(_) => false,
                 }
             }
@@ -1800,16 +1802,18 @@ impl<'a> Evaluator<'a> {
                     return source;
                 }
                 match self.query_static_value(expr) {
-                    Some(RulesValue::Int(_) | RulesValue::Float(_)) | None => source,
                     Some(
-                        RulesValue::Map(_)
+                        RulesValue::Int(_)
+                        | RulesValue::Float(_)
+                        | RulesValue::Map(_)
                         | RulesValue::PartialMap(_)
                         | RulesValue::PartialMapExcluding { .. }
                         | RulesValue::List(_)
                         | RulesValue::Set(_)
                         | RulesValue::PartialList(_)
                         | RulesValue::PartialListAny(_),
-                    ) => source,
+                    )
+                    | None => source,
                     Some(_) => false,
                 }
             }

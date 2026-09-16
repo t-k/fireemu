@@ -5013,11 +5013,10 @@ impl AuthRegistry {
 
     /// Atomically applies a tenant metadata patch and, when supplied, a password policy.
     ///
-    /// The tenant store, metadata entry, and explicit policy override are all validated and
-    /// locked before any of them is changed. A poisoned lock or an unknown tenant therefore
-    /// returns `None` without exposing a metadata-only or policy-only update to another
-    /// request. The returned policy is the newly supplied policy, or the current policy when
-    /// this operation only changes metadata.
+    /// The tenant store and metadata entry are validated and locked before either is changed.
+    /// A policy supplied here is a runtime update; it is intentionally not recorded as a
+    /// pending startup override. The returned policy is the newly supplied policy, or the
+    /// current policy when this operation only changes metadata.
     #[allow(clippy::needless_pass_by_value)]
     pub fn patch_tenant_with_password_policy(
         &self,
@@ -5041,10 +5040,6 @@ impl AuthRegistry {
         let mut metadata = self.tenant_metadata.lock().ok()?;
         let current_metadata = metadata.get(&key)?.clone();
         let mut store = store.lock().ok()?;
-        let mut overrides = match password_policy.as_ref() {
-            Some(_) => Some(self.password_policy_overrides.lock().ok()?),
-            None => None,
-        };
 
         let mut next_metadata = current_metadata;
         patch.apply_to(&mut next_metadata);
@@ -5058,10 +5053,6 @@ impl AuthRegistry {
         store.set_config(next_config);
         if let Some(policy) = password_policy {
             store.set_password_policy(policy.clone());
-            overrides
-                .as_mut()
-                .expect("a password policy patch holds the override lock")
-                .insert(key, policy);
         }
         Some((next_metadata, next_policy))
     }
@@ -7246,8 +7237,8 @@ mod broad_project_number_tests {
 #[cfg(test)]
 mod password_policy_namespace_tests {
     use super::{
-        AuthRegistry, AuthSnapshot, AuthStore, ProjectAuthConfig, ProjectAuthConfigPatch,
-        TenantMetadataPatch,
+        AuthNamespaceConfigPatch, AuthRegistry, AuthSnapshot, AuthStore, ProjectAuthConfig,
+        ProjectAuthConfigPatch, TenantMetadataPatch,
     };
     use crate::mfa::TotpPolicy;
     use crate::password_policy::{EnforcementState, PasswordPolicy};
@@ -7389,6 +7380,120 @@ mod password_policy_namespace_tests {
         assert_eq!(
             other.lock().expect("tenant store").password_policy(),
             &PasswordPolicy::default()
+        );
+    }
+
+    #[test]
+    fn runtime_tenant_updates_do_not_reappear_after_delete_and_recreate() {
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is created");
+        let runtime_policy = strict_policy();
+        assert!(registry
+            .patch_tenant_with_password_policy(
+                "demo-app",
+                "tenant-a",
+                TenantMetadataPatch {
+                    disabled_user_signup: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+                Some(runtime_policy.clone()),
+            )
+            .is_some());
+
+        assert!(registry.delete_tenant("demo-app", "tenant-a"));
+        let recreated = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("same tenant ID can be recreated");
+        assert_eq!(
+            recreated.lock().expect("tenant store").password_policy(),
+            &PasswordPolicy::default(),
+            "a runtime policy update must not become a startup override"
+        );
+        assert!(
+            !recreated
+                .lock()
+                .expect("tenant store")
+                .config()
+                .disabled_user_signup
+        );
+        assert!(
+            !registry
+                .tenant_metadata("demo-app", "tenant-a")
+                .expect("tenant metadata")
+                .disabled_user_signup
+        );
+    }
+
+    #[test]
+    fn startup_tenant_overrides_survive_delete_and_runtime_update() {
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let startup_policy = strict_policy();
+        assert!(registry.register_tenant_password_policy_override(
+            "demo-app",
+            "tenant-a",
+            startup_policy.clone(),
+        ));
+        assert!(registry.register_tenant_config_override(
+            "demo-app",
+            "tenant-a",
+            AuthNamespaceConfigPatch {
+                disabled_user_signup: Some(true),
+                ..AuthNamespaceConfigPatch::default()
+            },
+        ));
+        registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is created");
+
+        assert!(registry
+            .patch_tenant_with_password_policy(
+                "demo-app",
+                "tenant-a",
+                TenantMetadataPatch {
+                    disabled_user_signup: Some(false),
+                    ..TenantMetadataPatch::default()
+                },
+                Some(PasswordPolicy::default()),
+            )
+            .is_some());
+        assert!(registry.delete_tenant("demo-app", "tenant-a"));
+
+        let recreated = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("same tenant ID can be recreated");
+        assert_eq!(
+            recreated.lock().expect("tenant store").password_policy(),
+            &startup_policy,
+            "explicit startup policy remains authoritative after deletion"
+        );
+        assert!(
+            recreated
+                .lock()
+                .expect("tenant store")
+                .config()
+                .disabled_user_signup
+        );
+        assert!(
+            registry
+                .tenant_metadata("demo-app", "tenant-a")
+                .expect("tenant metadata")
+                .disabled_user_signup
         );
     }
 
@@ -7548,7 +7653,7 @@ mod password_policy_namespace_tests {
     }
 
     #[test]
-    fn tenant_patch_refuses_without_mutation_when_policy_override_lock_is_poisoned() {
+    fn tenant_patch_refuses_without_mutation_when_tenant_store_registry_is_poisoned() {
         let registry = Arc::new(AuthRegistry::new(
             "demo-app",
             Arc::new(Mutex::new(AuthStore::new(
@@ -7563,9 +7668,10 @@ mod password_policy_namespace_tests {
         let before_metadata = registry
             .tenant_metadata("demo-app", "tenant-a")
             .expect("tenant metadata");
-        let before_policy = registry
+        let tenant_store = registry
             .tenant_store("demo-app", "tenant-a")
-            .expect("tenant store")
+            .expect("tenant store");
+        let before_policy = tenant_store
             .lock()
             .expect("tenant store lock")
             .password_policy()
@@ -7573,8 +7679,8 @@ mod password_policy_namespace_tests {
 
         let poison = registry.clone();
         assert!(std::thread::spawn(move || {
-            let _guard = poison.password_policy_overrides.lock().unwrap();
-            panic!("poison password policy overrides");
+            let _guard = poison.tenants.lock().unwrap();
+            panic!("poison tenant store registry");
         })
         .join()
         .is_err());
@@ -7595,9 +7701,7 @@ mod password_policy_namespace_tests {
             Some(before_metadata)
         );
         assert_eq!(
-            registry
-                .tenant_store("demo-app", "tenant-a")
-                .expect("tenant store")
+            tenant_store
                 .lock()
                 .expect("tenant store lock")
                 .password_policy(),

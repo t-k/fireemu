@@ -38,7 +38,7 @@ use fireemu_core_auth::signup_quota::{
 };
 use fireemu_core_auth::store::{
     AuthRegistry, AuthStore, FederatedIdentity, ImportedUser, ProjectAuthConfig, Provider,
-    TenantMetadataPatch,
+    TenantMetadata,
 };
 use fireemu_core_export::auth::{
     fake_hash, AccountsFile, AuthConfig, AuthSettings, AuthSettingsNamespace, AuthSettingsRecord,
@@ -192,6 +192,7 @@ struct PreparedAuth {
     tenants: BTreeMap<String, Vec<ImportedUser>>,
 }
 
+#[cfg(test)]
 fn preflight_auth_tenant_stores(auth: &AuthRegistry, project: &str) -> Result<(), ArtifactError> {
     for tenant in auth.tenants(project) {
         let Some(tenant_store) = auth.tenant_store(project, &tenant) else {
@@ -475,11 +476,7 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
 }
 
 #[allow(clippy::too_many_lines)]
-fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
-    // Publication below clears the existing tenant namespaces after the default replacement.
-    // Probe every live tenant lock first so a poisoned tenant cannot turn that sequence into a
-    // partial import.
-    preflight_auth_tenant_stores(endpoints.auth, endpoints.project)?;
+fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
     let policy_path = PathBuf::from(AUTH_PATH).join(PASSWORD_POLICIES_FILE);
     let mut current_tenant_policies = BTreeMap::new();
     for tenant in endpoints.auth.tenants(endpoints.project) {
@@ -523,7 +520,7 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
     // Build the replacement in memory first. `import_user_trusted` can still reject a
     // syntactically valid record (for example, duplicate IDs or emails); doing this before
     // clearing the live store keeps the import atomic across all account records.
-    let default_candidate = {
+    let mut default_candidate = {
         let store = endpoints.auth.default_store();
         let store = store.lock().map_err(|_| {
             ArtifactError::new(
@@ -558,164 +555,44 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
         )?;
         candidate
     };
-    // Tenant stores are rebuilt after the default store. Preflight each tenant against an
-    // empty store with the imported configuration before deleting any existing tenant. A
-    // tenant gets its exact sidecar policy, or its pre-import policy for an old artifact; it
-    // never receives the project policy implicitly.
-    {
-        let store = endpoints.auth.default_store();
-        let store = store.lock().map_err(|_| {
-            ArtifactError::new(
-                "auth",
-                PathBuf::from(AUTH_PATH),
-                "the Auth store is poisoned",
-            )
-        })?;
-        for (tenant, users) in &auth.tenants {
-            let mut candidate = store.clone();
-            candidate.clear();
-            candidate.set_config(auth.config_over(store.config()));
-            if let Some(settings) =
-                settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
-            {
-                if let Some(config) = &settings.config {
-                    candidate.set_config(auth_config_from_settings(config, candidate.config()));
-                }
-                if let Some(quota) = &settings.quota {
-                    candidate
-                        .set_signup_quota_config(imported_quota_settings(quota, &settings_path)?)
-                        .map_err(|error| {
-                            ArtifactError::new(
-                                "auth",
-                                &settings_path,
-                                format!("the Auth settings quota is invalid: {error:?}"),
-                            )
-                        })?;
-                }
-            }
-            let fallback = current_tenant_policies
-                .get(tenant)
-                .cloned()
-                .unwrap_or_default();
-            candidate.set_password_policy(password_policy_for_tenant(
-                auth.password_policies.as_ref(),
-                endpoints.project,
-                tenant,
-                &fallback,
-                &policy_path,
-            )?);
-            install_auth_users(
-                &mut candidate,
-                users,
-                &auth.password_updated_at,
-                Some(tenant),
-                Path::new(&format!("accounts-{tenant}.json")),
-            )?;
-        }
-    }
-    let store = endpoints.auth.default_store();
-    let mut store = store.lock().map_err(|_| {
-        ArtifactError::new(
-            "auth",
-            PathBuf::from(AUTH_PATH),
-            "the Auth store is poisoned",
-        )
-    })?;
-    *store = default_candidate;
-    // An import restores accounts that already existed; no Auth trigger fires for them.
-    let _ = store.take_user_events();
-    drop(store);
-
-    for tenant in endpoints.auth.tenants(endpoints.project) {
-        endpoints.auth.delete_tenant(endpoints.project, &tenant);
-    }
-    let tenants = std::mem::take(&mut auth.tenants);
-    for (tenant, users) in tenants {
-        let tenant_store = endpoints
+    let default_config = default_candidate.config();
+    let mut tenant_candidates = Vec::with_capacity(auth.tenants.len());
+    for (tenant, users) in &auth.tenants {
+        let mut candidate = endpoints
             .auth
-            .ensure_tenant(endpoints.project, &tenant)
+            .tenant_import_candidate(endpoints.project, tenant)
             .ok_or_else(|| {
                 ArtifactError::new(
                     "auth",
                     PathBuf::from(AUTH_PATH),
-                    format!("cannot create tenant {tenant:?}"),
+                    format!("cannot prepare tenant {tenant:?}"),
                 )
             })?;
+        candidate.clear();
+        candidate.set_config(auth.config_over(default_config));
+        let mut metadata = TenantMetadata {
+            allow_password_signup: true,
+            enable_email_link_signin: true,
+            enable_anonymous_user: true,
+            ..TenantMetadata::default()
+        };
         if let Some(settings) =
-            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, &tenant)
+            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
         {
             if let Some(config) = &settings.config {
-                let current = endpoints
-                    .auth
-                    .tenant_metadata(endpoints.project, &tenant)
-                    .ok_or_else(|| {
-                        ArtifactError::new(
-                            "auth",
-                            &settings_path,
-                            format!("tenant {tenant:?} metadata disappeared during import"),
-                        )
-                    })?;
-                endpoints
-                    .auth
-                    .patch_tenant(
-                        endpoints.project,
-                        &tenant,
-                        TenantMetadataPatch {
-                            disabled_user_signup: config
-                                .disabled_user_signup
-                                .or(Some(current.disabled_user_signup)),
-                            disabled_user_deletion: config
-                                .disabled_user_deletion
-                                .or(Some(current.disabled_user_deletion)),
-                            enable_improved_email_privacy: config
-                                .enable_improved_email_privacy
-                                .or(Some(current.enable_improved_email_privacy)),
-                            ..TenantMetadataPatch::default()
-                        },
-                    )
-                    .ok_or_else(|| {
-                        ArtifactError::new(
-                            "auth",
-                            &settings_path,
-                            format!("cannot apply settings for tenant {tenant:?}"),
-                        )
-                    })?;
+                candidate.set_config(auth_config_from_settings(config, candidate.config()));
+                metadata.disabled_user_signup = config
+                    .disabled_user_signup
+                    .unwrap_or(metadata.disabled_user_signup);
+                metadata.disabled_user_deletion = config
+                    .disabled_user_deletion
+                    .unwrap_or(metadata.disabled_user_deletion);
+                metadata.enable_improved_email_privacy = config
+                    .enable_improved_email_privacy
+                    .unwrap_or(metadata.enable_improved_email_privacy);
             }
-        }
-        let mut tenant_store = tenant_store.lock().map_err(|_| {
-            ArtifactError::new(
-                "auth",
-                PathBuf::from(AUTH_PATH),
-                format!("tenant {tenant:?} store is poisoned"),
-            )
-        })?;
-        tenant_store.clear();
-        let current = tenant_store.config();
-        tenant_store.set_config(auth.config_over(current));
-        if let Some(settings) =
-            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, &tenant)
-        {
-            if let Some(config) = &settings.config {
-                let current = tenant_store.config();
-                tenant_store.set_config(auth_config_from_settings(config, current));
-            }
-        }
-        let fallback = current_tenant_policies
-            .get(&tenant)
-            .cloned()
-            .unwrap_or_default();
-        tenant_store.set_password_policy(password_policy_for_tenant(
-            auth.password_policies.as_ref(),
-            endpoints.project,
-            &tenant,
-            &fallback,
-            &policy_path,
-        )?);
-        if let Some(settings) =
-            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, &tenant)
-        {
             if let Some(quota) = &settings.quota {
-                tenant_store
+                candidate
                     .set_signup_quota_config(imported_quota_settings(quota, &settings_path)?)
                     .map_err(|error| {
                         ArtifactError::new(
@@ -726,24 +603,32 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
                     })?;
             }
         }
-        for user in users {
-            let id = user.local_id.clone();
-            let uid = tenant_store.import_user_trusted(user).map_err(|e| {
-                ArtifactError::new(
-                    "auth",
-                    PathBuf::from(AUTH_PATH).join(format!("accounts-{tenant}.json")),
-                    format!("account {id}: {e}"),
-                )
-            })?;
-            if let Some(at) = auth
-                .password_updated_at
-                .get(&(Some(tenant.clone()), id.clone()))
-            {
-                tenant_store.set_password_updated_at(&uid, *at);
-            }
-        }
-        let _ = tenant_store.take_user_events();
+        let fallback = current_tenant_policies
+            .get(tenant)
+            .cloned()
+            .unwrap_or_default();
+        candidate.set_password_policy(password_policy_for_tenant(
+            auth.password_policies.as_ref(),
+            endpoints.project,
+            tenant,
+            &fallback,
+            &policy_path,
+        )?);
+        install_auth_users(
+            &mut candidate,
+            users,
+            &auth.password_updated_at,
+            Some(tenant),
+            Path::new(&format!("accounts-{tenant}.json")),
+        )?;
+        let _ = candidate.take_user_events();
+        tenant_candidates.push((tenant.clone(), candidate, metadata));
     }
+    let _ = default_candidate.take_user_events();
+    endpoints
+        .auth
+        .replace_default_scope(endpoints.project, default_candidate, tenant_candidates)
+        .map_err(|error| ArtifactError::new("auth", PathBuf::from(AUTH_PATH), error))?;
     Ok(())
 }
 

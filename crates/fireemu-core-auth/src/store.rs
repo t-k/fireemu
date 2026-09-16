@@ -4784,6 +4784,161 @@ impl AuthRegistry {
             .cloned()
     }
 
+    /// Builds a fresh tenant store for an import without publishing it in the registry.
+    ///
+    /// Import preparation must be able to construct every replacement before changing live
+    /// membership. The store is initialized with the same inherited configuration as
+    /// `ensure_tenant`, but lifecycle epochs are assigned by the publication transaction so a
+    /// failed preparation cannot consume a lifecycle serial.
+    pub fn tenant_import_candidate(&self, project: &str, tenant: &str) -> Option<AuthStore> {
+        if project.is_empty()
+            || project.contains(['/', '\\'])
+            || tenant.is_empty()
+            || tenant.contains(['/', '\\'])
+        {
+            return None;
+        }
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        let projects = self.projects.lock().ok()?;
+        let parent = if project == self.default_project {
+            &self.default
+        } else {
+            projects.registered.get(project)?
+        };
+        self.build_tenant_import_candidate(project, tenant, parent)
+    }
+
+    /// Atomically replaces the default project and all of its imported tenant namespaces.
+    ///
+    /// All candidate stores and metadata must be prepared before this method is called. The
+    /// method acquires every live lock that could be affected before publishing any candidate,
+    /// so a poisoned store or inconsistent membership leaves the existing Auth state intact.
+    pub fn replace_default_scope(
+        &self,
+        project: &str,
+        default: AuthStore,
+        tenants: Vec<(String, AuthStore, TenantMetadata)>,
+    ) -> Result<(), &'static str> {
+        if project != self.default_project
+            || default.project_id() != project
+            || default.tenant_id().is_some()
+        {
+            return Err("invalid default Auth import candidate");
+        }
+        let mut tenant_ids = BTreeSet::new();
+        for (tenant, store, _) in &tenants {
+            if tenant.is_empty()
+                || tenant.contains(['/', '\\'])
+                || !tenant_ids.insert(tenant.clone())
+                || store.project_id() != project
+                || store.tenant_id() != Some(tenant.as_str())
+            {
+                return Err("invalid tenant Auth import candidate");
+            }
+        }
+
+        let gate = self
+            .operation_gate(project, None)
+            .ok_or("tenant operation-gate registry is poisoned")?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let projects = self
+            .projects
+            .lock()
+            .map_err(|_| "project registry is poisoned")?;
+        if !projects.pending_sessions.is_empty() {
+            return Err("a session registration is still provisional");
+        }
+        let mut live_tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut live_metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut operation_gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let current_tenant_keys = live_tenants
+            .keys()
+            .filter(|(candidate, _)| candidate == project)
+            .cloned()
+            .collect::<Vec<_>>();
+        let current_metadata_keys = live_metadata
+            .keys()
+            .filter(|(candidate, _)| candidate == project)
+            .cloned()
+            .collect::<Vec<_>>();
+        if current_tenant_keys != current_metadata_keys {
+            return Err("tenant store and metadata membership differ");
+        }
+        let current_stores = current_tenant_keys
+            .iter()
+            .map(|key| {
+                live_tenants
+                    .get(key)
+                    .cloned()
+                    .ok_or("tenant store disappeared during Auth import")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut default_store = self
+            .default
+            .lock()
+            .map_err(|_| "the default Auth store is poisoned")?;
+        let _current_store_guards = current_stores
+            .iter()
+            .map(|store| store.lock().map_err(|_| "an Auth tenant store is poisoned"))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // The replacement arcs are created before mutation. BTreeMap insertion below is the
+        // only remaining publication work and cannot return an application-level error.
+        let lifecycle_epochs = if let Some(incarnation) = self.lifecycle_incarnation {
+            let count = u64::try_from(tenants.len())
+                .map_err(|_| "too many tenant Auth import candidates")?;
+            let start = self
+                .next_lifecycle_serial
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                    value.checked_add(count)
+                })
+                .map_err(|_| "Auth lifecycle serial capacity exhausted")?;
+            Some(
+                (0..count)
+                    .map(|offset| AuthLifecycleEpoch::initial(incarnation, start + offset))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+        let mut replacement_stores = Vec::with_capacity(tenants.len());
+        for (index, (tenant, mut store, metadata)) in tenants.into_iter().enumerate() {
+            if let Some(epoch) = lifecycle_epochs
+                .as_ref()
+                .and_then(|epochs| epochs.get(index))
+            {
+                store.set_lifecycle_epoch(*epoch);
+            }
+            replacement_stores.push((
+                (project.to_owned(), tenant),
+                Arc::new(Mutex::new(store)),
+                metadata,
+            ));
+        }
+        *default_store = default;
+        live_tenants.retain(|(candidate, _), _| candidate != project);
+        live_metadata.retain(|(candidate, _), _| candidate != project);
+        operation_gates.retain(|(candidate, tenant), _| candidate != project || tenant.is_empty());
+        for (key, store, metadata) in replacement_stores {
+            live_tenants.insert(key.clone(), store);
+            live_metadata.insert(key, metadata);
+        }
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        Ok(())
+    }
+
     fn existing_tenant_with_metadata(&self, key: &TenantKey) -> Option<Arc<Mutex<AuthStore>>> {
         let tenants = self.tenants.lock().ok()?;
         let metadata = self.tenant_metadata.lock().ok()?;
@@ -4845,6 +5000,51 @@ impl AuthRegistry {
             store.set_signer(signer);
         }
         Some(Arc::new(Mutex::new(store)))
+    }
+
+    fn build_tenant_import_candidate(
+        &self,
+        project: &str,
+        tenant: &str,
+        parent: &SharedAuthStore,
+    ) -> Option<AuthStore> {
+        let (policy, config, signer, number) = {
+            let parent = parent.lock().ok()?;
+            (
+                *parent.policy(),
+                parent.config(),
+                parent.signer_arc(),
+                parent.project_number(),
+            )
+        };
+        let explicit_password_policy = self
+            .password_policy_overrides
+            .lock()
+            .ok()?
+            .get(&(project.to_owned(), tenant.to_owned()))
+            .cloned();
+        let explicit_config = self
+            .tenant_config_overrides
+            .lock()
+            .ok()?
+            .get(&(project.to_owned(), tenant.to_owned()))
+            .copied();
+        let seed = project
+            .bytes()
+            .chain(tenant.bytes())
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
+            });
+        let mut store = AuthStore::new_tenant(project, tenant, SplitMix64::new(seed), policy);
+        if let Some(policy) = explicit_password_policy {
+            store.set_password_policy(policy);
+        }
+        store.set_config(explicit_config.map_or(config, |patch| patch.apply_to(config)));
+        store.set_project_number(number);
+        if let Some(signer) = signer {
+            store.set_signer(signer);
+        }
+        Some(store)
     }
 
     fn publish_tenant(
@@ -6089,6 +6289,203 @@ mod compatibility_routing_tests {
             SplitMix64::new(seed),
             TotpPolicy::default(),
         )))
+    }
+
+    #[test]
+    fn default_scope_import_publishes_default_and_tenants_together() {
+        let default = store("demo-app", 1);
+        default
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("before@example.test"), NOW)
+            .unwrap();
+        let registry = AuthRegistry::new("demo-app", default.clone());
+        let old_tenant = registry.ensure_tenant("demo-app", "old").unwrap();
+        old_tenant
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("old@example.test"), NOW)
+            .unwrap();
+
+        let mut default_candidate =
+            AuthStore::new("demo-app", SplitMix64::new(10), TotpPolicy::default());
+        default_candidate
+            .create_user(NewUser::email("after@example.test"), NOW)
+            .unwrap();
+        let mut tenant_candidate = AuthStore::new_tenant(
+            "demo-app",
+            "new",
+            SplitMix64::new(11),
+            TotpPolicy::default(),
+        );
+        tenant_candidate
+            .create_user(NewUser::email("new@example.test"), NOW)
+            .unwrap();
+
+        registry
+            .replace_default_scope(
+                "demo-app",
+                default_candidate,
+                vec![(
+                    "new".to_owned(),
+                    tenant_candidate,
+                    TenantMetadata::default(),
+                )],
+            )
+            .unwrap();
+
+        assert_eq!(default.lock().unwrap().user_count(), 1);
+        assert!(default
+            .lock()
+            .unwrap()
+            .user_by_email("before@example.test")
+            .is_none());
+        assert!(default
+            .lock()
+            .unwrap()
+            .user_by_email("after@example.test")
+            .is_some());
+        assert_eq!(registry.tenants("demo-app"), vec!["new".to_owned()]);
+        assert!(registry.tenant_store("demo-app", "old").is_none());
+        assert_eq!(
+            registry
+                .tenant_store("demo-app", "new")
+                .unwrap()
+                .lock()
+                .unwrap()
+                .user_count(),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_default_scope_import_preserves_every_live_namespace() {
+        let default = store("demo-app", 1);
+        default
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("before@example.test"), NOW)
+            .unwrap();
+        let registry = Arc::new(AuthRegistry::new("demo-app", default.clone()));
+        let tenant = registry.ensure_tenant("demo-app", "existing").unwrap();
+        tenant
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("tenant@example.test"), NOW)
+            .unwrap();
+        let generation = registry.membership_generation.load(Ordering::Acquire);
+        let default_user_count = default.lock().unwrap().user_count();
+        let tenant_user_count = tenant.lock().unwrap().user_count();
+
+        // A malformed staged tenant candidate is rejected before any registry lock is changed.
+        let invalid = AuthStore::new_tenant(
+            "other-project",
+            "replacement",
+            SplitMix64::new(12),
+            TotpPolicy::default(),
+        );
+        assert_eq!(
+            registry.replace_default_scope(
+                "demo-app",
+                AuthStore::new("demo-app", SplitMix64::new(13), TotpPolicy::default()),
+                vec![("replacement".to_owned(), invalid, TenantMetadata::default())],
+            ),
+            Err("invalid tenant Auth import candidate")
+        );
+        assert_eq!(default.lock().unwrap().user_count(), default_user_count);
+        assert_eq!(tenant.lock().unwrap().user_count(), tenant_user_count);
+        assert_eq!(registry.tenants("demo-app"), vec!["existing".to_owned()]);
+        assert_eq!(
+            registry.membership_generation.load(Ordering::Acquire),
+            generation
+        );
+
+        // A poisoned live tenant is discovered while all affected stores are still untouched.
+        let poison = tenant.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = poison.lock().unwrap();
+            panic!("poison tenant during import publication");
+        })
+        .join()
+        .is_err());
+        let candidate = AuthStore::new_tenant(
+            "demo-app",
+            "replacement",
+            SplitMix64::new(14),
+            TotpPolicy::default(),
+        );
+        assert_eq!(
+            registry.replace_default_scope(
+                "demo-app",
+                AuthStore::new("demo-app", SplitMix64::new(15), TotpPolicy::default()),
+                vec![(
+                    "replacement".to_owned(),
+                    candidate,
+                    TenantMetadata::default()
+                )],
+            ),
+            Err("an Auth tenant store is poisoned")
+        );
+        assert_eq!(default.lock().unwrap().user_count(), default_user_count);
+        assert_eq!(registry.tenants("demo-app"), vec!["existing".to_owned()]);
+        assert_eq!(
+            registry.membership_generation.load(Ordering::Acquire),
+            generation
+        );
+    }
+
+    #[test]
+    fn lifecycle_serial_capacity_refusal_preserves_default_scope_import_state() {
+        let default = store("demo-app", 1);
+        default
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("before@example.test"), NOW)
+            .unwrap();
+        let registry = AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+            "demo-app",
+            default.clone(),
+            BTreeMap::new(),
+            41,
+        );
+        registry
+            .next_lifecycle_serial
+            .store(u64::MAX - 1, Ordering::Release);
+        let generation = registry.membership_generation.load(Ordering::Acquire);
+        let candidates = ["one", "two"]
+            .into_iter()
+            .map(|tenant| {
+                (
+                    tenant.to_owned(),
+                    AuthStore::new_tenant(
+                        "demo-app",
+                        tenant,
+                        SplitMix64::new(20),
+                        TotpPolicy::default(),
+                    ),
+                    TenantMetadata::default(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            registry.replace_default_scope(
+                "demo-app",
+                AuthStore::new("demo-app", SplitMix64::new(21), TotpPolicy::default()),
+                candidates,
+            ),
+            Err("Auth lifecycle serial capacity exhausted")
+        );
+        assert_eq!(default.lock().unwrap().user_count(), 1);
+        assert_eq!(registry.tenants("demo-app"), Vec::<String>::new());
+        assert_eq!(
+            registry.next_lifecycle_serial.load(Ordering::Acquire),
+            u64::MAX - 1
+        );
+        assert_eq!(
+            registry.membership_generation.load(Ordering::Acquire),
+            generation
+        );
     }
 
     #[test]

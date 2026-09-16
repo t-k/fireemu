@@ -4258,6 +4258,10 @@ impl AuthRegistry {
             .operation_gates
             .lock()
             .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
         let removed = projects.routed.keys().cloned().collect::<BTreeSet<_>>();
         let routed_stores = projects.routed.values().cloned().collect::<Vec<_>>();
         let tenant_stores = tenants
@@ -4275,6 +4279,7 @@ impl AuthRegistry {
         projects.routed.clear();
         tenants.retain(|(project, _), _| !removed.contains(project));
         metadata.retain(|(project, _), _| !removed.contains(project));
+        runtime_overrides.retain(|(project, _), _| !removed.contains(project));
         gates.retain(|(project, _), gate| !removed.contains(project) && gate.strong_count() > 0);
         if !removed.is_empty() {
             self.membership_generation.fetch_add(1, Ordering::Release);
@@ -4389,6 +4394,10 @@ impl AuthRegistry {
             .operation_gates
             .lock()
             .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
         let mut owned_projects = prepared
             .routed
             .iter()
@@ -4444,6 +4453,7 @@ impl AuthRegistry {
         projects.routed.clear();
         tenants.retain(|(project, _), _| !owned_projects.contains(project.as_str()));
         metadata.retain(|(project, _), _| !owned_projects.contains(project.as_str()));
+        runtime_overrides.retain(|(project, _), _| !owned_projects.contains(project.as_str()));
         gates.retain(|(project, _), gate| {
             !owned_projects.contains(project.as_str()) && gate.strong_count() > 0
         });
@@ -4535,6 +4545,10 @@ impl AuthRegistry {
             .operation_gates
             .lock()
             .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
         let actual = tenants
             .iter()
             .filter(|((project, _), _)| project == &prepared.project)
@@ -4567,6 +4581,7 @@ impl AuthRegistry {
         }
         tenants.retain(|(project, _), _| project != &prepared.project);
         metadata.retain(|(project, _), _| project != &prepared.project);
+        runtime_overrides.retain(|(project, _), _| project != &prepared.project);
         gates.retain(|(project, _), _| project != &prepared.project);
         self.membership_generation.fetch_add(1, Ordering::Release);
         drop(projects);
@@ -4816,6 +4831,9 @@ impl AuthRegistry {
         let Ok(mut gates) = self.operation_gates.lock() else {
             return false;
         };
+        let Ok(mut runtime_overrides) = self.tenant_runtime_config_overrides.lock() else {
+            return false;
+        };
         let tenant_stores = tenants
             .iter()
             .filter(|((candidate, _), _)| candidate == project)
@@ -4838,6 +4856,7 @@ impl AuthRegistry {
         projects.registered.remove(project);
         tenants.retain(|(candidate, _), _| candidate != project);
         metadata.retain(|(candidate, _), _| candidate != project);
+        runtime_overrides.retain(|(candidate, _), _| candidate != project);
         gates.retain(|(candidate, _), _| candidate != project);
         self.membership_generation.fetch_add(1, Ordering::Release);
         true
@@ -4963,6 +4982,10 @@ impl AuthRegistry {
             .operation_gates
             .lock()
             .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
         let current_tenant_keys = live_tenants
             .keys()
             .filter(|(candidate, _)| candidate == project)
@@ -5014,6 +5037,7 @@ impl AuthRegistry {
         *default_store = default;
         live_tenants.retain(|(candidate, _), _| candidate != project);
         live_metadata.retain(|(candidate, _), _| candidate != project);
+        runtime_overrides.retain(|(candidate, _), _| candidate != project);
         operation_gates.retain(|(candidate, tenant), _| candidate != project || tenant.is_empty());
         for (key, store, metadata) in replacement_stores {
             live_tenants.insert(key.clone(), store);
@@ -8069,7 +8093,8 @@ mod broad_project_number_tests {
 mod password_policy_namespace_tests {
     use super::{
         AuthNamespaceConfigPatch, AuthPrincipal, AuthRegistry, AuthSnapshot, AuthStore,
-        ProjectAuthConfig, ProjectAuthConfigPatch, TenantMetadataPatch,
+        ProjectAuthConfig, ProjectAuthConfigPatch, RoutedStoreInstall, TenantMetadata,
+        TenantMetadataPatch,
     };
     use crate::mfa::TotpPolicy;
     use crate::password_policy::{EnforcementState, PasswordPolicy};
@@ -8077,6 +8102,14 @@ mod password_policy_namespace_tests {
     use fireemu_core_types::determinism::SplitMix64;
     use fireemu_core_types::time::LogicalInstant;
     use std::sync::{Arc, Barrier, Mutex};
+
+    fn store(project: &str, seed: u64) -> Arc<Mutex<AuthStore>> {
+        Arc::new(Mutex::new(AuthStore::new(
+            project,
+            SplitMix64::new(seed),
+            TotpPolicy::default(),
+        )))
+    }
 
     fn strict_policy() -> PasswordPolicy {
         PasswordPolicy::try_new(
@@ -8264,6 +8297,204 @@ mod password_policy_namespace_tests {
                 .expect("tenant metadata")
                 .disabled_user_signup
         );
+    }
+
+    #[test]
+    fn runtime_tenant_updates_are_removed_by_default_scope_reset() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+        assert!(registry
+            .patch_tenant(
+                "demo-app",
+                "tenant-a",
+                TenantMetadataPatch {
+                    disabled_user_signup: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+            )
+            .is_some());
+
+        let prepared = registry.prepare_default_scope_reset().unwrap();
+        registry.apply_default_scope_reset(&prepared).unwrap();
+        assert!(!registry
+            .tenant_runtime_config_overrides
+            .lock()
+            .unwrap()
+            .contains_key(&("demo-app".to_owned(), "tenant-a".to_owned())));
+
+        let recreated = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is recreated");
+        assert!(!recreated.lock().unwrap().config().disabled_user_signup);
+    }
+
+    #[test]
+    fn runtime_tenant_updates_are_removed_by_project_reset() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        assert!(registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        registry.ensure_tenant("worker-alpha", "tenant-a").unwrap();
+        assert!(registry
+            .patch_tenant(
+                "worker-alpha",
+                "tenant-a",
+                TenantMetadataPatch {
+                    disabled_user_signup: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+            )
+            .is_some());
+
+        let prepared = registry
+            .prepare_project_reset("worker-alpha")
+            .unwrap()
+            .expect("registered project reset");
+        registry.apply_project_reset(&prepared).unwrap();
+        assert!(!registry
+            .tenant_runtime_config_overrides
+            .lock()
+            .unwrap()
+            .contains_key(&("worker-alpha".to_owned(), "tenant-a".to_owned())));
+
+        let recreated = registry
+            .ensure_tenant("worker-alpha", "tenant-a")
+            .expect("tenant is recreated");
+        assert!(!recreated.lock().unwrap().config().disabled_user_signup);
+    }
+
+    #[test]
+    fn runtime_tenant_updates_are_removed_when_a_project_is_removed() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        assert!(registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        registry.ensure_tenant("worker-alpha", "tenant-a").unwrap();
+        assert!(registry
+            .patch_tenant(
+                "worker-alpha",
+                "tenant-a",
+                TenantMetadataPatch {
+                    disabled_user_signup: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+            )
+            .is_some());
+
+        assert!(registry.remove("worker-alpha"));
+        assert!(!registry
+            .tenant_runtime_config_overrides
+            .lock()
+            .unwrap()
+            .contains_key(&("worker-alpha".to_owned(), "tenant-a".to_owned())));
+
+        assert!(registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(3), TotpPolicy::default())
+        ));
+        let recreated = registry
+            .ensure_tenant("worker-alpha", "tenant-a")
+            .expect("tenant is recreated");
+        assert!(!recreated.lock().unwrap().config().disabled_user_signup);
+    }
+
+    #[test]
+    fn runtime_tenant_updates_are_removed_when_default_scope_is_replaced() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+        assert!(registry
+            .patch_tenant(
+                "demo-app",
+                "tenant-a",
+                TenantMetadataPatch {
+                    disabled_user_signup: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+            )
+            .is_some());
+
+        registry
+            .replace_default_scope(
+                "demo-app",
+                AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default()),
+                vec![(
+                    "tenant-a".to_owned(),
+                    AuthStore::new_tenant(
+                        "demo-app",
+                        "tenant-a",
+                        SplitMix64::new(3),
+                        TotpPolicy::default(),
+                    ),
+                    TenantMetadata::default(),
+                )],
+            )
+            .unwrap();
+        assert!(!registry
+            .tenant_runtime_config_overrides
+            .lock()
+            .unwrap()
+            .contains_key(&("demo-app".to_owned(), "tenant-a".to_owned())));
+
+        registry
+            .patch_project_config(
+                "demo-app",
+                super::ProjectAuthConfigPatch {
+                    disabled_user_signup: Some(false),
+                    ..super::ProjectAuthConfigPatch::default()
+                },
+            )
+            .expect("project patch succeeds");
+        assert!(
+            !registry
+                .tenant_store("demo-app", "tenant-a")
+                .unwrap()
+                .lock()
+                .unwrap()
+                .config()
+                .disabled_user_signup
+        );
+    }
+
+    #[test]
+    fn runtime_tenant_updates_are_removed_when_routed_scopes_are_cleared() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        let routed = registry.routed_candidate("worker-alpha").unwrap();
+        assert!(matches!(
+            registry.install_routed("worker-alpha", Arc::new(Mutex::new(routed))),
+            RoutedStoreInstall::Installed(_)
+        ));
+        let key = ("worker-alpha".to_owned(), "tenant-a".to_owned());
+        let tenant = Arc::new(Mutex::new(AuthStore::new_tenant(
+            "worker-alpha",
+            "tenant-a",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        registry.tenants.lock().unwrap().insert(key.clone(), tenant);
+        registry
+            .tenant_metadata
+            .lock()
+            .unwrap()
+            .insert(key.clone(), TenantMetadata::default());
+        assert!(registry
+            .patch_tenant(
+                "worker-alpha",
+                "tenant-a",
+                TenantMetadataPatch {
+                    disabled_user_signup: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+            )
+            .is_some());
+
+        registry.clear_routed().unwrap();
+        assert!(!registry
+            .tenant_runtime_config_overrides
+            .lock()
+            .unwrap()
+            .contains_key(&key));
     }
 
     #[test]

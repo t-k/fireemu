@@ -360,8 +360,6 @@ def render() -> str:
         + "; ".join(f"{kind}: {count}" for kind, count in sorted(counts.items()))
         + ".",
         "",
-        "The versioned [Firestore v1 gRPC denominator companion](../../spec/compatibility/denominators/firestore-v1-grpc-2026-09-16.v2.json) is a separate, immutable structural inventory bound to the pinned protobuf source, generator and REST denominator parents. Its 468 Standard/Native rows and 34 Enterprise exclusions remain `waiting-oracle`; these rows do not promote production compatibility evidence.",
-        "",
         "## Fresh observations",
         "",
         "The aggregation receipts retain the original 2026-09-09 harness, now [archived](../../spec/compatibility/observations/2026-09-09/harness/probe.py) with its original digest. That harness could discard malformed stream elements; the current probe rejects them. These historical receipts contain extracted values, not complete raw aggregation streams, so they cannot be retrospectively revalidated by the fixed parser. No new production run or evidence promotion is implied by this repair.",

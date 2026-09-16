@@ -2473,6 +2473,39 @@ fn values_equal(a: &RulesValue, b: &RulesValue) -> bool {
     }
 }
 
+/// Equality used when proving a query constraint. Firestore query values use the same numeric
+/// equivalence recursively through arrays and maps, so a representation-only integer/float
+/// difference cannot prove that every matching document differs from a Rules literal. Concrete
+/// Rules evaluation continues to use [`values_equal`] so this proof-specific widening does not
+/// alter the language evaluator's semantics.
+#[allow(clippy::cast_precision_loss, clippy::float_cmp)]
+fn query_values_equal(a: &RulesValue, b: &RulesValue) -> bool {
+    match (a, b) {
+        (RulesValue::Int(x), RulesValue::Float(y)) | (RulesValue::Float(y), RulesValue::Int(x)) => {
+            !y.is_nan() && cmp_int_double(*x, *y) == core::cmp::Ordering::Equal
+        }
+        (RulesValue::List(x), RulesValue::List(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y)
+                    .all(|(left, right)| query_values_equal(left, right))
+        }
+        (RulesValue::Map(x), RulesValue::Map(y)) => {
+            x.len() == y.len()
+                && x.iter().all(|(key, left)| {
+                    y.get(key)
+                        .is_some_and(|right| query_values_equal(left, right))
+                })
+        }
+        (RulesValue::Set(x), RulesValue::Set(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|left| y.iter().any(|right| query_values_equal(left, right)))
+        }
+        _ => values_equal(a, b),
+    }
+}
+
 /// Compares a partially known map with a concrete value. A missing required key (or a known
 /// concrete value that differs) proves inequality; otherwise the unknown remainder keeps the
 /// equality undecidable.
@@ -2508,15 +2541,15 @@ fn partial_value_definitely_differs(expected: &RulesValue, actual: &RulesValue) 
         RulesValue::RangeExcluding { range, excluded } => {
             excluded
                 .iter()
-                .any(|member| !undetermined(member) && values_equal(member, actual))
+                .any(|member| !undetermined(member) && query_values_equal(member, actual))
                 || range_relation(range, BinaryOp::Eq, actual).is_ok_and(|equal| !equal)
         }
         RulesValue::OneOf(members) => members
             .iter()
-            .all(|member| !undetermined(member) && !values_equal(member, actual)),
+            .all(|member| !undetermined(member) && !query_values_equal(member, actual)),
         RulesValue::NotOneOf(excluded) => excluded
             .iter()
-            .any(|member| !undetermined(member) && values_equal(member, actual)),
+            .any(|member| !undetermined(member) && query_values_equal(member, actual)),
         RulesValue::PartialMap(fields) => {
             matches!(
                 partial_map_relation(BinaryOp::Eq, fields, actual),
@@ -2526,7 +2559,7 @@ fn partial_value_definitely_differs(expected: &RulesValue, actual: &RulesValue) 
         RulesValue::PartialMapExcluding { fields, excluded } => {
             if excluded
                 .iter()
-                .any(|member| !undetermined(member) && values_equal(member, actual))
+                .any(|member| !undetermined(member) && query_values_equal(member, actual))
             {
                 true
             } else {
@@ -2537,7 +2570,7 @@ fn partial_value_definitely_differs(expected: &RulesValue, actual: &RulesValue) 
             }
         }
         value if undetermined(value) => false,
-        value => !values_equal(value, actual),
+        value => !query_values_equal(value, actual),
     }
 }
 
@@ -3447,6 +3480,44 @@ mod tests {
         assert!(!partial_value_definitely_differs(
             &constrained,
             &RulesValue::Int(15)
+        ));
+    }
+
+    #[test]
+    fn partial_map_does_not_prove_nested_numeric_container_difference() {
+        let expected = RulesValue::PartialMap(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::List(vec![RulesValue::Int(1)]),
+        )]));
+        let actual = RulesValue::Map(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::List(vec![RulesValue::Float(1.0)]),
+        )]));
+
+        assert!(!partial_value_definitely_differs(&expected, &actual));
+
+        let nested_expected = RulesValue::PartialMap(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::Map(BTreeMap::from([("score".to_owned(), RulesValue::Int(1))])),
+        )]));
+        let nested_actual = RulesValue::Map(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::Map(BTreeMap::from([(
+                "score".to_owned(),
+                RulesValue::Float(1.0),
+            )])),
+        )]));
+        assert!(!partial_value_definitely_differs(
+            &nested_expected,
+            &nested_actual
+        ));
+        let different_actual = RulesValue::Map(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::List(vec![RulesValue::Float(2.0)]),
+        )]));
+        assert!(partial_value_definitely_differs(
+            &expected,
+            &different_actual
         ));
     }
 }

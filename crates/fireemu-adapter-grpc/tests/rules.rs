@@ -296,6 +296,16 @@ fn s(v: &str) -> pb::Value {
         value_type: Some(pb::value::ValueType::StringValue(v.to_owned())),
     }
 }
+fn double(v: f64) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::DoubleValue(v)),
+    }
+}
+fn integer(v: i64) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(v)),
+    }
+}
 fn map(fields: &[(&str, pb::Value)]) -> pb::Value {
     pb::Value {
         value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
@@ -930,6 +940,83 @@ service cloud.firestore {
         .await
         .is_ok());
     let _ = alice;
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn query_proof_does_not_treat_nested_numeric_representation_as_difference() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.meta != { payload: [1.0] };
+    }
+  }
+}",
+        )
+        .unwrap();
+
+    let stored_meta = map(&[("payload", arr(vec![double(1.0)]))]);
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("records/numeric", &[("meta", stored_meta)])]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+
+    let query_payload = arr(vec![integer(1)]);
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload.clone()),
+            "owner",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut owner_documents = Vec::new();
+    while let Some(response) = owner_stream.next().await {
+        if let Some(document) = response.unwrap().document {
+            owner_documents.push(document.name);
+        }
+    }
+    assert_eq!(
+        owner_documents,
+        vec![format!("{DOCS}/records/numeric")],
+        "the query's numeric equivalence should include the stored document"
+    );
+
+    let get_error = h
+        .client
+        .get_document(with_bearer(get("records/numeric"), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(get_error.code(), tonic::Code::PermissionDenied);
+
+    match h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload),
+            &alice_token,
+        ))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => {
+            let mut query_stream = response.into_inner();
+            let query_error = query_stream
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err();
+            assert_eq!(query_error.code(), tonic::Code::PermissionDenied);
+        }
+    }
     h.handle.abort();
 }
 

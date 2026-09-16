@@ -5987,11 +5987,12 @@ fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_function_captures, collect_function_scopes, function_key,
+        bind_function_captures, collect_function_scopes, evaluate_request, function_key,
         partial_value_definitely_differs, pattern_reachable_offsets, required_function_scope,
-        EvalError, FunctionBindings, MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES,
+        Decision, EvalError, FunctionBindings, MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES,
     };
     use crate::ast::PathSegment;
+    use crate::eval::{Method, RequestContext, RulesService};
     use crate::parse::parse_ruleset;
     use crate::value::{RangeBound, RulesValue, ValueRange};
     use std::collections::BTreeMap;
@@ -6153,5 +6154,59 @@ mod tests {
             &expected,
             &different_actual
         ));
+    }
+
+    #[test]
+    fn query_map_diff_does_not_authorize_from_representation_sensitive_changed_keys() {
+        let ruleset = parse_ruleset(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function canRead() {
+      let changed = resource.data.meta.diff({payload: [1.0]}).changedKeys();
+      return timestamp.date(changed.size(), 1, 1) is timestamp;
+    }
+
+    match /records/{id} {
+      allow get: if canRead();
+    }
+  }
+}",
+        )
+        .expect("map diff rules should parse");
+
+        let map_with_payload = |payload| {
+            let payload = RulesValue::List(vec![payload]);
+            let meta = RulesValue::Map(BTreeMap::from([("payload".to_owned(), payload)]));
+            let data = RulesValue::Map(BTreeMap::from([("meta".to_owned(), meta)]));
+            RulesValue::Map(BTreeMap::from([("data".to_owned(), data)]))
+        };
+        let context = |resource, abstract_path| RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: "/databases/(default)/documents/records/numeric".to_owned(),
+            auth: None,
+            resource: Some(resource),
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path,
+            request_query: None,
+        };
+
+        // Firestore query equality treats integer 1 and double 1.0 as equivalent. The
+        // abstract query resource therefore uses the integer representative, while the
+        // concrete document uses the stored double. `map.diff()` must not turn that one
+        // representative into a definite changed-key set whose size authorizes the query.
+        let query_report = evaluate_request(
+            &ruleset,
+            &context(map_with_payload(RulesValue::Int(1)), true),
+        );
+        assert!(matches!(query_report.decision, Decision::Deny(_)));
+
+        let concrete_report = evaluate_request(
+            &ruleset,
+            &context(map_with_payload(RulesValue::Float(1.0)), false),
+        );
+        assert!(matches!(concrete_report.decision, Decision::Deny(_)));
     }
 }

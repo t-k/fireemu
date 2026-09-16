@@ -86,6 +86,7 @@ const KNOWN_PASSWORD_POLICY_MEMBERS: [&str; 9] = [
 const KNOWN_AUTH_SETTINGS_MEMBERS: [&str; 4] = ["version", "projectId", "project", "namespaces"];
 const KNOWN_AUTH_SETTINGS_NAMESPACE_MEMBERS: [&str; 2] = ["tenantId", "settings"];
 const KNOWN_AUTH_SETTINGS_RECORD_MEMBERS: [&str; 3] = ["config", "quota", "blocking"];
+const BLOCKING_DISCOVERY_EVENTS_MEMBER: &str = "__fireemuDiscoveryEvents";
 const KNOWN_QUOTA_MEMBERS: [&str; 5] = [
     "mode",
     "algorithm",
@@ -481,11 +482,58 @@ fn parse_auth_settings_record(
     })
 }
 
+fn parse_blocking_discovery_events(
+    value: &JsonValue,
+    subject: &str,
+) -> Result<BTreeSet<String>, AuthExportError> {
+    let JsonValue::Array(events) = value else {
+        return refuse(format!(
+            "{subject}.{BLOCKING_DISCOVERY_EVENTS_MEMBER} is not an array"
+        ));
+    };
+    let mut discovery = BTreeSet::new();
+    for event in events {
+        let Some(event) = event.as_str() else {
+            return refuse(format!(
+                "{subject}.{BLOCKING_DISCOVERY_EVENTS_MEMBER} contains a non-string event"
+            ));
+        };
+        if !matches!(event, "beforeCreate" | "beforeSignIn") {
+            return refuse(format!(
+                "{subject}.{BLOCKING_DISCOVERY_EVENTS_MEMBER} contains unsupported event {event:?}"
+            ));
+        }
+        if !discovery.insert(event.to_owned()) {
+            return refuse(format!(
+                "{subject}.{BLOCKING_DISCOVERY_EVENTS_MEMBER} contains duplicate event {event:?}"
+            ));
+        }
+    }
+    Ok(discovery)
+}
+
 fn parse_blocking_settings(
     value: &JsonValue,
     subject: &str,
 ) -> Result<BlockingAuthSettingsRecord, AuthExportError> {
-    reject_unknown(value, &["triggers", "forwardInboundCredentials"], subject)?;
+    reject_unknown(
+        value,
+        &[
+            "triggers",
+            "forwardInboundCredentials",
+            BLOCKING_DISCOVERY_EVENTS_MEMBER,
+        ],
+        subject,
+    )?;
+    let discovery = value.get(BLOCKING_DISCOVERY_EVENTS_MEMBER).map_or_else(
+        || Ok(BTreeSet::new()),
+        |value| parse_blocking_discovery_events(value, subject),
+    )?;
+    if !discovery.is_empty() && value.get("triggers").is_none() {
+        return refuse(format!(
+            "{subject}.{BLOCKING_DISCOVERY_EVENTS_MEMBER} requires a triggers object"
+        ));
+    }
     let selection = |event: &str| -> Result<BlockingAuthSelectionRecord, AuthExportError> {
         let Some(triggers) = value.get("triggers") else {
             return Ok(BlockingAuthSelectionRecord::Discovery);
@@ -495,6 +543,14 @@ fn parse_blocking_settings(
                 "{subject}.triggers is not an object"
             )));
         };
+        if discovery.contains(event) {
+            if triggers.contains_key(event) {
+                return Err(AuthExportError(format!(
+                    "{subject}.{BLOCKING_DISCOVERY_EVENTS_MEMBER} conflicts with triggers.{event}"
+                )));
+            }
+            return Ok(BlockingAuthSelectionRecord::Discovery);
+        }
         let Some(entry) = triggers.get(event) else {
             return Ok(BlockingAuthSelectionRecord::Disabled);
         };
@@ -632,10 +688,13 @@ fn write_auth_settings_record(settings: &AuthSettingsRecord) -> Json {
 fn write_blocking_settings(settings: &BlockingAuthSettingsRecord) -> Json {
     let mut doc = Json::object();
     let mut triggers = Json::object();
+    let mut discovery = Vec::new();
     let mut has_trigger = false;
     let mut write_selection = |name: &str, selection: &BlockingAuthSelectionRecord| match selection
     {
-        BlockingAuthSelectionRecord::Discovery => {}
+        BlockingAuthSelectionRecord::Discovery => {
+            discovery.push(Json::string(name));
+        }
         BlockingAuthSelectionRecord::Disabled => {
             triggers.insert(name, Json::Null);
             has_trigger = true;
@@ -651,6 +710,9 @@ fn write_blocking_settings(settings: &BlockingAuthSettingsRecord) -> Json {
     write_selection("beforeSignIn", &settings.before_sign_in);
     if has_trigger {
         doc.insert("triggers", triggers);
+        if !discovery.is_empty() {
+            doc.insert(BLOCKING_DISCOVERY_EVENTS_MEMBER, Json::Array(discovery));
+        }
     }
     if let Some(forwarding) = settings.forwarding {
         let mut value = Json::object();
@@ -1808,6 +1870,71 @@ mod tests {
         }
         assert!(encoded.contains("fireemu://functions/demo-app/us-central1/checkRegistration"));
         assert!(!encoded.contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn auth_settings_sidecar_round_trips_mixed_blocking_discovery() {
+        let settings = AuthSettings {
+            project_id: "demo-app".to_owned(),
+            project: AuthSettingsRecord {
+                config: None,
+                quota: None,
+                blocking: Some(BlockingAuthSettingsRecord {
+                    before_create: BlockingAuthSelectionRecord::Discovery,
+                    before_sign_in: BlockingAuthSelectionRecord::Explicit {
+                        function_uri: "fireemu://functions/demo-app/us-central1/checkSignIn"
+                            .to_owned(),
+                    },
+                    forwarding: None,
+                }),
+            },
+            namespaces: Vec::new(),
+        };
+
+        let encoded = settings.to_json();
+        assert_eq!(
+            AuthSettings::parse(&encoded).expect("settings parse"),
+            settings
+        );
+    }
+
+    #[test]
+    fn auth_settings_sidecar_distinguishes_absent_triggers_from_absent_events() {
+        let discovery = AuthSettings::parse(
+            r#"{
+              "version": 1,
+              "projectId": "demo-app",
+              "project": {"blocking": {}}
+            }"#,
+        )
+        .expect("an absent triggers object selects discovery for both events");
+        let blocking = discovery.project.blocking.expect("blocking settings");
+        assert_eq!(
+            blocking.before_create,
+            BlockingAuthSelectionRecord::Discovery
+        );
+        assert_eq!(
+            blocking.before_sign_in,
+            BlockingAuthSelectionRecord::Discovery
+        );
+
+        let disabled = AuthSettings::parse(
+            r#"{
+              "version": 1,
+              "projectId": "demo-app",
+              "project": {"blocking": {"triggers": {}}}
+            }"#,
+        )
+        .expect("an empty triggers object disables both events");
+        let blocking = disabled.project.blocking.expect("blocking settings");
+        assert_eq!(
+            blocking.before_create,
+            BlockingAuthSelectionRecord::Disabled
+        );
+        assert_eq!(
+            blocking.before_sign_in,
+            BlockingAuthSelectionRecord::Disabled
+        );
     }
 
     #[test]

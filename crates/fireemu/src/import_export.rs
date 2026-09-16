@@ -85,6 +85,7 @@ pub const COMPATIBLE_FIRESTORE_VERSION: &str = "1.22.0";
 
 /// The default database, which the official Firestore section carries.
 const DEFAULT_DATABASE: &str = DatabaseId::DEFAULT;
+const BLOCKING_DISCOVERY_EVENTS_MEMBER: &str = "__fireemuDiscoveryEvents";
 
 const IMPORT_MANIFEST_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
 const IMPORT_AUTH_FILE_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
@@ -1800,6 +1801,50 @@ fn imported_quota_settings(
     Ok(config)
 }
 
+fn blocking_discovery_events_from_json(
+    value: &serde_json::Value,
+    path: &Path,
+) -> Result<BTreeSet<String>, ArtifactError> {
+    let events = value.as_array().ok_or_else(|| {
+        ArtifactError::new(
+            "auth",
+            path,
+            format!("blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} is not an array"),
+        )
+    })?;
+    let mut discovery = BTreeSet::new();
+    for event in events {
+        let event = event.as_str().ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                path,
+                format!(
+                    "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} contains a non-string event"
+                ),
+            )
+        })?;
+        if !matches!(event, "beforeCreate" | "beforeSignIn") {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                format!(
+                    "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} contains unsupported event {event:?}"
+                ),
+            ));
+        }
+        if !discovery.insert(event.to_owned()) {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                format!(
+                    "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} contains duplicate event {event:?}"
+                ),
+            ));
+        }
+    }
+    Ok(discovery)
+}
+
 fn blocking_settings_record_from_json(
     value: &serde_json::Value,
     path: &Path,
@@ -1807,6 +1852,19 @@ fn blocking_settings_record_from_json(
     let object = value
         .as_object()
         .ok_or_else(|| ArtifactError::new("auth", path, "blocking settings are not an object"))?;
+    let discovery = object.get(BLOCKING_DISCOVERY_EVENTS_MEMBER).map_or_else(
+        || Ok(BTreeSet::new()),
+        |value| blocking_discovery_events_from_json(value, path),
+    )?;
+    if !discovery.is_empty() && object.get("triggers").is_none() {
+        return Err(ArtifactError::new(
+            "auth",
+            path,
+            format!(
+                "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} requires a triggers object"
+            ),
+        ));
+    }
     let selection = |event: &str| -> Result<BlockingAuthSelectionRecord, ArtifactError> {
         let Some(triggers) = object.get("triggers") else {
             return Ok(BlockingAuthSelectionRecord::Discovery);
@@ -1814,6 +1872,18 @@ fn blocking_settings_record_from_json(
         let triggers = triggers.as_object().ok_or_else(|| {
             ArtifactError::new("auth", path, "blocking settings triggers are not an object")
         })?;
+        if discovery.contains(event) {
+            if triggers.contains_key(event) {
+                return Err(ArtifactError::new(
+                    "auth",
+                    path,
+                    format!(
+                        "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} conflicts with triggers.{event}"
+                    ),
+                ));
+            }
+            return Ok(BlockingAuthSelectionRecord::Discovery);
+        }
         let Some(entry) = triggers.get(event) else {
             return Ok(BlockingAuthSelectionRecord::Disabled);
         };
@@ -1870,12 +1940,15 @@ fn blocking_settings_record_from_json(
 fn blocking_settings_json(record: &BlockingAuthSettingsRecord) -> serde_json::Value {
     let mut object = serde_json::Map::new();
     let mut triggers = serde_json::Map::new();
-    let write_selection =
+    let mut discovery = Vec::new();
+    let mut write_selection =
         |name: &str,
          selection: &BlockingAuthSelectionRecord,
          triggers: &mut serde_json::Map<String, serde_json::Value>| {
             match selection {
-                BlockingAuthSelectionRecord::Discovery => {}
+                BlockingAuthSelectionRecord::Discovery => {
+                    discovery.push(name.to_owned());
+                }
                 BlockingAuthSelectionRecord::Disabled => {
                     triggers.insert(name.to_owned(), serde_json::Value::Null);
                 }
@@ -1891,6 +1964,17 @@ fn blocking_settings_json(record: &BlockingAuthSettingsRecord) -> serde_json::Va
     write_selection("beforeSignIn", &record.before_sign_in, &mut triggers);
     if !triggers.is_empty() {
         object.insert("triggers".to_owned(), serde_json::Value::Object(triggers));
+        if !discovery.is_empty() {
+            object.insert(
+                BLOCKING_DISCOVERY_EVENTS_MEMBER.to_owned(),
+                serde_json::Value::Array(
+                    discovery
+                        .into_iter()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
     }
     if let Some(forwarding) = record.forwarding {
         object.insert(
@@ -3644,6 +3728,56 @@ mod tests {
         )
         .expect("quota sidecar parses");
         assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn blocking_settings_conversion_preserves_mixed_discovery_events() {
+        let record = super::BlockingAuthSettingsRecord {
+            before_create: super::BlockingAuthSelectionRecord::Discovery,
+            before_sign_in: super::BlockingAuthSelectionRecord::Explicit {
+                function_uri: "fireemu://functions/demo-app/us-central1/checkSignIn".to_owned(),
+            },
+            forwarding: None,
+        };
+        let encoded = super::blocking_settings_json(&record);
+        assert_eq!(
+            super::blocking_settings_record_from_json(
+                &encoded,
+                std::path::Path::new("auth_export/fireemu-auth-settings.json")
+            )
+            .expect("blocking settings parse"),
+            record
+        );
+        assert!(encoded.to_string().contains("__fireemuDiscoveryEvents"));
+        assert!(!encoded.to_string().contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn blocking_settings_conversion_distinguishes_absent_triggers_from_absent_events() {
+        let path = std::path::Path::new("auth_export/fireemu-auth-settings.json");
+
+        let absent = super::blocking_settings_record_from_json(&serde_json::json!({}), path)
+            .expect("absent triggers select discovery");
+        assert_eq!(
+            absent.before_create,
+            super::BlockingAuthSelectionRecord::Discovery
+        );
+        assert_eq!(
+            absent.before_sign_in,
+            super::BlockingAuthSelectionRecord::Discovery
+        );
+
+        let empty =
+            super::blocking_settings_record_from_json(&serde_json::json!({"triggers": {}}), path)
+                .expect("an empty triggers object disables both events");
+        assert_eq!(
+            empty.before_create,
+            super::BlockingAuthSelectionRecord::Disabled
+        );
+        assert_eq!(
+            empty.before_sign_in,
+            super::BlockingAuthSelectionRecord::Disabled
+        );
     }
 
     #[test]

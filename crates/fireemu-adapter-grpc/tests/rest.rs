@@ -2821,6 +2821,9 @@ fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
     );
     assert_eq!(status, 409, "{expired}");
     assert_eq!(expired["error"]["status"], "ABORTED");
+    let (status, after_expiry) = call(&s, "GET", &format!("{DOCS}/expiry/doc"), Value::Null);
+    assert_eq!(status, 200, "{after_expiry}");
+    assert_eq!(after_expiry["fields"]["v"]["integerValue"], "1");
 
     let (status, released) = call(
         &s,

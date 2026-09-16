@@ -933,6 +933,47 @@ fn malformed_auth_types_are_refused_before_startup() {
 }
 
 #[test]
+fn an_unsupported_password_hash_is_refused_before_startup() {
+    let dir = scratch("unsupported-password-hash");
+    let export = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        export.join("auth_export/accounts.json"),
+        r#"{
+          "kind": "identitytoolkit#DownloadAccountResponse",
+          "users": [{
+            "localId": "opaque-hash-user",
+            "email": "opaque@example.com",
+            "salt": "official-salt",
+            "passwordHash": "scrypt$N=16384$r=8$p=1$opaque-digest",
+            "providerUserInfo": [{
+              "providerId": "password",
+              "rawId": "opaque@example.com",
+              "federatedId": "opaque@example.com"
+            }]
+          }]
+        }"#,
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_refused(&output, "auth", "accounts.json");
+    assert!(
+        log.contains("passwordHash"),
+        "the refusal explains the hash: {log}"
+    );
+    assert!(
+        log.contains("reversible form"),
+        "the refusal explains the limitation: {log}"
+    );
+}
+
+#[test]
 fn malformed_auth_config_boolean_is_refused_before_startup() {
     let dir = scratch("malformed-auth-config-bool");
     let export = copy_fixture("official-multiproduct", &dir);

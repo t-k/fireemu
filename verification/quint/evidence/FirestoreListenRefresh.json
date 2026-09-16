@@ -58,7 +58,7 @@
     "crates/fireemu-adapter-grpc/src/local.rs": "f5d45555bea4f623e9bd0429018083f367726418f80c6c13fc21bed5e50b9132",
     "crates/fireemu-adapter-grpc/src/streams.rs": "5b3603e55a84aa7420b969826b90f6e706d13f30f560e17072e6227ee3de5c87",
     "crates/fireemu-core-firestore/src/query.rs": "610efd6b06bfc4f0948806e4d0efe6660e02ab407d244741bdc42a0fdbf3386b",
-    "crates/fireemu-core-firestore/src/store.rs": "48392eb11f5932edac106db0a9286b20f4a10c56b435407b5b190e6dfd1a0c8c",
+    "crates/fireemu-core-firestore/src/store.rs": "7b0842a61beb6f28fba7ec89d8330bbf6dc07633c22244cd88e7fdfdd24eafca",
     "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",

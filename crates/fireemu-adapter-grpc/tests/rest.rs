@@ -454,6 +454,43 @@ fn rest_requests_are_authorized_like_grpc() {
 }
 
 #[test]
+fn batch_write_rest_rejects_write_without_operation_before_dispatch() {
+    let s = state(None);
+    let control = "projects/demo-app/databases/(default)/documents/batch-shape/control";
+    let target = "projects/demo-app/databases/(default)/documents/batch-shape/target";
+
+    let (status, created) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/batch-shape?documentId=control"),
+        json!({"fields": {"v": {"integerValue": "0"}}}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, before) = call(&s, "GET", &format!("/v1/{control}"), Value::Null);
+    assert_eq!(status, 200, "{before}");
+
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [
+                {},
+                {"update": {"name": target, "fields": {"v": {"integerValue": "1"}}}}
+            ]
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+
+    let (status, after) = call(&s, "GET", &format!("/v1/{control}"), Value::Null);
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after, before, "the malformed write changed the control document");
+    let (status, missing) = call(&s, "GET", &format!("/v1/{target}"), Value::Null);
+    assert_eq!(status, 404, "a malformed write dispatched its valid suffix: {missing}");
+}
+
+#[test]
 fn rest_consistency_selectors_are_mutually_exclusive() {
     let s = state(None);
     let (status, err) = call(

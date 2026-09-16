@@ -310,6 +310,7 @@ fn configure_blocking_auth_bridge(
     (
         fireemu_core_functions::manifest::BlockingAuthSelections,
         bool,
+        Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
     ),
     String,
 > {
@@ -317,6 +318,7 @@ fn configure_blocking_auth_bridge(
         return Ok((
             fireemu_core_functions::manifest::BlockingAuthSelections::default(),
             cfg.auth_forward_inbound_credentials,
+            None,
         ));
     };
     let selections = match &config.triggers {
@@ -341,12 +343,18 @@ fn configure_blocking_auth_bridge(
             .blocking_auth_target(event, selection)
             .map_err(|error| format!("auth.blockingFunctions: {error}"))?;
     }
-    let forward = config
-        .forward_inbound_credentials
-        .map(|value| value.id_token || value.access_token || value.refresh_token)
-        .unwrap_or(cfg.auth_forward_inbound_credentials)
-        && cfg.auth_forward_inbound_credentials;
-    Ok((selections, forward))
+    let forwarding_restrictions = config.forward_inbound_credentials.map(|value| {
+        fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+            id_token: value.id_token,
+            access_token: value.access_token,
+            refresh_token: value.refresh_token,
+        }
+    });
+    Ok((
+        selections,
+        cfg.auth_forward_inbound_credentials,
+        forwarding_restrictions,
+    ))
 }
 
 /// Reapplies every explicitly configured password policy after an import.
@@ -474,12 +482,17 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             .then(|| auth_notice_sink(log_bus.clone(), clock.clone())),
         blocking: match functions_runtime.as_ref() {
             Some(runtime) => {
-                let (selections, forward) = configure_blocking_auth_bridge(&cfg, runtime)?;
-                Some(Arc::new(functions::BlockingAuthBridge::new_with_selections(
-                    runtime.clone(),
-                    selections,
-                    forward,
-                ))
+                let (selections, forward, restrictions) =
+                    configure_blocking_auth_bridge(&cfg, runtime)?;
+                Some(Arc::new(
+                    functions::BlockingAuthBridge::try_new_with_selections_and_forwarding_policy(
+                        runtime.clone(),
+                        selections,
+                        forward,
+                        restrictions,
+                    )
+                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?,
+                )
                     as Arc<
                         dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
                     >)

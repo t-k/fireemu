@@ -2784,6 +2784,92 @@ fn tenant_authentication_flags_are_enforced() {
 }
 
 #[test]
+fn tenant_authentication_flags_cover_lookup_oob_and_password_reset() {
+    use fireemu_core_auth::store::{AuthRegistry, TenantMetadata};
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    let tenant = registry
+        .create_tenant(
+            "demo-app",
+            TenantMetadata {
+                allow_password_signup: true,
+                enable_email_link_signin: true,
+                ..TenantMetadata::default()
+            },
+        )
+        .unwrap();
+    s.registry = Some(registry.clone());
+
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": tenant, "email": "flags@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let id_token = created["idToken"].as_str().unwrap();
+
+    assert!(registry.update_tenant(
+        "demo-app",
+        &tenant,
+        TenantMetadata {
+            allow_password_signup: true,
+            enable_email_link_signin: false,
+            ..TenantMetadata::default()
+        },
+    ));
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"tenantId": tenant, "requestType": "EMAIL_SIGNIN", "email": "flags@example.com"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+
+    assert!(registry.update_tenant(
+        "demo-app",
+        &tenant,
+        TenantMetadata {
+            allow_password_signup: false,
+            enable_email_link_signin: true,
+            ..TenantMetadata::default()
+        },
+    ));
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"tenantId": tenant, "requestType": "PASSWORD_RESET", "email": "flags@example.com"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+
+    assert!(registry.update_tenant(
+        "demo-app",
+        &tenant,
+        TenantMetadata {
+            allow_password_signup: true,
+            enable_email_link_signin: true,
+            disable_auth: true,
+            ..TenantMetadata::default()
+        },
+    ));
+    for (path, body) in [
+        (
+            format!("{V1}/accounts:lookup"),
+            json!({"tenantId": tenant, "idToken": id_token}),
+        ),
+        (
+            format!("{V1}/accounts:resetPassword"),
+            json!({"tenantId": tenant, "oobCode": "missing-code"}),
+        ),
+    ] {
+        let (status, refused) = post(&s, &path, &body);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "PROJECT_DISABLED");
+    }
+}
+
+#[test]
 fn implicit_tenant_defaults_admit_password_anonymous_and_email_link_flows() {
     use fireemu_core_auth::store::AuthRegistry;
 

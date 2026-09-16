@@ -3655,6 +3655,9 @@ fn tenant_policy_denial_with_metadata(
             | routes::Handler::SignInWithPhoneNumber
             | routes::Handler::SignInWithIdp
             | routes::Handler::MfaSignInFinalize
+            | routes::Handler::Lookup
+            | routes::Handler::SendOobCode
+            | routes::Handler::ResetPassword
     );
     if metadata.disable_auth && authenticates {
         return Some(error(400, "PROJECT_DISABLED"));
@@ -3664,6 +3667,21 @@ fn tenant_policy_denial_with_metadata(
     }
     if handler == routes::Handler::SignInWithEmailLink && !metadata.enable_email_link_signin {
         return Some(error(400, "OPERATION_NOT_ALLOWED"));
+    }
+    if matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::ResetPassword
+    ) {
+        let password_operation = handler == routes::Handler::ResetPassword
+            || body.get("requestType").and_then(Value::as_str) == Some("PASSWORD_RESET");
+        if password_operation && !metadata.allow_password_signup {
+            return Some(error(400, "OPERATION_NOT_ALLOWED"));
+        }
+        let email_link_operation =
+            body.get("requestType").and_then(Value::as_str) == Some("EMAIL_SIGNIN");
+        if email_link_operation && !metadata.enable_email_link_signin {
+            return Some(error(400, "OPERATION_NOT_ALLOWED"));
+        }
     }
     if handler == routes::Handler::SignUp {
         let links_existing_user = body.get("idToken").is_some();

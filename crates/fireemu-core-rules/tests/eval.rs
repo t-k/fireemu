@@ -1492,6 +1492,43 @@ fn query_equality_keeps_nested_numeric_values_conservative() {
 }
 
 #[test]
+fn query_equality_provenance_survives_function_and_let_aliases() {
+    let rules = |condition: &str| {
+        format!(
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function gate(value) {{ let alias = value; return {condition}; }} match /notes/{{id}} {{ allow list: if gate(resource.data.meta.payload); }} }} }}"
+        )
+    };
+    let payload = RulesValue::List(vec![RulesValue::Int(1)]);
+    let meta = RulesValue::Map(BTreeMap::from([("payload".to_owned(), payload)]));
+    let nested = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("meta", meta)],
+    );
+
+    assert!(!allows(&rules("alias != [1.0]"), &nested));
+    assert!(!allows(&rules("alias[0] is int"), &nested));
+}
+
+#[test]
+fn partial_query_list_membership_does_not_assume_nested_numeric_representation() {
+    let rules = |condition: &str| {
+        format!(
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+        )
+    };
+    let tag = RulesValue::Map(BTreeMap::from([("score".to_owned(), RulesValue::Int(1))]));
+    let tags = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("tags", RulesValue::PartialList(vec![tag]))],
+    );
+
+    assert!(!allows(
+        &rules("{'score': 1.0} in resource.data.tags"),
+        &tags
+    ));
+}
+
+#[test]
 fn recursive_wildcards_backtrack_and_bind_undetermined_captures_in_proofs() {
     let group = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{path=**}/reviews/{r} { allow list: if true; } } }";
     for path in [

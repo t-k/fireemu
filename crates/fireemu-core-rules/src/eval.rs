@@ -292,6 +292,7 @@ struct FunctionEnvironment<'a> {
 struct Binding<'a> {
     name: String,
     visible_before: usize,
+    query_derived: bool,
     state: BindingState<'a>,
 }
 
@@ -310,6 +311,16 @@ impl Binding<'_> {
         Self {
             name,
             visible_before: 0,
+            query_derived: false,
+            state: BindingState::Value(value),
+        }
+    }
+
+    fn query_value(name: String, value: RulesValue) -> Self {
+        Self {
+            name,
+            visible_before: 0,
+            query_derived: true,
             state: BindingState::Value(value),
         }
     }
@@ -1321,16 +1332,6 @@ fn undetermined(v: &RulesValue) -> bool {
     }
 }
 
-fn is_resource_expression(expr: &Expr) -> bool {
-    match expr.kind() {
-        ExprKind::Ident(name) => name == "resource",
-        ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
-            is_resource_expression(object)
-        }
-        _ => false,
-    }
-}
-
 fn member_access_chain<'a>(
     expression: &'a Expr,
     members: &mut Vec<(&'a Expr, &'a str)>,
@@ -1374,6 +1375,55 @@ impl<'a> Evaluator<'a> {
             .iter()
             .rev()
             .any(|binding| binding.name == name)
+    }
+
+    fn query_derived_expression(&self, expr: &Expr) -> bool {
+        if !self.query_proof {
+            return false;
+        }
+        match expr.kind() {
+            ExprKind::Ident(name) => {
+                name == "resource"
+                    || self
+                        .scope
+                        .bindings
+                        .iter()
+                        .rposition(|binding| binding.name == *name)
+                        .is_some_and(|index| self.scope.bindings[index].query_derived)
+            }
+            ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+                self.query_derived_expression(object)
+            }
+            ExprKind::Slice { object, start, end } => {
+                self.query_derived_expression(object)
+                    || self.query_derived_expression(start)
+                    || self.query_derived_expression(end)
+            }
+            ExprKind::List(items) => items.iter().any(|item| self.query_derived_expression(item)),
+            ExprKind::Map(entries) => entries
+                .iter()
+                .any(|(_, value)| self.query_derived_expression(value)),
+            ExprKind::Unary { expr, .. } => self.query_derived_expression(expr),
+            ExprKind::Binary { left, right, .. } => {
+                self.query_derived_expression(left) || self.query_derived_expression(right)
+            }
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.query_derived_expression(cond)
+                    || self.query_derived_expression(then)
+                    || self.query_derived_expression(otherwise)
+            }
+            ExprKind::Call { callee, args, .. } => {
+                self.query_derived_expression(callee)
+                    || args
+                        .iter()
+                        .any(|argument| self.query_derived_expression(argument))
+            }
+            _ => false,
+        }
     }
 
     fn resolve_binding(&mut self, index: usize) -> Result<RulesValue, EvalError> {
@@ -1893,7 +1943,7 @@ impl<'a> Evaluator<'a> {
                 if matches!(v, RulesValue::Unknown) {
                     return Err(EvalError::Unknown);
                 }
-                let query_resource_value = self.query_proof && is_resource_expression(expr);
+                let query_resource_value = self.query_derived_expression(expr);
                 if query_resource_value
                     && matches!(type_name.as_str(), "int" | "float")
                     && matches!(v, RulesValue::Int(_) | RulesValue::Float(_))
@@ -2020,11 +2070,11 @@ impl<'a> Evaluator<'a> {
         let l = self.eval(left)?;
         let r = self.eval(right)?;
         let query_resource_value =
-            self.query_proof && (is_resource_expression(left) || is_resource_expression(right));
+            self.query_derived_expression(left) || self.query_derived_expression(right);
         Ok(match (op, &l, &r) {
             // Membership in a partially known container is provable only positively.
             (BinaryOp::In, item, V::PartialList(known)) if !undetermined(item) => {
-                if known.iter().any(|x| query_values_equal(x, item)) {
+                if query_membership_result(known, item).is_ok_and(|matches| matches) {
                     V::Bool(true)
                 } else {
                     return Err(EvalError::Unknown);
@@ -2033,8 +2083,7 @@ impl<'a> Evaluator<'a> {
             // At least one candidate is present: membership is certain only when every
             // candidate is the item.
             (BinaryOp::In, item, V::PartialListAny(candidates)) if !undetermined(item) => {
-                if !candidates.is_empty() && candidates.iter().all(|c| query_values_equal(c, item))
-                {
+                if !candidates.is_empty() && query_all_equal_result(candidates, item).is_ok() {
                     V::Bool(true)
                 } else {
                     return Err(EvalError::Unknown);
@@ -2285,7 +2334,11 @@ impl<'a> Evaluator<'a> {
                         .iter()
                         .map(|a| self.eval(a))
                         .collect::<Result<Vec<_>, _>>()?;
-                    return self.call_user(f, values);
+                    let query_derived = args
+                        .iter()
+                        .map(|a| self.query_derived_expression(a))
+                        .collect();
+                    return self.call_user(f, values, query_derived);
                 }
                 match name.as_str() {
                     "get" | "exists" | "getAfter" => {
@@ -2403,6 +2456,7 @@ impl<'a> Evaluator<'a> {
         &mut self,
         f: &'a FunctionDecl,
         values: Vec<RulesValue>,
+        query_derived: Vec<bool>,
     ) -> Result<RulesValue, EvalError> {
         if values.len() != f.params.len() {
             return Err(soft(format!(
@@ -2426,15 +2480,21 @@ impl<'a> Evaluator<'a> {
             .iter()
             .map(|(name, value)| Binding::value(name.clone(), value.clone()))
             .collect();
-        for (p, v) in f.params.iter().zip(values) {
-            self.scope.bindings.push(Binding::value(p.clone(), v));
+        for ((p, v), query_derived) in f.params.iter().zip(values).zip(query_derived) {
+            self.scope.bindings.push(if query_derived {
+                Binding::query_value(p.clone(), v)
+            } else {
+                Binding::value(p.clone(), v)
+            });
         }
         let result = {
             for l in &f.lets {
                 let visible_before = self.scope.bindings.len();
+                let query_derived = self.query_derived_expression(&l.value);
                 self.scope.bindings.push(Binding {
                     name: l.name.clone(),
                     visible_before,
+                    query_derived,
                     state: BindingState::Lazy(&l.value),
                 });
             }
@@ -2835,7 +2895,7 @@ fn method_call(
             let wanted = list_arg(&args[0])?;
             if wanted
                 .iter()
-                .any(|w| known.iter().any(|i| values_equal(i, w)))
+                .any(|w| query_membership_result(known, w).is_ok_and(|matches| matches))
             {
                 V::Bool(true)
             } else {
@@ -2849,7 +2909,7 @@ fn method_call(
             if !candidates.is_empty()
                 && candidates
                     .iter()
-                    .all(|c| wanted.iter().any(|w| values_equal(c, w)))
+                    .all(|c| query_membership_result(&wanted, c).is_ok_and(|matches| matches))
             {
                 V::Bool(true)
             } else {
@@ -2861,7 +2921,7 @@ fn method_call(
             let wanted = list_arg(&args[0])?;
             if wanted
                 .iter()
-                .all(|w| known.iter().any(|i| values_equal(i, w)))
+                .all(|w| query_membership_result(known, w).is_ok_and(|matches| matches))
             {
                 V::Bool(true)
             } else {
@@ -3432,6 +3492,15 @@ fn query_membership_result(items: &[RulesValue], item: &RulesValue) -> Result<bo
     } else {
         Ok(false)
     }
+}
+
+fn query_all_equal_result(candidates: &[RulesValue], item: &RulesValue) -> Result<(), EvalError> {
+    for candidate in candidates {
+        if !query_equality_result(BinaryOp::Eq, candidate, item).is_ok_and(|equal| equal) {
+            return Err(EvalError::Unknown);
+        }
+    }
+    Ok(())
 }
 
 fn contains_nested_numeric(value: &RulesValue) -> bool {

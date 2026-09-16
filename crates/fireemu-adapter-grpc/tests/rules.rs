@@ -1124,6 +1124,159 @@ service cloud.firestore {
             tonic::Code::PermissionDenied
         ),
     }
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function gate(value) {
+      let alias = value;
+      return alias != [1.0];
+    }
+    match /records/{id} {
+      allow read: if gate(resource.data.meta.payload);
+    }
+  }
+}",
+        )
+        .unwrap();
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/numeric"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", arr(vec![integer(1)])),
+            &alice_token,
+        ))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.tags.hasAny([{ score: 1 }]);
+    }
+  }
+}",
+        )
+        .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "records/map-membership",
+                &[("tags", arr(vec![map(&[("score", double(1.0))])]))],
+            )]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    let mut map_query = list("records");
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut map_query.query_type {
+        sq.r#where = Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                field: Some(sq::FieldReference {
+                    field_path: "tags".to_owned(),
+                }),
+                op: sq::field_filter::Operator::ArrayContains as i32,
+                value: Some(map(&[("score", integer(1))])),
+            })),
+        });
+    }
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(map_query.clone(), "owner"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner query should return the map document")
+            .unwrap()
+            .document
+            .expect("owner query document")
+            .name,
+        format!("{DOCS}/records/map-membership")
+    );
+    assert!(owner_stream.next().await.is_none());
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/map-membership"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(map_query.clone(), &alice_token))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+    let mut map_any_query = map_query;
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) =
+        &mut map_any_query.query_type
+    {
+        let Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::FieldFilter(filter)),
+        }) = &mut sq.r#where
+        else {
+            panic!("array-contains query filter should be present");
+        };
+        filter.op = sq::field_filter::Operator::ArrayContainsAny as i32;
+        filter.value = Some(arr(vec![map(&[("score", integer(1))])]));
+    }
+    match h
+        .client
+        .run_query(with_bearer(map_any_query, &alice_token))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("array-contains-any query must be denied")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
     h.handle.abort();
 }
 

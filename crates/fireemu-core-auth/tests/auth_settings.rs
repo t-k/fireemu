@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{
-    AuthError, AuthPrincipal, AuthRegistry, AuthStore, NewUser, ProjectAuthConfig,
-    ProjectAuthConfigPatch, TenantMetadataPatch,
+    AuthError, AuthNamespaceConfigPatch, AuthPrincipal, AuthRegistry, AuthStore, NewUser,
+    ProjectAuthConfig, ProjectAuthConfigPatch, TenantMetadataPatch,
 };
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -145,4 +145,116 @@ fn cross_namespace_snapshot_keeps_destination_client_permissions() {
     snapshot.restore_into(&mut destination);
     assert!(!destination.config().disabled_user_signup);
     assert!(destination.config().disabled_user_deletion);
+}
+
+#[test]
+fn project_config_override_waits_for_exact_namespace_registration() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app"))));
+    let patch = AuthNamespaceConfigPatch {
+        disabled_user_signup: Some(true),
+        enable_improved_email_privacy: Some(false),
+        ..AuthNamespaceConfigPatch::default()
+    };
+
+    assert!(registry.register_project_config_override("future-project", patch));
+    assert!(registry.store_for("future-project").is_none());
+    assert!(registry.register("future-project", store("future-project")));
+
+    let future = registry.store_for("future-project").unwrap();
+    let future = future.lock().unwrap();
+    assert!(future.config().disabled_user_signup);
+    assert!(!future.config().enable_improved_email_privacy);
+    assert!(
+        !registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .config()
+            .disabled_user_signup
+    );
+}
+
+#[test]
+fn tenant_config_override_waits_for_exact_namespace_and_preserves_siblings() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app"))));
+    let patch = AuthNamespaceConfigPatch {
+        disabled_user_signup: Some(true),
+        disabled_user_deletion: Some(true),
+        enable_improved_email_privacy: Some(false),
+    };
+
+    assert!(registry.register_tenant_config_override("demo-app", "tenant-a", patch));
+    assert!(registry.tenant_store("demo-app", "tenant-a").is_none());
+
+    let tenant_a = registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    let tenant_b = registry.ensure_tenant("demo-app", "tenant-b").unwrap();
+    let config_a = tenant_a.lock().unwrap().config();
+    assert!(config_a.disabled_user_signup);
+    assert!(config_a.disabled_user_deletion);
+    assert!(!config_a.enable_improved_email_privacy);
+    assert!(
+        registry
+            .tenant_metadata("demo-app", "tenant-a")
+            .unwrap()
+            .disabled_user_signup
+    );
+    assert!(!tenant_b.lock().unwrap().config().disabled_user_signup);
+    assert!(
+        !registry
+            .tenant_metadata("demo-app", "tenant-b")
+            .unwrap()
+            .disabled_user_signup
+    );
+}
+
+#[test]
+fn existing_tenant_config_override_updates_metadata_and_store_atomically() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app"))));
+    let tenant = registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    tenant.lock().unwrap().set_config(ProjectAuthConfig {
+        allow_duplicate_emails: true,
+        ..ProjectAuthConfig::default()
+    });
+
+    assert!(registry.register_tenant_config_override(
+        "demo-app",
+        "tenant-a",
+        AuthNamespaceConfigPatch {
+            disabled_user_deletion: Some(true),
+            ..AuthNamespaceConfigPatch::default()
+        },
+    ));
+    assert!(
+        registry
+            .tenant_metadata("demo-app", "tenant-a")
+            .unwrap()
+            .disabled_user_deletion
+    );
+    let config = tenant.lock().unwrap().config();
+    assert!(config.disabled_user_deletion);
+    assert!(config.allow_duplicate_emails);
+}
+
+#[test]
+fn empty_or_invalid_config_overrides_do_not_create_namespaces() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app"))));
+    assert!(!registry
+        .register_project_config_override("future-project", AuthNamespaceConfigPatch::default(),));
+    assert!(!registry.register_project_config_override(
+        "bad/project",
+        AuthNamespaceConfigPatch {
+            disabled_user_signup: Some(true),
+            ..AuthNamespaceConfigPatch::default()
+        },
+    ));
+    assert!(!registry.register_tenant_config_override(
+        "demo-app",
+        "",
+        AuthNamespaceConfigPatch {
+            disabled_user_signup: Some(true),
+            ..AuthNamespaceConfigPatch::default()
+        },
+    ));
+    assert!(registry.store_for("future-project").is_none());
+    assert!(registry.tenant_store("demo-app", "tenant-a").is_none());
 }

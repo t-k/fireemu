@@ -461,6 +461,57 @@ impl ProjectAuthConfigPatch {
     }
 }
 
+/// The non-password settings accepted by `auth.configOverrides` for one namespace.
+///
+/// This deliberately excludes account-linking and password-policy fields so a config override
+/// cannot silently change a different Auth setting group. `None` preserves the current value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuthNamespaceConfigPatch {
+    /// Whether end-user account creation is disabled.
+    pub disabled_user_signup: Option<bool>,
+    /// Whether end-user self-deletion is disabled.
+    pub disabled_user_deletion: Option<bool>,
+    /// Whether improved email privacy is enabled.
+    pub enable_improved_email_privacy: Option<bool>,
+}
+
+impl AuthNamespaceConfigPatch {
+    /// Whether this override selects no values.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.disabled_user_signup.is_none()
+            && self.disabled_user_deletion.is_none()
+            && self.enable_improved_email_privacy.is_none()
+    }
+
+    /// Applies the selected values to a project or tenant store configuration.
+    #[must_use]
+    pub fn apply_to(self, mut config: ProjectAuthConfig) -> ProjectAuthConfig {
+        if let Some(value) = self.disabled_user_signup {
+            config.disabled_user_signup = value;
+        }
+        if let Some(value) = self.disabled_user_deletion {
+            config.disabled_user_deletion = value;
+        }
+        if let Some(value) = self.enable_improved_email_privacy {
+            config.enable_improved_email_privacy = value;
+        }
+        config
+    }
+
+    fn apply_to_metadata(self, metadata: &mut TenantMetadata) {
+        if let Some(value) = self.disabled_user_signup {
+            metadata.disabled_user_signup = value;
+        }
+        if let Some(value) = self.disabled_user_deletion {
+            metadata.disabled_user_deletion = value;
+        }
+        if let Some(value) = self.enable_improved_email_privacy {
+            metadata.enable_improved_email_privacy = value;
+        }
+    }
+}
+
 /// The response mode requested from an OAuth/OIDC provider.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OAuthResponseType {
@@ -3782,12 +3833,17 @@ pub struct AuthRegistry {
     /// does not create or route the project; it is applied to the matching namespace when it
     /// later appears.
     project_password_policy_overrides: Mutex<BTreeMap<String, PasswordPolicy>>,
+    /// Explicit non-password settings configured before a project namespace is registered.
+    /// Entries never create a project or apply to another namespace.
+    project_config_overrides: Mutex<BTreeMap<String, AuthNamespaceConfigPatch>>,
     tenants: Mutex<BTreeMap<TenantKey, SharedAuthStore>>,
     tenant_metadata: Mutex<BTreeMap<TenantKey, TenantMetadata>>,
     /// Explicit password policies configured for tenants that may not exist yet. An entry is
     /// a pending namespace override, not a request to create the tenant or to inherit the
     /// project policy.
     password_policy_overrides: Mutex<BTreeMap<TenantKey, PasswordPolicy>>,
+    /// Explicit non-password settings configured before a tenant namespace is published.
+    tenant_config_overrides: Mutex<BTreeMap<TenantKey, AuthNamespaceConfigPatch>>,
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
@@ -3957,9 +4013,11 @@ impl AuthRegistry {
             scoped_refresh_routing,
             projects: Mutex::new(ProjectStores::default()),
             project_password_policy_overrides: Mutex::new(BTreeMap::new()),
+            project_config_overrides: Mutex::new(BTreeMap::new()),
             tenants: Mutex::new(BTreeMap::new()),
             tenant_metadata: Mutex::new(BTreeMap::new()),
             password_policy_overrides: Mutex::new(BTreeMap::new()),
+            tenant_config_overrides: Mutex::new(BTreeMap::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             membership_generation: AtomicU64::new(0),
             lifecycle_incarnation: None,
@@ -4018,6 +4076,12 @@ impl AuthRegistry {
             .ok()?
             .get(project)
             .cloned();
+        let explicit_config = self
+            .project_config_overrides
+            .lock()
+            .ok()?
+            .get(project)
+            .copied();
         let seed = project
             .bytes()
             .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
@@ -4030,7 +4094,7 @@ impl AuthRegistry {
         if let Some(epoch) = lifecycle_epoch {
             store.set_lifecycle_epoch(epoch);
         }
-        store.set_config(config);
+        store.set_config(explicit_config.map_or(config, |patch| patch.apply_to(config)));
         store.set_project_number(self.project_numbers.get(project).copied());
         if let Some(signer) = signer {
             store.set_signer(signer);
@@ -4081,6 +4145,15 @@ impl AuthRegistry {
             .and_then(|overrides| overrides.get(project).cloned())
         {
             candidate.set_password_policy(policy);
+        }
+        if let Some(patch) = self
+            .project_config_overrides
+            .lock()
+            .ok()
+            .and_then(|overrides| overrides.get(project).copied())
+        {
+            let next_config = patch.apply_to(candidate.config());
+            candidate.set_config(next_config);
         }
         drop(candidate);
         if projects.routed.len() >= MAX_ROUTED_AUTH_PROJECTS {
@@ -4513,6 +4586,15 @@ impl AuthRegistry {
         {
             store.set_password_policy(policy);
         }
+        if let Some(patch) = self
+            .project_config_overrides
+            .lock()
+            .ok()
+            .and_then(|overrides| overrides.get(project).copied())
+        {
+            let next_config = patch.apply_to(store.config());
+            store.set_config(next_config);
+        }
         store.set_project_number(self.project_numbers.get(project).copied());
         projects
             .registered
@@ -4562,6 +4644,15 @@ impl AuthRegistry {
             .and_then(|overrides| overrides.get(project).cloned())
         {
             store.set_password_policy(policy);
+        }
+        if let Some(patch) = self
+            .project_config_overrides
+            .lock()
+            .ok()
+            .and_then(|overrides| overrides.get(project).copied())
+        {
+            let next_config = patch.apply_to(store.config());
+            store.set_config(next_config);
         }
         store.set_project_number(self.project_numbers.get(project).copied());
         let displaced = projects.routed.remove(project);
@@ -4720,6 +4811,12 @@ impl AuthRegistry {
             .ok()?
             .get(&(project.to_owned(), tenant.to_owned()))
             .cloned();
+        let explicit_config = self
+            .tenant_config_overrides
+            .lock()
+            .ok()?
+            .get(&(project.to_owned(), tenant.to_owned()))
+            .copied();
         let seed = project
             .bytes()
             .chain(tenant.bytes())
@@ -4738,7 +4835,7 @@ impl AuthRegistry {
                 store.rekey_generated_values(epoch);
             }
         }
-        store.set_config(config);
+        store.set_config(explicit_config.map_or(config, |patch| patch.apply_to(config)));
         store.set_project_number(number);
         if let Some(signer) = signer {
             store.set_signer(signer);
@@ -4811,16 +4908,16 @@ impl AuthRegistry {
             return Some(store);
         }
         let store = self.build_tenant_store(project, tenant, parent)?;
-        match self.publish_tenant(
-            key,
-            store,
-            TenantMetadata {
-                allow_password_signup: true,
-                enable_email_link_signin: true,
-                enable_anonymous_user: true,
-                ..TenantMetadata::default()
-            },
-        ) {
+        let mut tenant_metadata = TenantMetadata {
+            allow_password_signup: true,
+            enable_email_link_signin: true,
+            enable_anonymous_user: true,
+            ..TenantMetadata::default()
+        };
+        if let Some(patch) = self.tenant_config_overrides.lock().ok()?.get(&key).copied() {
+            patch.apply_to_metadata(&mut tenant_metadata);
+        }
+        match self.publish_tenant(key, store, tenant_metadata) {
             TenantPublication::Published(store)
             | TenantPublication::Existing {
                 store,
@@ -4845,6 +4942,15 @@ impl AuthRegistry {
             let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
             let tenant = format!("fireemu-{sequence:020}");
             let store = self.build_tenant_store(project, &tenant, parent)?;
+            if let Some(patch) = self
+                .tenant_config_overrides
+                .lock()
+                .ok()?
+                .get(&(project.to_owned(), tenant.clone()))
+                .copied()
+            {
+                patch.apply_to_metadata(&mut metadata);
+            }
             match self.publish_tenant((project.to_owned(), tenant.clone()), store, metadata) {
                 TenantPublication::Published(_) => return Some(tenant),
                 TenantPublication::Existing {
@@ -5012,6 +5118,51 @@ impl AuthRegistry {
         self.patch_project_config_under_gate(project, patch)
     }
 
+    /// Registers a non-password Auth config override without creating the project namespace.
+    ///
+    /// The selected fields are applied immediately when the exact project already exists, or at
+    /// the publication boundary when it is registered later. The override is never copied to a
+    /// different project or directly to a tenant.
+    pub fn register_project_config_override(
+        &self,
+        project: &str,
+        patch: AuthNamespaceConfigPatch,
+    ) -> bool {
+        if project.is_empty() || project.contains(['/', '\\']) || patch.is_empty() {
+            return false;
+        }
+        let Some(gate) = self.operation_gate(project, None) else {
+            return false;
+        };
+        let Ok(_operation) = gate.lock() else {
+            return false;
+        };
+        let Ok(projects) = self.projects.lock() else {
+            return false;
+        };
+        let existing = if project == self.default_project {
+            Some(self.default.clone())
+        } else {
+            projects
+                .registered
+                .get(project)
+                .or_else(|| projects.routed.get(project))
+                .cloned()
+        };
+        let Ok(mut overrides) = self.project_config_overrides.lock() else {
+            return false;
+        };
+        if let Some(store) = existing {
+            let Ok(mut store) = store.lock() else {
+                return false;
+            };
+            let next_config = patch.apply_to(store.config());
+            store.set_config(next_config);
+        }
+        overrides.insert(project.to_owned(), patch);
+        true
+    }
+
     /// Registers an explicit project password policy without creating that project namespace.
     ///
     /// The policy is applied immediately when the namespace already exists and is applied at
@@ -5148,6 +5299,62 @@ impl AuthRegistry {
             store.set_password_policy(policy.clone());
         }
         overrides.insert(key, policy);
+        true
+    }
+
+    /// Registers a non-password Auth config override without creating the tenant namespace.
+    ///
+    /// An existing tenant receives the selected settings atomically in both its metadata and
+    /// store. A future tenant receives them only when the exact `(project, tenant)` namespace is
+    /// published; no project setting or sibling tenant is consulted.
+    pub fn register_tenant_config_override(
+        &self,
+        project: &str,
+        tenant: &str,
+        patch: AuthNamespaceConfigPatch,
+    ) -> bool {
+        if project.is_empty()
+            || project.contains(['/', '\\'])
+            || tenant.is_empty()
+            || tenant.contains(['/', '\\'])
+            || patch.is_empty()
+        {
+            return false;
+        }
+        let Some(gate) = self.operation_gate(project, None) else {
+            return false;
+        };
+        let Ok(_operation) = gate.lock() else {
+            return false;
+        };
+        let key = (project.to_owned(), tenant.to_owned());
+        let Ok(tenants) = self.tenants.lock() else {
+            return false;
+        };
+        let existing = tenants.get(&key).cloned();
+        let Ok(mut overrides) = self.tenant_config_overrides.lock() else {
+            return false;
+        };
+        if let Some(store) = existing {
+            let Ok(mut metadata) = self.tenant_metadata.lock() else {
+                return false;
+            };
+            let Some(current_metadata) = metadata.get(&key).cloned() else {
+                return false;
+            };
+            let Ok(mut store) = store.lock() else {
+                return false;
+            };
+            let next_config = patch.apply_to(store.config());
+            let mut next_metadata = current_metadata;
+            patch.apply_to_metadata(&mut next_metadata);
+            let Some(metadata) = metadata.get_mut(&key) else {
+                return false;
+            };
+            *metadata = next_metadata;
+            store.set_config(next_config);
+        }
+        overrides.insert(key, patch);
         true
     }
 

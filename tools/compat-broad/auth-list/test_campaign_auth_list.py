@@ -447,7 +447,7 @@ def test_v5_campaign_package_binds_manifest_source_commit():
     assert all(value is None for value in package["production"]["ownerInputs"].values())
 
 
-def test_v6_campaign_package_binds_current_hashes():
+def test_v6_campaign_package_preserves_historical_hashes():
     import hashlib
 
     root = __import__("pathlib").Path(__file__).parents[3]
@@ -467,18 +467,48 @@ def test_v6_campaign_package_binds_current_hashes():
     assert artifact["observerSha256"] == result["observerSha256"]
     assert artifact["parentManifestSha256"] == result["parentManifestSha256"]
     assert artifact["executionCommit"] == result["executionCommit"]
-    for field, relative_path in (
-        ("shadowSha256", package["adapter"]["shadowPath"]),
-        ("sourceSha256", package["adapter"]["path"]),
-        ("gateSha256", package["adapter"]["gatePath"]),
-    ):
-        assert package["adapter"][field] == hashlib.sha256(
-            (root / relative_path).read_bytes()
-        ).hexdigest()
+    assert package["adapter"]["shadowSha256"] == (
+        "4010f1b16fb6d54a13d684374429aaa0f4e30b41b91f8e98aa73a4090872a73f"
+    )
+    assert package["adapter"]["sourceSha256"] == (
+        "88e4c79839b4aa9ba6e47a9f0b75ab9505461ae31fb04ff9dd2a842b4f916ed0"
+    )
+    assert package["adapter"]["gateSha256"] == (
+        "7ac19bad00fc18df247105474cb51181a874b5f45a87a0fa196d454196381c1a"
+    )
     assert package["adapter"]["shadowCommit"] == result["executionCommit"]
     assert artifact["observationRequests"] == 18
     assert artifact["recoveryRequests"] == 19
     assert artifact["totalRequests"] == 39
+    assert result["productionExecuted"] is False
+    assert result["recordingComplete"] is True
+    assert result["stateValidation"] is True
+    assert package["production"]["productionExecuted"] is False
+    assert all(value is None for value in package["production"]["ownerInputs"].values())
+
+
+def test_v7_campaign_package_binds_current_shadow_and_result():
+    import hashlib
+
+    root = __import__("pathlib").Path(__file__).parents[3]
+    package_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v7.json"
+    result_path = root / "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact-v7/result.json"
+    package = json.loads(package_path.read_bytes())
+    result = json.loads(result_path.read_bytes())
+    artifact = package["localShadow"]["ownedArtifact"]
+    assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
+        "02d66be29949efef2ce5acbc3b12a1630a86c5125f5b1eafe7baa3cccb5ad178"
+    )
+    assert package["kind"] == "production-campaign-auth-list-next-v7"
+    assert package["adapter"]["shadowCommit"] == result["executionCommit"]
+    assert package["adapter"]["shadowSha256"] == hashlib.sha256(
+        (root / package["adapter"]["shadowPath"]).read_bytes()
+    ).hexdigest()
+    assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
+    assert artifact["artifactSha256"] == result["artifactSha256"]
+    assert artifact["observerSha256"] == result["observerSha256"]
+    assert artifact["parentManifestSha256"] == result["parentManifestSha256"]
+    assert artifact["executionCommit"] == result["executionCommit"]
     assert result["productionExecuted"] is False
     assert result["recordingComplete"] is True
     assert result["stateValidation"] is True

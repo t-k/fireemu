@@ -278,3 +278,5 @@ The Auth/ListCollectionIds state-validation and Auth batchCreate ProtoJSON-null 
 ## BatchWrite transport parity follow-up (`36c7da90` / `2f5c1f75`)
 
 The REST BatchWrite path preserves an operation-unspecified write as a protobuf oneof with no selected member, so the shared backend reports that row as `INVALID_ARGUMENT` while valid prefix and suffix writes still execute. A matching tonic regression verifies the same per-row status ordering and both valid documents' post-state. The REST regression suite also verifies malformed non-array input through the real `/v1/` document readback route, avoiding a route-level 404 that could mask an unintended mutation. These tests confirm local REST/gRPC parity for this bounded malformed-row condition; they do not infer the production rejection unit for every invalid BatchWrite shape.
+
+The complete `fireemu-adapter-grpc` package regression on this head passed 368 tests with one pre-existing skip. This is a local adapter regression result; it does not provide production invalid-BatchWrite rejection-unit evidence.

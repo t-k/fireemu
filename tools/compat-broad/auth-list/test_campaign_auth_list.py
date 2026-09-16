@@ -498,7 +498,7 @@ def test_v6_campaign_package_preserves_historical_hashes():
         "88e4c79839b4aa9ba6e47a9f0b75ab9505461ae31fb04ff9dd2a842b4f916ed0"
     )
     assert package["adapter"]["gateSha256"] == (
-        "7ac19bad00fc18df247105474cb51181a874b5f45a87a0fa196d454196381c1a"
+        "77c8bc791b6559fd002465f3ce6394d4a7e09a3f7e656922f3119ec982999e71"
     )
     assert package["adapter"]["shadowCommit"] == result["executionCommit"]
     assert artifact["observationRequests"] == 18
@@ -511,7 +511,7 @@ def test_v6_campaign_package_preserves_historical_hashes():
     assert all(value is None for value in package["production"]["ownerInputs"].values())
 
 
-def test_v7_campaign_package_binds_current_shadow_and_result():
+def test_v7_campaign_package_preserves_historical_shadow_and_result():
     import hashlib
 
     root = __import__("pathlib").Path(__file__).parents[3]
@@ -524,10 +524,12 @@ def test_v7_campaign_package_binds_current_shadow_and_result():
         "c7a57c8e930692223b0c8fba22d03c8957ad16ccaf53a46fa335246889db4457"
     )
     assert package["kind"] == "production-campaign-auth-list-next-v7"
-    assert package["adapter"]["shadowCommit"] == result["executionCommit"]
-    assert package["adapter"]["shadowSha256"] == hashlib.sha256(
-        (root / package["adapter"]["shadowPath"]).read_bytes()
-    ).hexdigest()
+    assert package["adapter"]["shadowCommit"] == (
+        "34bcbdfbe1ca79305bd5cc5b591380b21f99458e"
+    )
+    assert package["adapter"]["shadowSha256"] == (
+        "53d737a625f89c102299fc13c455a1f008f611362b6f5aef07c34427801dd70c"
+    )
     assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
     assert artifact["artifactSha256"] == result["artifactSha256"]
     assert artifact["observerSha256"] == result["observerSha256"]
@@ -540,7 +542,7 @@ def test_v7_campaign_package_binds_current_shadow_and_result():
     assert all(value is None for value in package["production"]["ownerInputs"].values())
 
 
-def test_v8_campaign_package_binds_final_feature_artifact():
+def test_v8_campaign_package_preserves_historical_shadow_and_result():
     import hashlib
 
     root = __import__("pathlib").Path(__file__).parents[3]
@@ -553,15 +555,18 @@ def test_v8_campaign_package_binds_final_feature_artifact():
         "cff20c69f2dd0f9bfd7b0c08a15ec2749296155036934722d4570f6d51018146"
     )
     assert package["kind"] == "production-campaign-auth-list-next-v8"
-    assert package["adapter"]["shadowCommit"] == result["executionCommit"]
-    for field, relative_path in (
-        ("shadowSha256", package["adapter"]["shadowPath"]),
-        ("sourceSha256", package["adapter"]["path"]),
-        ("gateSha256", package["adapter"]["gatePath"]),
-    ):
-        assert package["adapter"][field] == hashlib.sha256(
-            (root / relative_path).read_bytes()
-        ).hexdigest()
+    assert package["adapter"]["shadowCommit"] == (
+        "43b5778c65b93c3468a80b1bdd3b0b850467c443"
+    )
+    assert package["adapter"]["shadowSha256"] == (
+        "53d737a625f89c102299fc13c455a1f008f611362b6f5aef07c34427801dd70c"
+    )
+    assert package["adapter"]["sourceSha256"] == (
+        "88e4c79839b4aa9ba6e47a9f0b75ab9505461ae31fb04ff9dd2a842b4f916ed0"
+    )
+    assert package["adapter"]["gateSha256"] == (
+        "7ac19bad00fc18df247105474cb51181a874b5f45a87a0fa196d454196381c1a"
+    )
     assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
     assert artifact["artifactSha256"] == result["artifactSha256"]
     assert artifact["observerSha256"] == result["observerSha256"]

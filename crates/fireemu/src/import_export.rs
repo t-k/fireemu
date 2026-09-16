@@ -37,8 +37,8 @@ use fireemu_core_auth::signup_quota::{
     QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
 };
 use fireemu_core_auth::store::{
-    AuthRegistry, AuthStore, FederatedIdentity, ImportedUser, ProjectAuthConfig, Provider,
-    TenantMetadata,
+    AuthNamespaceConfigPatch, AuthRegistry, AuthStore, FederatedIdentity, ImportedUser,
+    ProjectAuthConfig, Provider, TenantMetadata,
 };
 use fireemu_core_export::auth::{
     fake_hash, AccountsFile, AuthConfig, AuthSettings, AuthSettingsNamespace, AuthSettingsRecord,
@@ -729,6 +729,36 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
             }
         }
         return Err(ArtifactError::new("auth", PathBuf::from(AUTH_PATH), error));
+    }
+    // A tenant settings entry is a point-in-time namespace snapshot. Preserve its explicitly
+    // serialized config as a tenant override after publication, including values equal to the
+    // project/default config. Without this registration, a later project PATCH would treat an
+    // imported tenant as inherited and silently replace the restored setting.
+    if let Some(settings) = auth
+        .auth_settings
+        .as_ref()
+        .filter(|settings| settings.project_id == endpoints.project)
+    {
+        for namespace in &settings.namespaces {
+            let Some(tenant) = namespace.tenant_id.as_deref() else {
+                continue;
+            };
+            let Some(config) = namespace.settings.config.as_ref() else {
+                continue;
+            };
+            let patch = auth_namespace_config_patch(config);
+            if !patch.is_empty()
+                && !endpoints
+                    .auth
+                    .register_tenant_config_override(endpoints.project, tenant, patch)
+            {
+                return Err(ArtifactError::new(
+                    "auth",
+                    settings_path.clone(),
+                    format!("cannot restore explicit config for tenant {tenant:?}"),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -2134,6 +2164,24 @@ fn auth_config_from_settings(config: &AuthConfig, current: ProjectAuthConfig) ->
     }
 }
 
+fn auth_namespace_config_patch(config: &AuthConfig) -> AuthNamespaceConfigPatch {
+    AuthNamespaceConfigPatch {
+        allow_duplicate_emails: config.allow_duplicate_emails,
+        disabled_user_signup: config.disabled_user_signup,
+        disabled_user_deletion: config.disabled_user_deletion,
+        enable_improved_email_privacy: config.enable_improved_email_privacy,
+    }
+}
+
+fn exported_tenant_config(config: ProjectAuthConfig) -> AuthConfig {
+    AuthConfig {
+        allow_duplicate_emails: Some(config.allow_duplicate_emails),
+        enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
+        disabled_user_signup: Some(config.disabled_user_signup),
+        disabled_user_deletion: Some(config.disabled_user_deletion),
+    }
+}
+
 fn exported_tenant_metadata(metadata: &TenantMetadata) -> TenantMetadataRecord {
     TenantMetadataRecord {
         display_name: metadata.display_name.clone(),
@@ -2950,14 +2998,7 @@ fn export_auth(
         tenant_settings.push(AuthSettingsNamespace {
             tenant_id: Some(tenant.to_owned()),
             settings: AuthSettingsRecord {
-                config: (tenant_config != ProjectAuthConfig::default()).then(|| AuthConfig {
-                    allow_duplicate_emails: Some(tenant_config.allow_duplicate_emails),
-                    enable_improved_email_privacy: Some(
-                        tenant_config.enable_improved_email_privacy,
-                    ),
-                    disabled_user_signup: Some(tenant_config.disabled_user_signup),
-                    disabled_user_deletion: Some(tenant_config.disabled_user_deletion),
-                }),
+                config: Some(exported_tenant_config(tenant_config)),
                 quota: (tenant_quota != SignupQuotaConfig::default())
                     .then(|| exported_quota_settings(&tenant_quota)),
                 blocking: None,
@@ -3885,6 +3926,177 @@ mod tests {
                 disabled_user_signup: true,
                 disabled_user_deletion: true,
             }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn explicit_tenant_config_equal_to_project_default_survives_export_import() {
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{
+            AuthNamespaceConfigPatch, AuthRegistry, AuthStore, ProjectAuthConfigPatch,
+        };
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+        use std::sync::{Arc, Mutex};
+
+        let make_runtime = |auth: Arc<AuthRegistry>, clock: Arc<Mutex<VirtualClock>>, seed: u64| {
+            let backend = Arc::new(LocalBackend::new(
+                Gateway {
+                    enforce_limits: true,
+                    ctx: PlanningContext {
+                        edition: FirestoreEdition::Standard,
+                        api_mode: FirestoreApiMode::Native,
+                        policy: IndexValidationPolicy::Production,
+                    },
+                    indexes: IndexSet::default(),
+                },
+                clock.clone(),
+                seed,
+            ));
+            let storage = Arc::new(fireemu_adapter_http::storage::StorageState {
+                store: Mutex::new(fireemu_core_storage::store::StorageState::new(seed)),
+                clock,
+                auth,
+                tenancy: None,
+                rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
+                project: "demo-app".to_owned(),
+                events: None,
+                barrier: None,
+                firestore: None,
+                faults: None,
+                clock_observer: None,
+                app_check_policy: None,
+                admin_capability: None,
+                token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            });
+            (backend, storage)
+        };
+
+        let source_clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let source_default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let source_auth = Arc::new(AuthRegistry::new("demo-app", source_default));
+        source_auth
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("source tenant is created");
+        // Every selected value equals the project/default value. The override's presence, not
+        // a value difference, is the state this round trip must preserve.
+        assert!(source_auth.register_tenant_config_override(
+            "demo-app",
+            "tenant-a",
+            AuthNamespaceConfigPatch {
+                allow_duplicate_emails: Some(false),
+                enable_improved_email_privacy: Some(false),
+                disabled_user_signup: Some(false),
+                disabled_user_deletion: Some(false),
+            },
+        ));
+        let (source_backend, source_storage) =
+            make_runtime(source_auth.clone(), source_clock.clone(), 7);
+        let source_endpoints = super::Endpoints {
+            backend: &source_backend,
+            auth: &source_auth,
+            storage: &source_storage,
+            clock: &source_clock,
+            project: "demo-app",
+            blocking: None,
+            auth_operation_gate: None,
+        };
+
+        let export_root = super::trusted_temp::TrustedTempDir::new("tenant-config-roundtrip");
+        let export_dir = export_root.join("export");
+        super::export(
+            &export_dir,
+            super::Products {
+                firestore: false,
+                auth: true,
+                storage: false,
+            },
+            &source_endpoints,
+            "test",
+        )
+        .expect("Auth export succeeds");
+        let sidecar = std::fs::read_to_string(
+            export_dir
+                .join(super::AUTH_PATH)
+                .join(super::AUTH_SETTINGS_FILE),
+        )
+        .expect("Auth settings sidecar exists");
+        assert!(sidecar.contains("\"config\""));
+        assert!(sidecar.contains("\"allowDuplicateEmails\": false"));
+
+        let destination_clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let destination_default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(2),
+            TotpPolicy::default(),
+        )));
+        destination_default
+            .lock()
+            .expect("destination store lock")
+            .set_config(fireemu_core_auth::store::ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                ..fireemu_core_auth::store::ProjectAuthConfig::default()
+            });
+        let destination_auth = Arc::new(AuthRegistry::new("demo-app", destination_default));
+        let (destination_backend, destination_storage) =
+            make_runtime(destination_auth.clone(), destination_clock.clone(), 8);
+        let destination_endpoints = super::Endpoints {
+            backend: &destination_backend,
+            auth: &destination_auth,
+            storage: &destination_storage,
+            clock: &destination_clock,
+            project: "demo-app",
+            blocking: None,
+            auth_operation_gate: None,
+        };
+        let prepared = super::prepare(
+            &export_dir,
+            super::Products {
+                firestore: false,
+                auth: true,
+                storage: false,
+            },
+            "demo-app",
+        )
+        .expect("Auth export is prepared");
+        super::apply(prepared, &destination_endpoints).expect("Auth import succeeds");
+
+        let tenant = destination_auth
+            .tenant_store("demo-app", "tenant-a")
+            .expect("imported tenant exists");
+        assert!(
+            !tenant
+                .lock()
+                .expect("imported tenant lock")
+                .config()
+                .allow_duplicate_emails
+        );
+
+        assert!(destination_auth
+            .patch_project_config(
+                "demo-app",
+                ProjectAuthConfigPatch {
+                    allow_duplicate_emails: Some(true),
+                    ..ProjectAuthConfigPatch::default()
+                },
+            )
+            .is_some());
+        assert!(
+            !tenant
+                .lock()
+                .expect("restored tenant lock")
+                .config()
+                .allow_duplicate_emails
         );
     }
 

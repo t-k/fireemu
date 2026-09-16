@@ -1718,6 +1718,33 @@ service cloud.firestore {
 }
 
 #[test]
+fn query_path_bind_rejects_numeric_aliases_before_interpolation() {
+    let rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{d}/documents {
+    function check() {
+      let target = resource.data.target;
+      return path('/other/{id}').bind({id: target}) == path('/other/1');
+    }
+    match /notes/{id} { allow read: if check(); }
+  }
+}";
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("target", RulesValue::Int(1))],
+    );
+    assert!(!allows(rules, &query));
+
+    let mut concrete_float = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_float.resource = Some(doc(&[("target", RulesValue::Float(1.0))]));
+    assert!(!allows(rules, &concrete_float));
+
+    let mut concrete_int = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_int.resource = Some(doc(&[("target", RulesValue::Int(1))]));
+    assert!(allows(rules, &concrete_int));
+}
+
+#[test]
 fn partial_query_list_membership_does_not_assume_nested_numeric_representation() {
     let rules = |condition: &str| {
         format!(

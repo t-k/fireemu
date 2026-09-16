@@ -3316,6 +3316,9 @@ fn method_call(
                             return Err(soft(format!("bind() has no value for {{{placeholder}}}")));
                         };
                         used.push(key);
+                        if query_derived && matches!(value, V::Int(_) | V::Float(_)) {
+                            return Err(EvalError::Unknown);
+                        }
                         out.push(match value {
                             V::String(s) => s.clone(),
                             V::Int(i) => i.to_string(),

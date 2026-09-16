@@ -24,6 +24,7 @@
 //! readable; `fireemu` writes the whole export directory with owner-only permissions.
 
 use fireemu_core_types::json::{parse, JsonValue};
+use std::collections::BTreeSet;
 
 use crate::json::Json;
 
@@ -31,6 +32,11 @@ use crate::json::Json;
 pub const ACCOUNTS_FILE: &str = "accounts.json";
 /// The file name of the project configuration.
 pub const CONFIG_FILE: &str = "config.json";
+/// The fireemu-only Auth policy sidecar. It is kept separate from the official `config.json`
+/// document so an export remains importable by the official Local Emulator Suite.
+pub const PASSWORD_POLICIES_FILE: &str = "fireemu-password-policies.json";
+/// Version of the fireemu-only Auth password policy sidecar format.
+pub const PASSWORD_POLICIES_VERSION: i64 = 1;
 /// The `kind` member the Identity Toolkit answers with.
 pub const DOWNLOAD_KIND: &str = "identitytoolkit#DownloadAccountResponse";
 
@@ -56,6 +62,280 @@ const KNOWN_MFA_MEMBERS: [&str; 6] = [
     "totpInfo",
 ];
 const KNOWN_TOTP_MEMBERS: [&str; 1] = ["sharedSecretKey"];
+const KNOWN_PASSWORD_POLICIES_MEMBERS: [&str; 4] =
+    ["version", "projectId", "project", "namespaces"];
+const KNOWN_PASSWORD_NAMESPACE_MEMBERS: [&str; 2] = ["tenantId", "policy"];
+const KNOWN_PASSWORD_POLICY_MEMBERS: [&str; 9] = [
+    "enforcementState",
+    "forceUpgradeOnSignin",
+    "minLength",
+    "maxLength",
+    "requireUppercase",
+    "requireLowercase",
+    "requireNumeric",
+    "requireNonAlphanumeric",
+    "allowedNonAlphanumericCharacters",
+];
+
+/// One validated password policy in the fireemu export extension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordPolicyRecord {
+    /// `OFF` or `ENFORCE`.
+    pub enforcement_state: String,
+    /// Whether a non-compliant existing password is rejected at sign-in.
+    pub force_upgrade_on_signin: bool,
+    /// Inclusive minimum length in UTF-16 code units.
+    pub min_length: i64,
+    /// Optional custom maximum length. `None` is distinct from an explicit maximum.
+    pub max_length: Option<i64>,
+    /// Require at least one ASCII uppercase character.
+    pub require_uppercase: bool,
+    /// Require at least one ASCII lowercase character.
+    pub require_lowercase: bool,
+    /// Require at least one ASCII digit.
+    pub require_numeric: bool,
+    /// Require a character from the configured set.
+    pub require_non_alphanumeric: bool,
+    /// Explicit allowed non-alphanumeric characters.
+    pub allowed_non_alphanumeric_characters: BTreeSet<char>,
+}
+
+/// A namespace policy entry in the fireemu export extension. `tenant_id: None` is the project
+/// namespace represented by `project_id` on [`PasswordPolicies`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordPolicyNamespace {
+    /// Tenant ID, or `None` for the project namespace.
+    pub tenant_id: Option<String>,
+    /// Effective policy for this namespace.
+    pub policy: PasswordPolicyRecord,
+}
+
+/// Explicit password policies retained by an Auth export. This is deliberately a fireemu
+/// extension: the official Auth export format has no password-policy sidecar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordPolicies {
+    /// Source project ID. Policies are only installed when it matches the import target.
+    pub project_id: String,
+    /// Policy of the project namespace.
+    pub project: PasswordPolicyRecord,
+    /// Explicit tenant policies; unlisted tenants do not inherit the project policy.
+    pub namespaces: Vec<PasswordPolicyNamespace>,
+}
+
+impl PasswordPolicies {
+    /// Parses the fireemu-only sidecar.
+    pub fn parse(text: &str) -> Result<Self, AuthExportError> {
+        let value = parse(text).map_err(|e| AuthExportError(e.to_string()))?;
+        reject_unknown(
+            &value,
+            &KNOWN_PASSWORD_POLICIES_MEMBERS,
+            "password policy sidecar",
+        )?;
+        let version = value
+            .get("version")
+            .and_then(JsonValue::as_i64)
+            .ok_or_else(|| {
+                AuthExportError("password policy sidecar has no integer version".to_owned())
+            })?;
+        if version != PASSWORD_POLICIES_VERSION {
+            return refuse(format!(
+                "unsupported password policy sidecar version {version}"
+            ));
+        }
+        let project_id = value
+            .get("projectId")
+            .and_then(JsonValue::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| AuthExportError("password policy sidecar has no projectId".to_owned()))?
+            .to_owned();
+        let project = parse_password_policy(
+            value.get("project").ok_or_else(|| {
+                AuthExportError("password policy sidecar has no project".to_owned())
+            })?,
+            "password policy sidecar project",
+        )?;
+        let mut namespaces = Vec::new();
+        if let Some(value) = value.get("namespaces") {
+            let JsonValue::Array(entries) = value else {
+                return refuse("password policy sidecar namespaces is not an array");
+            };
+            let mut tenants = BTreeSet::new();
+            for (index, entry) in entries.iter().enumerate() {
+                reject_unknown(
+                    entry,
+                    &KNOWN_PASSWORD_NAMESPACE_MEMBERS,
+                    "password policy namespace",
+                )?;
+                let tenant_id = match entry.get("tenantId") {
+                    None | Some(JsonValue::Null) => None,
+                    Some(JsonValue::String(value)) if !value.is_empty() => Some(value.clone()),
+                    Some(_) => {
+                        return refuse(format!(
+                            "password policy namespace {index} has an invalid tenantId"
+                        ))
+                    }
+                };
+                let key = tenant_id.clone().unwrap_or_default();
+                if !tenants.insert(key) {
+                    return refuse(format!(
+                        "password policy sidecar has duplicate tenant namespace at index {index}"
+                    ));
+                }
+                let policy = parse_password_policy(
+                    entry.get("policy").ok_or_else(|| {
+                        AuthExportError("password policy namespace has no policy".to_owned())
+                    })?,
+                    "password policy namespace policy",
+                )?;
+                namespaces.push(PasswordPolicyNamespace { tenant_id, policy });
+            }
+        }
+        if namespaces.iter().any(|entry| entry.tenant_id.is_none()) {
+            return refuse("password policy sidecar cannot repeat the project namespace");
+        }
+        Ok(Self {
+            project_id,
+            project,
+            namespaces,
+        })
+    }
+
+    /// Serializes the sidecar with stable namespace ordering.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut doc = Json::object();
+        doc.insert("version", Json::Int(PASSWORD_POLICIES_VERSION));
+        doc.insert("projectId", Json::string(&self.project_id));
+        doc.insert("project", write_password_policy(&self.project));
+        let mut namespaces = self.namespaces.clone();
+        namespaces.sort_by(|left, right| left.tenant_id.cmp(&right.tenant_id));
+        doc.insert(
+            "namespaces",
+            Json::Array(
+                namespaces
+                    .iter()
+                    .map(|entry| {
+                        let mut namespace = Json::object();
+                        namespace
+                            .insert_some("tenantId", entry.tenant_id.as_ref().map(Json::string));
+                        namespace.insert("policy", write_password_policy(&entry.policy));
+                        namespace
+                    })
+                    .collect(),
+            ),
+        );
+        doc.to_pretty()
+    }
+}
+
+fn parse_password_policy(
+    value: &JsonValue,
+    subject: &str,
+) -> Result<PasswordPolicyRecord, AuthExportError> {
+    reject_unknown(value, &KNOWN_PASSWORD_POLICY_MEMBERS, subject)?;
+    let enforcement_state = value
+        .get("enforcementState")
+        .and_then(JsonValue::as_str)
+        .filter(|value| matches!(*value, "OFF" | "ENFORCE"))
+        .ok_or_else(|| AuthExportError(format!("{subject} has an invalid enforcementState")))?
+        .to_owned();
+    let force_upgrade_on_signin = value
+        .get("forceUpgradeOnSignin")
+        .and_then(JsonValue::as_bool)
+        .ok_or_else(|| AuthExportError(format!("{subject} has no boolean forceUpgradeOnSignin")))?;
+    let min_length = value
+        .get("minLength")
+        .and_then(JsonValue::as_i64)
+        .filter(|value| (6..=30).contains(value))
+        .ok_or_else(|| AuthExportError(format!("{subject} has an invalid minLength")))?;
+    let max_length = match value.get("maxLength") {
+        None | Some(JsonValue::Null) => None,
+        Some(JsonValue::Int(value)) if (min_length..=4096).contains(value) => Some(*value),
+        Some(_) => return refuse(format!("{subject} has an invalid maxLength")),
+    };
+    let boolean = |key: &str| {
+        value
+            .get(key)
+            .and_then(JsonValue::as_bool)
+            .ok_or_else(|| AuthExportError(format!("{subject} has no boolean {key}")))
+    };
+    let allowed_non_alphanumeric_characters = match value.get("allowedNonAlphanumericCharacters") {
+        None => default_allowed_non_alphanumeric_characters(),
+        Some(JsonValue::Array(values)) => {
+            let mut allowed = BTreeSet::new();
+            for item in values {
+                let character = item
+                    .as_str()
+                    .and_then(|text| {
+                        let mut chars = text.chars();
+                        let character = chars.next()?;
+                        chars.next().is_none().then_some(character)
+                    })
+                    .filter(|character| {
+                        character.is_ascii()
+                            && !character.is_ascii_alphanumeric()
+                            && !character.is_control()
+                    })
+                    .ok_or_else(|| {
+                        AuthExportError(format!(
+                            "{subject} has an invalid allowedNonAlphanumericCharacters entry"
+                        ))
+                    })?;
+                allowed.insert(character);
+            }
+            allowed
+        }
+        Some(_) => {
+            return refuse(format!(
+                "{subject} allowedNonAlphanumericCharacters is not an array"
+            ))
+        }
+    };
+    Ok(PasswordPolicyRecord {
+        enforcement_state,
+        force_upgrade_on_signin,
+        min_length,
+        max_length,
+        require_uppercase: boolean("requireUppercase")?,
+        require_lowercase: boolean("requireLowercase")?,
+        require_numeric: boolean("requireNumeric")?,
+        require_non_alphanumeric: boolean("requireNonAlphanumeric")?,
+        allowed_non_alphanumeric_characters,
+    })
+}
+
+fn default_allowed_non_alphanumeric_characters() -> BTreeSet<char> {
+    "~!@#$%^&*_-+=[]{}|\\:;'<>,.?/`\"()".chars().collect()
+}
+
+fn write_password_policy(policy: &PasswordPolicyRecord) -> Json {
+    let mut doc = Json::object();
+    doc.insert("enforcementState", Json::string(&policy.enforcement_state));
+    doc.insert(
+        "forceUpgradeOnSignin",
+        Json::Bool(policy.force_upgrade_on_signin),
+    );
+    doc.insert("minLength", Json::Int(policy.min_length));
+    doc.insert_some("maxLength", policy.max_length.map(Json::Int));
+    doc.insert("requireUppercase", Json::Bool(policy.require_uppercase));
+    doc.insert("requireLowercase", Json::Bool(policy.require_lowercase));
+    doc.insert("requireNumeric", Json::Bool(policy.require_numeric));
+    doc.insert(
+        "requireNonAlphanumeric",
+        Json::Bool(policy.require_non_alphanumeric),
+    );
+    doc.insert(
+        "allowedNonAlphanumericCharacters",
+        Json::Array(
+            policy
+                .allowed_non_alphanumeric_characters
+                .iter()
+                .map(|character| Json::string(character.to_string()))
+                .collect(),
+        ),
+    );
+    doc
+}
 
 /// Why an Auth document was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -632,7 +912,11 @@ pub mod fake_hash {
 
 #[cfg(test)]
 mod tests {
-    use super::{fake_hash, AccountsFile, AuthConfig, MfaEnrollment, ProviderUserInfo, UserRecord};
+    use super::{
+        fake_hash, AccountsFile, AuthConfig, MfaEnrollment, PasswordPolicies,
+        PasswordPolicyNamespace, PasswordPolicyRecord, ProviderUserInfo, UserRecord,
+    };
+    use std::collections::BTreeSet;
 
     const OFFICIAL: &str = r#"{
       "kind": "identitytoolkit#DownloadAccountResponse",
@@ -860,6 +1144,52 @@ mod tests {
     #[test]
     fn a_config_document_that_is_not_an_object_is_refused() {
         assert!(AuthConfig::parse("[]").is_err());
+    }
+
+    #[test]
+    fn fireemu_password_policy_sidecar_round_trips_project_and_tenant_state() {
+        let policy = PasswordPolicyRecord {
+            enforcement_state: "ENFORCE".to_owned(),
+            force_upgrade_on_signin: true,
+            min_length: 12,
+            max_length: None,
+            require_uppercase: true,
+            require_lowercase: true,
+            require_numeric: true,
+            require_non_alphanumeric: true,
+            allowed_non_alphanumeric_characters: BTreeSet::from(['!', '@']),
+        };
+        let policies = PasswordPolicies {
+            project_id: "demo-app".to_owned(),
+            project: policy.clone(),
+            namespaces: vec![PasswordPolicyNamespace {
+                tenant_id: Some("tenant-a".to_owned()),
+                policy,
+            }],
+        };
+        let encoded = policies.to_json();
+        assert_eq!(PasswordPolicies::parse(&encoded).unwrap(), policies);
+    }
+
+    #[test]
+    fn password_policy_sidecar_rejects_duplicate_tenants_and_unknown_members() {
+        let policy = r#"{
+          "enforcementState":"OFF",
+          "forceUpgradeOnSignin":false,
+          "minLength":6,
+          "requireUppercase":false,
+          "requireLowercase":false,
+          "requireNumeric":false,
+          "requireNonAlphanumeric":false,
+          "allowedNonAlphanumericCharacters":["!"]
+        }"#;
+        let duplicate = format!(
+            r#"{{"version":1,"projectId":"demo-app","project":{policy},"namespaces":[{{"tenantId":"a","policy":{policy}}},{{"tenantId":"a","policy":{policy}}}]}}"#
+        );
+        assert!(PasswordPolicies::parse(&duplicate).is_err());
+        let unknown =
+            format!(r#"{{"version":1,"projectId":"demo-app","project":{policy},"future":true}}"#);
+        assert!(PasswordPolicies::parse(&unknown).is_err());
     }
 
     #[test]

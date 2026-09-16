@@ -3581,8 +3581,16 @@ pub struct AuthRegistry {
     default: SharedAuthStore,
     scoped_refresh_routing: bool,
     projects: Mutex<ProjectStores>,
+    /// Explicit project policies configured before a project session is registered. An entry
+    /// does not create or route the project; it is applied to the matching namespace when it
+    /// later appears.
+    project_password_policy_overrides: Mutex<BTreeMap<String, PasswordPolicy>>,
     tenants: Mutex<BTreeMap<TenantKey, SharedAuthStore>>,
     tenant_metadata: Mutex<BTreeMap<TenantKey, TenantMetadata>>,
+    /// Explicit password policies configured for tenants that may not exist yet. An entry is
+    /// a pending namespace override, not a request to create the tenant or to inherit the
+    /// project policy.
+    password_policy_overrides: Mutex<BTreeMap<TenantKey, PasswordPolicy>>,
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
@@ -3698,8 +3706,10 @@ impl AuthRegistry {
             default,
             scoped_refresh_routing,
             projects: Mutex::new(ProjectStores::default()),
+            project_password_policy_overrides: Mutex::new(BTreeMap::new()),
             tenants: Mutex::new(BTreeMap::new()),
             tenant_metadata: Mutex::new(BTreeMap::new()),
+            password_policy_overrides: Mutex::new(BTreeMap::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             membership_generation: AtomicU64::new(0),
             lifecycle_incarnation: None,
@@ -3752,12 +3762,21 @@ impl AuthRegistry {
             let default = self.default.lock().ok()?;
             (*default.policy(), default.config(), default.signer_arc())
         };
+        let explicit_password_policy = self
+            .project_password_policy_overrides
+            .lock()
+            .ok()?
+            .get(project)
+            .cloned();
         let seed = project
             .bytes()
             .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
                 hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
             });
         let mut store = AuthStore::new(project, SplitMix64::new(seed), policy);
+        if let Some(policy) = explicit_password_policy {
+            store.set_password_policy(policy);
+        }
         if let Some(epoch) = lifecycle_epoch {
             store.set_lifecycle_epoch(epoch);
         }
@@ -3804,6 +3823,14 @@ impl AuthRegistry {
                 return RoutedStoreInstall::Capacity;
             };
             candidate.set_lifecycle_epoch(epoch);
+        }
+        if let Some(policy) = self
+            .project_password_policy_overrides
+            .lock()
+            .ok()
+            .and_then(|overrides| overrides.get(project).cloned())
+        {
+            candidate.set_password_policy(policy);
         }
         drop(candidate);
         if projects.routed.len() >= MAX_ROUTED_AUTH_PROJECTS {
@@ -4228,6 +4255,14 @@ impl AuthRegistry {
             };
             store.set_lifecycle_epoch(epoch);
         }
+        if let Some(policy) = self
+            .project_password_policy_overrides
+            .lock()
+            .ok()
+            .and_then(|overrides| overrides.get(project).cloned())
+        {
+            store.set_password_policy(policy);
+        }
         store.set_project_number(self.project_numbers.get(project).copied());
         projects
             .registered
@@ -4269,6 +4304,14 @@ impl AuthRegistry {
                 return false;
             };
             store.set_lifecycle_epoch(epoch);
+        }
+        if let Some(policy) = self
+            .project_password_policy_overrides
+            .lock()
+            .ok()
+            .and_then(|overrides| overrides.get(project).cloned())
+        {
+            store.set_password_policy(policy);
         }
         store.set_project_number(self.project_numbers.get(project).copied());
         let displaced = projects.routed.remove(project);
@@ -4421,6 +4464,12 @@ impl AuthRegistry {
                 parent.lifecycle_epoch.is_some(),
             )
         };
+        let explicit_password_policy = self
+            .password_policy_overrides
+            .lock()
+            .ok()?
+            .get(&(project.to_owned(), tenant.to_owned()))
+            .cloned();
         let seed = project
             .bytes()
             .chain(tenant.bytes())
@@ -4428,6 +4477,9 @@ impl AuthRegistry {
                 hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
             });
         let mut store = AuthStore::new_tenant(project, tenant, SplitMix64::new(seed), policy);
+        if let Some(policy) = explicit_password_policy {
+            store.set_password_policy(policy);
+        }
         if self.lifecycle_incarnation.is_some() {
             let epoch = self.next_lifecycle_epoch()?;
             if lifecycle_enabled {
@@ -4669,35 +4721,74 @@ impl AuthRegistry {
         self.patch_project_config_under_gate(project, patch)
     }
 
-    /// Replaces only the default project namespace's password policy. Tenant policies are
-    /// deliberately not inherited: callers must publish them through
-    /// [`Self::set_tenant_password_policy`] after resolving an explicit tenant override.
-    pub fn set_project_password_policy(&self, project: &str, policy: PasswordPolicy) -> bool {
+    /// Registers an explicit project password policy without creating that project namespace.
+    ///
+    /// The policy is applied immediately when the namespace already exists and is applied at
+    /// the publication boundary when a routed or explicit project store is later registered.
+    /// This does not create a project and never applies the policy to another project.
+    pub fn register_project_password_policy_override(
+        &self,
+        project: &str,
+        policy: PasswordPolicy,
+    ) -> bool {
+        if project.is_empty() || project.contains(['/', '\\']) {
+            return false;
+        }
         let Some(gate) = self.operation_gate(project, None) else {
             return false;
         };
         let Ok(_operation) = gate.lock() else {
             return false;
         };
-        let Ok(projects) = self.projects.lock() else {
+        let existing = self.projects.lock().ok().and_then(|projects| {
+            if project == self.default_project {
+                Some(self.default.clone())
+            } else {
+                projects
+                    .registered
+                    .get(project)
+                    .or_else(|| projects.routed.get(project))
+                    .cloned()
+            }
+        });
+        if let Some(store) = existing {
+            let Ok(mut store) = store.lock() else {
+                return false;
+            };
+            store.set_password_policy(policy.clone());
+        }
+        let Ok(mut overrides) = self.project_password_policy_overrides.lock() else {
             return false;
         };
-        let store = if project == self.default_project {
-            self.default.clone()
-        } else if let Some(store) = projects
-            .registered
-            .get(project)
-            .or_else(|| projects.routed.get(project))
-        {
-            store.clone()
-        } else {
+        overrides.insert(project.to_owned(), policy);
+        true
+    }
+
+    /// Replaces only the default project namespace's password policy. Tenant policies are
+    /// deliberately not inherited: callers must publish them through
+    /// [`Self::set_tenant_password_policy`] after resolving an explicit tenant override.
+    pub fn set_project_password_policy(&self, project: &str, policy: PasswordPolicy) -> bool {
+        if project == self.default_project {
+            return self.register_project_password_policy_override(project, policy);
+        }
+        let Some(store) = self.store_for(project) else {
             return false;
         };
-        drop(projects);
+        let Some(gate) = self.operation_gate(project, None) else {
+            return false;
+        };
+        let Ok(_operation) = gate.lock() else {
+            return false;
+        };
         let Ok(mut store) = store.lock() else {
             return false;
         };
-        store.set_password_policy(policy);
+        store.set_password_policy(policy.clone());
+        drop(store);
+        let Ok(mut overrides) = self.project_password_policy_overrides.lock() else {
+            return false;
+        };
+        overrides.insert(project.to_owned(), policy);
         true
     }
 
@@ -4715,6 +4806,9 @@ impl AuthRegistry {
         let Ok(_operation) = gate.lock() else {
             return false;
         };
+        if tenant.is_empty() || tenant.contains(['/', '\\']) {
+            return false;
+        }
         let key = (project.to_owned(), tenant.to_owned());
         let Ok(stores) = self.tenants.lock() else {
             return false;
@@ -4726,7 +4820,56 @@ impl AuthRegistry {
         let Ok(mut store) = store.lock() else {
             return false;
         };
-        store.set_password_policy(policy);
+        store.set_password_policy(policy.clone());
+        drop(store);
+        if let Ok(mut overrides) = self.password_policy_overrides.lock() {
+            overrides.insert(key, policy);
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Registers an explicit password policy for a tenant without creating that tenant.
+    ///
+    /// The policy is applied immediately when the namespace already exists and is applied at
+    /// the publication boundary when [`Self::ensure_tenant`] or [`Self::create_tenant`] later
+    /// creates the exact `(project, tenant)` namespace. No project policy is inherited.
+    pub fn register_tenant_password_policy_override(
+        &self,
+        project: &str,
+        tenant: &str,
+        policy: PasswordPolicy,
+    ) -> bool {
+        if project.is_empty()
+            || project.contains(['/', '\\'])
+            || tenant.is_empty()
+            || tenant.contains(['/', '\\'])
+        {
+            return false;
+        }
+        let Some(gate) = self.operation_gate(project, None) else {
+            return false;
+        };
+        let Ok(_operation) = gate.lock() else {
+            return false;
+        };
+        let key = (project.to_owned(), tenant.to_owned());
+        let existing = self
+            .tenants
+            .lock()
+            .ok()
+            .and_then(|stores| stores.get(&key).cloned());
+        if let Some(store) = existing {
+            let Ok(mut store) = store.lock() else {
+                return false;
+            };
+            store.set_password_policy(policy.clone());
+        }
+        let Ok(mut overrides) = self.password_policy_overrides.lock() else {
+            return false;
+        };
+        overrides.insert(key, policy);
         true
     }
 
@@ -6564,5 +6707,127 @@ mod broad_project_number_tests {
         assert!(!store
             .local_id_for_email
             .contains_key("MixedCase@example.com"));
+    }
+}
+
+#[cfg(test)]
+mod password_policy_namespace_tests {
+    use super::{AuthRegistry, AuthSnapshot, AuthStore};
+    use crate::mfa::TotpPolicy;
+    use crate::password_policy::{EnforcementState, PasswordPolicy};
+    use fireemu_core_types::determinism::SplitMix64;
+    use std::sync::{Arc, Mutex};
+
+    fn strict_policy() -> PasswordPolicy {
+        PasswordPolicy::try_new(
+            EnforcementState::Enforce,
+            true,
+            12,
+            Some(30),
+            true,
+            true,
+            true,
+            true,
+            crate::password_policy::default_allowed_non_alphanumeric(),
+        )
+        .expect("the policy is valid")
+    }
+
+    #[test]
+    fn auth_snapshot_restores_the_effective_password_policy() {
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        let policy = strict_policy();
+        store.set_password_policy(policy.clone());
+        let snapshot = AuthSnapshot::capture(&store);
+
+        store.set_password_policy(PasswordPolicy::default());
+        snapshot.restore_into(&mut store);
+
+        assert_eq!(store.password_policy(), &policy);
+    }
+
+    #[test]
+    fn tenant_password_policy_isolated_until_an_explicit_override() {
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let project_policy = strict_policy();
+        default
+            .lock()
+            .expect("default store")
+            .set_password_policy(project_policy);
+        let registry = AuthRegistry::new("demo-app", default);
+        let tenant_policy = PasswordPolicy::try_new(
+            EnforcementState::Enforce,
+            false,
+            10,
+            None,
+            false,
+            true,
+            true,
+            false,
+            crate::password_policy::default_allowed_non_alphanumeric(),
+        )
+        .expect("the policy is valid");
+
+        assert!(registry.tenant_store("demo-app", "tenant-a").is_none());
+        assert!(registry.register_tenant_password_policy_override(
+            "demo-app",
+            "tenant-a",
+            tenant_policy.clone(),
+        ));
+        assert!(registry.tenant_store("demo-app", "tenant-a").is_none());
+
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is created by the normal route");
+        assert_eq!(
+            tenant.lock().expect("tenant store").password_policy(),
+            &tenant_policy
+        );
+
+        let other = registry
+            .ensure_tenant("demo-app", "tenant-b")
+            .expect("tenant is created by the normal route");
+        assert_eq!(
+            other.lock().expect("tenant store").password_policy(),
+            &PasswordPolicy::default()
+        );
+    }
+
+    #[test]
+    fn project_password_policy_override_waits_for_namespace_registration() {
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = AuthRegistry::new("demo-app", default);
+        let policy = strict_policy();
+
+        assert!(
+            registry.register_project_password_policy_override("future-project", policy.clone(),)
+        );
+        assert!(registry.store_for("future-project").is_none());
+
+        let candidate = registry
+            .routed_candidate("future-project")
+            .expect("a valid routed project can be prepared");
+        assert_eq!(candidate.password_policy(), &policy);
+        assert!(matches!(
+            registry.install_routed("future-project", Arc::new(Mutex::new(candidate)),),
+            super::RoutedStoreInstall::Installed(_)
+        ));
+        assert_eq!(
+            registry
+                .routed_store_for("future-project")
+                .expect("registered routed store")
+                .lock()
+                .expect("routed store")
+                .password_policy(),
+            &policy
+        );
     }
 }

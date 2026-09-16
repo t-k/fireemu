@@ -32,12 +32,14 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
 use fireemu_core_auth::claims::CustomClaims;
 use fireemu_core_auth::mfa::{PhoneFactor, TotpFactor, TotpSecret};
+use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy};
 use fireemu_core_auth::store::{
     AuthRegistry, AuthStore, FederatedIdentity, ImportedUser, ProjectAuthConfig, Provider,
 };
 use fireemu_core_export::auth::{
-    fake_hash, AccountsFile, AuthConfig, MfaEnrollment, ProviderUserInfo, UserRecord,
-    ACCOUNTS_FILE, CONFIG_FILE,
+    fake_hash, AccountsFile, AuthConfig, MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace,
+    PasswordPolicyRecord, ProviderUserInfo, UserRecord, ACCOUNTS_FILE, CONFIG_FILE,
+    PASSWORD_POLICIES_FILE,
 };
 use fireemu_core_export::firestore::{
     for_each_output, write_output_to, ExportDocument, OverallMetadata, PartitionMetadata,
@@ -171,6 +173,9 @@ struct PreparedAuth {
     /// did not (the official emulator's export without the key, or no config.json at all),
     /// the running store's setting is kept: an import must not switch the protection off.
     email_privacy_declared: bool,
+    /// The optional fireemu-only password policy sidecar. The official Auth export has no
+    /// equivalent, so a missing sidecar leaves the running policy unchanged.
+    password_policies: Option<PasswordPolicies>,
     tenants: BTreeMap<String, Vec<ImportedUser>>,
 }
 
@@ -448,6 +453,38 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
     // Probe every live tenant lock first so a poisoned tenant cannot turn that sequence into a
     // partial import.
     preflight_auth_tenant_stores(endpoints.auth, endpoints.project)?;
+    let policy_path = PathBuf::from(AUTH_PATH).join(PASSWORD_POLICIES_FILE);
+    let mut current_tenant_policies = BTreeMap::new();
+    for tenant in endpoints.auth.tenants(endpoints.project) {
+        let tenant_store = endpoints
+            .auth
+            .tenant_store(endpoints.project, &tenant)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    &policy_path,
+                    format!("tenant {tenant:?} disappeared during policy preflight"),
+                )
+            })?;
+        let policy = tenant_store
+            .lock()
+            .map_err(|_| {
+                ArtifactError::new(
+                    "auth",
+                    &policy_path,
+                    format!("tenant {tenant:?} store is poisoned"),
+                )
+            })?
+            .password_policy()
+            .clone();
+        current_tenant_policies.insert(tenant, policy);
+    }
+    let imported_project_policy = auth
+        .password_policies
+        .as_ref()
+        .filter(|policies| policies.project_id == endpoints.project)
+        .map(|policies| imported_password_policy(&policies.project, &policy_path))
+        .transpose()?;
     // Build the replacement in memory first. `import_user_trusted` can still reject a
     // syntactically valid record (for example, duplicate IDs or emails); doing this before
     // clearing the live store keeps the import atomic across all account records.
@@ -463,6 +500,9 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
         let mut candidate = store.clone();
         candidate.clear();
         candidate.set_config(auth.config_over(store.config()));
+        if let Some(policy) = &imported_project_policy {
+            candidate.set_password_policy(policy.clone());
+        }
         install_auth_users(
             &mut candidate,
             &auth.users,
@@ -473,8 +513,9 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
         candidate
     };
     // Tenant stores are rebuilt after the default store. Preflight each tenant against an
-    // empty store with the imported configuration before deleting any existing tenant.
-    // Tenant policy is inherited from the project, so the same trusted import checks apply.
+    // empty store with the imported configuration before deleting any existing tenant. A
+    // tenant gets its exact sidecar policy, or its pre-import policy for an old artifact; it
+    // never receives the project policy implicitly.
     {
         let store = endpoints.auth.default_store();
         let store = store.lock().map_err(|_| {
@@ -488,6 +529,17 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
             let mut candidate = store.clone();
             candidate.clear();
             candidate.set_config(auth.config_over(store.config()));
+            let fallback = current_tenant_policies
+                .get(tenant)
+                .cloned()
+                .unwrap_or_default();
+            candidate.set_password_policy(password_policy_for_tenant(
+                auth.password_policies.as_ref(),
+                endpoints.project,
+                tenant,
+                &fallback,
+                &policy_path,
+            )?);
             install_auth_users(
                 &mut candidate,
                 users,
@@ -535,6 +587,17 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
         tenant_store.clear();
         let current = tenant_store.config();
         tenant_store.set_config(auth.config_over(current));
+        let fallback = current_tenant_policies
+            .get(&tenant)
+            .cloned()
+            .unwrap_or_default();
+        tenant_store.set_password_policy(password_policy_for_tenant(
+            auth.password_policies.as_ref(),
+            endpoints.project,
+            &tenant,
+            &fallback,
+            &policy_path,
+        )?);
         for user in users {
             let id = user.local_id.clone();
             let uid = tenant_store.import_user_trusted(user).map_err(|e| {
@@ -1177,6 +1240,36 @@ fn read_auth_config(
     Ok((config, email_privacy_declared))
 }
 
+fn read_auth_password_policies(
+    dir: &Path,
+    section_dir: &Path,
+    remaining_bytes: &mut u64,
+) -> Result<Option<PasswordPolicies>, ArtifactError> {
+    let path = section_dir.join(PASSWORD_POLICIES_FILE);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(ArtifactError::new(
+                "auth",
+                &path,
+                format!("cannot inspect the optional password policy sidecar: {error}"),
+            ))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(ArtifactError::new(
+            "auth",
+            &path,
+            "the optional password policy sidecar is not a regular no-symlink file",
+        ));
+    }
+    let text = read_auth_text(dir, &path, remaining_bytes)?;
+    PasswordPolicies::parse(&text)
+        .map(Some)
+        .map_err(|error| ArtifactError::new("auth", &path, error.to_string()))
+}
+
 fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, ArtifactError> {
     let section_dir = dir.join(&section.path);
     scan_import_tree(
@@ -1191,6 +1284,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     let mut remaining_bytes = IMPORT_AUTH_TOTAL_BYTES_LIMIT;
     let (config, email_privacy_declared) =
         read_auth_config(dir, &section_dir, &mut remaining_bytes)?;
+    let password_policies = read_auth_password_policies(dir, &section_dir, &mut remaining_bytes)?;
     let mut tenants = BTreeMap::new();
     let mut password_updated_at = BTreeMap::new();
     let entries = std::fs::read_dir(&section_dir)
@@ -1249,8 +1343,105 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
         password_updated_at,
         config,
         email_privacy_declared,
+        password_policies,
         tenants,
     })
+}
+
+fn exported_password_policy(policy: &PasswordPolicy) -> PasswordPolicyRecord {
+    PasswordPolicyRecord {
+        enforcement_state: match policy.enforcement_state {
+            EnforcementState::Off => "OFF".to_owned(),
+            EnforcementState::Enforce => "ENFORCE".to_owned(),
+        },
+        force_upgrade_on_signin: policy.force_upgrade_on_signin,
+        #[allow(clippy::cast_possible_wrap)]
+        min_length: policy.min_length as i64,
+        max_length: policy.max_length.map(|value| {
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                value as i64
+            }
+        }),
+        require_uppercase: policy.require_uppercase,
+        require_lowercase: policy.require_lowercase,
+        require_numeric: policy.require_numeric,
+        require_non_alphanumeric: policy.require_non_alphanumeric,
+        allowed_non_alphanumeric_characters: policy.allowed_non_alphanumeric.clone(),
+    }
+}
+
+fn imported_password_policy(
+    record: &PasswordPolicyRecord,
+    path: &Path,
+) -> Result<PasswordPolicy, ArtifactError> {
+    let state = match record.enforcement_state.as_str() {
+        "OFF" => EnforcementState::Off,
+        "ENFORCE" => EnforcementState::Enforce,
+        _ => {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                "the password policy sidecar has an invalid enforcementState",
+            ))
+        }
+    };
+    let min_length = usize::try_from(record.min_length).map_err(|_| {
+        ArtifactError::new(
+            "auth",
+            path,
+            "the password policy sidecar has an invalid minLength",
+        )
+    })?;
+    let max_length = record
+        .max_length
+        .map(usize::try_from)
+        .transpose()
+        .map_err(|_| {
+            ArtifactError::new(
+                "auth",
+                path,
+                "the password policy sidecar has an invalid maxLength",
+            )
+        })?;
+    PasswordPolicy::try_new(
+        state,
+        record.force_upgrade_on_signin,
+        min_length,
+        max_length,
+        record.require_uppercase,
+        record.require_lowercase,
+        record.require_numeric,
+        record.require_non_alphanumeric,
+        record.allowed_non_alphanumeric_characters.clone(),
+    )
+    .map_err(|error| {
+        ArtifactError::new(
+            "auth",
+            path,
+            format!("the password policy sidecar is invalid: {error:?}"),
+        )
+    })
+}
+
+fn password_policy_for_tenant(
+    policies: Option<&PasswordPolicies>,
+    target_project: &str,
+    tenant: &str,
+    fallback: &PasswordPolicy,
+    path: &Path,
+) -> Result<PasswordPolicy, ArtifactError> {
+    let Some(policies) = policies.filter(|policies| policies.project_id == target_project) else {
+        return Ok(fallback.clone());
+    };
+    let Some(namespace) = policies
+        .namespaces
+        .iter()
+        .find(|namespace| namespace.tenant_id.as_deref() == Some(tenant))
+    else {
+        return Ok(PasswordPolicy::default());
+    };
+    imported_password_policy(&namespace.policy, path)
 }
 
 fn millis_instant(text: Option<&str>) -> Option<LogicalInstant> {
@@ -1941,6 +2132,8 @@ fn export_auth(
     };
     write_private_file(&config_path, document.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
+    let project_policy = exported_password_policy(store.password_policy());
+    let mut tenant_policies = Vec::new();
     for tenant in endpoints.auth.tenants(endpoints.project) {
         let tenant_store = endpoints
             .auth
@@ -1962,6 +2155,13 @@ fn export_auth(
                 )
             })?
             .clone();
+        let tenant_policy = exported_password_policy(tenant_store.password_policy());
+        if tenant_policy != exported_password_policy(&PasswordPolicy::default()) {
+            tenant_policies.push(PasswordPolicyNamespace {
+                tenant_id: Some(tenant.clone()),
+                policy: tenant_policy,
+            });
+        }
         let mut file = AccountsFile::default();
         for user in tenant_store.users_by_creation() {
             file.users
@@ -1969,6 +2169,22 @@ fn export_auth(
         }
         let path = section_dir.join(format!("accounts-{tenant}.json"));
         write_private_file(&path, file.to_json().as_bytes())
+            .map_err(|e| ArtifactError::new("auth", &path, e))?;
+    }
+
+    // The official export format has no password-policy member. Keep this state in an
+    // explicit fireemu sidecar so ordinary config.json fixtures remain byte-compatible and
+    // the official CLI can continue to ignore the extension safely.
+    if project_policy != exported_password_policy(&PasswordPolicy::default())
+        || !tenant_policies.is_empty()
+    {
+        let path = section_dir.join(PASSWORD_POLICIES_FILE);
+        let policies = PasswordPolicies {
+            project_id: endpoints.project.to_owned(),
+            project: project_policy,
+            namespaces: tenant_policies,
+        };
+        write_private_file(&path, policies.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
 

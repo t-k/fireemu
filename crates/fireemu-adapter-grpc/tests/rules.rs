@@ -1472,6 +1472,7 @@ async fn aggregation_implicit_order_does_not_change_security_rules_query_metadat
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn query_proof_preserves_same_field_range_with_negation_filters() {
     use sq::field_filter::Operator as Op;
     let mut h = start().await;
@@ -1483,6 +1484,9 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /scores/{id} { allow list: if resource.data.score > 0; }
     match /excluded/{id} { allow list: if resource.data.score != 20; }
+    match /exact/{id} { allow list: if resource.data.score == 20; }
+    match /membership/{id} { allow list: if resource.data.score in [20, 30]; }
+    match /not-membership/{id} { allow list: if !(resource.data.score in [20, 30]); }
   }
 }",
         )
@@ -1537,6 +1541,24 @@ service cloud.firestore {
             value: Some(arr(vec![int(20), int(30)])),
         })),
     };
+    let equal = |value| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::Equal as i32,
+            value: Some(int(value)),
+        })),
+    };
+    let in_values = sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::In as i32,
+            value: Some(arr(vec![int(20), int(30)])),
+        })),
+    };
 
     // The range proves score > 0; the negation only removes values from that range.
     assert!(h
@@ -1549,7 +1571,10 @@ service cloud.firestore {
         .is_ok());
     assert!(h
         .client
-        .run_query(with_bearer(query("scores", 10, not_in), &alice_token))
+        .run_query(with_bearer(
+            query("scores", 10, not_in.clone()),
+            &alice_token
+        ))
         .await
         .is_ok());
     assert!(h
@@ -1560,12 +1585,53 @@ service cloud.firestore {
         ))
         .await
         .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(query("exact", 10, equal(20)), &alice_token))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("membership", 10, in_values),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("not-membership", 10, not_in),
+            &alice_token
+        ))
+        .await
+        .is_ok());
 
     // A range that still includes non-positive values cannot prove the rule.
     assert_eq!(
         h.client
             .run_query(with_bearer(
                 query("scores", -10, not_equal(20)),
+                &alice_token
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    let nonexcluded = sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::NotIn as i32,
+            value: Some(arr(vec![int(20), int(40)])),
+        })),
+    };
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query("not-membership", 10, nonexcluded),
                 &alice_token
             ))
             .await

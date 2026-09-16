@@ -994,8 +994,34 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                     });
                     *entry = entry.take().and_then(|r| tighten(r, bound));
                 }
+                match op {
+                    FieldOp::NotEqual => exclusions
+                        .entry(field)
+                        .or_default()
+                        .push(rules_value(value)),
+                    FieldOp::NotIn => {
+                        if let Value::Array(items) = value {
+                            exclusions
+                                .entry(field)
+                                .or_default()
+                                .extend(items.iter().map(rules_value));
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
+    }
+    for (field, range) in &ranges {
+        let value = match (range.clone(), exclusions.get(field)) {
+            (Some(range), Some(excluded)) => RulesValue::RangeExcluding {
+                range,
+                excluded: excluded.clone(),
+            },
+            (Some(range), None) => RulesValue::Range(range),
+            (None, _) => RulesValue::Unknown,
+        };
+        set_nested(&mut data, field, value);
     }
     for atom in disjunction {
         match atom {
@@ -1032,21 +1058,6 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                         }
                     }
                 }
-                // Exists, is not null and differs from the listed values.
-                FieldOp::NotEqual => {
-                    exclusions
-                        .entry(field)
-                        .or_default()
-                        .push(rules_value(value));
-                }
-                FieldOp::NotIn => {
-                    if let Value::Array(items) = value {
-                        exclusions
-                            .entry(field)
-                            .or_default()
-                            .extend(items.iter().map(rules_value));
-                    }
-                }
                 _ => {}
             },
             FilterExpr::Unary {
@@ -1056,19 +1067,8 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
             _ => {}
         }
     }
-    for (field, range) in &ranges {
-        let value = match (range.clone(), exclusions.get(field)) {
-            (Some(range), Some(excluded)) => RulesValue::RangeExcluding {
-                range,
-                excluded: excluded.clone(),
-            },
-            (Some(range), None) => RulesValue::Range(range),
-            (None, _) => RulesValue::Unknown,
-        };
-        set_nested(&mut data, field, value);
-    }
     for (field, excluded) in exclusions {
-        if !ranges.contains_key(field) {
+        if !ranges.contains_key(field) && !has_known_field(&data, field) {
             set_nested(&mut data, field, RulesValue::NotOneOf(excluded));
         }
     }
@@ -1210,6 +1210,23 @@ fn set_nested(fields: &mut BTreeMap<String, RulesValue>, path: &FieldPath, value
     if let Some(last) = segments.last() {
         map.insert(last.clone(), value);
     }
+}
+
+fn has_known_field(fields: &BTreeMap<String, RulesValue>, path: &FieldPath) -> bool {
+    let mut current = fields;
+    for (index, segment) in path.segments().iter().enumerate() {
+        let Some(value) = current.get(segment) else {
+            return false;
+        };
+        if index + 1 == path.segments().len() {
+            return true;
+        }
+        current = match value {
+            RulesValue::Map(map) | RulesValue::PartialMap(map) => map,
+            _ => return false,
+        };
+    }
+    false
 }
 
 const fn method_name(m: Method) -> &'static str {

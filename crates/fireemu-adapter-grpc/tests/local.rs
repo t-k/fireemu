@@ -2883,7 +2883,10 @@ async fn batch_write_keeps_valid_rows_around_an_unspecified_operation() {
 
     assert_eq!(response.status.len(), 3);
     assert_eq!(response.status[0].code, 0);
-    assert_eq!(response.status[1].code, i32::from(tonic::Code::InvalidArgument));
+    assert_eq!(
+        response.status[1].code,
+        i32::from(tonic::Code::InvalidArgument)
+    );
     assert_eq!(response.status[2].code, 0);
 
     for (name, value) in [("rows/prefix", 1), ("rows/suffix", 3)] {

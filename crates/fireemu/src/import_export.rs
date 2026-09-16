@@ -2494,6 +2494,7 @@ fn sanitize(database: &str) -> String {
         .collect()
 }
 
+#[allow(clippy::too_many_lines)]
 fn export_auth(
     dir: &Path,
     endpoints: &Endpoints,

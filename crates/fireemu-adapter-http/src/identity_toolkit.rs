@@ -4617,13 +4617,20 @@ fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String
     let mut tenant = None;
     for kv in query.unwrap_or("").split('&').filter(|kv| !kv.is_empty()) {
         let Some((name, value)) = kv.split_once('=') else {
+            if matches!(decode(kv).as_str(), "key" | "apiKey" | "tenantId") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
             continue;
         };
-        let slot = match name {
+        let decoded_name = decode(name);
+        let slot = match decoded_name.as_str() {
             "key" | "apiKey" => &mut api_key,
             "tenantId" => &mut tenant,
             _ => continue,
         };
+        if value.is_empty() || malformed_query_component(name) || malformed_query_component(value) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
         if slot.is_some() {
             return Err(error(400, "INVALID_ARGUMENT"));
         }

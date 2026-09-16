@@ -8369,3 +8369,59 @@ fn duplicate_query_selectors_fail_closed_without_mutation() {
     );
     assert_eq!(policy.0, 200, "{}", policy.1);
 }
+
+#[test]
+fn malformed_query_selectors_fail_closed_without_mutation() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    let tenant = registry.tenant_store("demo-app", "tenant-a").unwrap();
+    s.registry = Some(registry);
+
+    for (index, query) in [
+        "tenantId",
+        "%74enantId",
+        "key",
+        "apiKey",
+        "key=valid-key&tenantId",
+        "tenantId&key=valid-key",
+        "tenantId=",
+        "key=",
+        "apiKey=",
+        "tenantId=%ZZ",
+        "key=valid%ZZ",
+        "apiKey=%A",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let email = format!("malformed-selector-{index}@example.com");
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:signUp?{query}"),
+            &json!({"email": email, "password": "password1"}),
+        );
+        assert_eq!(status, 400, "{query}: {refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_ARGUMENT", "{query}");
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_none());
+        assert!(tenant.lock().unwrap().user_by_email(&email).is_none());
+    }
+
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?ignored=kept&%74enantId=tenant%2Da"),
+        &json!({
+            "email": "valid-selector-with-unrelated-query@example.com",
+            "password": "password1",
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert!(tenant
+        .lock()
+        .unwrap()
+        .user_by_email("valid-selector-with-unrelated-query@example.com")
+        .is_some());
+}

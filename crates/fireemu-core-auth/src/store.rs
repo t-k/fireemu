@@ -5113,9 +5113,24 @@ impl AuthRegistry {
         project: &str,
         patch: ProjectAuthConfigPatch,
     ) -> Option<ProjectAuthConfig> {
+        self.patch_project_config_with_password_policy(project, patch, None)
+    }
+
+    /// Applies a project Auth configuration patch and password-policy replacement as one
+    /// namespace transition. Project configuration continues to propagate to every existing
+    /// tenant, while the password policy remains scoped to the selected project namespace.
+    /// Supplying a policy also records the explicit project override for namespaces that are
+    /// registered or routed later. All locks and membership checks complete before any state is
+    /// changed, so a failed transition cannot publish only part of the update.
+    pub fn patch_project_config_with_password_policy(
+        &self,
+        project: &str,
+        patch: ProjectAuthConfigPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<ProjectAuthConfig> {
         let gate = self.operation_gate(project, None)?;
         let _operation = gate.lock().ok()?;
-        self.patch_project_config_under_gate(project, patch)
+        self.patch_project_config_under_gate(project, patch, password_policy)
     }
 
     /// Registers a non-password Auth config override without creating the project namespace.
@@ -5362,6 +5377,7 @@ impl AuthRegistry {
         &self,
         project: &str,
         patch: ProjectAuthConfigPatch,
+        password_policy: Option<PasswordPolicy>,
     ) -> Option<ProjectAuthConfig> {
         let projects = self.projects.lock().ok()?;
         let parent = if project == self.default_project {
@@ -5372,34 +5388,57 @@ impl AuthRegistry {
                 .get(project)
                 .or_else(|| projects.routed.get(project))?
         };
-        if patch.is_empty() {
+        if patch.is_empty() && password_policy.is_none() {
             return Some(parent.lock().ok()?.config());
         }
-        let tenants = self.tenants.lock().ok()?;
-        let metadata = self.tenant_metadata.lock().ok()?;
-        if tenants
-            .keys()
-            .filter(|(candidate, _)| candidate == project)
-            .ne(metadata
+        if !patch.is_empty() {
+            let tenants = self.tenants.lock().ok()?;
+            let metadata = self.tenant_metadata.lock().ok()?;
+            if tenants
                 .keys()
-                .filter(|(candidate, _)| candidate == project))
-        {
-            return None;
+                .filter(|(candidate, _)| candidate == project)
+                .ne(metadata
+                    .keys()
+                    .filter(|(candidate, _)| candidate == project))
+            {
+                return None;
+            }
+            let tenant_stores = tenants
+                .iter()
+                .filter(|((candidate, _), _)| candidate == project)
+                .map(|(_, store)| store)
+                .collect::<Vec<_>>();
+            let mut overrides = match password_policy.as_ref() {
+                Some(_) => Some(self.project_password_policy_overrides.lock().ok()?),
+                None => None,
+            };
+            let mut parent = parent.lock().ok()?;
+            let config = patch.apply_to(parent.config());
+            let mut tenant_guards = Vec::with_capacity(tenant_stores.len());
+            for store in tenant_stores {
+                tenant_guards.push(store.lock().ok()?);
+            }
+            parent.set_config(config);
+            for tenant in &mut tenant_guards {
+                tenant.set_config(config);
+            }
+            if let Some(password_policy) = password_policy {
+                parent.set_password_policy(password_policy.clone());
+                overrides
+                    .as_mut()
+                    .expect("a password policy patch holds the override lock")
+                    .insert(project.to_owned(), password_policy);
+            }
+            return Some(config);
         }
-        let tenant_stores = tenants
-            .iter()
-            .filter(|((candidate, _), _)| candidate == project)
-            .map(|(_, store)| store)
-            .collect::<Vec<_>>();
         let mut parent = parent.lock().ok()?;
-        let mut tenant_guards = Vec::with_capacity(tenant_stores.len());
-        for store in tenant_stores {
-            tenant_guards.push(store.lock().ok()?);
-        }
         let config = patch.apply_to(parent.config());
-        parent.set_config(config);
-        for tenant in &mut tenant_guards {
-            tenant.set_config(config);
+        if let Some(password_policy) = password_policy {
+            let Ok(mut overrides) = self.project_password_policy_overrides.lock() else {
+                return None;
+            };
+            parent.set_password_policy(password_policy.clone());
+            overrides.insert(project.to_owned(), password_policy);
         }
         Some(config)
     }
@@ -7202,7 +7241,10 @@ mod broad_project_number_tests {
 
 #[cfg(test)]
 mod password_policy_namespace_tests {
-    use super::{AuthRegistry, AuthSnapshot, AuthStore, TenantMetadataPatch};
+    use super::{
+        AuthRegistry, AuthSnapshot, AuthStore, ProjectAuthConfig, ProjectAuthConfigPatch,
+        TenantMetadataPatch,
+    };
     use crate::mfa::TotpPolicy;
     use crate::password_policy::{EnforcementState, PasswordPolicy};
     use fireemu_core_types::determinism::SplitMix64;
@@ -7390,6 +7432,115 @@ mod password_policy_namespace_tests {
                 .password_policy(),
             &policy
         );
+    }
+
+    #[test]
+    fn project_config_and_password_policy_patch_commit_as_one_update() {
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is created");
+        let policy = strict_policy();
+
+        let config = registry
+            .patch_project_config_with_password_policy(
+                "demo-app",
+                ProjectAuthConfigPatch {
+                    allow_duplicate_emails: Some(true),
+                    enable_improved_email_privacy: Some(true),
+                    disabled_user_signup: Some(true),
+                    disabled_user_deletion: Some(true),
+                },
+                Some(policy.clone()),
+            )
+            .expect("project patch succeeds");
+
+        let expected = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: true,
+            disabled_user_signup: true,
+            disabled_user_deletion: true,
+        };
+        assert_eq!(config, expected);
+        assert_eq!(registry.default_store().lock().unwrap().config(), expected);
+        assert_eq!(
+            registry.default_store().lock().unwrap().password_policy(),
+            &policy
+        );
+        assert_eq!(tenant.lock().unwrap().config(), expected);
+        assert_eq!(
+            tenant.lock().unwrap().password_policy(),
+            &PasswordPolicy::default(),
+            "project password policy must not be implicitly inherited by a tenant"
+        );
+        assert_eq!(
+            registry
+                .project_password_policy_overrides
+                .lock()
+                .unwrap()
+                .get("demo-app"),
+            Some(&policy)
+        );
+    }
+
+    #[test]
+    fn combined_project_patch_rejects_inconsistent_membership_before_any_write() {
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is created");
+        registry
+            .tenant_metadata
+            .lock()
+            .unwrap()
+            .remove(&("demo-app".to_owned(), "tenant-a".to_owned()));
+
+        assert!(registry
+            .patch_project_config_with_password_policy(
+                "demo-app",
+                ProjectAuthConfigPatch {
+                    disabled_user_signup: Some(true),
+                    ..ProjectAuthConfigPatch::default()
+                },
+                Some(strict_policy()),
+            )
+            .is_none());
+        assert_eq!(
+            registry.default_store().lock().unwrap().config(),
+            ProjectAuthConfig::default()
+        );
+        assert_eq!(
+            registry.default_store().lock().unwrap().password_policy(),
+            &PasswordPolicy::default()
+        );
+        assert_eq!(
+            tenant.lock().unwrap().config(),
+            ProjectAuthConfig::default()
+        );
+        assert_eq!(
+            tenant.lock().unwrap().password_policy(),
+            &PasswordPolicy::default()
+        );
+        assert!(registry
+            .project_password_policy_overrides
+            .lock()
+            .unwrap()
+            .get("demo-app")
+            .is_none());
     }
 
     #[test]

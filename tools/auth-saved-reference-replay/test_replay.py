@@ -3,10 +3,18 @@
 import copy
 import json
 import shutil
+import sys
+import types
 from pathlib import Path
 
 import pytest
+import run_replay
 from replay import CORPORA, compare, evaluate, load_spec, typed_equal
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "compat-inventory"))
+import owned_runner
+
+sys.path.pop(0)
 
 
 PRIVATE_BUNDLE = Path("docs.local/logs/2026-09-14/auth-saved-reference-replay-b3e57fef")
@@ -131,7 +139,9 @@ def test_manifest_tampering_is_rejected_before_comparison(tmp_path):
     manifest["corpora"]["auth-profile"]["configurationSha256"] = "0" * 64
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="configuration is not bound"):
-        evaluate(bundle, tmp_path / "result.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61")
+        evaluate(
+            bundle, tmp_path / "result.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61"
+        )
 
 
 def test_manifest_probe_and_process_tampering_is_rejected(tmp_path):
@@ -141,7 +151,9 @@ def test_manifest_probe_and_process_tampering_is_rejected(tmp_path):
     manifest["corpora"]["auth-profile"]["probeInputsSha256"] = "0" * 64
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="probe input digest"):
-        evaluate(bundle, tmp_path / "result.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61")
+        evaluate(
+            bundle, tmp_path / "result.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61"
+        )
 
     bundle = private_bundle_copy(tmp_path, "process-bundle")
     report_path = bundle / "auth-profile/local.json"
@@ -149,16 +161,145 @@ def test_manifest_probe_and_process_tampering_is_rejected(tmp_path):
     report["ownedProcess"]["stopped"] = 0
     report_path.write_text(json.dumps(report))
     manifest = json.loads((bundle / "run-manifest.json").read_text())
-    manifest["corpora"]["auth-profile"]["localReportSha256"] = __import__("hashlib").sha256(report_path.read_bytes()).hexdigest()
+    manifest["corpora"]["auth-profile"]["localReportSha256"] = (
+        __import__("hashlib").sha256(report_path.read_bytes()).hexdigest()
+    )
     manifest["corpora"]["auth-profile"]["localReportBytes"] = report_path.stat().st_size
     (bundle / "run-manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="stopped flag"):
-        evaluate(bundle, tmp_path / "result.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61")
+        evaluate(
+            bundle, tmp_path / "result.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61"
+        )
 
 
 def test_fixed_bundle_evaluation_is_deterministic(tmp_path):
     bundle = private_bundle_copy(tmp_path)
-    first = evaluate(bundle, tmp_path / "first.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61")
-    second = evaluate(bundle, tmp_path / "second.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61")
+    first = evaluate(
+        bundle, tmp_path / "first.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61"
+    )
+    second = evaluate(
+        bundle, tmp_path / "second.json", "b3e57fef9edff8e09fbf93cea6666b7f51c3fd61"
+    )
     assert first["comparisonDigest"] == second["comparisonDigest"]
     assert first["allCasesMatch"] is True
+
+
+def test_run_accepts_a_complete_failed_report_and_writes_the_manifest(
+    tmp_path, monkeypatch
+):
+    def fake_run(output):
+        output.mkdir(mode=0o700)
+        (output / "local.json").write_text("{}")
+        return {
+            "status": "failed",
+            "artifact": {"sha256": "b" * 64},
+            "runtimeSourceCommit": "a" * 40,
+            "cleanup": {"uidAbsent": True, "emailAbsent": True},
+            "ownedProcess": {"listenersClosed": True, "exitCode": 0},
+            "probeInputs": {},
+            "configuration": {"sha256": "c" * 64, "fileSha256": "d" * 64},
+        }
+
+    fake = types.SimpleNamespace(run=fake_run, complete=lambda report: True)
+    monkeypatch.setattr(run_replay, "RUNNERS", dict.fromkeys(CORPORA, fake))
+    monkeypatch.setattr(run_replay, "load_runner", lambda path: fake)
+    monkeypatch.setattr(
+        owned_runner,
+        "build_artifact",
+        lambda: (Path("artifact"), {"artifactSha256": "b" * 64}),
+    )
+    monkeypatch.setattr(
+        run_replay.subprocess, "check_output", lambda *args, **kwargs: "a" * 40 + "\n"
+    )
+
+    manifest = run_replay.run(tmp_path / "bundle")
+    assert manifest["sourceCommit"] == "a" * 40
+    assert (tmp_path / "bundle/run-manifest.json").is_file()
+
+
+def test_run_stops_when_a_report_is_incomplete(tmp_path, monkeypatch):
+    fake = types.SimpleNamespace(
+        run=lambda output: {"status": "incomplete"}, complete=lambda report: False
+    )
+    monkeypatch.setattr(run_replay, "RUNNERS", dict.fromkeys(CORPORA, fake))
+    monkeypatch.setattr(run_replay, "load_runner", lambda path: fake)
+    monkeypatch.setattr(
+        owned_runner,
+        "build_artifact",
+        lambda: (Path("artifact"), {"artifactSha256": "b" * 64}),
+    )
+    monkeypatch.setattr(
+        run_replay.subprocess, "check_output", lambda *args, **kwargs: "a" * 40 + "\n"
+    )
+
+    with pytest.raises(ValueError, match="incomplete"):
+        run_replay.run(tmp_path / "bundle")
+    assert not (tmp_path / "bundle/run-manifest.json").exists()
+
+
+def test_evaluate_writes_a_complete_semantic_mismatch(tmp_path, monkeypatch):
+    local_root = tmp_path / "bundle"
+    local_root.mkdir()
+    (local_root / "run-manifest.json").write_text("{}")
+    for name in CORPORA:
+        corpus = local_root / name
+        corpus.mkdir()
+        (corpus / "local.json").write_text("{}")
+    mismatch = {
+        "classification": "SEMANTIC_MISMATCH",
+        "caseCount": 1,
+        "matchCount": 0,
+        "mismatchCases": ["case"],
+        "rows": [],
+        "currentLocal": {},
+        "configurationComparison": {},
+    }
+    monkeypatch.setattr(
+        "replay.load_spec", lambda: {"corpora": [{"id": name} for name in CORPORA]}
+    )
+    monkeypatch.setattr("replay.validate_manifest", lambda *args: ({}, {}))
+    monkeypatch.setattr("replay.compare", lambda *args: mismatch)
+    result = evaluate(local_root, tmp_path / "result.json", "a" * 40)
+    assert result["allCasesMatch"] is False
+    assert json.loads((tmp_path / "result.json").read_text())["allCasesMatch"] is False
+
+
+@pytest.mark.parametrize("collision", ["regular", "symlink", "hardlink"])
+def test_evaluate_rejects_every_existing_output_collision(
+    tmp_path, monkeypatch, collision
+):
+    local_root = tmp_path / "bundle"
+    local_root.mkdir()
+    (local_root / "run-manifest.json").write_text("{}")
+    for name in CORPORA:
+        corpus = local_root / name
+        corpus.mkdir()
+        (corpus / "local.json").write_text("{}")
+    monkeypatch.setattr(
+        "replay.load_spec", lambda: {"corpora": [{"id": name} for name in CORPORA]}
+    )
+    monkeypatch.setattr("replay.validate_manifest", lambda *args: ({}, {}))
+    monkeypatch.setattr(
+        "replay.compare",
+        lambda *args: {
+            "classification": "MATCH",
+            "caseCount": 0,
+            "matchCount": 0,
+            "mismatchCases": [],
+            "rows": [],
+            "currentLocal": {},
+            "configurationComparison": {},
+        },
+    )
+    target = tmp_path / "result.json"
+    if collision == "regular":
+        target.write_text("original")
+    elif collision == "symlink":
+        target.with_name("symlink-target").write_text("original")
+        target.symlink_to(target.with_name("symlink-target"))
+    else:
+        target.with_name("hardlink-source").write_text("original")
+        target.hardlink_to(target.with_name("hardlink-source"))
+
+    with pytest.raises(ValueError, match="already exists"):
+        evaluate(local_root, target, "a" * 40)

@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -259,6 +260,7 @@ def validate_manifest(local_root: Path, source_commit: str, spec: dict[str, Any]
         entry = entries[name]
         require(isinstance(entry, dict), f"{name}: run manifest entry missing")
         require(entry.get("runtimeSourceCommit") == source_commit, f"{name}: manifest source binding changed")
+        require(entry.get("status") in {"passed", "failed"}, f"{name}: manifest status is invalid")
         require(entry.get("artifactSha256") == artifact, f"{name}: manifest artifact binding changed")
         report_path = Path(entry.get("localReport", ""))
         require(report_path.name == "local.json" and report_path.parent.name == name, f"{name}: report path is not corpus-bound")
@@ -267,6 +269,7 @@ def validate_manifest(local_root: Path, source_commit: str, spec: dict[str, Any]
         require(entry.get("localReportSha256") == file_digest(local_path), f"{name}: local report bytes are not bound")
         require(type(entry.get("localReportBytes")) is int and entry["localReportBytes"] == local_path.stat().st_size, f"{name}: local report length is not bound")
         local = json.loads(local_path.read_bytes())
+        require(local.get("status") == entry["status"], f"{name}: manifest status does not match local report")
         probe = expected_probe_inputs(name)
         if expected_configuration is None:
             expected_configuration = local.get("configuration")
@@ -283,7 +286,7 @@ def validate_manifest(local_root: Path, source_commit: str, spec: dict[str, Any]
 
 def evaluate(local_root: Path, output: Path, source_commit: str) -> dict[str, Any]:
     spec = load_spec()
-    manifest, _ = validate_manifest(local_root, source_commit, spec)
+    _manifest, _ = validate_manifest(local_root, source_commit, spec)
     reports = {}
     spec_entries = {entry["id"]: entry for entry in spec["corpora"]}
     for name, metadata in CORPORA.items():
@@ -293,7 +296,13 @@ def evaluate(local_root: Path, output: Path, source_commit: str) -> dict[str, An
     stable = {name: {key: reports[name][key] for key in ("classification", "caseCount", "matchCount", "mismatchCases", "rows", "currentLocal", "configurationComparison")} for name in reports}
     result = {"schemaVersion": 2, "kind": "auth-saved-reference-replay-v2", "sourceCommit": source_commit, "runManifestSha256": file_digest(local_root / "run-manifest.json"), "corpora": reports, "allCasesMatch": all(report["classification"] == "MATCH" for report in reports.values()), "comparisonDigest": digest(stable)}
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    payload = (json.dumps(result, indent=2, sort_keys=True) + "\n").encode()
+    try:
+        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise ValueError("evaluation output already exists") from exc
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(payload)
     return result
 
 

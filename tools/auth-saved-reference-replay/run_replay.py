@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from replay import CORPORA, digest, file_digest, load_spec, require
+from replay import CORPORA, digest, file_digest, require
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNERS = {
@@ -54,8 +54,14 @@ def run(output_root: Path) -> dict:
         runner = load_runner(RUNNERS[name])
         runner.build_artifact = lambda: (binary, build)
         report = runner.run(output_root / name)
-        require(report.get("status") == "passed", f"{name}: owned replay failed")
+        require(
+            runner.complete(report),
+            f"{name}: owned replay failed or is incomplete",
+        )
+        status = report.get("status")
+        require(status in {"passed", "failed"}, f"{name}: invalid report status")
         reports[name] = {
+            "status": status,
             "localReport": f"{name}/local.json",
             "localReportSha256": file_digest(output_root / name / "local.json"),
             "localReportBytes": (output_root / name / "local.json").stat().st_size,

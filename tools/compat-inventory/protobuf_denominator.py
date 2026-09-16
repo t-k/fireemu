@@ -13,6 +13,13 @@ SOURCE_FILE = Path(__file__).resolve()
 SOURCE_PATH = "spec/compatibility/upstream/firestore-protobuf.json"
 OUTPUT_PATH = "spec/compatibility/denominators/firestore-v1-grpc-2026-09-16.v1.json"
 VERSION = "firestore-v1-grpc-2026-09-16.v1"
+PINNED_SOURCE_SHA256 = (
+    "0e4a9f8bbc8cf782f73fb3266960cd9ff09f8267d4614fbba997d107f29f0fd9"
+)
+PINNED_UPSTREAM_COMMIT = "1f38da6aa7661cf22e17247ad33d2d566a2c356e"
+PINNED_DESCRIPTOR_SHA256 = (
+    "3fa4e3045827c76244e478059dc9f75b1c73ba60612f1921527eec98da1f0fe0"
+)
 GOAL = "IP-FS-PRODUCTION-COMPATIBILITY"
 PARENT_DENOMINATORS = [
     {
@@ -203,14 +210,42 @@ def build(
 def validate(value: dict[str, Any], source: dict[str, Any], source_sha256: str) -> None:
     if value.get("schemaVersion") != 1 or value.get("denominatorVersion") != VERSION:
         raise ValidationError("unsupported protobuf denominator version")
-    if value.get("source", {}).get("sha256") != source_sha256:
+    if source_sha256 != PINNED_SOURCE_SHA256:
+        raise ValidationError("protobuf source is not the pinned snapshot")
+    if source.get("upstreamCommit") != PINNED_UPSTREAM_COMMIT:
+        raise ValidationError("protobuf upstream commit is not pinned")
+    if source.get("descriptorSha256") != PINNED_DESCRIPTOR_SHA256:
+        raise ValidationError("protobuf descriptor digest is not pinned")
+    source_meta = value.get("source")
+    if not isinstance(source_meta, dict) or source_meta.get("path") != SOURCE_PATH:
+        raise ValidationError("protobuf source path is not pinned")
+    if source_meta.get("sha256") != source_sha256:
         raise ValidationError("source digest does not match pinned protobuf input")
-    generator_sha256 = value.get("generator", {}).get("sha256")
+    generator = value.get("generator")
+    generator_sha256 = generator.get("sha256") if isinstance(generator, dict) else None
     if not isinstance(generator_sha256, str) or len(generator_sha256) != 64:
         raise ValidationError("generator digest is missing")
+    actual_generator_sha256 = hashlib.sha256(SOURCE_FILE.read_bytes()).hexdigest()
+    if generator_sha256 != actual_generator_sha256:
+        raise ValidationError("generator digest does not match checked-in generator")
+    companions = value.get("companionTo")
+    if companions != PARENT_DENOMINATORS:
+        raise ValidationError(
+            "companion denominator anchors do not match pinned values"
+        )
+    for anchor in PARENT_DENOMINATORS:
+        parent_path = ROOT / anchor["path"]
+        try:
+            actual_parent_sha256 = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ValidationError(
+                f"companion denominator is missing: {anchor['path']}"
+            ) from exc
+        if actual_parent_sha256 != anchor["sha256"]:
+            raise ValidationError(f"companion denominator changed: {anchor['path']}")
     expected = build(
         source,
-        source_path=value["source"]["path"],
+        source_path=SOURCE_PATH,
         source_sha256=source_sha256,
         generator_sha256=generator_sha256,
     )
@@ -245,10 +280,19 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--source", default=SOURCE_PATH)
     parser.add_argument("--output", default=OUTPUT_PATH)
+    parser.add_argument(
+        "--check", action="store_true", help="validate the checked-in companion"
+    )
     args = parser.parse_args()
     source_path = args.root / args.source
+    output_path = args.root / args.output
     source = json.loads(source_path.read_text())
     source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    if args.check:
+        value = json.loads(output_path.read_text())
+        validate(value, source, source_sha256)
+        print("protobuf denominator: valid")
+        return
     generator_sha256 = hashlib.sha256(SOURCE_FILE.read_bytes()).hexdigest()
     value = build(
         source,
@@ -256,7 +300,6 @@ def main() -> None:
         source_sha256=source_sha256,
         generator_sha256=generator_sha256,
     )
-    output_path = args.root / args.output
     write_immutable(output_path, serialized(value))
     print(
         f"protobuf denominator: {value['summary']['surfaceCount']} surfaces, "

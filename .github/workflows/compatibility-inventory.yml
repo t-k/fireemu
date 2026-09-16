@@ -104,6 +104,8 @@ jobs:
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-create-disable-comparison-approval.py --check
       - name: Check broad local inventory and comparison safety
         run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_protobuf_denominator.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/protobuf_denominator.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_production_denominator.py -q
           base_sha="${{ github.event.pull_request.base.sha || github.event.before }}"
           if [ -n "$base_sha" ]; then

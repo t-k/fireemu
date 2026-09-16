@@ -99,12 +99,16 @@ def test_validate_rejects_stale_source_and_reclassification():
         source_sha256="c" * 64,
         generator_sha256="d" * 64,
     )
-    with pytest.raises(denominator.ValidationError, match="source digest"):
+    with pytest.raises(denominator.ValidationError, match="pinned snapshot"):
         denominator.validate(value, source_value, "e" * 64)
 
-    value["surfaces"][0]["scope"] = "enterprise-only"
+    source_path = denominator.ROOT / denominator.SOURCE_PATH
+    current_source = json.loads(source_path.read_text())
+    current_sha = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    current_value = json.loads((denominator.ROOT / denominator.OUTPUT_PATH).read_text())
+    current_value["surfaces"][0]["scope"] = "enterprise-only"
     with pytest.raises(denominator.ValidationError, match="scope classification"):
-        denominator.validate(value, source_value, "c" * 64)
+        denominator.validate(current_value, current_source, current_sha)
 
 
 def test_current_companion_is_reproducible_and_immutable():
@@ -129,4 +133,61 @@ def test_current_companion_is_reproducible_and_immutable():
     with pytest.raises(ValueError, match="immutable denominator version"):
         denominator.write_immutable(
             output_path, denominator.serialized({"changed": True})
+        )
+
+
+def test_validate_rejects_forged_generator_digest():
+    source_path = denominator.ROOT / denominator.SOURCE_PATH
+    source_value = json.loads(source_path.read_text())
+    value = json.loads((denominator.ROOT / denominator.OUTPUT_PATH).read_text())
+    value["generator"]["sha256"] = "f" * 64
+    with pytest.raises(denominator.ValidationError, match="generator digest"):
+        denominator.validate(
+            value,
+            source_value,
+            hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        )
+
+
+def test_validate_rejects_changed_companion_file(monkeypatch, tmp_path):
+    source_path = denominator.ROOT / denominator.SOURCE_PATH
+    source_value = json.loads(source_path.read_text())
+    parent = tmp_path / "parent.json"
+    parent.write_text("original\n")
+    anchor = {
+        "path": "parent.json",
+        "version": "test.v1",
+        "sha256": hashlib.sha256(parent.read_bytes()).hexdigest(),
+    }
+    monkeypatch.setattr(denominator, "PARENT_DENOMINATORS", [anchor])
+    value = denominator.build(
+        source_value,
+        source_path=denominator.SOURCE_PATH,
+        source_sha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        generator_sha256=hashlib.sha256(
+            denominator.SOURCE_FILE.read_bytes()
+        ).hexdigest(),
+    )
+    monkeypatch.setattr(denominator, "ROOT", tmp_path)
+    parent.write_text("changed\n")
+    with pytest.raises(
+        denominator.ValidationError, match="companion denominator changed"
+    ):
+        denominator.validate(
+            value,
+            source_value,
+            hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        )
+
+
+def test_validate_rejects_source_metadata_drift():
+    source_path = denominator.ROOT / denominator.SOURCE_PATH
+    source_value = json.loads(source_path.read_text())
+    source_value["upstreamCommit"] = "c" * 40
+    value = json.loads((denominator.ROOT / denominator.OUTPUT_PATH).read_text())
+    with pytest.raises(denominator.ValidationError, match="upstream commit"):
+        denominator.validate(
+            value,
+            source_value,
+            hashlib.sha256(source_path.read_bytes()).hexdigest(),
         )

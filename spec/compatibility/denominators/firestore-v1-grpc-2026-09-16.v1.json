@@ -23,7 +23,7 @@
   ],
   "generator": {
     "path": "tools/compat-inventory/protobuf_denominator.py",
-    "sha256": "4177063550bb45cbcf25848f5afc5903b7e2f9e8d4714364c0ba77b1ba80ba88"
+    "sha256": "2841ca013f4e1db76a383fc0cc47a6faa9724c7a25b7e89013f6eb6fd1ec3996"
   },
   "surfaces": [
     {

@@ -2074,6 +2074,43 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
 }
 
 #[tokio::test]
+async fn batch_write_keeps_valid_rows_around_an_unspecified_operation() {
+    let (mut client, _clock, handle) = start().await;
+    let response = client
+        .batch_write(pb::BatchWriteRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("rows/prefix", &[("value", i(1))]),
+                pb::Write::default(),
+                update_write("rows/suffix", &[("value", i(3))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(response.status.len(), 3);
+    assert_eq!(response.status[0].code, 0);
+    assert_eq!(response.status[1].code, i32::from(tonic::Code::InvalidArgument));
+    assert_eq!(response.status[2].code, 0);
+
+    for (name, value) in [("rows/prefix", 1), ("rows/suffix", 3)] {
+        let document = client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/{name}"),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(document.fields.get("value"), Some(&i(value)));
+    }
+
+    handle.abort();
+}
+
+#[tokio::test]
 async fn aggregation_index_validation_rejects_unindexed_fields_before_transaction_observation() {
     let (mut client, _clock, backend, handle) =
         start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;

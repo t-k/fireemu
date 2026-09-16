@@ -1776,6 +1776,12 @@ fn query_proof_rejects_numeric_representation_sensitive_integer_builtins() {
         &rules("duration.time(1, 2, 3, 4) is duration"),
         &normalized
     ));
+    let aliased = "rules_version = '2'; service cloud.firestore { function identity(value) { return value; } match /databases/{d}/documents { match /notes/{id} { allow list: if timestamp.date(identity(resource.data.year), 1, 1) is timestamp; } } }";
+    let aliased_query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("year", RulesValue::Int(2026))],
+    );
+    assert!(!allows(aliased, &aliased_query));
 }
 
 #[test]
@@ -1797,6 +1803,12 @@ fn query_proof_rejects_unary_negation_at_the_integer_boundary() {
         assert!(allows(helper_normalized, &query));
         assert!(allows(let_normalized, &query));
     }
+    let identity_rules = "rules_version = '2'; service cloud.firestore { function identity(value) { return value; } match /databases/{d}/documents { match /notes/{id} { allow list: if (-identity(resource.data.value)) == 9223372036854775808.0; } } }";
+    let identity_query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(i64::MIN))],
+    );
+    assert!(!allows(identity_rules, &identity_query));
 }
 
 #[test]

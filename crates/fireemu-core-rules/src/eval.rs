@@ -4622,7 +4622,7 @@ impl<'a> Evaluator<'a> {
                             && integer_only_argument.is_some_and(|indices| {
                                 indices.iter().any(|&index| {
                                     args.get(index).is_some_and(|argument| {
-                                        self.query_numeric_expression_source(argument)
+                                        self.query_numeric_error_source(argument)
                                     })
                                 })
                             })

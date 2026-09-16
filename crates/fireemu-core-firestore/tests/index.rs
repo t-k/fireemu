@@ -266,6 +266,58 @@ fn vector_queries_require_a_dimensioned_vector_index_in_production() {
 }
 
 #[test]
+fn vector_queries_use_a_matching_single_field_vector_index() {
+    let query = nearest_query();
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let mut configured = IndexSet::default();
+    configured.set_single_field_indexes(
+        &collection,
+        &fp("embedding"),
+        vec![(
+            IndexQueryScope::Collection,
+            IndexFieldMode::Vector { dimension: 2 },
+        )],
+    );
+
+    assert!(matches!(
+        decide(&query, &configured, standard()),
+        IndexDecision::UseIndex { index }
+            if index.fields == vec![IndexField {
+                path: fp("embedding"),
+                mode: IndexFieldMode::Vector { dimension: 2 },
+            }]
+    ));
+
+    let mut wrong_dimension = configured.clone();
+    wrong_dimension.set_single_field_indexes(
+        &collection,
+        &fp("embedding"),
+        vec![(
+            IndexQueryScope::Collection,
+            IndexFieldMode::Vector { dimension: 3 },
+        )],
+    );
+    assert!(matches!(
+        decide(&query, &wrong_dimension, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    let mut wrong_scope = configured;
+    wrong_scope.set_single_field_indexes(
+        &collection,
+        &fp("embedding"),
+        vec![(
+            IndexQueryScope::CollectionGroup,
+            IndexFieldMode::Vector { dimension: 2 },
+        )],
+    );
+    assert!(matches!(
+        decide(&query, &wrong_scope, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+}
+
+#[test]
 fn vector_query_prefilters_require_the_same_composite_vector_index() {
     let query = nearest_query().with_filter(field(
         "category",

@@ -889,6 +889,19 @@ fn decide_find_nearest(query: &Query, indexes: &IndexSet, ctx: PlanningContext) 
             collection,
             group,
         );
+        if required.fields.len() == 1
+            && matches!(required.fields[0].mode, IndexFieldMode::Vector { .. })
+            && has_single_field_mode(
+                indexes,
+                collection,
+                &required.fields[0].path,
+                group,
+                required.fields[0].mode,
+            )
+        {
+            chosen.get_or_insert(required.clone());
+            continue;
+        }
         if let Some(index) = indexes
             .composites()
             .iter()

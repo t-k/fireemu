@@ -599,11 +599,12 @@ def execute_45(a, output, runtime_identity):
                         )
                     if not absent:
                         versions[step["id"]] = body["updateTime"]
-                        if step["id"] == "original":
+                        if name not in a.creation_proofs:
                             # The seed response may omit the document body on
                             # transports that acknowledge the write with an
                             # empty JSON object. Bind cleanup to the first
-                            # complete readback instead.
+                            # complete readback instead. This also covers
+                            # plans whose first step is a write or transform.
                             a.creation_proofs[name] = {
                                 "name": name,
                                 "updateTime": body["updateTime"],
@@ -619,6 +620,8 @@ def execute_45(a, output, runtime_identity):
                                     "responseDigest": digest(body),
                                 }
                             )
+                    elif step["id"] == "after" and status == 404:
+                        a.creation_proofs.pop(name, None)
                     reads[step["id"]] = None if absent else body
                 rows.append(
                     {

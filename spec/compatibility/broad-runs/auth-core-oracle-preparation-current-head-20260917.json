@@ -1,0 +1,131 @@
+{
+  "backlog": [
+    {
+      "campaignId": "AUTH-CREDENTIAL-REFRESH-AUTHTIME-01",
+      "productionRequired": "likely; only after finite case and owner envelope are ready",
+      "reason": "Same-second authTime/refresh/session boundary remains production-unobserved and is not needed to freeze the current settings package.",
+      "status": "BACKLOG"
+    },
+    {
+      "campaignId": "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01",
+      "productionRequired": "yes for backend delivery semantics; no local saved-reference replacement",
+      "reason": "Delivery-boundary and code transition semantics remain unobserved; avoid duplicate coverage from existing OOB local cases.",
+      "status": "BACKLOG"
+    },
+    {
+      "campaignId": "AUTH-CREDENTIAL-PROVIDER-HASH-ROUNDTRIP-01",
+      "productionRequired": "only for backend format conditions that saved evidence cannot cover",
+      "reason": "Provider/hash export restrictions and lifecycle transitions need a dedicated finite case; no plaintext/hash inference is allowed.",
+      "status": "BACKLOG"
+    }
+  ],
+  "current": {
+    "campaignId": "AUTH-SETTINGS-CURRENT-HEAD-REBIND-02",
+    "nextAction": "Build a fireemu artifact from the bound feature head, bind its SHA-256, execute both local shadows with cleanup, then submit complete manifests to O7.",
+    "packages": [
+      "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v2.json",
+      "spec/compatibility/broad-runs/auth-settings-sdk-next-v2.json"
+    ],
+    "purpose": "Freeze current-head source bindings for password-policy and integrated Auth-settings SDK campaigns without reusing or rewriting historical manifests.",
+    "status": "BLOCKED_OWNER"
+  },
+  "evidenceBoundary": {
+    "localArtifactShadow": "pending for both v2 packages",
+    "officialEmulator": "unobserved",
+    "productionObserved": "none added by this report",
+    "promotion": "no parent or child goal is eligible for COMPAT_VERIFIED from this report",
+    "savedProductionReference": "historical receipts and 515f0cf4 replay are retained and not upgraded to current-head evidence",
+    "sdkLocal": "runner tests exist; settings runner case-level execution remains pending"
+  },
+  "featureHead": "2db210750005601e9e774a76f0150c30ff5479ee",
+  "frozenAt": "2026-09-16T21:27:40Z",
+  "gitStatus": "clean at freeze",
+  "id": "auth-core-oracle-preparation-current-head-20260917",
+  "kind": "auth-core-oracle-preparation-current-head-rebind-report",
+  "next": {
+    "boundPriorReplay": {
+      "classification": "saved-production-reference MATCH only; stale for current-head promotion until recompare",
+      "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
+      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9",
+      "sourceCommit": "515f0cf4afa1b12e887b84552aa20851ab3142ae"
+    },
+    "campaignId": "AUTH-CORE-SAVED-REFERENCE-REPLAY-02",
+    "ownerDecisionRequired": false,
+    "productionRequired": false,
+    "purpose": "Recompare the four immutable Auth saved corpora through an artifact built from this feature head; no new production operation is required by default.",
+    "savedReferences": [
+      "spec/compatibility/evidence/auth-basic-v2/receipt.json",
+      "spec/compatibility/evidence/auth-password/receipt.json",
+      "spec/compatibility/evidence/auth-profile/receipt.json",
+      "spec/compatibility/evidence/auth-display-name/receipt.json"
+    ],
+    "status": "PENDING_LOCAL_ARTIFACT"
+  },
+  "parentClosure": {
+    "compatVerified": "0 / 14",
+    "nearestAuthConditions": [
+      "current-head final artifact regression for Auth settings",
+      "required production comparisons for AUTH-CONFIG-SDK and related Auth flows",
+      "known mismatch repair and independent review"
+    ],
+    "ownerDecisionRequired": [
+      "owner identity and permission reference",
+      "project/tenant scope and execution window",
+      "fresh nonce and configuration acceptance",
+      "recovery owner/reserve and complete budget envelope"
+    ]
+  },
+  "productionExecuted": false,
+  "productionStatus": "BLOCKED_OWNER",
+  "rebindPackages": [
+    {
+      "historicalManifest": {
+        "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next.json",
+        "preserved": true,
+        "sha256": "660bddd2abb2fa4b96e045c9b3d4b940139fd35f4c36d881d975beb6ad2f2978"
+      },
+      "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v2.json",
+      "sha256": "85308b9411863beab74a023db46deeabe10e60121527e994e8db4e0d0acecbe7",
+      "status": "BLOCKED_OWNER"
+    },
+    {
+      "historicalManifest": {
+        "path": "spec/compatibility/broad-runs/auth-settings-sdk-next.json",
+        "preserved": true,
+        "sha256": "a4f737118d9a6ca4cb332b6fd1b129d43e03a5f49ccae5c29592b9318d49bad9"
+      },
+      "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v2.json",
+      "sha256": "99f68c193dd76641efacf7c4b68f35d0d156dd620056d36ae6f5f5cb8c4712f8",
+      "status": "BLOCKED_OWNER"
+    }
+  ],
+  "safety": {
+    "cloudReadPerformed": false,
+    "configurationMutationPerformed": false,
+    "historicalArtifactRewritten": false,
+    "nonceReused": false,
+    "privateCredentialStored": false,
+    "productionOperationPerformed": false
+  },
+  "staleBindings": [
+    {
+      "action": "Preserve as historical preparation; use v2 for current-head Gate review.",
+      "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next.json",
+      "reason": "Version 1 has no current feature-head source binding and predates the final Auth settings fixes.",
+      "sha256": "660bddd2abb2fa4b96e045c9b3d4b940139fd35f4c36d881d975beb6ad2f2978"
+    },
+    {
+      "action": "Preserve as historical preparation; use v2 and retain the runner limitation explicitly.",
+      "path": "spec/compatibility/broad-runs/auth-settings-sdk-next.json",
+      "reason": "Version 1 has no current feature-head source binding and the runner remains a plan/validation helper rather than case-level SDK evidence.",
+      "sha256": "a4f737118d9a6ca4cb332b6fd1b129d43e03a5f49ccae5c29592b9318d49bad9"
+    },
+    {
+      "action": "Do not rewrite; perform a new current-head saved-reference recompare when an artifact is available.",
+      "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
+      "reason": "The saved replay is valid immutable saved-production-reference evidence but binds source/artifact 515f0cf4, not the current feature head.",
+      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9"
+    }
+  ],
+  "version": 1
+}

@@ -2835,6 +2835,14 @@ fn rest_retry_transaction_starts_fresh_transaction_and_replay_is_refused() {
     );
     assert_eq!(status, 409, "{first_error}");
     assert_eq!(first_error["error"]["status"], "ABORTED");
+    let (status, after_first_abort) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/retry-contention/locked"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{after_first_abort}");
+    assert_eq!(after_first_abort["fields"]["v"]["integerValue"], "1");
 
     let (status, second_error) = call(
         &s,
@@ -2847,6 +2855,14 @@ fn rest_retry_transaction_starts_fresh_transaction_and_replay_is_refused() {
     );
     assert_eq!(status, 409, "{second_error}");
     assert_eq!(second_error["error"]["status"], "ABORTED");
+    let (status, after_second_abort) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/retry-contention/locked"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{after_second_abort}");
+    assert_eq!(after_second_abort["fields"]["v"]["integerValue"], "1");
 
     let (status, retried) = call(
         &s,
@@ -2868,13 +2884,46 @@ fn rest_retry_transaction_starts_fresh_transaction_and_replay_is_refused() {
     assert_eq!(status, 400, "{replay}");
     assert_eq!(replay["error"]["status"], "INVALID_ARGUMENT");
 
-    let (status, rolled_back) = call(
+    let (status, first_rolled_back) = call(
         &s,
         "POST",
         &format!("{DOCS}:rollback"),
-        json!({"transaction": fresh}),
+        json!({"transaction": first}),
     );
-    assert_eq!(status, 200, "{rolled_back}");
+    assert_eq!(status, 200, "{first_rolled_back}");
+
+    let (status, fresh_read) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/retry-contention/locked?transaction={fresh}"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{fresh_read}");
+    assert_eq!(fresh_read["fields"]["v"]["integerValue"], "1");
+
+    let (status, fresh_commit) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({
+            "transaction": fresh,
+            "writes": [{"update": {"name": locked, "fields": {"v": {"integerValue": "4"}}}}]
+        }),
+    );
+    assert_eq!(status, 200, "{fresh_commit}");
+    assert_eq!(
+        fresh_commit["writeResults"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    let (status, after_fresh_commit) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/retry-contention/locked"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{after_fresh_commit}");
+    assert_eq!(after_fresh_commit["fields"]["v"]["integerValue"], "4");
 }
 
 fn contended_rest_commit_waits(query_lock: bool) {

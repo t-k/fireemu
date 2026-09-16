@@ -4988,13 +4988,45 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
             u64::from(value.nesting_depth()),
         )?;
     }
+    for (name, value) in &doc.fields {
+        let property_path = PropertyPath::root(name);
+        validate_value(value, false, &property_path)?;
+    }
     let size = document_size(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
     check_limit(limits::DOCUMENT_BYTES, size.total)?;
-    for (name, value) in &doc.fields {
-        validate_value(value, false, name)?;
-    }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PropertyPath {
+    segments: Vec<String>,
+}
+
+impl PropertyPath {
+    fn root(name: &str) -> Self {
+        Self {
+            segments: vec![name.to_owned()],
+        }
+    }
+
+    fn child(&self, name: &str) -> Self {
+        let mut segments = self.segments.clone();
+        segments.push(name.to_owned());
+        Self { segments }
+    }
+
+    fn canonical(&self) -> String {
+        self.segments
+            .iter()
+            .map(|segment| {
+                FieldPath::from_segments([segment.as_str()])
+                    .expect("stored field names are validated before rendering")
+                    .canonical()
+            })
+            .collect::<Vec<_>>()
+            .join(".")
+    }
 }
 
 /// The value rules every stored value obeys: an array never holds an array directly, a
@@ -5005,7 +5037,7 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
 fn validate_value(
     value: &Value,
     inside_array: bool,
-    property_path: &str,
+    property_path: &PropertyPath,
 ) -> Result<(), FirestoreError> {
     // Production counts the payload, not storage accounting's trailing string byte.
     let payload_bytes = match value {
@@ -5015,7 +5047,8 @@ fn validate_value(
     };
     if payload_bytes > limits::MAX_FIELD_PAYLOAD_BYTES {
         return Err(FirestoreError::InvalidArgument(format!(
-            "The value of property \"{property_path}\" is longer than 1048487 bytes."
+            "The value of property \"{}\" is longer than 1048487 bytes.",
+            property_path.canonical()
         )));
     }
     match value {
@@ -5031,7 +5064,7 @@ fn validate_value(
         }
         Value::Map(fields) => fields.iter().try_for_each(|(name, value)| {
             validate_stored_field_name(name)?;
-            let nested_path = format!("{property_path}.{name}");
+            let nested_path = property_path.child(name);
             validate_value(value, false, &nested_path)
         }),
         Value::Reference(name) => validate_reference(name),

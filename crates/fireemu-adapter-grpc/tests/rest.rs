@@ -345,6 +345,45 @@ fn rest_document_size_and_nesting_boundaries_refuse_without_publishing() {
 }
 
 #[test]
+fn rest_oversized_nested_values_report_canonical_paths_without_publishing() {
+    let s = state(None);
+    let oversized = "x".repeat(1_048_488);
+    for (document_id, key, expected_path) in [
+        ("dotted-key", "with.dot", "items.`with.dot`"),
+        ("quoted-key", "with\"quote", "items.`with\"quote`"),
+    ] {
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/limits/{document_id}"),
+            json!({
+                "fields": {
+                    "items": {"arrayValue": {"values": [{
+                        "mapValue": {"fields": {
+                            key: {"stringValue": oversized}
+                        }}
+                    }]}}
+                }
+            }),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+        assert_eq!(
+            body["error"]["message"],
+            format!("The value of property \"{expected_path}\" is longer than 1048487 bytes.")
+        );
+
+        let (status, missing) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/limits/{document_id}"),
+            Value::Null,
+        );
+        assert_eq!(status, 404, "{missing}");
+    }
+}
+
+#[test]
 fn batch_write_rest_preserves_slots_and_omits_success_status_defaults() {
     let s = state(None);
     let middle = "projects/demo-app/databases/(default)/documents/batch/1";

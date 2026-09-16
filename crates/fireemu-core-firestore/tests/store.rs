@@ -678,10 +678,13 @@ fn limit_violations_reject_the_whole_commit_atomically() {
     let mut s = FirestoreState::new();
     s.commit(&[set("a/1", &[("k", Value::Integer(1))])], None, t(0))
         .unwrap();
-    let too_big = Value::String("x".repeat(1_048_576));
+    // Keep each field below the per-value limit so this control exercises the
+    // aggregate document-size refusal rather than the property-size diagnostic.
+    let too_big = Value::String("x".repeat(600_000));
+    let also_too_big = Value::String("y".repeat(500_000));
     let writes = vec![
         set("a/1", &[("k", Value::Integer(2))]),
-        set("a/2", &[("blob", too_big)]),
+        set("a/2", &[("blob", too_big), ("other", also_too_big)]),
     ];
     match s.commit(&writes, None, t(1)) {
         Err(FirestoreError::ResourceExhausted(v)) => {

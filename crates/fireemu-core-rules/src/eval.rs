@@ -1771,7 +1771,11 @@ impl<'a> Evaluator<'a> {
                 {
                     return source;
                 }
-                match self.query_static_value(expr) {
+                // Resolve only evaluator globals here. The function-specific analysis is
+                // independent of the caller's runtime bindings; using the full binding stack
+                // would let a caller parameter named `resource` or `request` shadow the global
+                // value referenced by this callee.
+                match self.query_static_value_with_limit(expr, 0) {
                     Some(
                         RulesValue::Int(_)
                         | RulesValue::Float(_)
@@ -1801,7 +1805,7 @@ impl<'a> Evaluator<'a> {
                 {
                     return source;
                 }
-                match self.query_static_value(expr) {
+                match self.query_static_value_with_limit(expr, 0) {
                     Some(
                         RulesValue::Int(_)
                         | RulesValue::Float(_)

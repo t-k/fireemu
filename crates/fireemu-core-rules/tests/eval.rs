@@ -1668,6 +1668,15 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
         "rules_version = '2';\nservice cloud.firestore { function check(resource) { return int(string(resource)) / 2 == 576460752303423488; } match /databases/{d}/documents { match /notes/{id} { allow list: if check(resource.data.value); } } }",
         &large_int
     ));
+    for access in ["resource.data.value", "resource.data['value']"] {
+        let shadowed_global_rules = format!(
+            "rules_version = '2';\nservice cloud.firestore {{ function pick() {{ return {access}; }} function check(resource) {{ return string(pick()) == '0'; }} match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if check({{'data': {{'value': 'unrelated'}}}}); }} }} }}"
+        );
+        assert!(
+            !allows(&shadowed_global_rules, &zero),
+            "{access} must resolve global resource without caller shadowing"
+        );
+    }
     assert!(!allows(
         "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if math.pow(float(resource.data.value), -1) > 0; } } }",
         &zero

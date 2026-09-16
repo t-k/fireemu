@@ -139,11 +139,13 @@ def _write_output_exclusively(output: Path, result: dict, input_paths: tuple[Pat
     output.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(result, indent=2) + "\n"
     try:
-        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError as error:
         raise ValueError(f"output must be a new regular file: {output}") from error
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def recompare(
@@ -153,6 +155,7 @@ def recompare(
     historical_commit: str,
 ) -> dict:
     production = _read_object(production_path)
+    _read_object(original_local_path)
     current_local = _read_object(current_local_path)
     historical = _validate_historical_receipts(
         production_path, original_local_path, historical_commit
@@ -254,9 +257,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     result = recompare(
-        args.production.resolve(),
-        args.original_local.resolve(),
-        args.current_local.resolve(),
+        args.production,
+        args.original_local,
+        args.current_local,
         args.historical_commit,
     )
     _write_output_exclusively(

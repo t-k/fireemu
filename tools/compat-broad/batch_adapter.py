@@ -7,11 +7,13 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 from batch_contract import (
@@ -36,6 +38,27 @@ HOSTS = {
     "www.googleapis.com",
     "apikeys.googleapis.com",
 }
+
+
+def _creation_version(name, fields, status, body):
+    """Return a version only for an exact acknowledged conditional create."""
+    if (
+        status != 200
+        or not isinstance(body, dict)
+        or body.get("name") != name
+        or digest(body.get("fields")) != digest(fields)
+        or not isinstance(body.get("updateTime"), str)
+        or not re.fullmatch(
+            r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z",
+            body["updateTime"],
+        )
+    ):
+        raise ValueError("conditional creation acknowledgement mismatch")
+    try:
+        datetime.fromisoformat(body["updateTime"].replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("conditional creation version is invalid") from error
+    return body["updateTime"]
 
 
 def request_headers(token, *, local, form):
@@ -166,6 +189,7 @@ class Adapter:
         self.last_auth_operation = None
         self.tokens = set()
         self.refresh_tokens = set()
+        self.creation_proofs = {}
         self.emails = {
             f"broad-{nonce}-{label}@example.invalid" for label in ("a", "b", "weak")
         }
@@ -365,14 +389,29 @@ class Adapter:
                 )
                 self.documents.add(name)
             for seed in program["seed"]:
-                status, _ = self.doc(
+                status, body = self.doc(
                     seed["path"].removeprefix("/v1/"),
                     method="PATCH",
                     body={"fields": seed["fields"]},
                     query="?currentDocument.exists=false",
                 )
-                if status != 200:
-                    raise ValueError("seed failed")
+                name = seed["path"].split("?", 1)[0].removeprefix("/v1/")
+                version = _creation_version(name, seed["fields"], status, body)
+                self.creation_proofs[name] = {
+                    "name": name,
+                    "updateTime": version,
+                    "fieldsDigest": digest(seed["fields"]),
+                    "responseDigest": digest(body),
+                }
+                self.record(
+                    {
+                        "kind": "document-created",
+                        "name": name,
+                        "updateTime": version,
+                        "fieldsDigest": digest(seed["fields"]),
+                        "responseDigest": digest(body),
+                    }
+                )
             for step in program["steps"]:
                 status, result = self.request(
                     "firestore",
@@ -585,10 +624,15 @@ class Adapter:
             try:
                 status, body = self.doc(name)
                 if status == 200:
-                    if body.get("name") != name or not body.get("updateTime"):
+                    proof = self.creation_proofs.get(name)
+                    if (
+                        proof is None
+                        or body.get("name") != name
+                        or body.get("updateTime") != proof["updateTime"]
+                    ):
                         raise ValueError("document readback mismatch")
                     query = "?" + urllib.parse.urlencode(
-                        {"currentDocument.updateTime": body["updateTime"]}
+                        {"currentDocument.updateTime": proof["updateTime"]}
                     )
                     status, _ = self.doc(name, method="DELETE", query=query)
                     if status != 200:

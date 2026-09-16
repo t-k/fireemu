@@ -172,6 +172,100 @@ def test_unjournaled_resources_and_foreign_auth_selectors_fail_before_transport(
     assert not run.journal.exists()
 
 
+def test_cleanup_never_deletes_a_document_replaced_after_conditional_seed(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as a
+
+    c = contract()
+    name = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf/doc"
+    fields = {"_sharedOwner": {"referenceValue": name}, "marker": {"stringValue": "owned"}}
+    created = {"name": name, "fields": fields, "updateTime": "2026-09-16T00:00:00Z"}
+    foreign = {"name": name, "fields": {"marker": {"stringValue": "foreign"}}, "updateTime": "2026-09-16T00:00:01Z"}
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        if method == "GET" and len(calls) == 1:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "PATCH":
+            return 200, created, "application/json"
+        if method == "GET":
+            return 200, foreign, "application/json"
+        pytest.fail("foreign replacement must never receive DELETE")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "parent": name.rsplit("/tf/doc", 1)[0],
+        "targets": [name],
+        "seed": [{"path": "/v1/" + name, "fields": fields}],
+        "steps": [],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+    run.cleanup()
+
+    assert calls[-1][0] == "GET"
+    assert run.unrecovered == [{"kind": "document", "name": name}]
+
+
+def test_conditional_seed_race_keeps_existing_document_unowned(tmp_path, monkeypatch):
+    import batch_adapter as a
+
+    c = contract()
+    name = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf/doc"
+    fields = {"marker": {"stringValue": "owned"}}
+    foreign = {
+        "name": name,
+        "fields": {"marker": {"stringValue": "foreign"}},
+        "updateTime": "2026-09-16T00:00:01Z",
+    }
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        if method == "GET" and len(calls) == 1:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "PATCH":
+            return 400, {"error": {"status": "ALREADY_EXISTS"}}, "application/json"
+        if method == "GET":
+            return 200, foreign, "application/json"
+        pytest.fail("preflight race must never receive DELETE")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "parent": name.rsplit("/tf/doc", 1)[0],
+        "targets": [name],
+        "seed": [{"path": "/v1/" + name, "fields": fields}],
+        "steps": [],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    with pytest.raises(ValueError, match="conditional creation"):
+        run.firestore()
+    run.cleanup()
+
+    assert run.unrecovered == [{"kind": "document", "name": name}]
+    assert all(method != "DELETE" for method, _url, _body in calls)
+
+
 def test_remote_adapter_cannot_be_constructed_without_permission(tmp_path):
     import batch_adapter as a
 

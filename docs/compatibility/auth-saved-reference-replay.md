@@ -10,7 +10,7 @@ The current-head replay at source commit `78b1da35071f93504c872b21dd9f92858d3e1f
 
 This replay reduces only the final-artifact replay condition for the four declared account/profile/password corpora. It does not promote `AUTH-ACCOUNT` or establish provider lifecycle, alternate hash formats, configured policy parity, MFA, OOB, tenant, blocking, token-signature or SDK compatibility. The original production receipts and their limitations remain immutable.
 
-To reproduce the local-only run, check out the fixed runtime source `78b1da35071f93504c872b21dd9f92858d3e1fd3`, then materialize the replay tools and binding spec from the later feature commit that contains this result. Keep the runtime source commit passed to the evaluator fixed at `78b1da35`; the replay tool and binding spec are separate evidence inputs:
+To reproduce the local-only run, check out the clean committed source `78b1da35071f93504c872b21dd9f92858d3e1fd3`. That source already contains the replay tools and binding spec. The run manifest binds the runtime commit used by the owned probes:
 
 ```sh
 uv run --project tools/compat-inventory --locked --python 3.12 \

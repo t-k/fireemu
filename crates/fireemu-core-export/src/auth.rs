@@ -35,14 +35,21 @@ pub const CONFIG_FILE: &str = "config.json";
 /// The fireemu-only Auth policy sidecar. It is kept separate from the official `config.json`
 /// document so an export remains importable by the official Local Emulator Suite.
 pub const PASSWORD_POLICIES_FILE: &str = "fireemu-password-policies.json";
+/// The fireemu-only Auth runtime settings sidecar. It carries settings which are not part of
+/// the official `config.json`, such as the local sign-up quota simulator.
+pub const AUTH_SETTINGS_FILE: &str = "fireemu-auth-settings.json";
+/// Version of the fireemu-only Auth runtime settings sidecar format.
+pub const AUTH_SETTINGS_VERSION: i64 = 1;
 /// Version of the fireemu-only Auth password policy sidecar format.
 pub const PASSWORD_POLICIES_VERSION: i64 = 1;
 /// The `kind` member the Identity Toolkit answers with.
 pub const DOWNLOAD_KIND: &str = "identitytoolkit#DownloadAccountResponse";
 
-const KNOWN_CONFIG_MEMBERS: [&str; 2] = ["signIn", "emailPrivacyConfig"];
+const KNOWN_CONFIG_MEMBERS: [&str; 3] = ["signIn", "emailPrivacyConfig", "client"];
 const KNOWN_SIGN_IN_MEMBERS: [&str; 1] = ["allowDuplicateEmails"];
 const KNOWN_PRIVACY_MEMBERS: [&str; 1] = ["enableImprovedEmailPrivacy"];
+const KNOWN_CLIENT_MEMBERS: [&str; 1] = ["permissions"];
+const KNOWN_PERMISSION_MEMBERS: [&str; 2] = ["disabledUserSignup", "disabledUserDeletion"];
 const KNOWN_PROVIDER_MEMBERS: [&str; 8] = [
     "providerId",
     "rawId",
@@ -76,6 +83,17 @@ const KNOWN_PASSWORD_POLICY_MEMBERS: [&str; 9] = [
     "requireNonAlphanumeric",
     "allowedNonAlphanumericCharacters",
 ];
+const KNOWN_AUTH_SETTINGS_MEMBERS: [&str; 4] = ["version", "projectId", "project", "namespaces"];
+const KNOWN_AUTH_SETTINGS_NAMESPACE_MEMBERS: [&str; 2] = ["tenantId", "settings"];
+const KNOWN_AUTH_SETTINGS_RECORD_MEMBERS: [&str; 2] = ["config", "quota"];
+const KNOWN_QUOTA_MEMBERS: [&str; 5] = [
+    "mode",
+    "algorithm",
+    "defaultQuotaPerHour",
+    "maxTrackedBuckets",
+    "temporary",
+];
+const KNOWN_TEMPORARY_QUOTA_MEMBERS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
 /// One validated password policy in the fireemu export extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,6 +244,287 @@ impl PasswordPolicies {
         );
         doc.to_pretty()
     }
+}
+
+/// The local sign-up quota configuration retained by a fireemu Auth export.
+///
+/// Usage buckets are deliberately absent: they are runtime state, and restoring an account
+/// export must not silently restore or reset quota history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaSettingsRecord {
+    /// `off`, `observe`, or `enforce`.
+    pub mode: String,
+    /// The local algorithm identifier.
+    pub algorithm: String,
+    /// Default quota for a UTC-aligned hourly window.
+    pub default_quota_per_hour: i64,
+    /// Maximum number of retained project/IP/window buckets.
+    pub max_tracked_buckets: i64,
+    /// Optional absolute temporary quota interval.
+    pub temporary: Option<TemporaryQuotaRecord>,
+}
+
+/// A serializable temporary quota interval.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemporaryQuotaRecord {
+    /// Maximum successful reservations in the interval.
+    pub quota: i64,
+    /// RFC 3339 UTC start time.
+    pub start_time: String,
+    /// Positive protobuf duration, for example `86400s`.
+    pub quota_duration: String,
+}
+
+/// Settings which are not safely represented by the official Auth export shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthSettingsRecord {
+    /// Optional namespace configuration. Project config normally lives in `config.json`; tenant
+    /// settings use this field because official tenant account files have no config document.
+    pub config: Option<AuthConfig>,
+    /// Optional local quota configuration. Usage is intentionally not retained.
+    pub quota: Option<QuotaSettingsRecord>,
+}
+
+/// A settings entry scoped to one Auth namespace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthSettingsNamespace {
+    /// Tenant ID, or `None` for the project namespace.
+    pub tenant_id: Option<String>,
+    /// Settings for that namespace.
+    pub settings: AuthSettingsRecord,
+}
+
+/// fireemu-only Auth settings retained next to the official export.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthSettings {
+    /// Source project ID. Settings are only installed when it matches the import target.
+    pub project_id: String,
+    /// Optional project settings. The project config itself is in `config.json`; this entry is
+    /// still present when a project quota simulator is configured.
+    pub project: AuthSettingsRecord,
+    /// Explicit tenant settings. Unlisted tenants do not inherit these values on import.
+    pub namespaces: Vec<AuthSettingsNamespace>,
+}
+
+impl AuthSettings {
+    /// Parses the fireemu-only settings sidecar.
+    pub fn parse(text: &str) -> Result<Self, AuthExportError> {
+        let value = parse(text).map_err(|e| AuthExportError(e.to_string()))?;
+        reject_unknown(
+            &value,
+            &KNOWN_AUTH_SETTINGS_MEMBERS,
+            "Auth settings sidecar",
+        )?;
+        let version = value
+            .get("version")
+            .and_then(JsonValue::as_i64)
+            .ok_or_else(|| {
+                AuthExportError("Auth settings sidecar has no integer version".to_owned())
+            })?;
+        if version != AUTH_SETTINGS_VERSION {
+            return refuse(format!(
+                "unsupported Auth settings sidecar version {version}"
+            ));
+        }
+        let project_id = value
+            .get("projectId")
+            .and_then(JsonValue::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| AuthExportError("Auth settings sidecar has no projectId".to_owned()))?
+            .to_owned();
+        let project = parse_auth_settings_record(
+            value.get("project").ok_or_else(|| {
+                AuthExportError("Auth settings sidecar has no project".to_owned())
+            })?,
+            "Auth settings sidecar project",
+        )?;
+        let mut namespaces = Vec::new();
+        if let Some(JsonValue::Array(entries)) = value.get("namespaces") {
+            let mut tenants = BTreeSet::new();
+            for (index, entry) in entries.iter().enumerate() {
+                reject_unknown(
+                    entry,
+                    &KNOWN_AUTH_SETTINGS_NAMESPACE_MEMBERS,
+                    "Auth settings namespace",
+                )?;
+                let tenant_id = entry
+                    .get("tenantId")
+                    .and_then(JsonValue::as_str)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| {
+                        AuthExportError(format!(
+                            "Auth settings namespace {index} has no non-empty tenantId"
+                        ))
+                    })?
+                    .to_owned();
+                if !tenants.insert(tenant_id.clone()) {
+                    return refuse(format!(
+                        "Auth settings sidecar has duplicate tenant namespace at index {index}"
+                    ));
+                }
+                let settings = parse_auth_settings_record(
+                    entry.get("settings").ok_or_else(|| {
+                        AuthExportError("Auth settings namespace has no settings".to_owned())
+                    })?,
+                    "Auth settings namespace settings",
+                )?;
+                namespaces.push(AuthSettingsNamespace {
+                    tenant_id: Some(tenant_id),
+                    settings,
+                });
+            }
+        } else if let Some(value) = value.get("namespaces") {
+            return refuse(format!(
+                "Auth settings sidecar namespaces is not an array ({value:?})"
+            ));
+        }
+        Ok(Self {
+            project_id,
+            project,
+            namespaces,
+        })
+    }
+
+    /// Serializes the sidecar with stable tenant ordering.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut doc = Json::object();
+        doc.insert("version", Json::Int(AUTH_SETTINGS_VERSION));
+        doc.insert("projectId", Json::string(&self.project_id));
+        doc.insert("project", write_auth_settings_record(&self.project));
+        let mut namespaces = self.namespaces.clone();
+        namespaces.sort_by(|left, right| left.tenant_id.cmp(&right.tenant_id));
+        doc.insert(
+            "namespaces",
+            Json::Array(
+                namespaces
+                    .iter()
+                    .map(|entry| {
+                        let mut namespace = Json::object();
+                        namespace
+                            .insert_some("tenantId", entry.tenant_id.as_ref().map(Json::string));
+                        namespace.insert("settings", write_auth_settings_record(&entry.settings));
+                        namespace
+                    })
+                    .collect(),
+            ),
+        );
+        doc.to_pretty()
+    }
+}
+
+fn parse_auth_settings_record(
+    value: &JsonValue,
+    subject: &str,
+) -> Result<AuthSettingsRecord, AuthExportError> {
+    reject_unknown(value, &KNOWN_AUTH_SETTINGS_RECORD_MEMBERS, subject)?;
+    let config = match value.get("config") {
+        None | Some(JsonValue::Null) => None,
+        Some(config) => Some(AuthConfig::parse(&Json::from_value(config).to_pretty())?),
+    };
+    let quota = match value.get("quota") {
+        None | Some(JsonValue::Null) => None,
+        Some(quota) => Some(parse_quota_settings(quota, &format!("{subject}.quota"))?),
+    };
+    Ok(AuthSettingsRecord { config, quota })
+}
+
+fn parse_quota_settings(
+    value: &JsonValue,
+    subject: &str,
+) -> Result<QuotaSettingsRecord, AuthExportError> {
+    reject_unknown(value, &KNOWN_QUOTA_MEMBERS, subject)?;
+    let string = |key: &str| {
+        value
+            .get(key)
+            .and_then(JsonValue::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AuthExportError(format!("{subject} has no non-empty {key}")))
+            .map(ToOwned::to_owned)
+    };
+    let integer = |key: &str| {
+        value
+            .get(key)
+            .and_then(JsonValue::as_i64)
+            .ok_or_else(|| AuthExportError(format!("{subject} has no integer {key}")))
+    };
+    let temporary = match value.get("temporary") {
+        None | Some(JsonValue::Null) => None,
+        Some(value) => {
+            reject_unknown(
+                value,
+                &KNOWN_TEMPORARY_QUOTA_MEMBERS,
+                &format!("{subject}.temporary"),
+            )?;
+            let quota = value
+                .get("quota")
+                .and_then(JsonValue::as_i64)
+                .filter(|quota| *quota >= 0)
+                .ok_or_else(|| AuthExportError(format!("{subject}.temporary.quota is invalid")))?;
+            let start_time = value
+                .get("startTime")
+                .and_then(JsonValue::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AuthExportError(format!("{subject}.temporary.startTime is invalid"))
+                })?
+                .to_owned();
+            let quota_duration = value
+                .get("quotaDuration")
+                .and_then(JsonValue::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AuthExportError(format!("{subject}.temporary.quotaDuration is invalid"))
+                })?
+                .to_owned();
+            Some(TemporaryQuotaRecord {
+                quota,
+                start_time,
+                quota_duration,
+            })
+        }
+    };
+    Ok(QuotaSettingsRecord {
+        mode: string("mode")?,
+        algorithm: string("algorithm")?,
+        default_quota_per_hour: integer("defaultQuotaPerHour")?,
+        max_tracked_buckets: integer("maxTrackedBuckets")?,
+        temporary,
+    })
+}
+
+fn write_auth_settings_record(settings: &AuthSettingsRecord) -> Json {
+    let mut doc = Json::object();
+    doc.insert_some(
+        "config",
+        settings.config.as_ref().map(|config| {
+            Json::from_value(&parse(&config.to_json()).expect("AuthConfig writer emits JSON"))
+        }),
+    );
+    doc.insert_some("quota", settings.quota.as_ref().map(write_quota_settings));
+    doc
+}
+
+fn write_quota_settings(settings: &QuotaSettingsRecord) -> Json {
+    let mut doc = Json::object();
+    doc.insert("mode", Json::string(&settings.mode));
+    doc.insert("algorithm", Json::string(&settings.algorithm));
+    doc.insert(
+        "defaultQuotaPerHour",
+        Json::Int(settings.default_quota_per_hour),
+    );
+    doc.insert("maxTrackedBuckets", Json::Int(settings.max_tracked_buckets));
+    doc.insert_some(
+        "temporary",
+        settings.temporary.as_ref().map(|temporary| {
+            let mut value = Json::object();
+            value.insert("quota", Json::Int(temporary.quota));
+            value.insert("startTime", Json::string(&temporary.start_time));
+            value.insert("quotaDuration", Json::string(&temporary.quota_duration));
+            value
+        }),
+    );
+    doc
 }
 
 fn parse_password_policy(
@@ -462,6 +761,10 @@ pub struct AuthConfig {
     /// declare it, so an import keeps the running configuration instead of switching the
     /// protection off.
     pub enable_improved_email_privacy: Option<bool>,
+    /// `client.permissions.disabledUserSignup`; `None` when the artifact does not declare it.
+    pub disabled_user_signup: Option<bool>,
+    /// `client.permissions.disabledUserDeletion`; `None` when the artifact does not declare it.
+    pub disabled_user_deletion: Option<bool>,
 }
 
 impl AuthConfig {
@@ -482,6 +785,16 @@ impl AuthConfig {
                 "Auth config emailPrivacyConfig",
             )?;
         }
+        if let Some(client) = value.get("client") {
+            reject_unknown(client, &KNOWN_CLIENT_MEMBERS, "Auth config client")?;
+            if let Some(permissions) = client.get("permissions") {
+                reject_unknown(
+                    permissions,
+                    &KNOWN_PERMISSION_MEMBERS,
+                    "Auth config client.permissions",
+                )?;
+            }
+        }
         Ok(Self {
             allow_duplicate_emails: bool_member(&value, "signIn", "allowDuplicateEmails")?
                 .unwrap_or(false),
@@ -489,6 +802,16 @@ impl AuthConfig {
                 &value,
                 "emailPrivacyConfig",
                 "enableImprovedEmailPrivacy",
+            )?,
+            disabled_user_signup: nested_bool_member(
+                &value,
+                &["client", "permissions"],
+                "disabledUserSignup",
+            )?,
+            disabled_user_deletion: nested_bool_member(
+                &value,
+                &["client", "permissions"],
+                "disabledUserDeletion",
             )?,
         })
     }
@@ -509,6 +832,20 @@ impl AuthConfig {
             let mut privacy = Json::object();
             privacy.insert("enableImprovedEmailPrivacy", Json::Bool(enabled));
             doc.insert("emailPrivacyConfig", privacy);
+        }
+        if self.disabled_user_signup.is_some() || self.disabled_user_deletion.is_some() {
+            let mut permissions = Json::object();
+            permissions.insert_some(
+                "disabledUserSignup",
+                self.disabled_user_signup.map(Json::Bool),
+            );
+            permissions.insert_some(
+                "disabledUserDeletion",
+                self.disabled_user_deletion.map(Json::Bool),
+            );
+            let mut client = Json::object();
+            client.insert("permissions", permissions);
+            doc.insert("client", client);
         }
         doc.to_pretty()
     }
@@ -756,6 +1093,32 @@ fn bool_member(
     }
 }
 
+fn nested_bool_member(
+    value: &JsonValue,
+    parents: &[&str],
+    key: &str,
+) -> Result<Option<bool>, AuthExportError> {
+    let mut current = value;
+    for parent in parents {
+        let Some(next) = current.get(parent) else {
+            return Ok(None);
+        };
+        if !matches!(next, JsonValue::Object(_)) {
+            return refuse(format!(
+                "the Auth config member {parent:?} is not an object"
+            ));
+        }
+        current = next;
+    }
+    match current.get(key) {
+        None => Ok(None),
+        Some(JsonValue::Bool(value)) => Ok(Some(*value)),
+        Some(_) => refuse(format!(
+            "the Auth config/account member {key:?} is not a boolean"
+        )),
+    }
+}
+
 fn write_user(user: &UserRecord) -> Json {
     let mut doc = Json::object();
     doc.insert("localId", Json::string(&user.local_id));
@@ -913,8 +1276,10 @@ pub mod fake_hash {
 #[cfg(test)]
 mod tests {
     use super::{
-        fake_hash, AccountsFile, AuthConfig, MfaEnrollment, PasswordPolicies,
-        PasswordPolicyNamespace, PasswordPolicyRecord, ProviderUserInfo, UserRecord,
+        fake_hash, AccountsFile, AuthConfig, AuthSettings, AuthSettingsNamespace,
+        AuthSettingsRecord, MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace,
+        PasswordPolicyRecord, ProviderUserInfo, QuotaSettingsRecord, TemporaryQuotaRecord,
+        UserRecord,
     };
     use std::collections::BTreeSet;
 
@@ -1115,6 +1480,8 @@ mod tests {
             AuthConfig {
                 allow_duplicate_emails: false,
                 enable_improved_email_privacy: Some(false),
+                disabled_user_signup: None,
+                disabled_user_deletion: None,
             }
         );
         assert_eq!(
@@ -1124,6 +1491,8 @@ mod tests {
         let enabled = AuthConfig {
             allow_duplicate_emails: true,
             enable_improved_email_privacy: Some(true),
+            disabled_user_signup: None,
+            disabled_user_deletion: None,
         };
         assert_eq!(
             AuthConfig::parse(&enabled.to_json()).expect("it parses"),
@@ -1133,12 +1502,32 @@ mod tests {
         let undeclared = AuthConfig {
             allow_duplicate_emails: false,
             enable_improved_email_privacy: None,
+            disabled_user_signup: None,
+            disabled_user_deletion: None,
         };
         assert!(!undeclared.to_json().contains("emailPrivacyConfig"));
         assert_eq!(
             AuthConfig::parse(&undeclared.to_json()).expect("it parses"),
             undeclared
         );
+    }
+
+    #[test]
+    fn client_permissions_are_optional_and_round_trip_without_affecting_official_config() {
+        let config = AuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: Some(true),
+            disabled_user_signup: Some(true),
+            disabled_user_deletion: Some(false),
+        };
+        let encoded = config.to_json();
+        let decoded = AuthConfig::parse(&encoded).expect("client permissions parse");
+        assert_eq!(decoded, config);
+        assert!(
+            AuthConfig::parse(r#"{"client":{"permissions":{"disabledUserSignup":"true"}}}"#)
+                .is_err()
+        );
+        assert!(AuthConfig::parse(r#"{"client":{"permissions":{"future":true}}}"#).is_err());
     }
 
     #[test]
@@ -1190,6 +1579,75 @@ mod tests {
         let unknown =
             format!(r#"{{"version":1,"projectId":"demo-app","project":{policy},"future":true}}"#);
         assert!(PasswordPolicies::parse(&unknown).is_err());
+    }
+
+    #[test]
+    fn auth_settings_sidecar_round_trips_namespace_quota_without_usage() {
+        let settings = AuthSettings {
+            project_id: "demo-app".to_owned(),
+            project: AuthSettingsRecord {
+                config: None,
+                quota: Some(QuotaSettingsRecord {
+                    mode: "enforce".to_owned(),
+                    algorithm: "fixed-window-v1".to_owned(),
+                    default_quota_per_hour: 100,
+                    max_tracked_buckets: 4096,
+                    temporary: Some(TemporaryQuotaRecord {
+                        quota: 200,
+                        start_time: "2030-01-01T00:00:00.000Z".to_owned(),
+                        quota_duration: "86400s".to_owned(),
+                    }),
+                }),
+            },
+            namespaces: vec![AuthSettingsNamespace {
+                tenant_id: Some("tenant-a".to_owned()),
+                settings: AuthSettingsRecord {
+                    config: Some(AuthConfig {
+                        allow_duplicate_emails: false,
+                        enable_improved_email_privacy: Some(true),
+                        disabled_user_signup: Some(true),
+                        disabled_user_deletion: Some(true),
+                    }),
+                    quota: None,
+                },
+            }],
+        };
+        let encoded = settings.to_json();
+        assert_eq!(
+            AuthSettings::parse(&encoded).expect("settings parse"),
+            settings
+        );
+        for forbidden_member in [
+            "passwordHash",
+            "password",
+            "idToken",
+            "refreshToken",
+            "oobCode",
+            "clientSecret",
+        ] {
+            assert!(
+                !encoded.contains(&format!("\"{forbidden_member}\"")),
+                "Auth settings sidecar contains sensitive member {forbidden_member}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_settings_sidecar_rejects_duplicate_tenants_and_unknown_members() {
+        let settings = r#"{
+          "version": 1,
+          "projectId": "demo-app",
+          "project": {},
+          "namespaces": [
+            {"tenantId": "tenant-a", "settings": {}},
+            {"tenantId": "tenant-a", "settings": {}}
+          ]
+        }"#;
+        assert!(AuthSettings::parse(settings).is_err());
+        assert!(AuthSettings::parse(
+            r#"{"version":1,"projectId":"demo-app","project":{"future":true}}"#
+        )
+        .is_err());
     }
 
     #[test]

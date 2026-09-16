@@ -33,13 +33,18 @@ use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
 use fireemu_core_auth::claims::CustomClaims;
 use fireemu_core_auth::mfa::{PhoneFactor, TotpFactor, TotpSecret};
 use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy};
+use fireemu_core_auth::signup_quota::{
+    QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+};
 use fireemu_core_auth::store::{
     AuthRegistry, AuthStore, FederatedIdentity, ImportedUser, ProjectAuthConfig, Provider,
+    TenantMetadataPatch,
 };
 use fireemu_core_export::auth::{
-    fake_hash, AccountsFile, AuthConfig, MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace,
-    PasswordPolicyRecord, ProviderUserInfo, UserRecord, ACCOUNTS_FILE, CONFIG_FILE,
-    PASSWORD_POLICIES_FILE,
+    fake_hash, AccountsFile, AuthConfig, AuthSettings, AuthSettingsNamespace, AuthSettingsRecord,
+    MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace, PasswordPolicyRecord,
+    ProviderUserInfo, QuotaSettingsRecord, TemporaryQuotaRecord, UserRecord, ACCOUNTS_FILE,
+    AUTH_SETTINGS_FILE, CONFIG_FILE, PASSWORD_POLICIES_FILE,
 };
 use fireemu_core_export::firestore::{
     for_each_output, write_output_to, ExportDocument, OverallMetadata, PartitionMetadata,
@@ -59,7 +64,7 @@ use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::ImportedObject;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
-use fireemu_core_types::time::{civil_from_days, LogicalInstant};
+use fireemu_core_types::time::{civil_from_days, LogicalDuration, LogicalInstant};
 use fireemu_export_publication::PublicationStage;
 
 use crate::config::Selection;
@@ -169,6 +174,9 @@ struct PreparedAuth {
     /// is imported so a lookup answers what the artifact recorded.
     password_updated_at: BTreeMap<(Option<String>, String), LogicalInstant>,
     config: ProjectAuthConfig,
+    /// Whether each client permission was explicitly declared in `config.json`. An old
+    /// official artifact must not turn an already configured runtime switch off.
+    client_permissions_declared: (bool, bool),
     /// Whether the artifact declared `emailPrivacyConfig.enableImprovedEmailPrivacy`. When it
     /// did not (the official emulator's export without the key, or no config.json at all),
     /// the running store's setting is kept: an import must not switch the protection off.
@@ -176,6 +184,9 @@ struct PreparedAuth {
     /// The optional fireemu-only password policy sidecar. The official Auth export has no
     /// equivalent, so a missing sidecar leaves the running policy unchanged.
     password_policies: Option<PasswordPolicies>,
+    /// Optional fireemu-only namespace settings. The sidecar carries quota configuration and
+    /// explicit tenant projections; usage buckets are never serialized.
+    auth_settings: Option<AuthSettings>,
     tenants: BTreeMap<String, Vec<ImportedUser>>,
 }
 
@@ -208,7 +219,17 @@ impl PreparedAuth {
             } else {
                 current.enable_improved_email_privacy
             },
-            ..self.config
+            disabled_user_signup: if self.client_permissions_declared.0 {
+                self.config.disabled_user_signup
+            } else {
+                current.disabled_user_signup
+            },
+            disabled_user_deletion: if self.client_permissions_declared.1 {
+                self.config.disabled_user_deletion
+            } else {
+                current.disabled_user_deletion
+            },
+            allow_duplicate_emails: self.config.allow_duplicate_emails,
         }
     }
 }
@@ -485,6 +506,14 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
         .filter(|policies| policies.project_id == endpoints.project)
         .map(|policies| imported_password_policy(&policies.project, &policy_path))
         .transpose()?;
+    let settings_path = PathBuf::from(AUTH_PATH).join(AUTH_SETTINGS_FILE);
+    let imported_project_quota = auth
+        .auth_settings
+        .as_ref()
+        .filter(|settings| settings.project_id == endpoints.project)
+        .and_then(|settings| settings.project.quota.as_ref())
+        .map(|quota| imported_quota_settings(quota, &settings_path))
+        .transpose()?;
     // Build the replacement in memory first. `import_user_trusted` can still reject a
     // syntactically valid record (for example, duplicate IDs or emails); doing this before
     // clearing the live store keeps the import atomic across all account records.
@@ -502,6 +531,17 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
         candidate.set_config(auth.config_over(store.config()));
         if let Some(policy) = &imported_project_policy {
             candidate.set_password_policy(policy.clone());
+        }
+        if let Some(quota) = &imported_project_quota {
+            candidate
+                .set_signup_quota_config(quota.clone())
+                .map_err(|error| {
+                    ArtifactError::new(
+                        "auth",
+                        &settings_path,
+                        format!("the Auth settings quota is invalid: {error:?}"),
+                    )
+                })?;
         }
         install_auth_users(
             &mut candidate,
@@ -529,6 +569,24 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
             let mut candidate = store.clone();
             candidate.clear();
             candidate.set_config(auth.config_over(store.config()));
+            if let Some(settings) =
+                settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
+            {
+                if let Some(config) = &settings.config {
+                    candidate.set_config(auth_config_from_settings(config, candidate.config()));
+                }
+                if let Some(quota) = &settings.quota {
+                    candidate
+                        .set_signup_quota_config(imported_quota_settings(quota, &settings_path)?)
+                        .map_err(|error| {
+                            ArtifactError::new(
+                                "auth",
+                                &settings_path,
+                                format!("the Auth settings quota is invalid: {error:?}"),
+                            )
+                        })?;
+                }
+            }
             let fallback = current_tenant_policies
                 .get(tenant)
                 .cloned()
@@ -577,6 +635,47 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
                     format!("cannot create tenant {tenant:?}"),
                 )
             })?;
+        if let Some(settings) =
+            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, &tenant)
+        {
+            if let Some(config) = &settings.config {
+                let current = endpoints
+                    .auth
+                    .tenant_metadata(endpoints.project, &tenant)
+                    .ok_or_else(|| {
+                        ArtifactError::new(
+                            "auth",
+                            &settings_path,
+                            format!("tenant {tenant:?} metadata disappeared during import"),
+                        )
+                    })?;
+                endpoints
+                    .auth
+                    .patch_tenant(
+                        endpoints.project,
+                        &tenant,
+                        TenantMetadataPatch {
+                            disabled_user_signup: config
+                                .disabled_user_signup
+                                .or(Some(current.disabled_user_signup)),
+                            disabled_user_deletion: config
+                                .disabled_user_deletion
+                                .or(Some(current.disabled_user_deletion)),
+                            enable_improved_email_privacy: config
+                                .enable_improved_email_privacy
+                                .or(Some(current.enable_improved_email_privacy)),
+                            ..TenantMetadataPatch::default()
+                        },
+                    )
+                    .ok_or_else(|| {
+                        ArtifactError::new(
+                            "auth",
+                            &settings_path,
+                            format!("cannot apply settings for tenant {tenant:?}"),
+                        )
+                    })?;
+            }
+        }
         let mut tenant_store = tenant_store.lock().map_err(|_| {
             ArtifactError::new(
                 "auth",
@@ -587,6 +686,14 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
         tenant_store.clear();
         let current = tenant_store.config();
         tenant_store.set_config(auth.config_over(current));
+        if let Some(settings) =
+            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, &tenant)
+        {
+            if let Some(config) = &settings.config {
+                let current = tenant_store.config();
+                tenant_store.set_config(auth_config_from_settings(config, current));
+            }
+        }
         let fallback = current_tenant_policies
             .get(&tenant)
             .cloned()
@@ -598,6 +705,21 @@ fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), Artif
             &fallback,
             &policy_path,
         )?);
+        if let Some(settings) =
+            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, &tenant)
+        {
+            if let Some(quota) = &settings.quota {
+                tenant_store
+                    .set_signup_quota_config(imported_quota_settings(quota, &settings_path)?)
+                    .map_err(|error| {
+                        ArtifactError::new(
+                            "auth",
+                            &settings_path,
+                            format!("the Auth settings quota is invalid: {error:?}"),
+                        )
+                    })?;
+            }
+        }
         for user in users {
             let id = user.local_id.clone();
             let uid = tenant_store.import_user_trusted(user).map_err(|e| {
@@ -1204,40 +1326,82 @@ fn read_auth_config(
     dir: &Path,
     section_dir: &Path,
     remaining_bytes: &mut u64,
-) -> Result<(ProjectAuthConfig, bool), ArtifactError> {
+) -> Result<(ProjectAuthConfig, bool, bool, bool), ArtifactError> {
     let config_path = section_dir.join(CONFIG_FILE);
-    let (config, email_privacy_declared) = match std::fs::symlink_metadata(&config_path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+    let (config, email_privacy_declared, signup_declared, deletion_declared) =
+        match std::fs::symlink_metadata(&config_path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                    return Err(ArtifactError::new(
+                        "auth",
+                        &config_path,
+                        "the optional config is not a regular no-symlink file",
+                    ));
+                }
+                let text = read_auth_text(dir, &config_path, remaining_bytes)?;
+                let parsed = AuthConfig::parse(&text)
+                    .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
+                (
+                    ProjectAuthConfig {
+                        allow_duplicate_emails: parsed.allow_duplicate_emails,
+                        enable_improved_email_privacy: parsed
+                            .enable_improved_email_privacy
+                            .unwrap_or(false),
+                        disabled_user_signup: parsed.disabled_user_signup.unwrap_or(false),
+                        disabled_user_deletion: parsed.disabled_user_deletion.unwrap_or(false),
+                    },
+                    parsed.enable_improved_email_privacy.is_some(),
+                    parsed.disabled_user_signup.is_some(),
+                    parsed.disabled_user_deletion.is_some(),
+                )
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                (ProjectAuthConfig::default(), false, false, false)
+            }
+            Err(e) => {
                 return Err(ArtifactError::new(
                     "auth",
                     &config_path,
-                    "the optional config is not a regular no-symlink file",
-                ));
+                    format!("cannot inspect the optional config: {e}"),
+                ))
             }
-            let text = read_auth_text(dir, &config_path, remaining_bytes)?;
-            let parsed = AuthConfig::parse(&text)
-                .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
-            (
-                ProjectAuthConfig {
-                    allow_duplicate_emails: parsed.allow_duplicate_emails,
-                    enable_improved_email_privacy: parsed
-                        .enable_improved_email_privacy
-                        .unwrap_or(false),
-                },
-                parsed.enable_improved_email_privacy.is_some(),
-            )
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (ProjectAuthConfig::default(), false),
-        Err(e) => {
+        };
+    Ok((
+        config,
+        email_privacy_declared,
+        signup_declared,
+        deletion_declared,
+    ))
+}
+
+fn read_auth_settings(
+    dir: &Path,
+    section_dir: &Path,
+    remaining_bytes: &mut u64,
+) -> Result<Option<AuthSettings>, ArtifactError> {
+    let path = section_dir.join(AUTH_SETTINGS_FILE);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
             return Err(ArtifactError::new(
                 "auth",
-                &config_path,
-                format!("cannot inspect the optional config: {e}"),
+                &path,
+                format!("cannot inspect the optional Auth settings sidecar: {error}"),
             ))
         }
     };
-    Ok((config, email_privacy_declared))
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(ArtifactError::new(
+            "auth",
+            &path,
+            "the optional Auth settings sidecar is not a regular no-symlink file",
+        ));
+    }
+    let text = read_auth_text(dir, &path, remaining_bytes)?;
+    AuthSettings::parse(&text)
+        .map(Some)
+        .map_err(|error| ArtifactError::new("auth", &path, error.to_string()))
 }
 
 fn read_auth_password_policies(
@@ -1282,9 +1446,10 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
         Some(IMPORT_AUTH_FILE_BYTES_LIMIT),
     )?;
     let mut remaining_bytes = IMPORT_AUTH_TOTAL_BYTES_LIMIT;
-    let (config, email_privacy_declared) =
+    let (config, email_privacy_declared, signup_declared, deletion_declared) =
         read_auth_config(dir, &section_dir, &mut remaining_bytes)?;
     let password_policies = read_auth_password_policies(dir, &section_dir, &mut remaining_bytes)?;
+    let auth_settings = read_auth_settings(dir, &section_dir, &mut remaining_bytes)?;
     let mut tenants = BTreeMap::new();
     let mut password_updated_at = BTreeMap::new();
     let entries = std::fs::read_dir(&section_dir)
@@ -1338,12 +1503,35 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
         users.push(imported_user(record, &accounts_path)?);
         note_password_updated_at(&mut password_updated_at, None, record);
     }
+    if let Some(settings) = &auth_settings {
+        if settings.project_id.is_empty() {
+            return Err(ArtifactError::new(
+                "auth",
+                section_dir.join(AUTH_SETTINGS_FILE),
+                "the Auth settings sidecar has an empty projectId",
+            ));
+        }
+        for namespace in &settings.namespaces {
+            let tenant = namespace.tenant_id.as_deref().unwrap_or_default();
+            if !tenants.contains_key(tenant) {
+                return Err(ArtifactError::new(
+                    "auth",
+                    section_dir.join(AUTH_SETTINGS_FILE),
+                    format!(
+                        "settings name tenant {tenant:?} has no matching accounts-{tenant}.json"
+                    ),
+                ));
+            }
+        }
+    }
     Ok(PreparedAuth {
         users,
         password_updated_at,
         config,
+        client_permissions_declared: (signup_declared, deletion_declared),
         email_privacy_declared,
         password_policies,
+        auth_settings,
         tenants,
     })
 }
@@ -1422,6 +1610,208 @@ fn imported_password_policy(
             format!("the password policy sidecar is invalid: {error:?}"),
         )
     })
+}
+
+fn exported_quota_settings(config: &SignupQuotaConfig) -> QuotaSettingsRecord {
+    let temporary = config.temporary.map(|temporary| TemporaryQuotaRecord {
+        quota: i64::try_from(temporary.quota).unwrap_or(i64::MAX),
+        start_time: rfc3339_text(temporary.start_time),
+        quota_duration: protobuf_duration_text(temporary.duration),
+    });
+    QuotaSettingsRecord {
+        mode: match config.mode {
+            QuotaMode::Off => "off".to_owned(),
+            QuotaMode::Observe => "observe".to_owned(),
+            QuotaMode::Enforce => "enforce".to_owned(),
+        },
+        algorithm: match config.algorithm {
+            QuotaAlgorithm::FixedWindowV1 => "fixed-window-v1".to_owned(),
+        },
+        #[allow(clippy::cast_possible_wrap)]
+        default_quota_per_hour: config.default_quota_per_hour as i64,
+        #[allow(clippy::cast_possible_wrap)]
+        max_tracked_buckets: config.max_tracked_buckets as i64,
+        temporary,
+    }
+}
+
+fn imported_quota_settings(
+    record: &QuotaSettingsRecord,
+    path: &Path,
+) -> Result<SignupQuotaConfig, ArtifactError> {
+    let mode = match record.mode.as_str() {
+        "off" => QuotaMode::Off,
+        "observe" => QuotaMode::Observe,
+        "enforce" => QuotaMode::Enforce,
+        _ => {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                "the Auth settings sidecar has an invalid quota mode",
+            ))
+        }
+    };
+    if record.algorithm != "fixed-window-v1" {
+        return Err(ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has an unsupported quota algorithm",
+        ));
+    }
+    let default_quota_per_hour = u64::try_from(record.default_quota_per_hour).map_err(|_| {
+        ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has an invalid defaultQuotaPerHour",
+        )
+    })?;
+    let max_tracked_buckets = usize::try_from(record.max_tracked_buckets).map_err(|_| {
+        ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has an invalid maxTrackedBuckets",
+        )
+    })?;
+    let temporary = record
+        .temporary
+        .as_ref()
+        .map(|temporary| {
+            let quota = u64::try_from(temporary.quota).map_err(|_| {
+                ArtifactError::new(
+                    "auth",
+                    path,
+                    "the Auth settings sidecar has an invalid temporary quota",
+                )
+            })?;
+            let start_time = LogicalInstant::parse_rfc3339(&temporary.start_time).map_err(|e| {
+                ArtifactError::new(
+                    "auth",
+                    path,
+                    format!("the Auth settings sidecar has an invalid temporary startTime: {e}"),
+                )
+            })?;
+            let duration = parse_protobuf_duration_text(&temporary.quota_duration, path)?;
+            TemporaryQuota::new(quota, start_time, duration).map_err(|e| {
+                ArtifactError::new(
+                    "auth",
+                    path,
+                    format!("the Auth settings sidecar has an invalid temporary quota: {e:?}"),
+                )
+            })
+        })
+        .transpose()?;
+    let config = SignupQuotaConfig {
+        mode,
+        algorithm: QuotaAlgorithm::FixedWindowV1,
+        default_quota_per_hour,
+        max_tracked_buckets,
+        temporary,
+    };
+    config.validate().map_err(|e| {
+        ArtifactError::new(
+            "auth",
+            path,
+            format!("the Auth settings sidecar has an invalid quota configuration: {e:?}"),
+        )
+    })?;
+    Ok(config)
+}
+
+fn protobuf_duration_text(duration: LogicalDuration) -> String {
+    let nanos = duration.as_nanos();
+    let seconds = nanos.div_euclid(1_000_000_000);
+    let fraction = nanos.rem_euclid(1_000_000_000);
+    if fraction == 0 {
+        format!("{seconds}s")
+    } else {
+        format!("{seconds}.{fraction:09}s")
+            .trim_end_matches('0')
+            .to_owned()
+    }
+}
+
+fn parse_protobuf_duration_text(text: &str, path: &Path) -> Result<LogicalDuration, ArtifactError> {
+    let body = text
+        .strip_suffix('s')
+        .filter(|body| !body.is_empty())
+        .ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                path,
+                "the Auth settings sidecar has an invalid quota duration",
+            )
+        })?;
+    if body.starts_with(['+', '-']) {
+        return Err(ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has a negative quota duration",
+        ));
+    }
+    let (seconds, fraction) = body.split_once('.').map_or((body, ""), |parts| parts);
+    let seconds = seconds.parse::<i128>().map_err(|_| {
+        ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has an invalid quota duration seconds value",
+        )
+    })?;
+    if fraction.is_empty()
+        || fraction.len() > 9
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has an invalid quota duration fraction",
+        ));
+    }
+    let fraction_nanos = fraction
+        .parse::<i128>()
+        .unwrap_or(0)
+        .saturating_mul(10_i128.pow(u32::try_from(9 - fraction.len()).unwrap_or(0)));
+    let nanos = seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(fraction_nanos))
+        .ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                path,
+                "the Auth settings sidecar quota duration overflows",
+            )
+        })?;
+    Ok(LogicalDuration::from_nanos(nanos))
+}
+
+fn auth_config_from_settings(config: &AuthConfig, current: ProjectAuthConfig) -> ProjectAuthConfig {
+    ProjectAuthConfig {
+        allow_duplicate_emails: config.allow_duplicate_emails,
+        enable_improved_email_privacy: config
+            .enable_improved_email_privacy
+            .unwrap_or(current.enable_improved_email_privacy),
+        disabled_user_signup: config
+            .disabled_user_signup
+            .unwrap_or(current.disabled_user_signup),
+        disabled_user_deletion: config
+            .disabled_user_deletion
+            .unwrap_or(current.disabled_user_deletion),
+    }
+}
+
+fn settings_for_tenant<'a>(
+    settings: Option<&'a AuthSettings>,
+    target_project: &str,
+    tenant: &str,
+) -> Option<&'a AuthSettingsRecord> {
+    settings
+        .filter(|settings| settings.project_id == target_project)
+        .and_then(|settings| {
+            settings
+                .namespaces
+                .iter()
+                .find(|namespace| namespace.tenant_id.as_deref() == Some(tenant))
+                .map(|namespace| &namespace.settings)
+        })
 }
 
 fn password_policy_for_tenant(
@@ -2129,11 +2519,15 @@ fn export_auth(
     let document = AuthConfig {
         allow_duplicate_emails: config.allow_duplicate_emails,
         enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
+        disabled_user_signup: Some(config.disabled_user_signup),
+        disabled_user_deletion: Some(config.disabled_user_deletion),
     };
     write_private_file(&config_path, document.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
     let project_policy = exported_password_policy(store.password_policy());
+    let project_quota = store.signup_quota().config().clone();
     let mut tenant_policies = Vec::new();
+    let mut tenant_settings = Vec::new();
     for tenant in endpoints.auth.tenants(endpoints.project) {
         let tenant_store = endpoints
             .auth
@@ -2162,6 +2556,27 @@ fn export_auth(
                 policy: tenant_policy,
             });
         }
+        let tenant_config = tenant_store.config();
+        let tenant_quota = tenant_store.signup_quota().config().clone();
+        if tenant_config != ProjectAuthConfig::default()
+            || tenant_quota != SignupQuotaConfig::default()
+        {
+            tenant_settings.push(AuthSettingsNamespace {
+                tenant_id: Some(tenant.clone()),
+                settings: AuthSettingsRecord {
+                    config: Some(AuthConfig {
+                        allow_duplicate_emails: tenant_config.allow_duplicate_emails,
+                        enable_improved_email_privacy: Some(
+                            tenant_config.enable_improved_email_privacy,
+                        ),
+                        disabled_user_signup: Some(tenant_config.disabled_user_signup),
+                        disabled_user_deletion: Some(tenant_config.disabled_user_deletion),
+                    }),
+                    quota: (tenant_quota != SignupQuotaConfig::default())
+                        .then(|| exported_quota_settings(&tenant_quota)),
+                },
+            });
+        }
         let mut file = AccountsFile::default();
         for user in tenant_store.users_by_creation() {
             file.users
@@ -2185,6 +2600,20 @@ fn export_auth(
             namespaces: tenant_policies,
         };
         write_private_file(&path, policies.to_json().as_bytes())
+            .map_err(|e| ArtifactError::new("auth", &path, e))?;
+    }
+    if project_quota != SignupQuotaConfig::default() || !tenant_settings.is_empty() {
+        let path = section_dir.join(AUTH_SETTINGS_FILE);
+        let settings = AuthSettings {
+            project_id: endpoints.project.to_owned(),
+            project: AuthSettingsRecord {
+                config: None,
+                quota: (project_quota != SignupQuotaConfig::default())
+                    .then(|| exported_quota_settings(&project_quota)),
+            },
+            namespaces: tenant_settings,
+        };
+        write_private_file(&path, settings.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
 
@@ -2865,6 +3294,8 @@ mod tests {
         rfc3339_instant, rfc3339_text, scan_import_tree, UnmanagedCopyBudget,
         IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
+    use fireemu_core_auth::store::ProjectAuthConfig;
+    use fireemu_core_export::auth::AuthConfig;
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
     use fireemu_export_publication::PublicationStage;
 
@@ -2957,6 +3388,61 @@ mod tests {
     #[cfg(unix)]
     fn budget_dir(name: &str) -> TrustedTempDir {
         TrustedTempDir::new(&format!("import-budget-{name}"))
+    }
+
+    #[test]
+    fn auth_settings_quota_conversion_preserves_the_config_without_usage() {
+        use fireemu_core_auth::signup_quota::{
+            QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+        };
+        use fireemu_core_types::time::LogicalDuration;
+
+        let config = SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour: 7,
+            max_tracked_buckets: 12,
+            temporary: Some(
+                TemporaryQuota::new(
+                    9,
+                    LogicalInstant::from_unix_seconds(1_893_456_000),
+                    LogicalDuration::from_seconds(90),
+                )
+                .expect("temporary quota is valid"),
+            ),
+        };
+        let record = super::exported_quota_settings(&config);
+        let restored = super::imported_quota_settings(
+            &record,
+            std::path::Path::new("auth_export/fireemu-auth-settings.json"),
+        )
+        .expect("quota sidecar parses");
+        assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn auth_settings_conversion_does_not_drop_destination_namespace_values() {
+        let destination = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: false,
+            disabled_user_signup: false,
+            disabled_user_deletion: true,
+        };
+        let config = AuthConfig {
+            allow_duplicate_emails: false,
+            enable_improved_email_privacy: None,
+            disabled_user_signup: Some(true),
+            disabled_user_deletion: None,
+        };
+        assert_eq!(
+            super::auth_config_from_settings(&config, destination),
+            ProjectAuthConfig {
+                allow_duplicate_emails: false,
+                enable_improved_email_privacy: false,
+                disabled_user_signup: true,
+                disabled_user_deletion: true,
+            }
+        );
     }
 
     #[cfg(not(unix))]

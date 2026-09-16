@@ -13,7 +13,11 @@ use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_auth::jwt::{base64url_encode, encode_unsigned, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
-use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::index::{
+    IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
+    PlanningContext,
+};
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_rules::eval::DocumentAccess;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
@@ -21,7 +25,7 @@ use fireemu_core_rules::value::RulesValue;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
-use fireemu_core_types::ids::{DatabaseId, ProjectId};
+use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
 use fireemu_core_types::time::LogicalInstant;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
@@ -220,6 +224,14 @@ async fn start() -> Harness {
 }
 
 async fn start_with(acceptance: TokenAcceptance) -> Harness {
+    start_with_config(acceptance, IndexSet::default()).await
+}
+
+async fn start_with_indexes(indexes: IndexSet) -> Harness {
+    start_with_config(TokenAcceptance::Verified, indexes).await
+}
+
+async fn start_with_config(acceptance: TokenAcceptance, indexes: IndexSet) -> Harness {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -229,7 +241,7 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
             api_mode: FirestoreApiMode::Native,
             policy: IndexValidationPolicy::Production,
         },
-        indexes: IndexSet::default(),
+        indexes,
     };
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
@@ -1652,6 +1664,155 @@ service cloud.firestore {
             .code(),
         tonic::Code::PermissionDenied
     );
+    h.handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn query_proof_preserves_parent_exclusion_with_nested_range() {
+    use sq::field_filter::Operator as Op;
+
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(IndexDefinition {
+        collection_group: CollectionId::try_new("records").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![
+            IndexField {
+                path: FieldPath::parse("meta").unwrap(),
+                mode: IndexFieldMode::Ascending,
+            },
+            IndexField {
+                path: FieldPath::parse("meta.score").unwrap(),
+                mode: IndexFieldMode::Ascending,
+            },
+        ],
+    });
+    let mut h = start_with_indexes(indexes).await;
+    let (_alice, alice_token) = h.user("nested-range@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta != {}; }
+  }
+}",
+        )
+        .unwrap();
+
+    let int = |value: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(value)),
+    };
+    let field_filter = |field: &str, op: Op, value: pb::Value| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: field.to_owned(),
+            }),
+            op: op as i32,
+            value: Some(value),
+        })),
+    };
+    let query = |filters: Vec<sq::Filter>| {
+        let mut request = list("records");
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+            &mut request.query_type
+        {
+            query.r#where = Some(sq::Filter {
+                filter_type: Some(sq::filter::FilterType::CompositeFilter(
+                    sq::CompositeFilter {
+                        op: sq::composite_filter::Operator::And as i32,
+                        filters,
+                    },
+                )),
+            });
+        }
+        request
+    };
+    let parent_exclusion = field_filter("meta", Op::NotEqual, map(&[]));
+    let nested_range = field_filter("meta.score", Op::GreaterThan, int(10));
+
+    // The nested range and the parent exclusion must be retained together.
+    let first = h
+        .client
+        .run_query(with_bearer(
+            query(vec![parent_exclusion.clone(), nested_range.clone()]),
+            &alice_token,
+        ))
+        .await;
+    assert!(first.is_ok(), "{first:?}");
+    // Reordering equivalent filters must not change the proof.
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query(vec![nested_range.clone(), parent_exclusion.clone()]),
+            &alice_token,
+        ))
+        .await
+        .is_ok());
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta.score > 0; }
+  }
+}",
+        )
+        .unwrap();
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query(vec![nested_range.clone(), parent_exclusion.clone()]),
+            &alice_token,
+        ))
+        .await
+        .is_ok());
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta == {}; }
+  }
+}",
+        )
+        .unwrap();
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query(vec![parent_exclusion.clone(), nested_range.clone()]),
+                &alice_token,
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta.score > 100; }
+  }
+}",
+        )
+        .unwrap();
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query(vec![parent_exclusion, nested_range]),
+                &alice_token,
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+
     h.handle.abort();
 }
 

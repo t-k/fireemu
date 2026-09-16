@@ -44,6 +44,15 @@ pub enum RulesValue {
     Unknown,
     /// A map whose listed keys are known; any other key may exist with any value.
     PartialMap(BTreeMap<String, RulesValue>),
+    /// A map whose listed keys are known and whose complete value excludes the listed maps.
+    /// This keeps a parent-level `!=` / `not-in` query constraint alongside constraints on
+    /// child fields instead of replacing either side of the proof.
+    PartialMapExcluding {
+        /// Known fields (other keys may exist with any value).
+        fields: BTreeMap<String, RulesValue>,
+        /// Complete map values excluded by the query.
+        excluded: Vec<RulesValue>,
+    },
     /// A list known to contain the listed members plus an unknown remainder.
     PartialList(Vec<RulesValue>),
     /// A list known to contain at least one of the listed candidates plus an unknown
@@ -129,7 +138,7 @@ impl RulesValue {
             Self::String(_) => "string",
             Self::List(_) | Self::PartialList(_) | Self::PartialListAny(_) => "list",
             Self::Set(_) => "set",
-            Self::Map(_) | Self::PartialMap(_) => "map",
+            Self::Map(_) | Self::PartialMap(_) | Self::PartialMapExcluding { .. } => "map",
             Self::Path(_) => "path",
             Self::Timestamp(_) => "timestamp",
             Self::Bytes(_) => "bytes",
@@ -230,6 +239,12 @@ impl fmt::Display for RulesValue {
             Self::OneOf(items) => write!(f, "one_of({} values)", items.len()),
             Self::NotOneOf(items) => write!(f, "not_one_of({} values)", items.len()),
             Self::PartialMap(m) => write!(f, "map({} known keys, ...)", m.len()),
+            Self::PartialMapExcluding { fields, excluded } => write!(
+                f,
+                "map({} known keys, ...; excluding {} values)",
+                fields.len(),
+                excluded.len()
+            ),
             Self::PartialList(l) => write!(f, "list({} known members, ...)", l.len()),
             Self::PartialListAny(l) => write!(f, "list(one of {} candidates, ...)", l.len()),
             Self::Range(r) => {

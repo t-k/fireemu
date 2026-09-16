@@ -1068,8 +1068,8 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
         }
     }
     for (field, excluded) in exclusions {
-        if !ranges.contains_key(field) && !has_known_field(&data, field) {
-            set_nested(&mut data, field, RulesValue::NotOneOf(excluded));
+        if !ranges.contains_key(field) {
+            set_nested_exclusion(&mut data, field, excluded);
         }
     }
     let mut m = BTreeMap::new();
@@ -1199,11 +1199,15 @@ fn set_nested(fields: &mut BTreeMap<String, RulesValue>, path: &FieldPath, value
         let entry = map
             .entry(s.clone())
             .or_insert_with(|| RulesValue::PartialMap(BTreeMap::new()));
-        if !matches!(entry, RulesValue::PartialMap(_) | RulesValue::Map(_)) {
+        if !matches!(
+            entry,
+            RulesValue::PartialMap(_) | RulesValue::PartialMapExcluding { .. } | RulesValue::Map(_)
+        ) {
             *entry = RulesValue::PartialMap(BTreeMap::new());
         }
         map = match entry {
             RulesValue::PartialMap(m) | RulesValue::Map(m) => m,
+            RulesValue::PartialMapExcluding { fields, .. } => fields,
             _ => return,
         };
     }
@@ -1212,21 +1216,55 @@ fn set_nested(fields: &mut BTreeMap<String, RulesValue>, path: &FieldPath, value
     }
 }
 
-fn has_known_field(fields: &BTreeMap<String, RulesValue>, path: &FieldPath) -> bool {
-    let mut current = fields;
-    for (index, segment) in path.segments().iter().enumerate() {
-        let Some(value) = current.get(segment) else {
-            return false;
-        };
-        if index + 1 == path.segments().len() {
-            return true;
+/// Merges a parent-level exclusion with any partial child constraints already present at that
+/// path. Query proofs need both facts: a child range remains available to the evaluator while
+/// the complete map is known not to equal each excluded value.
+fn set_nested_exclusion(
+    fields: &mut BTreeMap<String, RulesValue>,
+    path: &FieldPath,
+    excluded_values: Vec<RulesValue>,
+) {
+    let segments = path.segments();
+    let Some(last) = segments.last() else {
+        return;
+    };
+    let mut map = fields;
+    for segment in &segments[..segments.len() - 1] {
+        let entry = map
+            .entry(segment.clone())
+            .or_insert_with(|| RulesValue::PartialMap(BTreeMap::new()));
+        if !matches!(
+            entry,
+            RulesValue::PartialMap(_) | RulesValue::PartialMapExcluding { .. } | RulesValue::Map(_)
+        ) {
+            *entry = RulesValue::PartialMap(BTreeMap::new());
         }
-        current = match value {
-            RulesValue::Map(map) | RulesValue::PartialMap(map) => map,
-            _ => return false,
+        map = match entry {
+            RulesValue::PartialMap(m) | RulesValue::Map(m) => m,
+            RulesValue::PartialMapExcluding { fields, .. } => fields,
+            _ => return,
         };
     }
-    false
+    let merged = match map.remove(last) {
+        Some(RulesValue::PartialMap(fields)) => RulesValue::PartialMapExcluding {
+            fields,
+            excluded: excluded_values,
+        },
+        Some(RulesValue::PartialMapExcluding {
+            fields,
+            mut excluded,
+        }) => {
+            excluded.extend(excluded_values);
+            RulesValue::PartialMapExcluding { fields, excluded }
+        }
+        Some(RulesValue::NotOneOf(mut previous)) => {
+            previous.extend(excluded_values);
+            RulesValue::NotOneOf(previous)
+        }
+        Some(existing) => existing,
+        None => RulesValue::NotOneOf(excluded_values),
+    };
+    map.insert(last.clone(), merged);
 }
 
 const fn method_name(m: Method) -> &'static str {

@@ -1304,6 +1304,7 @@ fn undetermined(v: &RulesValue) -> bool {
     match v {
         RulesValue::Unknown
         | RulesValue::PartialMap(_)
+        | RulesValue::PartialMapExcluding { .. }
         | RulesValue::PartialList(_)
         | RulesValue::PartialListAny(_)
         | RulesValue::Range(_)
@@ -1700,6 +1701,7 @@ impl<'a> Evaluator<'a> {
                 | RulesValue::List(_)
                 | RulesValue::Set(_)
                 | RulesValue::PartialMap(_)
+                | RulesValue::PartialMapExcluding { .. }
                 | RulesValue::PartialList(_)
                 | RulesValue::PartialListAny(_)
                 | RulesValue::OneOf(_)
@@ -1757,6 +1759,9 @@ impl<'a> Evaluator<'a> {
                     RulesValue::PartialMap(m) => {
                         Ok(m.get(name).cloned().unwrap_or(RulesValue::Unknown))
                     }
+                    RulesValue::PartialMapExcluding { fields, .. } => {
+                        Ok(fields.get(name).cloned().unwrap_or(RulesValue::Unknown))
+                    }
                     RulesValue::Unknown => Err(EvalError::Unknown),
                     RulesValue::Null => Err(soft(format!("member {name} of null"))),
                     other => Err(soft(format!("member {name} of {}", other.type_name()))),
@@ -1772,6 +1777,9 @@ impl<'a> Evaluator<'a> {
                         .ok_or_else(|| soft(format!("missing key {k}"))),
                     (RulesValue::PartialMap(m), RulesValue::String(k)) => {
                         Ok(m.get(&k).cloned().unwrap_or(RulesValue::Unknown))
+                    }
+                    (RulesValue::PartialMapExcluding { fields, .. }, RulesValue::String(k)) => {
+                        Ok(fields.get(&k).cloned().unwrap_or(RulesValue::Unknown))
                     }
                     (o, i) if undetermined(&o) || undetermined(&i) => Err(EvalError::Unknown),
                     (RulesValue::List(items), RulesValue::Int(i)) => usize::try_from(i)
@@ -1894,12 +1902,18 @@ impl<'a> Evaluator<'a> {
                     RulesValue::NotOneOf(_)
                         | RulesValue::RangeExcluding { .. }
                         | RulesValue::PartialMap(_)
+                        | RulesValue::PartialMapExcluding { .. }
                         | RulesValue::PartialList(_)
                         | RulesValue::PartialListAny(_)
                 ) {
                     return match type_name.as_str() {
                         // A partially known container is at least a container of its kind.
-                        "map" if matches!(v, RulesValue::PartialMap(_)) => {
+                        "map"
+                            if matches!(
+                                v,
+                                RulesValue::PartialMap(_) | RulesValue::PartialMapExcluding { .. }
+                            ) =>
+                        {
                             Ok(RulesValue::Bool(true))
                         }
                         "list"
@@ -1999,6 +2013,13 @@ impl<'a> Evaluator<'a> {
                     return Err(EvalError::Unknown);
                 }
             }
+            (BinaryOp::In, V::String(k), V::PartialMapExcluding { fields, .. }) => {
+                if fields.contains_key(k) {
+                    V::Bool(true)
+                } else {
+                    return Err(EvalError::Unknown);
+                }
+            }
             // A range against a concrete value: decided when every member agrees.
             (
                 BinaryOp::Eq
@@ -2088,6 +2109,30 @@ impl<'a> Evaluator<'a> {
                     V::Bool(op == BinaryOp::Ne)
                 } else {
                     return Err(EvalError::Unknown);
+                }
+            }
+            (BinaryOp::Eq | BinaryOp::Ne, V::PartialMap(fields), c) if !undetermined(c) => {
+                V::Bool(partial_map_relation(op, fields, c)?)
+            }
+            (BinaryOp::Eq | BinaryOp::Ne, V::PartialMapExcluding { fields, excluded }, c)
+                if !undetermined(c) =>
+            {
+                if excluded.iter().any(|excluded| values_equal(excluded, c)) {
+                    V::Bool(op == BinaryOp::Ne)
+                } else {
+                    V::Bool(partial_map_relation(op, fields, c)?)
+                }
+            }
+            (BinaryOp::Eq | BinaryOp::Ne, c, V::PartialMap(fields)) if !undetermined(c) => {
+                V::Bool(partial_map_relation(op, fields, c)?)
+            }
+            (BinaryOp::Eq | BinaryOp::Ne, c, V::PartialMapExcluding { fields, excluded })
+                if !undetermined(c) =>
+            {
+                if excluded.iter().any(|excluded| values_equal(excluded, c)) {
+                    V::Bool(op == BinaryOp::Ne)
+                } else {
+                    V::Bool(partial_map_relation(op, fields, c)?)
                 }
             }
             (BinaryOp::In, V::NotOneOf(excluded), V::List(items)) if !undetermined(&r) => {
@@ -2428,6 +2473,68 @@ fn values_equal(a: &RulesValue, b: &RulesValue) -> bool {
     }
 }
 
+/// Compares a partially known map with a concrete value. A missing required key (or a known
+/// concrete value that differs) proves inequality; otherwise the unknown remainder keeps the
+/// equality undecidable.
+fn partial_map_relation(
+    op: BinaryOp,
+    fields: &BTreeMap<String, RulesValue>,
+    candidate: &RulesValue,
+) -> Result<bool, EvalError> {
+    let RulesValue::Map(candidate) = candidate else {
+        return Ok(op == BinaryOp::Ne);
+    };
+    let definitely_different = fields.iter().any(|(key, expected)| {
+        let Some(actual) = candidate.get(key) else {
+            return true;
+        };
+        partial_value_definitely_differs(expected, actual)
+    });
+    if definitely_different {
+        Ok(op == BinaryOp::Ne)
+    } else {
+        Err(EvalError::Unknown)
+    }
+}
+
+fn partial_value_definitely_differs(expected: &RulesValue, actual: &RulesValue) -> bool {
+    if undetermined(actual) {
+        return false;
+    }
+    match expected {
+        RulesValue::Range(range) | RulesValue::RangeExcluding { range, .. } => {
+            range_relation(range, BinaryOp::Eq, actual).is_ok_and(|equal| !equal)
+        }
+        RulesValue::OneOf(members) => members
+            .iter()
+            .all(|member| !undetermined(member) && !values_equal(member, actual)),
+        RulesValue::NotOneOf(excluded) => excluded
+            .iter()
+            .any(|member| !undetermined(member) && values_equal(member, actual)),
+        RulesValue::PartialMap(fields) => {
+            matches!(
+                partial_map_relation(BinaryOp::Eq, fields, actual),
+                Ok(false)
+            )
+        }
+        RulesValue::PartialMapExcluding { fields, excluded } => {
+            if excluded
+                .iter()
+                .any(|member| !undetermined(member) && values_equal(member, actual))
+            {
+                true
+            } else {
+                matches!(
+                    partial_map_relation(BinaryOp::Eq, fields, actual),
+                    Ok(false)
+                )
+            }
+        }
+        value if undetermined(value) => false,
+        value => !values_equal(value, actual),
+    }
+}
+
 /// Exact ordering of an `i64` against a non-NaN `f64` (no conversion of the integer to a
 /// double, which loses precision above 2^53).
 fn cmp_int_double(i: i64, d: f64) -> core::cmp::Ordering {
@@ -2676,9 +2783,24 @@ fn method_call(
                 _ => return Err(soft("get() expects a string key")),
             }
         }
-        (V::Unknown | V::PartialList(_) | V::PartialListAny(_) | V::PartialMap(_), _) => {
-            return Err(EvalError::Unknown)
+        (V::PartialMapExcluding { fields, .. }, "get") => {
+            arity(2)?;
+            match &args[0] {
+                V::String(k) => match fields.get(k) {
+                    Some(v) => v.clone(),
+                    None => return Err(EvalError::Unknown),
+                },
+                _ => return Err(soft("get() expects a string key")),
+            }
         }
+        (
+            V::Unknown
+            | V::PartialList(_)
+            | V::PartialListAny(_)
+            | V::PartialMap(_)
+            | V::PartialMapExcluding { .. },
+            _,
+        ) => return Err(EvalError::Unknown),
         (V::String(s), "size") => {
             arity(0)?;
             V::Int(i64::try_from(s.chars().count()).unwrap_or(i64::MAX))

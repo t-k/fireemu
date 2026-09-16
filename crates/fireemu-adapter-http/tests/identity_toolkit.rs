@@ -1789,6 +1789,15 @@ fn project_blocking_settings_get_patch_preserves_masked_values_and_rejects_atomi
     assert_eq!(status, 200, "{after}");
     assert_eq!(after["blockingFunctions"], updated["blockingFunctions"]);
     assert_eq!(after["client"]["permissions"]["disabledUserSignup"], false);
+
+    let cleared = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=blockingFunctions"),
+        &json!({"blockingFunctions": null}),
+    );
+    assert_eq!(cleared.0, 200, "{}", cleared.1);
+    assert_eq!(cleared.1["blockingFunctions"], json!({}));
 }
 
 #[test]
@@ -7966,6 +7975,212 @@ fn tenant_config_rejects_malformed_unmasked_fields_without_mutation() {
             "{label}"
         );
     }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn project_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
+    let s = state();
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let initial = admin(
+        &s,
+        "PATCH",
+        &format!(
+            "{path}?updateMask=signIn,emailPrivacyConfig,client.permissions,passwordPolicyConfig,quota"
+        ),
+        &json!({
+            "signIn": {"allowDuplicateEmails": true},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true},
+            "client": {"permissions": {
+                "disabledUserSignup": true,
+                "disabledUserDeletion": true
+            }},
+            "passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": [{"customStrengthOptions": {
+                    "minPasswordLength": 12
+                }}]
+            },
+            "quota": {
+                "signUpQuotaConfig": {
+                    "quota": "2",
+                    "startTime": "2030-01-01T00:00:00Z",
+                    "quotaDuration": "3600s"
+                },
+                "quotaSimulation": {
+                    "mode": "enforce",
+                    "algorithm": "fixed-window-v1",
+                    "defaultQuotaPerHour": 17,
+                    "maxTrackedBuckets": 8
+                }
+            }
+        }),
+    );
+    assert_eq!(initial.0, 200, "{}", initial.1);
+    let before = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(before.0, 200, "{}", before.1);
+
+    // ProtoJSON null message values are absent when no update mask selects them. They must not
+    // be rejected or reset unrelated settings.
+    let omitted = admin(
+        &s,
+        "PATCH",
+        path,
+        &json!({
+            "signIn": null,
+            "emailPrivacyConfig": null,
+            "client": null,
+            "quota": null,
+            "passwordPolicyConfig": null,
+            "blockingFunctions": null
+        }),
+    );
+    assert_eq!(omitted.0, 200, "{}", omitted.1);
+    assert_eq!(omitted.1, before.1);
+
+    let nested_nulls = admin(
+        &s,
+        "PATCH",
+        path,
+        &json!({
+            "signIn": {"allowDuplicateEmails": null},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": null},
+            "client": {"permissions": {
+                "disabledUserSignup": null,
+                "disabledUserDeletion": null
+            }},
+            "passwordPolicyConfig": {"forceUpgradeOnSignin": null},
+            "quota": {"quotaSimulation": {
+                "mode": null,
+                "algorithm": null
+            }},
+            "blockingFunctions": {
+                "triggers": {"beforeCreate": null},
+                "forwardInboundCredentials": {"idToken": null}
+            }
+        }),
+    );
+    assert_eq!(nested_nulls.0, 200, "{}", nested_nulls.1);
+    assert_eq!(nested_nulls.1, before.1);
+
+    // A selected null clears the corresponding message to its default value.
+    let cleared = admin(
+        &s,
+        "PATCH",
+        &format!(
+            "{path}?updateMask=signIn,emailPrivacyConfig,client.permissions,passwordPolicyConfig,quota"
+        ),
+        &json!({
+            "signIn": null,
+            "emailPrivacyConfig": null,
+            "client": null,
+            "passwordPolicyConfig": null,
+            "quota": null
+        }),
+    );
+    assert_eq!(cleared.0, 200, "{}", cleared.1);
+    assert_eq!(cleared.1["signIn"]["allowDuplicateEmails"], false);
+    assert_eq!(
+        cleared.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        false
+    );
+    assert_eq!(
+        cleared.1["client"]["permissions"]["disabledUserSignup"],
+        false
+    );
+    assert_eq!(
+        cleared.1["client"]["permissions"]["disabledUserDeletion"],
+        false
+    );
+    assert_eq!(
+        cleared.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+        "OFF"
+    );
+    assert!(cleared.1["quota"].get("signUpQuotaConfig").is_none());
+    assert_eq!(cleared.1["quota"]["quotaSimulation"]["mode"], "off");
+}
+
+#[test]
+fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    s.registry = Some(registry);
+    let path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/tenant-a";
+    let initial = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=client.permissions,emailPrivacyConfig,displayName"),
+        &json!({
+            "displayName": "Configured",
+            "client": {"permissions": {
+                "disabledUserSignup": true,
+                "disabledUserDeletion": true
+            }},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+        }),
+    );
+    assert_eq!(initial.0, 200, "{}", initial.1);
+    let before = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(before.0, 200, "{}", before.1);
+
+    let omitted = admin(
+        &s,
+        "PATCH",
+        path,
+        &json!({
+            "displayName": null,
+            "client": null,
+            "emailPrivacyConfig": null,
+            "passwordPolicyConfig": null
+        }),
+    );
+    assert_eq!(omitted.0, 200, "{}", omitted.1);
+    assert_eq!(omitted.1, before.1);
+
+    let nested_nulls = admin(
+        &s,
+        "PATCH",
+        path,
+        &json!({
+            "displayName": null,
+            "client": {"permissions": {
+                "disabledUserSignup": null,
+                "disabledUserDeletion": null
+            }},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": null}
+        }),
+    );
+    assert_eq!(nested_nulls.0, 200, "{}", nested_nulls.1);
+    assert_eq!(nested_nulls.1, before.1);
+
+    let cleared = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=client.permissions,emailPrivacyConfig,displayName"),
+        &json!({
+            "displayName": null,
+            "client": null,
+            "emailPrivacyConfig": null
+        }),
+    );
+    assert_eq!(cleared.0, 200, "{}", cleared.1);
+    assert!(cleared.1["displayName"].is_null());
+    assert_eq!(
+        cleared.1["client"]["permissions"]["disabledUserSignup"],
+        false
+    );
+    assert_eq!(
+        cleared.1["client"]["permissions"]["disabledUserDeletion"],
+        false
+    );
+    assert_eq!(
+        cleared.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        false
+    );
 }
 
 #[test]

@@ -2866,7 +2866,7 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         return Err(error(400, "INVALID_ARGUMENT"));
     }
     let state = match object.get("passwordPolicyEnforcementState") {
-        None => EnforcementState::Off,
+        None | Some(Value::Null) => EnforcementState::Off,
         Some(Value::String(value)) => match value.as_str() {
             "OFF" => EnforcementState::Off,
             "ENFORCE" => EnforcementState::Enforce,
@@ -2875,12 +2875,12 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
     };
     let force = match object.get("forceUpgradeOnSignin") {
-        None => false,
+        None | Some(Value::Null) => false,
         Some(Value::Bool(value)) => *value,
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
     };
     let options = match object.get("passwordPolicyVersions") {
-        None => None,
+        None | Some(Value::Null) => None,
         Some(Value::Array(versions)) if versions.len() == 1 => {
             let version = versions[0]
                 .as_object()
@@ -2890,6 +2890,7 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
             }
             match version.get("customStrengthOptions") {
                 Some(Value::Object(options)) => Some(options),
+                Some(Value::Null) => None,
                 None | Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
             }
         }
@@ -2903,16 +2904,22 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         return Err(error(400, "INVALID_ARGUMENT"));
     }
     let number = |key: &str, default: usize| {
-        options.and_then(|o| o.get(key)).map_or(Ok(default), |v| {
-            v.as_u64()
-                .and_then(|n| usize::try_from(n).ok())
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
-        })
+        options
+            .and_then(|o| o.get(key))
+            .filter(|value| !value.is_null())
+            .map_or(Ok(default), |v| {
+                v.as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+            })
     };
     let boolean = |key: &str| {
-        options.and_then(|o| o.get(key)).map_or(Ok(false), |v| {
-            v.as_bool().ok_or_else(|| error(400, "INVALID_ARGUMENT"))
-        })
+        options
+            .and_then(|o| o.get(key))
+            .filter(|value| !value.is_null())
+            .map_or(Ok(false), |v| {
+                v.as_bool().ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+            })
     };
     let max = options
         .and_then(|o| o.get("maxPasswordLength"))
@@ -2988,13 +2995,23 @@ fn password_policy_from_update(
     let Some(value) = body.get("passwordPolicyConfig") else {
         return Err(error(400, "INVALID_ARGUMENT"));
     };
-    let object = value
-        .as_object()
-        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    if value.is_null() && policy_fields.contains(&"passwordPolicyConfig") {
+        if policy_fields.len() != 1 {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        return Ok(Some(PasswordPolicy::default()));
+    }
+    let object = match value {
+        Value::Null => serde_json::Map::new(),
+        Value::Object(object) => object.clone(),
+        _ => return Err(error(400, "INVALID_ARGUMENT")),
+    };
     // Validate the complete supplied policy before applying the mask. A malformed policy
     // payload must never become a partial successful update merely because its malformed
     // member was outside the selected mask.
-    let _supplied_policy = password_policy_from_config_json(value)?;
+    if !value.is_null() {
+        let _supplied_policy = password_policy_from_config_json(value)?;
+    }
     if policy_fields.contains(&"passwordPolicyConfig") {
         if policy_fields.len() != 1 {
             return Err(error(400, "INVALID_ARGUMENT"));
@@ -3014,10 +3031,13 @@ fn password_policy_from_update(
             "passwordPolicyEnforcementState"
             | "forceUpgradeOnSignin"
             | "passwordPolicyVersions" => {
-                if let Some(value) = object.get(child) {
+                if let Some(value) = object.get(child).filter(|value| !value.is_null()) {
                     merged_object.insert(child.to_owned(), value.clone());
                 } else {
-                    merged_object.remove(child);
+                    let defaults = password_policy_config_json(&PasswordPolicy::default());
+                    if let Some(value) = defaults.get(child) {
+                        merged_object.insert(child.to_owned(), value.clone());
+                    }
                 }
             }
             _ => return Err(error(400, "INVALID_ARGUMENT")),
@@ -3045,15 +3065,19 @@ fn apply_project_config_parent(
     let Some(value) = body.get(parent) else {
         return Ok(());
     };
+    if value.is_null() {
+        *current = Some(false);
+        return Ok(());
+    }
     let Some(object) = value.as_object() else {
         return Err(error(400, "INVALID_ARGUMENT"));
     };
     if let Some(value) = object.get(child) {
-        *current = Some(
-            value
-                .as_bool()
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
-        );
+        *current = Some(match value {
+            Value::Bool(value) => *value,
+            Value::Null => false,
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        });
     }
     Ok(())
 }
@@ -3066,12 +3090,15 @@ fn nested_bool_default_false(
     let Some(value) = body.get(parent) else {
         return Ok(false);
     };
+    if value.is_null() {
+        return Ok(false);
+    }
     let Some(object) = value.as_object() else {
         return Err(error(400, "INVALID_ARGUMENT"));
     };
     match object.get(child) {
-        None => Ok(false),
         Some(Value::Bool(value)) => Ok(*value),
+        None | Some(Value::Null) => Ok(false),
         Some(_) => Err(error(400, "INVALID_ARGUMENT")),
     }
 }
@@ -3082,14 +3109,9 @@ fn apply_project_config_parent_path(
     child: &str,
     current: &mut Option<bool>,
 ) -> Result<(), JsonResponse> {
-    let object = nested_object(body, parent_path)?;
-    if let Some(value) = object.get(child) {
-        *current = Some(
-            value
-                .as_bool()
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
-        );
-    }
+    let mut path = parent_path.to_vec();
+    path.push(child);
+    *current = Some(nested_bool_default_false_path(body, &path)?);
     Ok(())
 }
 
@@ -3164,41 +3186,49 @@ fn project_blocking_settings_update(
         .blocking_auth_settings()
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
     for field in blocking_fields {
+        let input = body
+            .get("blockingFunctions")
+            .filter(|value| !value.is_null());
         let value = match field {
-            "blockingFunctions" => body.get("blockingFunctions"),
-            "blockingFunctions.triggers" => body
-                .get("blockingFunctions")
-                .and_then(|value| value.get("triggers")),
-            "blockingFunctions.triggers.beforeCreate" => body
-                .get("blockingFunctions")
+            "blockingFunctions" => input.cloned().unwrap_or_else(|| json!({})),
+            "blockingFunctions.triggers" => input
                 .and_then(|value| value.get("triggers"))
-                .and_then(|value| value.get("beforeCreate")),
-            "blockingFunctions.triggers.beforeSignIn" => body
-                .get("blockingFunctions")
-                .and_then(|value| value.get("triggers"))
-                .and_then(|value| value.get("beforeSignIn")),
-            "blockingFunctions.forwardInboundCredentials" => body
-                .get("blockingFunctions")
-                .and_then(|value| value.get("forwardInboundCredentials")),
-            "blockingFunctions.forwardInboundCredentials.idToken" => body
-                .get("blockingFunctions")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+            "blockingFunctions.triggers.beforeCreate"
+            | "blockingFunctions.triggers.beforeSignIn" => {
+                let event = field
+                    .strip_prefix("blockingFunctions.triggers.")
+                    .expect("validated blocking trigger field");
+                input
+                    .and_then(|value| value.get("triggers"))
+                    .and_then(|value| value.get(event))
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            }
+            "blockingFunctions.forwardInboundCredentials" => input
                 .and_then(|value| value.get("forwardInboundCredentials"))
-                .and_then(|value| value.get("idToken")),
-            "blockingFunctions.forwardInboundCredentials.accessToken" => body
-                .get("blockingFunctions")
-                .and_then(|value| value.get("forwardInboundCredentials"))
-                .and_then(|value| value.get("accessToken")),
-            "blockingFunctions.forwardInboundCredentials.refreshToken" => body
-                .get("blockingFunctions")
-                .and_then(|value| value.get("forwardInboundCredentials"))
-                .and_then(|value| value.get("refreshToken")),
-            _ => None,
-        };
-        let Some(value) = value else {
-            return Err(error(400, "INVALID_ARGUMENT"));
+                .filter(|value| !value.is_null())
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+            "blockingFunctions.forwardInboundCredentials.idToken"
+            | "blockingFunctions.forwardInboundCredentials.accessToken"
+            | "blockingFunctions.forwardInboundCredentials.refreshToken" => {
+                let key = field
+                    .strip_prefix("blockingFunctions.forwardInboundCredentials.")
+                    .expect("validated blocking forwarding field");
+                input
+                    .and_then(|value| value.get("forwardInboundCredentials"))
+                    .and_then(|value| value.get(key))
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .unwrap_or(Value::Bool(false))
+            }
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
         };
         if field == "blockingFunctions" {
-            candidate = value.clone();
+            candidate = value;
             continue;
         }
         let root = candidate
@@ -3210,10 +3240,10 @@ fn project_blocking_settings_update(
         {
             ("forwardInboundCredentials", key)
         } else if field == "blockingFunctions.triggers" {
-            root.insert("triggers".to_owned(), value.clone());
+            root.insert("triggers".to_owned(), value);
             continue;
         } else if field == "blockingFunctions.forwardInboundCredentials" {
-            root.insert("forwardInboundCredentials".to_owned(), value.clone());
+            root.insert("forwardInboundCredentials".to_owned(), value);
             continue;
         } else {
             return Err(error(400, "INVALID_ARGUMENT"));
@@ -3224,7 +3254,7 @@ fn project_blocking_settings_update(
         let group_object = group_value
             .as_object_mut()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-        group_object.insert(key.to_owned(), value.clone());
+        group_object.insert(key.to_owned(), value);
     }
     blocking
         .validate_blocking_auth_settings(&candidate)
@@ -3356,7 +3386,10 @@ fn quota_config_from_json(
             )
         };
     }
-    if let Some(value) = object.get("quotaSimulation") {
+    if let Some(value) = object
+        .get("quotaSimulation")
+        .filter(|value| !value.is_null())
+    {
         let simulation = value
             .as_object()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3366,22 +3399,28 @@ fn quota_config_from_json(
         {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
-        if let Some(value) = simulation.get("mode") {
+        if let Some(value) = simulation.get("mode").filter(|value| !value.is_null()) {
             next.mode = quota_mode_from_json(value)?;
         }
-        if let Some(value) = simulation.get("algorithm") {
+        if let Some(value) = simulation.get("algorithm").filter(|value| !value.is_null()) {
             if value.as_str() != Some("fixed-window-v1") {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
             next.algorithm = QuotaAlgorithm::FixedWindowV1;
         }
-        if let Some(value) = simulation.get("defaultQuotaPerHour") {
+        if let Some(value) = simulation
+            .get("defaultQuotaPerHour")
+            .filter(|value| !value.is_null())
+        {
             next.default_quota_per_hour = value
                 .as_u64()
                 .filter(|value| *value <= 1_000_000)
                 .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
         }
-        if let Some(value) = simulation.get("maxTrackedBuckets") {
+        if let Some(value) = simulation
+            .get("maxTrackedBuckets")
+            .filter(|value| !value.is_null())
+        {
             next.max_tracked_buckets = value
                 .as_u64()
                 .filter(|value| (1..=65_536).contains(value))
@@ -3394,6 +3433,7 @@ fn quota_config_from_json(
     Ok(next)
 }
 
+#[allow(clippy::too_many_lines)]
 fn quota_config_from_update(
     current: &SignupQuotaConfig,
     body: &Value,
@@ -3410,10 +3450,41 @@ fn quota_config_from_update(
     if quota_fields.contains(&"quota") && quota_fields.len() != 1 {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
-    let Some(quota) = body.get("quota") else {
+    let Some(quota_value) = body.get("quota") else {
         return Err(error(400, "INVALID_ARGUMENT"));
     };
-    let quota = quota
+    if quota_value.is_null() {
+        if quota_fields.contains(&"quota") {
+            return Ok(Some(SignupQuotaConfig::default()));
+        }
+        let mut selected = serde_json::Map::new();
+        if quota_fields.contains(&"quota.signUpQuotaConfig") {
+            selected.insert("signUpQuotaConfig".to_owned(), Value::Null);
+        }
+        if quota_fields.contains(&"quota.quotaSimulation") {
+            selected.insert(
+                "quotaSimulation".to_owned(),
+                quota_config_json(&SignupQuotaConfig::default())["quotaSimulation"].clone(),
+            );
+        } else if quota_fields
+            .iter()
+            .any(|field| field.starts_with("quota.quotaSimulation."))
+        {
+            let defaults = quota_config_json(&SignupQuotaConfig::default());
+            let mut simulation = serde_json::Map::new();
+            for field in quota_fields
+                .iter()
+                .filter_map(|field| field.strip_prefix("quota.quotaSimulation."))
+            {
+                if let Some(value) = defaults["quotaSimulation"].get(field) {
+                    simulation.insert(field.to_owned(), value.clone());
+                }
+            }
+            selected.insert("quotaSimulation".to_owned(), Value::Object(simulation));
+        }
+        return quota_config_from_json(&Value::Object(selected), current).map(Some);
+    }
+    let quota = quota_value
         .as_object()
         .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
     // Validate every supplied quota member before applying the mask. A malformed value outside
@@ -3433,7 +3504,14 @@ fn quota_config_from_update(
         .any(|field| *field == "quota" || *field == "quota.quotaSimulation")
     {
         if let Some(value) = quota.get("quotaSimulation") {
-            selected.insert("quotaSimulation".to_owned(), value.clone());
+            if value.is_null() {
+                selected.insert(
+                    "quotaSimulation".to_owned(),
+                    quota_config_json(&SignupQuotaConfig::default())["quotaSimulation"].clone(),
+                );
+            } else {
+                selected.insert("quotaSimulation".to_owned(), value.clone());
+            }
         }
     }
     if quota_fields
@@ -3441,16 +3519,23 @@ fn quota_config_from_update(
         .any(|field| field.starts_with("quota.quotaSimulation."))
     {
         let mut simulation = serde_json::Map::new();
-        let value = quota
-            .get("quotaSimulation")
-            .and_then(Value::as_object)
-            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        let value = quota.get("quotaSimulation");
+        let defaults = quota_config_json(&SignupQuotaConfig::default());
+        let value = value.and_then(Value::as_object);
         for field in quota_fields
             .iter()
             .filter_map(|field| field.strip_prefix("quota.quotaSimulation."))
         {
-            if let Some(value) = value.get(field) {
-                simulation.insert(field.to_owned(), value.clone());
+            if let Some(value) = value.and_then(|value| value.get(field)) {
+                if value.is_null() {
+                    if let Some(default) = defaults["quotaSimulation"].get(field) {
+                        simulation.insert(field.to_owned(), default.clone());
+                    }
+                } else {
+                    simulation.insert(field.to_owned(), value.clone());
+                }
+            } else if let Some(default) = defaults["quotaSimulation"].get(field) {
+                simulation.insert(field.to_owned(), default.clone());
             }
         }
         selected.insert("quotaSimulation".to_owned(), Value::Object(simulation));
@@ -3515,7 +3600,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
     }
-    if let Some(value) = object.get("signIn") {
+    if let Some(value) = object.get("signIn").filter(|value| !value.is_null()) {
         let sign_in = value
             .as_object()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3529,7 +3614,10 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
     }
-    if let Some(value) = object.get("emailPrivacyConfig") {
+    if let Some(value) = object
+        .get("emailPrivacyConfig")
+        .filter(|value| !value.is_null())
+    {
         let privacy = value
             .as_object()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3546,30 +3634,30 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
     }
-    if let Some(value) = object.get("client") {
+    if let Some(value) = object.get("client").filter(|value| !value.is_null()) {
         let client = value
             .as_object()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
         if client.keys().any(|key| key != "permissions") {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
-        let permissions = client
-            .get("permissions")
-            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
-            .as_object()
-            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-        if permissions
-            .keys()
-            .any(|key| key != "disabledUserSignup" && key != "disabledUserDeletion")
-        {
-            return Err(error(400, "INVALID_ARGUMENT"));
-        }
-        for key in ["disabledUserSignup", "disabledUserDeletion"] {
+        if let Some(permissions) = client.get("permissions").filter(|value| !value.is_null()) {
+            let permissions = permissions
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
             if permissions
-                .get(key)
-                .is_some_and(|value| !value.is_boolean() && !value.is_null())
+                .keys()
+                .any(|key| key != "disabledUserSignup" && key != "disabledUserDeletion")
             {
                 return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            for key in ["disabledUserSignup", "disabledUserDeletion"] {
+                if permissions
+                    .get(key)
+                    .is_some_and(|value| !value.is_boolean() && !value.is_null())
+                {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                }
             }
         }
     }
@@ -3578,7 +3666,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
             password_policy_from_config_json(value)?;
         }
     }
-    if let Some(value) = object.get("quota") {
+    if let Some(value) = object.get("quota").filter(|value| !value.is_null()) {
         let quota = value
             .as_object()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3601,7 +3689,10 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 }
             }
         }
-        if let Some(value) = quota.get("quotaSimulation") {
+        if let Some(value) = quota
+            .get("quotaSimulation")
+            .filter(|value| !value.is_null())
+        {
             let simulation = value
                 .as_object()
                 .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3616,7 +3707,10 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
         // malformed unselected member without changing the current namespace.
         quota_config_from_json(value, &SignupQuotaConfig::default())?;
     }
-    if let Some(value) = object.get("blockingFunctions") {
+    if let Some(value) = object
+        .get("blockingFunctions")
+        .filter(|value| !value.is_null())
+    {
         let blocking = value
             .as_object()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3626,7 +3720,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
         {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
-        if let Some(triggers) = blocking.get("triggers") {
+        if let Some(triggers) = blocking.get("triggers").filter(|value| !value.is_null()) {
             let triggers = triggers
                 .as_object()
                 .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3656,20 +3750,34 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 }
             }
         }
-        if let Some(forwarding) = blocking.get("forwardInboundCredentials") {
+        if let Some(forwarding) = blocking
+            .get("forwardInboundCredentials")
+            .filter(|value| !value.is_null())
+        {
             let forwarding = forwarding
                 .as_object()
                 .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
             if forwarding
                 .keys()
                 .any(|key| key != "idToken" && key != "accessToken" && key != "refreshToken")
-                || forwarding.values().any(|value| !value.is_boolean())
+                || forwarding
+                    .values()
+                    .any(|value| !value.is_boolean() && !value.is_null())
             {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
         }
     }
     Ok(())
+}
+
+fn contains_non_null_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Array(values) => values.iter().any(contains_non_null_value),
+        Value::Object(values) => values.values().any(contains_non_null_value),
+        _ => true,
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -3715,28 +3823,43 @@ fn project_config_management(
         Ok(Some(fields)) => fields,
         Ok(None) => {
             let mut fields = Vec::new();
-            if body.get("signIn").is_some() {
+            if body.get("signIn").is_some_and(contains_non_null_value) {
                 fields.push("signIn".to_owned());
             }
-            if body.get("emailPrivacyConfig").is_some() {
+            if body
+                .get("emailPrivacyConfig")
+                .is_some_and(contains_non_null_value)
+            {
                 fields.push("emailPrivacyConfig".to_owned());
             }
             if body
                 .get("client")
                 .and_then(|value| value.get("permissions"))
-                .is_some()
+                .is_some_and(contains_non_null_value)
             {
                 fields.push("client.permissions".to_owned());
             }
-            if body.get("passwordPolicyConfig").is_some() {
+            if body
+                .get("passwordPolicyConfig")
+                .is_some_and(contains_non_null_value)
+            {
                 fields.push("passwordPolicyConfig".to_owned());
             }
-            if let Some(quota) = body.get("quota").and_then(Value::as_object) {
+            if let Some(quota) = body
+                .get("quota")
+                .filter(|value| !value.is_null())
+                .and_then(Value::as_object)
+            {
                 for field in quota.keys() {
-                    fields.push(format!("quota.{field}"));
+                    if quota.get(field).is_some_and(contains_non_null_value) {
+                        fields.push(format!("quota.{field}"));
+                    }
                 }
             }
-            if body.get("blockingFunctions").is_some() {
+            if body
+                .get("blockingFunctions")
+                .is_some_and(contains_non_null_value)
+            {
                 fields.push("blockingFunctions".to_owned());
             }
             fields
@@ -4670,9 +4793,11 @@ fn tenant_metadata_patch(
                     "client.permissions" => body
                         .get("client")
                         .and_then(|value| value.get("permissions"))
-                        .is_some(),
-                    "emailPrivacyConfig" => body.get("emailPrivacyConfig").is_some(),
-                    field => body.get(field).is_some(),
+                        .is_some_and(contains_non_null_value),
+                    "emailPrivacyConfig" => body
+                        .get("emailPrivacyConfig")
+                        .is_some_and(contains_non_null_value),
+                    field => body.get(field).is_some_and(contains_non_null_value),
                 })
                 .collect()
         },
@@ -4716,14 +4841,13 @@ fn tenant_metadata_patch(
                     &["client", "permissions", "disabledUserDeletion"],
                 )?);
             }
-            "emailPrivacyConfig.enableImprovedEmailPrivacy" => {
+            "emailPrivacyConfig.enableImprovedEmailPrivacy" | "emailPrivacyConfig" => {
                 patch.enable_improved_email_privacy = Some(nested_bool_default_false_path(
                     body,
                     &["emailPrivacyConfig", "enableImprovedEmailPrivacy"],
                 )?);
             }
             "client.permissions" => {
-                let _ = nested_object(body, &["client", "permissions"])?;
                 patch.disabled_user_signup = Some(nested_bool_default_false_path(
                     body,
                     &["client", "permissions", "disabledUserSignup"],
@@ -4733,34 +4857,11 @@ fn tenant_metadata_patch(
                     &["client", "permissions", "disabledUserDeletion"],
                 )?);
             }
-            "emailPrivacyConfig" => {
-                let _ = nested_object(body, &["emailPrivacyConfig"])?;
-                patch.enable_improved_email_privacy = Some(nested_bool_default_false_path(
-                    body,
-                    &["emailPrivacyConfig", "enableImprovedEmailPrivacy"],
-                )?);
-            }
             field if valid_password_policy_field(field) => {}
             _ => unreachable!("tenant update mask was validated"),
         }
     }
     Ok(patch)
-}
-
-fn nested_object<'a>(
-    body: &'a Value,
-    path: &[&str],
-) -> Result<&'a serde_json::Map<String, Value>, JsonResponse> {
-    let mut value = body;
-    for key in path {
-        value = match value.get(*key) {
-            None | Some(Value::Null) => return Err(error(400, "INVALID_ARGUMENT")),
-            Some(value) => value,
-        };
-    }
-    value
-        .as_object()
-        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
 }
 
 fn nested_bool_default_false_path(body: &Value, path: &[&str]) -> Result<bool, JsonResponse> {
@@ -4775,8 +4876,8 @@ fn nested_bool_default_false_path(body: &Value, path: &[&str]) -> Result<bool, J
         }
     }
     match value.get(path[path.len() - 1]) {
-        None | Some(Value::Null) => Ok(false),
         Some(Value::Bool(value)) => Ok(*value),
+        None | Some(Value::Null) => Ok(false),
         Some(_) => Err(error(400, "INVALID_ARGUMENT")),
     }
 }

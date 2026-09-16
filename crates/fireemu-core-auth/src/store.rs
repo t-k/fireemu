@@ -3479,6 +3479,10 @@ impl AuthSnapshot {
             restored.refresh_tokens = Arc::new(BTreeMap::new());
             restored.deleted_refresh_digests = Arc::new(BTreeSet::new());
             restored.tokens_by_user = Arc::new(BTreeMap::new());
+            // A cross-namespace restore must not transfer control-plane policy from the
+            // captured namespace. The destination policy belongs to the destination namespace
+            // and remains effective until an explicit policy update changes it.
+            restored.password_policy = live.password_policy.clone();
         }
         live.project_id.clone_into(&mut restored.project_id);
         restored.project_number = live.project_number;
@@ -6769,6 +6773,65 @@ mod password_policy_namespace_tests {
         snapshot.restore_into(&mut store);
 
         assert_eq!(store.password_policy(), &policy);
+    }
+
+    #[test]
+    fn cross_namespace_snapshot_restore_preserves_destination_password_policy() {
+        let mut source =
+            AuthStore::new("source-project", SplitMix64::new(1), TotpPolicy::default());
+        source.set_password_policy(strict_policy());
+        let snapshot = AuthSnapshot::capture(&source);
+
+        let mut destination = AuthStore::new(
+            "destination-project",
+            SplitMix64::new(2),
+            TotpPolicy::default(),
+        );
+        let destination_policy = PasswordPolicy::try_new(
+            EnforcementState::Enforce,
+            false,
+            8,
+            Some(20),
+            false,
+            true,
+            false,
+            false,
+            crate::password_policy::default_allowed_non_alphanumeric(),
+        )
+        .expect("the policy is valid");
+        destination.set_password_policy(destination_policy.clone());
+
+        snapshot.restore_into(&mut destination);
+
+        assert_eq!(destination.password_policy(), &destination_policy);
+    }
+
+    #[test]
+    fn cross_tenant_snapshot_restore_preserves_destination_password_policy() {
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        source.tenant_id = Some("tenant-a".to_owned());
+        source.set_password_policy(strict_policy());
+        let snapshot = AuthSnapshot::capture(&source);
+
+        let mut destination = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+        destination.tenant_id = Some("tenant-b".to_owned());
+        let destination_policy = PasswordPolicy::try_new(
+            EnforcementState::Enforce,
+            false,
+            8,
+            Some(20),
+            false,
+            true,
+            false,
+            false,
+            crate::password_policy::default_allowed_non_alphanumeric(),
+        )
+        .expect("the policy is valid");
+        destination.set_password_policy(destination_policy.clone());
+
+        snapshot.restore_into(&mut destination);
+
+        assert_eq!(destination.password_policy(), &destination_policy);
     }
 
     #[test]

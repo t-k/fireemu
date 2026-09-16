@@ -4991,8 +4991,8 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
     let size = document_size(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
     check_limit(limits::DOCUMENT_BYTES, size.total)?;
-    for value in doc.fields.values() {
-        validate_value(value, false)?;
+    for (name, value) in &doc.fields {
+        validate_value(value, false, name)?;
     }
     Ok(())
 }
@@ -5002,7 +5002,11 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
 /// of non-empty segments), and a vector has between one and
 /// [`limits::MAX_VECTOR_DIMENSIONS`] finite-or-infinite dimensions (production refuses NaN
 /// components but stores infinities; observed 2026-09-08 against the oracle project).
-fn validate_value(value: &Value, inside_array: bool) -> Result<(), FirestoreError> {
+fn validate_value(
+    value: &Value,
+    inside_array: bool,
+    property_path: &str,
+) -> Result<(), FirestoreError> {
     // Production counts the payload, not storage accounting's trailing string byte.
     let payload_bytes = match value {
         Value::String(value) => value.len(),
@@ -5010,9 +5014,9 @@ fn validate_value(value: &Value, inside_array: bool) -> Result<(), FirestoreErro
         _ => 0,
     };
     if payload_bytes > limits::MAX_FIELD_PAYLOAD_BYTES {
-        return Err(FirestoreError::InvalidArgument(
-            "The value of a property is longer than 1048487 bytes.".into(),
-        ));
+        return Err(FirestoreError::InvalidArgument(format!(
+            "The value of property \"{property_path}\" is longer than 1048487 bytes."
+        )));
     }
     match value {
         Value::Array(items) => {
@@ -5021,11 +5025,14 @@ fn validate_value(value: &Value, inside_array: bool) -> Result<(), FirestoreErro
                     "Nested arrays are not allowed".into(),
                 ));
             }
-            items.iter().try_for_each(|v| validate_value(v, true))
+            items
+                .iter()
+                .try_for_each(|v| validate_value(v, true, property_path))
         }
         Value::Map(fields) => fields.iter().try_for_each(|(name, value)| {
             validate_stored_field_name(name)?;
-            validate_value(value, false)
+            let nested_path = format!("{property_path}.{name}");
+            validate_value(value, false, &nested_path)
         }),
         Value::Reference(name) => validate_reference(name),
         Value::Vector(dimensions) => validate_vector(dimensions),

@@ -2,7 +2,7 @@
 
 This artifact records the finite local coverage added for `FS-DATA-WRITE` at the REST and gRPC adapter boundaries. It is local verification evidence and does not establish a production comparison.
 
-The REST tests round trip null, boolean, integer, double, NaN, timestamp, bytes, document reference, geo point, array and map values. They also distinguish an absent field from an explicit null through a response mask, verify that a failed existence precondition leaves the document unchanged, and check the accepted and refused document nesting and size boundaries without publishing refused documents.
+The REST tests round trip null, boolean, integer, double, NaN, timestamp, bytes, document reference, geo point, array and map values. They also distinguish an absent field from an explicit null through a response mask, verify that a failed existence precondition leaves the document unchanged, and check the accepted and refused document nesting and size boundaries without publishing refused documents. Oversized payloads include the field name in the refusal message, matching the saved production response (`The value of property \"blob\" is longer than 1048487 bytes.`).
 
 The gRPC test checks the same missing versus null distinction for `GetDocument`, `BatchGetDocuments` and `ListDocuments` response masks. BatchGet returns both a found and missing item, and the listing contains only the stored document with the requested projection.
 

@@ -302,6 +302,19 @@ fn rest_document_size_and_nesting_boundaries_refuse_without_publishing() {
     );
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/limits/oversized-field"),
+        json!({"fields": {"blob": {"stringValue": "x".repeat(1_048_488)}}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "The value of property \"blob\" is longer than 1048487 bytes."
+    );
+
     let (status, exact) = call(&s, "GET", &format!("{DOCS}/limits/exact"), Value::Null);
     assert_eq!(status, 200, "{exact}");
     assert_eq!(

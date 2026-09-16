@@ -4460,6 +4460,11 @@ fn select_store(
         }
     }
     let requested_tenant = body_tenant.or(query_tenant.as_deref());
+    if let Some((_, Some(path_tenant))) = routes::scoped_target(path) {
+        if requested_tenant.is_some_and(|requested| requested != path_tenant) {
+            return Err(error(400, "TENANT_ID_MISMATCH"));
+        }
+    }
     let Some(registry) = &state.registry else {
         if requested_tenant.is_some()
             || routes::scoped_target(path).is_some_and(|(_, tenant)| tenant.is_some())

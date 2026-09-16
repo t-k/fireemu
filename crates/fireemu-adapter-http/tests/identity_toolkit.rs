@@ -8145,6 +8145,126 @@ fn explicit_tenant_policy_query_uses_the_registered_tenant_without_tenancy_selec
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn scoped_tenant_selectors_must_match_body_and_query_before_auth_work() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    for tenant in ["tenant-a", "tenant-b"] {
+        registry.ensure_tenant("demo-app", tenant).unwrap();
+    }
+    let tenant_a = registry.tenant_store("demo-app", "tenant-a").unwrap();
+    tenant_a.lock().unwrap().set_password_policy(
+        PasswordPolicy::try_new(
+            EnforcementState::Enforce,
+            false,
+            12,
+            None,
+            false,
+            false,
+            false,
+            false,
+            default_allowed_non_alphanumeric(),
+        )
+        .unwrap(),
+    );
+    s.registry = Some(registry.clone());
+    let path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/tenant-a";
+
+    let before = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(before.0, 200, "{}", before.1);
+    assert_eq!(
+        before.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["minPasswordLength"],
+        12
+    );
+
+    let query_mismatch = admin(
+        &s,
+        "GET",
+        &format!("{path}?tenantId=tenant-b"),
+        &Value::Null,
+    );
+    assert_eq!(query_mismatch.0, 400, "{}", query_mismatch.1);
+    assert_eq!(query_mismatch.1["error"]["message"], "TENANT_ID_MISMATCH");
+
+    let patch_query_mismatch = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?tenantId=tenant-b&updateMask=displayName"),
+        &json!({"displayName": "must-not-commit"}),
+    );
+    assert_eq!(patch_query_mismatch.0, 400, "{}", patch_query_mismatch.1);
+    assert_eq!(
+        patch_query_mismatch.1["error"]["message"],
+        "TENANT_ID_MISMATCH"
+    );
+
+    let patch_body_mismatch = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=displayName"),
+        &json!({"tenantId": "tenant-b", "displayName": "must-not-commit"}),
+    );
+    assert_eq!(patch_body_mismatch.0, 400, "{}", patch_body_mismatch.1);
+    assert_eq!(
+        patch_body_mismatch.1["error"]["message"],
+        "TENANT_ID_MISMATCH"
+    );
+
+    let account_query_mismatch = admin(
+        &s,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/projects/demo-app/tenants/tenant-a/accounts?tenantId=tenant-b",
+        &json!({"email": "must-not-create@example.com", "password": "password1"}),
+    );
+    assert_eq!(
+        account_query_mismatch.0, 400,
+        "{}",
+        account_query_mismatch.1
+    );
+    assert_eq!(
+        account_query_mismatch.1["error"]["message"],
+        "TENANT_ID_MISMATCH"
+    );
+    assert!(tenant_a
+        .lock()
+        .unwrap()
+        .user_by_email("must-not-create@example.com")
+        .is_none());
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("must-not-create@example.com")
+        .is_none());
+
+    let same_query = admin(
+        &s,
+        "GET",
+        &format!("{path}?tenantId=tenant-a"),
+        &Value::Null,
+    );
+    assert_eq!(same_query.0, 200, "{}", same_query.1);
+    assert_eq!(
+        same_query.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["minPasswordLength"],
+        12
+    );
+
+    let same_body = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=displayName"),
+        &json!({"tenantId": "tenant-a", "displayName": "accepted"}),
+    );
+    assert_eq!(same_body.0, 200, "{}", same_body.1);
+    assert_eq!(same_body.1["displayName"], "accepted");
+}
+
+#[test]
 fn conflicting_body_and_query_tenants_fail_without_mutation() {
     let mut s = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(

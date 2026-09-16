@@ -30,6 +30,47 @@ struct RecordingBlockingHook {
     reject: Option<BlockingAuthEvent>,
 }
 
+struct ConfigurableBlockingHook {
+    settings: Arc<Mutex<Value>>,
+}
+
+impl AuthBlockingHook for ConfigurableBlockingHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("settings regression hook is not used for Auth requests")
+    }
+
+    fn blocking_auth_settings(&self) -> Option<Value> {
+        Some(self.settings.lock().unwrap().clone())
+    }
+
+    fn validate_blocking_auth_settings(&self, settings: &Value) -> Result<(), String> {
+        let has_external_uri = settings
+            .get("triggers")
+            .and_then(|triggers| triggers.as_object())
+            .into_iter()
+            .flat_map(|triggers| triggers.values())
+            .filter_map(Value::as_object)
+            .filter_map(|trigger| trigger.get("functionUri"))
+            .filter_map(Value::as_str)
+            .any(|uri| uri.starts_with("https://"));
+        if has_external_uri {
+            Err("external function URI".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn update_blocking_auth_settings(&self, settings: &Value) -> Result<(), String> {
+        self.validate_blocking_auth_settings(settings)?;
+        *self.settings.lock().unwrap() = settings.clone();
+        Ok(())
+    }
+}
+
 struct UpdatingBlockingHook;
 
 struct UnhandledBlockingHook;
@@ -1659,6 +1700,72 @@ fn owner() -> RequestHeaders {
 fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Value) {
     let r = handle_with(state, method, path, &owner(), body);
     (r.status, r.body)
+}
+
+#[test]
+fn project_blocking_settings_get_patch_preserves_masked_values_and_rejects_atomically() {
+    let settings = Arc::new(Mutex::new(json!({
+        "triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/checkRegistration"},
+            "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+        },
+        "forwardInboundCredentials": {
+            "idToken": false,
+            "accessToken": true,
+            "refreshToken": false
+        }
+    })));
+    let mut s = state();
+    s.blocking = Some(Arc::new(ConfigurableBlockingHook {
+        settings: settings.clone(),
+    }));
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+
+    let (status, before) = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(status, 200, "{before}");
+    assert_eq!(
+        before["blockingFunctions"],
+        settings.lock().unwrap().clone()
+    );
+
+    let (status, updated) = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=blockingFunctions.triggers.beforeCreate"),
+        &json!({"blockingFunctions": {"triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/renamedCreate"}
+        }}}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(
+        updated["blockingFunctions"]["triggers"]["beforeCreate"]["functionUri"],
+        "fireemu://functions/demo-app/us-central1/renamedCreate"
+    );
+    assert_eq!(
+        updated["blockingFunctions"]["triggers"]["beforeSignIn"],
+        before["blockingFunctions"]["triggers"]["beforeSignIn"]
+    );
+    assert_eq!(
+        updated["blockingFunctions"]["forwardInboundCredentials"],
+        before["blockingFunctions"]["forwardInboundCredentials"]
+    );
+
+    let (status, rejected) = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=blockingFunctions,client.permissions.disabledUserSignup"),
+        &json!({
+            "blockingFunctions": {"triggers": {
+                "beforeCreate": {"functionUri": "https://example.invalid/hook"}
+            }},
+            "client": {"permissions": {"disabledUserSignup": true}}
+        }),
+    );
+    assert_eq!(status, 400, "{rejected}");
+    let (status, after) = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after["blockingFunctions"], updated["blockingFunctions"]);
+    assert_eq!(after["client"]["permissions"]["disabledUserSignup"], false);
 }
 
 struct ReentrantAdminHook {

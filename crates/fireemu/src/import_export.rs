@@ -42,6 +42,7 @@ use fireemu_core_auth::store::{
 };
 use fireemu_core_export::auth::{
     fake_hash, AccountsFile, AuthConfig, AuthSettings, AuthSettingsNamespace, AuthSettingsRecord,
+    BlockingAuthForwardingRecord, BlockingAuthSelectionRecord, BlockingAuthSettingsRecord,
     MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace, PasswordPolicyRecord,
     ProviderUserInfo, QuotaSettingsRecord, TemporaryQuotaRecord, UserRecord, ACCOUNTS_FILE,
     AUTH_SETTINGS_FILE, CONFIG_FILE, PASSWORD_POLICIES_FILE,
@@ -145,6 +146,9 @@ pub struct Endpoints<'a> {
     pub clock: &'a Arc<Mutex<VirtualClock>>,
     /// The project the run serves.
     pub project: &'a str,
+    /// The optional runtime-owned Blocking Auth bridge. Only its logical project settings cross
+    /// the export seam; runner addresses, ports and secrets stay in the live runtime.
+    pub blocking: Option<&'a dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>,
 }
 
 impl Endpoints<'_> {
@@ -517,6 +521,24 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         .and_then(|settings| settings.project.quota.as_ref())
         .map(|quota| imported_quota_settings(quota, &settings_path))
         .transpose()?;
+    let imported_project_blocking = auth
+        .auth_settings
+        .as_ref()
+        .filter(|settings| settings.project_id == endpoints.project)
+        .and_then(|settings| settings.project.blocking.as_ref())
+        .map(blocking_settings_json);
+    if let Some(settings) = &imported_project_blocking {
+        let Some(blocking) = endpoints.blocking else {
+            return Err(ArtifactError::new(
+                "auth",
+                &settings_path,
+                "blocking settings require a running owned Functions runtime",
+            ));
+        };
+        blocking
+            .validate_blocking_auth_settings(settings)
+            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?;
+    }
     // Build the replacement in memory first. `import_user_trusted` can still reject a
     // syntactically valid record (for example, duplicate IDs or emails); doing this before
     // clearing the live store keeps the import atomic across all account records.
@@ -629,6 +651,18 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         .auth
         .replace_default_scope(endpoints.project, default_candidate, tenant_candidates)
         .map_err(|error| ArtifactError::new("auth", PathBuf::from(AUTH_PATH), error))?;
+    if let Some(settings) = imported_project_blocking {
+        let Some(blocking) = endpoints.blocking else {
+            return Err(ArtifactError::new(
+                "auth",
+                &settings_path,
+                "blocking settings require a running owned Functions runtime",
+            ));
+        };
+        blocking
+            .update_blocking_auth_settings(&settings)
+            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?;
+    }
     Ok(())
 }
 
@@ -1621,6 +1655,111 @@ fn imported_quota_settings(
     Ok(config)
 }
 
+fn blocking_settings_record_from_json(
+    value: &serde_json::Value,
+    path: &Path,
+) -> Result<BlockingAuthSettingsRecord, ArtifactError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ArtifactError::new("auth", path, "blocking settings are not an object"))?;
+    let selection = |event: &str| -> Result<BlockingAuthSelectionRecord, ArtifactError> {
+        let Some(triggers) = object.get("triggers") else {
+            return Ok(BlockingAuthSelectionRecord::Discovery);
+        };
+        let triggers = triggers.as_object().ok_or_else(|| {
+            ArtifactError::new("auth", path, "blocking settings triggers are not an object")
+        })?;
+        let Some(entry) = triggers.get(event) else {
+            return Ok(BlockingAuthSelectionRecord::Disabled);
+        };
+        if entry.is_null() {
+            return Ok(BlockingAuthSelectionRecord::Disabled);
+        }
+        let uri = entry
+            .get("functionUri")
+            .and_then(serde_json::Value::as_str)
+            .filter(|uri| !uri.is_empty())
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    path,
+                    format!("blocking settings {event} has no functionUri"),
+                )
+            })?;
+        Ok(BlockingAuthSelectionRecord::Explicit {
+            function_uri: uri.to_owned(),
+        })
+    };
+    let forwarding = match object.get("forwardInboundCredentials") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => {
+            let value = value.as_object().ok_or_else(|| {
+                ArtifactError::new("auth", path, "blocking forwarding is not an object")
+            })?;
+            let boolean = |key: &str| {
+                value
+                    .get(key)
+                    .and_then(serde_json::Value::as_bool)
+                    .ok_or_else(|| {
+                        ArtifactError::new(
+                            "auth",
+                            path,
+                            format!("blocking forwarding {key} is not a boolean"),
+                        )
+                    })
+            };
+            Some(BlockingAuthForwardingRecord {
+                id_token: boolean("idToken")?,
+                access_token: boolean("accessToken")?,
+                refresh_token: boolean("refreshToken")?,
+            })
+        }
+    };
+    Ok(BlockingAuthSettingsRecord {
+        before_create: selection("beforeCreate")?,
+        before_sign_in: selection("beforeSignIn")?,
+        forwarding,
+    })
+}
+
+fn blocking_settings_json(record: &BlockingAuthSettingsRecord) -> serde_json::Value {
+    let mut object = serde_json::Map::new();
+    let mut triggers = serde_json::Map::new();
+    let write_selection =
+        |name: &str,
+         selection: &BlockingAuthSelectionRecord,
+         triggers: &mut serde_json::Map<String, serde_json::Value>| {
+            match selection {
+                BlockingAuthSelectionRecord::Discovery => {}
+                BlockingAuthSelectionRecord::Disabled => {
+                    triggers.insert(name.to_owned(), serde_json::Value::Null);
+                }
+                BlockingAuthSelectionRecord::Explicit { function_uri } => {
+                    triggers.insert(
+                        name.to_owned(),
+                        serde_json::json!({"functionUri": function_uri}),
+                    );
+                }
+            }
+        };
+    write_selection("beforeCreate", &record.before_create, &mut triggers);
+    write_selection("beforeSignIn", &record.before_sign_in, &mut triggers);
+    if !triggers.is_empty() {
+        object.insert("triggers".to_owned(), serde_json::Value::Object(triggers));
+    }
+    if let Some(forwarding) = record.forwarding {
+        object.insert(
+            "forwardInboundCredentials".to_owned(),
+            serde_json::json!({
+                "idToken": forwarding.id_token,
+                "accessToken": forwarding.access_token,
+                "refreshToken": forwarding.refresh_token,
+            }),
+        );
+    }
+    serde_json::Value::Object(object)
+}
+
 fn protobuf_duration_text(duration: LogicalDuration) -> String {
     let nanos = duration.as_nanos();
     let seconds = nanos.div_euclid(1_000_000_000);
@@ -2491,6 +2630,7 @@ fn export_auth(
                     }),
                     quota: (tenant_quota != SignupQuotaConfig::default())
                         .then(|| exported_quota_settings(&tenant_quota)),
+                    blocking: None,
                 },
             });
         }
@@ -2519,7 +2659,15 @@ fn export_auth(
         write_private_file(&path, policies.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
-    if project_quota != SignupQuotaConfig::default() || !tenant_settings.is_empty() {
+    let project_blocking = endpoints
+        .blocking
+        .and_then(fireemu_adapter_http::identity_toolkit::AuthBlockingHook::blocking_auth_settings)
+        .map(|value| blocking_settings_record_from_json(&value, &section_dir))
+        .transpose()?;
+    if project_quota != SignupQuotaConfig::default()
+        || project_blocking.is_some()
+        || !tenant_settings.is_empty()
+    {
         let path = section_dir.join(AUTH_SETTINGS_FILE);
         let settings = AuthSettings {
             project_id: endpoints.project.to_owned(),
@@ -2527,6 +2675,7 @@ fn export_auth(
                 config: None,
                 quota: (project_quota != SignupQuotaConfig::default())
                     .then(|| exported_quota_settings(&project_quota)),
+                blocking: project_blocking,
             },
             namespaces: tenant_settings,
         };
@@ -3275,6 +3424,7 @@ mod tests {
             storage: &storage,
             clock: &clock,
             project: "demo-app",
+            blocking: None,
         };
         let root = std::env::temp_dir().join(format!(
             "fireemu-windows-export-entry-{}",

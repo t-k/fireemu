@@ -2141,6 +2141,7 @@ struct Exporter {
     clock: Arc<Mutex<VirtualClock>>,
     project: String,
     products: import_export::Products,
+    blocking: Option<Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>>,
 }
 
 impl Exporter {
@@ -2151,6 +2152,7 @@ impl Exporter {
             storage: &self.storage,
             clock: &self.clock,
             project: &self.project,
+            blocking: self.blocking.as_deref(),
         }
     }
 }

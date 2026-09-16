@@ -85,7 +85,7 @@ const KNOWN_PASSWORD_POLICY_MEMBERS: [&str; 9] = [
 ];
 const KNOWN_AUTH_SETTINGS_MEMBERS: [&str; 4] = ["version", "projectId", "project", "namespaces"];
 const KNOWN_AUTH_SETTINGS_NAMESPACE_MEMBERS: [&str; 2] = ["tenantId", "settings"];
-const KNOWN_AUTH_SETTINGS_RECORD_MEMBERS: [&str; 2] = ["config", "quota"];
+const KNOWN_AUTH_SETTINGS_RECORD_MEMBERS: [&str; 3] = ["config", "quota", "blocking"];
 const KNOWN_QUOTA_MEMBERS: [&str; 5] = [
     "mode",
     "algorithm",
@@ -284,6 +284,46 @@ pub struct AuthSettingsRecord {
     pub config: Option<AuthConfig>,
     /// Optional local quota configuration. Usage is intentionally not retained.
     pub quota: Option<QuotaSettingsRecord>,
+    /// Logical project-level Blocking Auth selection. Runner addresses and secrets are never
+    /// part of an export.
+    pub blocking: Option<BlockingAuthSettingsRecord>,
+}
+
+/// One logical Blocking Auth trigger selection, resolved again against an owned Functions
+/// manifest when an artifact is imported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockingAuthSelectionRecord {
+    /// Use the discovered target for this event.
+    Discovery,
+    /// Explicitly disable this event.
+    Disabled,
+    /// Select the stable logical fireemu URI for one owned function.
+    Explicit {
+        /// Stable logical URI for the selected owned function.
+        function_uri: String,
+    },
+}
+
+/// Project-level logical Blocking Auth settings retained by the fireemu sidecar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockingAuthSettingsRecord {
+    /// Selection for `beforeCreate`.
+    pub before_create: BlockingAuthSelectionRecord,
+    /// Selection for `beforeSignIn`.
+    pub before_sign_in: BlockingAuthSelectionRecord,
+    /// Whether the project-level forwarding restriction was explicitly configured.
+    pub forwarding: Option<BlockingAuthForwardingRecord>,
+}
+
+/// Raw credential forwarding restriction for a Blocking Auth function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockingAuthForwardingRecord {
+    /// Forward provider ID tokens.
+    pub id_token: bool,
+    /// Forward provider access tokens.
+    pub access_token: bool,
+    /// Forward provider refresh tokens.
+    pub refresh_token: bool,
 }
 
 /// A settings entry scoped to one Auth namespace.
@@ -427,7 +467,86 @@ fn parse_auth_settings_record(
         None | Some(JsonValue::Null) => None,
         Some(quota) => Some(parse_quota_settings(quota, &format!("{subject}.quota"))?),
     };
-    Ok(AuthSettingsRecord { config, quota })
+    let blocking = match value.get("blocking") {
+        None | Some(JsonValue::Null) => None,
+        Some(blocking) => Some(parse_blocking_settings(
+            blocking,
+            &format!("{subject}.blocking"),
+        )?),
+    };
+    Ok(AuthSettingsRecord {
+        config,
+        quota,
+        blocking,
+    })
+}
+
+fn parse_blocking_settings(
+    value: &JsonValue,
+    subject: &str,
+) -> Result<BlockingAuthSettingsRecord, AuthExportError> {
+    reject_unknown(value, &["triggers", "forwardInboundCredentials"], subject)?;
+    let selection = |event: &str| -> Result<BlockingAuthSelectionRecord, AuthExportError> {
+        let Some(triggers) = value.get("triggers") else {
+            return Ok(BlockingAuthSelectionRecord::Discovery);
+        };
+        let JsonValue::Object(triggers) = triggers else {
+            return Err(AuthExportError(format!(
+                "{subject}.triggers is not an object"
+            )));
+        };
+        let Some(entry) = triggers.get(event) else {
+            return Ok(BlockingAuthSelectionRecord::Disabled);
+        };
+        if matches!(entry, JsonValue::Null) {
+            return Ok(BlockingAuthSelectionRecord::Disabled);
+        }
+        reject_unknown(
+            entry,
+            &["functionUri"],
+            &format!("{subject}.triggers.{event}"),
+        )?;
+        let uri = entry
+            .get("functionUri")
+            .and_then(JsonValue::as_str)
+            .filter(|uri| !uri.is_empty())
+            .ok_or_else(|| {
+                AuthExportError(format!("{subject}.triggers.{event}.functionUri is missing"))
+            })?;
+        Ok(BlockingAuthSelectionRecord::Explicit {
+            function_uri: uri.to_owned(),
+        })
+    };
+    let forwarding = match value.get("forwardInboundCredentials") {
+        None | Some(JsonValue::Null) => None,
+        Some(forwarding) => {
+            reject_unknown(
+                forwarding,
+                &["idToken", "accessToken", "refreshToken"],
+                &format!("{subject}.forwardInboundCredentials"),
+            )?;
+            let boolean = |key: &str| {
+                forwarding
+                    .get(key)
+                    .and_then(JsonValue::as_bool)
+                    .ok_or_else(|| {
+                        AuthExportError(format!(
+                            "{subject}.forwardInboundCredentials.{key} is not a boolean"
+                        ))
+                    })
+            };
+            Some(BlockingAuthForwardingRecord {
+                id_token: boolean("idToken")?,
+                access_token: boolean("accessToken")?,
+                refresh_token: boolean("refreshToken")?,
+            })
+        }
+    };
+    Ok(BlockingAuthSettingsRecord {
+        before_create: selection("beforeCreate")?,
+        before_sign_in: selection("beforeSignIn")?,
+        forwarding,
+    })
 }
 
 fn parse_quota_settings(
@@ -503,6 +622,43 @@ fn write_auth_settings_record(settings: &AuthSettingsRecord) -> Json {
         }),
     );
     doc.insert_some("quota", settings.quota.as_ref().map(write_quota_settings));
+    doc.insert_some(
+        "blocking",
+        settings.blocking.as_ref().map(write_blocking_settings),
+    );
+    doc
+}
+
+fn write_blocking_settings(settings: &BlockingAuthSettingsRecord) -> Json {
+    let mut doc = Json::object();
+    let mut triggers = Json::object();
+    let mut has_trigger = false;
+    let mut write_selection = |name: &str, selection: &BlockingAuthSelectionRecord| match selection
+    {
+        BlockingAuthSelectionRecord::Discovery => {}
+        BlockingAuthSelectionRecord::Disabled => {
+            triggers.insert(name, Json::Null);
+            has_trigger = true;
+        }
+        BlockingAuthSelectionRecord::Explicit { function_uri } => {
+            let mut value = Json::object();
+            value.insert("functionUri", Json::string(function_uri));
+            triggers.insert(name, value);
+            has_trigger = true;
+        }
+    };
+    write_selection("beforeCreate", &settings.before_create);
+    write_selection("beforeSignIn", &settings.before_sign_in);
+    if has_trigger {
+        doc.insert("triggers", triggers);
+    }
+    if let Some(forwarding) = settings.forwarding {
+        let mut value = Json::object();
+        value.insert("idToken", Json::Bool(forwarding.id_token));
+        value.insert("accessToken", Json::Bool(forwarding.access_token));
+        value.insert("refreshToken", Json::Bool(forwarding.refresh_token));
+        doc.insert("forwardInboundCredentials", value);
+    }
     doc
 }
 
@@ -1277,7 +1433,8 @@ pub mod fake_hash {
 mod tests {
     use super::{
         fake_hash, AccountsFile, AuthConfig, AuthSettings, AuthSettingsNamespace,
-        AuthSettingsRecord, MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace,
+        AuthSettingsRecord, BlockingAuthForwardingRecord, BlockingAuthSelectionRecord,
+        BlockingAuthSettingsRecord, MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace,
         PasswordPolicyRecord, ProviderUserInfo, QuotaSettingsRecord, TemporaryQuotaRecord,
         UserRecord,
     };
@@ -1611,6 +1768,18 @@ mod tests {
                         quota_duration: "86400s".to_owned(),
                     }),
                 }),
+                blocking: Some(BlockingAuthSettingsRecord {
+                    before_create: BlockingAuthSelectionRecord::Explicit {
+                        function_uri: "fireemu://functions/demo-app/us-central1/checkRegistration"
+                            .to_owned(),
+                    },
+                    before_sign_in: BlockingAuthSelectionRecord::Disabled,
+                    forwarding: Some(BlockingAuthForwardingRecord {
+                        id_token: false,
+                        access_token: true,
+                        refresh_token: false,
+                    }),
+                }),
             },
             namespaces: vec![AuthSettingsNamespace {
                 tenant_id: Some("tenant-a".to_owned()),
@@ -1622,6 +1791,7 @@ mod tests {
                         disabled_user_deletion: Some(true),
                     }),
                     quota: None,
+                    blocking: None,
                 },
             }],
         };
@@ -1630,19 +1800,14 @@ mod tests {
             AuthSettings::parse(&encoded).expect("settings parse"),
             settings
         );
-        for forbidden_member in [
-            "passwordHash",
-            "password",
-            "idToken",
-            "refreshToken",
-            "oobCode",
-            "clientSecret",
-        ] {
+        for forbidden_member in ["passwordHash", "password", "oobCode", "clientSecret"] {
             assert!(
                 !encoded.contains(&format!("\"{forbidden_member}\"")),
                 "Auth settings sidecar contains sensitive member {forbidden_member}"
             );
         }
+        assert!(encoded.contains("fireemu://functions/demo-app/us-central1/checkRegistration"));
+        assert!(!encoded.contains("127.0.0.1"));
     }
 
     #[test]

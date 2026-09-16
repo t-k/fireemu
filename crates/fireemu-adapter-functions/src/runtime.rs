@@ -3390,11 +3390,28 @@ impl FunctionsRuntime {
         self: &Arc<Self>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> Result<Option<(BlockingAuthTarget, BlockingAuthAdmission)>, String> {
+        self.try_admit_blocking_auth_for(event, None)
+    }
+
+    /// Atomically selects and admits a ready Blocking Auth runner for `event`.
+    ///
+    /// When `function` is present, only that manifest function may be selected. This keeps
+    /// logical project configuration connected to the actual runner while leaving runner
+    /// addresses and secrets owned by the runtime. A missing or changed target returns `None`;
+    /// callers handling an explicit configuration must fail closed instead of falling back to
+    /// discovery.
+    pub fn try_admit_blocking_auth_for(
+        self: &Arc<Self>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        function: Option<&str>,
+    ) -> Result<Option<(BlockingAuthTarget, BlockingAuthAdmission)>, String> {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("the Functions runtime is shutting down".to_owned());
         }
-        let Some(spec) = self.manifest.functions.iter().find(|function| {
-            matches!(function.trigger, Trigger::BlockingAuth { event: candidate, .. } if candidate == event)
+        let Some(spec) = self.manifest.functions.iter().find(|candidate| {
+            matches!(candidate.trigger, Trigger::BlockingAuth { event: candidate_event, .. } if candidate_event == event)
+                && function
+                    .is_none_or(|selected| candidate.name == selected)
         }) else {
             return Ok(None);
         };

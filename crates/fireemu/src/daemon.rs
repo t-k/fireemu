@@ -690,6 +690,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         clock: clock.clone(),
         project: cfg.auth_project.clone(),
         products: import_export::Products::from(&only),
+        blocking: auth.blocking.clone(),
     });
     // The import happens before the command starts and before the banner claims the
     // suite is ready: a run that cannot install its fixture must not run at all.

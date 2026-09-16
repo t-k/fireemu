@@ -446,6 +446,23 @@ pub trait AuthBlockingHook: Send + Sync {
     ) -> Result<Option<Value>, BlockingFunctionFailure> {
         self.invoke_for(project, tenant, event, user)
     }
+
+    /// Returns the logical project-level blocking settings, when this hook is backed by a
+    /// configurable local Functions runtime. The projection must not contain runner addresses,
+    /// secrets or dynamic ports.
+    fn blocking_auth_settings(&self) -> Option<Value> {
+        None
+    }
+
+    /// Validates a complete logical blocking settings projection without changing state.
+    fn validate_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+        Err("blocking Auth settings are not configurable for this hook".to_owned())
+    }
+
+    /// Atomically replaces a previously validated logical blocking settings projection.
+    fn update_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+        Err("blocking Auth settings are not configurable for this hook".to_owned())
+    }
 }
 
 fn handler_may_invoke_blocking_auth(
@@ -2729,6 +2746,7 @@ fn apply_project_config_fields(
             field
                 if field == "passwordPolicyConfig"
                     || field.starts_with("passwordPolicyConfig.")
+                    || valid_blocking_config_field(field)
                     || valid_quota_field(field) => {}
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         }
@@ -2995,7 +3013,130 @@ fn valid_project_config_field(field: &str) -> bool {
             | "quota.quotaSimulation.algorithm"
             | "quota.quotaSimulation.defaultQuotaPerHour"
             | "quota.quotaSimulation.maxTrackedBuckets"
+            | "blockingFunctions"
+            | "blockingFunctions.triggers"
+            | "blockingFunctions.triggers.beforeCreate"
+            | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.forwardInboundCredentials"
+            | "blockingFunctions.forwardInboundCredentials.idToken"
+            | "blockingFunctions.forwardInboundCredentials.accessToken"
+            | "blockingFunctions.forwardInboundCredentials.refreshToken"
     )
+}
+
+fn valid_blocking_config_field(field: &str) -> bool {
+    matches!(
+        field,
+        "blockingFunctions"
+            | "blockingFunctions.triggers"
+            | "blockingFunctions.triggers.beforeCreate"
+            | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.forwardInboundCredentials"
+            | "blockingFunctions.forwardInboundCredentials.idToken"
+            | "blockingFunctions.forwardInboundCredentials.accessToken"
+            | "blockingFunctions.forwardInboundCredentials.refreshToken"
+    )
+}
+
+fn project_blocking_settings_update(
+    state: &AuthState,
+    body: &Value,
+    fields: &[String],
+) -> Result<Option<Value>, JsonResponse> {
+    let blocking_fields: Vec<&str> = fields
+        .iter()
+        .map(String::as_str)
+        .filter(|field| valid_blocking_config_field(field))
+        .collect();
+    if blocking_fields.is_empty() {
+        return Ok(None);
+    }
+    let Some(blocking) = state.blocking.as_ref() else {
+        return Err(error(400, "FAILED_PRECONDITION"));
+    };
+    let mut candidate = blocking
+        .blocking_auth_settings()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    for field in blocking_fields {
+        let value = match field {
+            "blockingFunctions" => body.get("blockingFunctions"),
+            "blockingFunctions.triggers" => body
+                .get("blockingFunctions")
+                .and_then(|value| value.get("triggers")),
+            "blockingFunctions.triggers.beforeCreate" => body
+                .get("blockingFunctions")
+                .and_then(|value| value.get("triggers"))
+                .and_then(|value| value.get("beforeCreate")),
+            "blockingFunctions.triggers.beforeSignIn" => body
+                .get("blockingFunctions")
+                .and_then(|value| value.get("triggers"))
+                .and_then(|value| value.get("beforeSignIn")),
+            "blockingFunctions.forwardInboundCredentials" => body
+                .get("blockingFunctions")
+                .and_then(|value| value.get("forwardInboundCredentials")),
+            "blockingFunctions.forwardInboundCredentials.idToken" => body
+                .get("blockingFunctions")
+                .and_then(|value| value.get("forwardInboundCredentials"))
+                .and_then(|value| value.get("idToken")),
+            "blockingFunctions.forwardInboundCredentials.accessToken" => body
+                .get("blockingFunctions")
+                .and_then(|value| value.get("forwardInboundCredentials"))
+                .and_then(|value| value.get("accessToken")),
+            "blockingFunctions.forwardInboundCredentials.refreshToken" => body
+                .get("blockingFunctions")
+                .and_then(|value| value.get("forwardInboundCredentials"))
+                .and_then(|value| value.get("refreshToken")),
+            _ => None,
+        };
+        let Some(value) = value else {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        };
+        if field == "blockingFunctions" {
+            candidate = value.clone();
+            continue;
+        }
+        let root = candidate
+            .as_object_mut()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        let (group, key) = if let Some(key) = field.strip_prefix("blockingFunctions.triggers.") {
+            ("triggers", key)
+        } else if let Some(key) = field.strip_prefix("blockingFunctions.forwardInboundCredentials.")
+        {
+            ("forwardInboundCredentials", key)
+        } else if field == "blockingFunctions.triggers" {
+            root.insert("triggers".to_owned(), value.clone());
+            continue;
+        } else if field == "blockingFunctions.forwardInboundCredentials" {
+            root.insert("forwardInboundCredentials".to_owned(), value.clone());
+            continue;
+        } else {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        };
+        let group_value = root
+            .entry(group.to_owned())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        let group_object = group_value
+            .as_object_mut()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        group_object.insert(key.to_owned(), value.clone());
+    }
+    if fields.iter().any(|field| field == "blockingFunctions") {
+        let has_partial_triggers = candidate
+            .get("triggers")
+            .and_then(Value::as_object)
+            .is_some_and(|triggers| {
+                !triggers.is_empty()
+                    && (triggers.get("beforeCreate").is_none()
+                        || triggers.get("beforeSignIn").is_none())
+            });
+        if has_partial_triggers {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    blocking
+        .validate_blocking_auth_settings(&candidate)
+        .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+    Ok(Some(candidate))
 }
 
 fn valid_quota_field(field: &str) -> bool {
@@ -3263,6 +3404,7 @@ fn quota_config_json(quota: &SignupQuotaConfig) -> Value {
     Value::Object(quota_object)
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
     let object = body
         .as_object()
@@ -3270,7 +3412,12 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
     for key in object.keys() {
         if !matches!(
             key.as_str(),
-            "signIn" | "emailPrivacyConfig" | "client" | "passwordPolicyConfig" | "quota"
+            "signIn"
+                | "emailPrivacyConfig"
+                | "client"
+                | "passwordPolicyConfig"
+                | "quota"
+                | "blockingFunctions"
         ) {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
@@ -3348,6 +3495,59 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
             }
         }
     }
+    if let Some(value) = object.get("blockingFunctions") {
+        let blocking = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if blocking
+            .keys()
+            .any(|key| key != "triggers" && key != "forwardInboundCredentials")
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if let Some(triggers) = blocking.get("triggers") {
+            let triggers = triggers
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if triggers
+                .keys()
+                .any(|key| key != "beforeCreate" && key != "beforeSignIn")
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            for key in ["beforeCreate", "beforeSignIn"] {
+                let Some(value) = triggers.get(key) else {
+                    continue;
+                };
+                if value.is_null() {
+                    continue;
+                }
+                let trigger = value
+                    .as_object()
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                if trigger.keys().any(|field| field != "functionUri")
+                    || trigger
+                        .get("functionUri")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+                {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                }
+            }
+        }
+        if let Some(forwarding) = blocking.get("forwardInboundCredentials") {
+            let forwarding = forwarding
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if forwarding
+                .keys()
+                .any(|key| key != "idToken" && key != "accessToken" && key != "refreshToken")
+                || forwarding.values().any(|value| !value.is_boolean())
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -3369,14 +3569,19 @@ fn project_config_management(
         let Ok(store) = selected_store.lock() else {
             return error(500, "INTERNAL");
         };
-        return JsonResponse {
-            status: 200,
-            body: project_config_json_with_auth_settings(
-                store.config(),
-                store.password_policy(),
-                store.signup_quota().config(),
-            ),
-        };
+        let mut body = project_config_json_with_auth_settings(
+            store.config(),
+            store.password_policy(),
+            store.signup_quota().config(),
+        );
+        if let Some(blocking) = state
+            .blocking
+            .as_ref()
+            .and_then(|hook| hook.blocking_auth_settings())
+        {
+            body["blockingFunctions"] = blocking;
+        }
+        return JsonResponse { status: 200, body };
     }
     if !body.is_object() {
         return error(400, "INVALID_ARGUMENT");
@@ -3409,16 +3614,23 @@ fn project_config_management(
                     fields.push(format!("quota.{field}"));
                 }
             }
+            if body.get("blockingFunctions").is_some() {
+                fields.push("blockingFunctions".to_owned());
+            }
             fields
         }
         Err(response) => return response,
     };
     if fields.iter().any(|field| {
         (field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field))
-            || !valid_project_config_field(field)
+            || (!valid_project_config_field(field) && !valid_blocking_config_field(field))
     }) {
         return error(400, "INVALID_ARGUMENT");
     }
+    let blocking_settings = match project_blocking_settings_update(state, body, &fields) {
+        Ok(settings) => settings,
+        Err(response) => return response,
+    };
     let mut patch = ProjectAuthConfigPatch::default();
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
@@ -3483,17 +3695,33 @@ fn project_config_management(
         }
         config
     };
+    if let Some(settings) = blocking_settings {
+        let Some(blocking) = state.blocking.as_ref() else {
+            return error(400, "FAILED_PRECONDITION");
+        };
+        if blocking.update_blocking_auth_settings(&settings).is_err() {
+            return error(400, "INVALID_ARGUMENT");
+        }
+    }
     JsonResponse {
         status: 200,
         body: {
             let Ok(store) = selected_store.lock() else {
                 return error(500, "INTERNAL");
             };
-            project_config_json_with_auth_settings(
+            let mut body = project_config_json_with_auth_settings(
                 config,
                 store.password_policy(),
                 store.signup_quota().config(),
-            )
+            );
+            if let Some(blocking) = state
+                .blocking
+                .as_ref()
+                .and_then(|hook| hook.blocking_auth_settings())
+            {
+                body["blockingFunctions"] = blocking;
+            }
+            body
         },
     }
 }

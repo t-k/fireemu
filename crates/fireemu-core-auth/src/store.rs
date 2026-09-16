@@ -4809,6 +4809,53 @@ impl AuthRegistry {
         self.build_tenant_import_candidate(project, tenant, parent)
     }
 
+    fn validate_default_scope_import_candidates(
+        &self,
+        project: &str,
+        default: &AuthStore,
+        tenants: &[(String, AuthStore, TenantMetadata)],
+    ) -> Result<(), &'static str> {
+        if project != self.default_project
+            || default.project_id() != project
+            || default.tenant_id().is_some()
+        {
+            return Err("invalid default Auth import candidate");
+        }
+        let mut tenant_ids = BTreeSet::new();
+        for (tenant, store, _) in tenants {
+            if tenant.is_empty()
+                || tenant.contains(['/', '\\'])
+                || !tenant_ids.insert(tenant.clone())
+                || store.project_id() != project
+                || store.tenant_id() != Some(tenant.as_str())
+            {
+                return Err("invalid tenant Auth import candidate");
+            }
+        }
+        Ok(())
+    }
+
+    fn reserve_import_lifecycle_epochs(
+        &self,
+        count: usize,
+    ) -> Result<Option<Vec<AuthLifecycleEpoch>>, &'static str> {
+        let Some(incarnation) = self.lifecycle_incarnation else {
+            return Ok(None);
+        };
+        let count = u64::try_from(count).map_err(|_| "too many tenant Auth import candidates")?;
+        let start = self
+            .next_lifecycle_serial
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(count)
+            })
+            .map_err(|_| "Auth lifecycle serial capacity exhausted")?;
+        Ok(Some(
+            (0..count)
+                .map(|offset| AuthLifecycleEpoch::initial(incarnation, start + offset))
+                .collect(),
+        ))
+    }
+
     /// Atomically replaces the default project and all of its imported tenant namespaces.
     ///
     /// All candidate stores and metadata must be prepared before this method is called. The
@@ -4820,23 +4867,7 @@ impl AuthRegistry {
         default: AuthStore,
         tenants: Vec<(String, AuthStore, TenantMetadata)>,
     ) -> Result<(), &'static str> {
-        if project != self.default_project
-            || default.project_id() != project
-            || default.tenant_id().is_some()
-        {
-            return Err("invalid default Auth import candidate");
-        }
-        let mut tenant_ids = BTreeSet::new();
-        for (tenant, store, _) in &tenants {
-            if tenant.is_empty()
-                || tenant.contains(['/', '\\'])
-                || !tenant_ids.insert(tenant.clone())
-                || store.project_id() != project
-                || store.tenant_id() != Some(tenant.as_str())
-            {
-                return Err("invalid tenant Auth import candidate");
-            }
-        }
+        self.validate_default_scope_import_candidates(project, &default, &tenants)?;
 
         let gate = self
             .operation_gate(project, None)
@@ -4896,23 +4927,7 @@ impl AuthRegistry {
 
         // The replacement arcs are created before mutation. BTreeMap insertion below is the
         // only remaining publication work and cannot return an application-level error.
-        let lifecycle_epochs = if let Some(incarnation) = self.lifecycle_incarnation {
-            let count = u64::try_from(tenants.len())
-                .map_err(|_| "too many tenant Auth import candidates")?;
-            let start = self
-                .next_lifecycle_serial
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                    value.checked_add(count)
-                })
-                .map_err(|_| "Auth lifecycle serial capacity exhausted")?;
-            Some(
-                (0..count)
-                    .map(|offset| AuthLifecycleEpoch::initial(incarnation, start + offset))
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
-        };
+        let lifecycle_epochs = self.reserve_import_lifecycle_epochs(tenants.len())?;
         let mut replacement_stores = Vec::with_capacity(tenants.len());
         for (index, (tenant, mut store, metadata)) in tenants.into_iter().enumerate() {
             if let Some(epoch) = lifecycle_epochs

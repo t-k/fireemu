@@ -8015,6 +8015,136 @@ fn explicit_api_key_keeps_default_namespace_compatibility_without_tenancy_regist
 }
 
 #[test]
+fn explicit_tenant_never_falls_back_when_tenancy_selector_is_unavailable() {
+    for (label, tenancy) in [
+        ("missing", None),
+        (
+            "empty",
+            Some(Arc::new(RwLock::new(Tenancy::new("demo-app")))),
+        ),
+    ] {
+        let mut s = state();
+        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+            "demo-app",
+            s.store.clone(),
+        ));
+        registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+        s.registry = Some(registry.clone());
+        s.tenancy = tenancy;
+
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp?key=fake-api-key&tenantId=tenant-a"),
+            &json!({
+                "email": format!("explicit-{label}@example.com"),
+                "password": "password1",
+            }),
+        );
+        assert_eq!(status, 200, "{label}: {created}");
+        assert!(registry
+            .tenant_store("demo-app", "tenant-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_by_email(format!("explicit-{label}@example.com").as_str())
+            .is_some());
+        assert!(
+            s.store
+                .lock()
+                .unwrap()
+                .user_by_email(format!("explicit-{label}@example.com").as_str())
+                .is_none(),
+            "{label}: explicit tenant must not use default store"
+        );
+
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:signUp?key=fake-api-key&tenantId=missing-tenant"),
+            &json!({
+                "email": format!("missing-{label}@example.com"),
+                "password": "password1",
+            }),
+        );
+        assert_eq!(status, 404, "{label}: {refused}");
+        assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND");
+        assert!(
+            s.store
+                .lock()
+                .unwrap()
+                .user_by_email(format!("missing-{label}@example.com").as_str())
+                .is_none(),
+            "{label}: unknown tenant must not mutate default store"
+        );
+
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:signUp?key=fake-api-key&tenantId=tenant-a"),
+            &json!({
+                "tenantId": "tenant-b",
+                "email": format!("mismatch-{label}@example.com"),
+                "password": "password1",
+            }),
+        );
+        assert_eq!(status, 400, "{label}: {refused}");
+        assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+        assert!(registry
+            .tenant_store("demo-app", "tenant-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_by_email(format!("mismatch-{label}@example.com").as_str())
+            .is_none());
+    }
+}
+
+#[test]
+fn explicit_tenant_policy_query_uses_the_registered_tenant_without_tenancy_selector() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    let tenant = registry.tenant_store("demo-app", "tenant-a").unwrap();
+    tenant.lock().unwrap().set_password_policy(
+        PasswordPolicy::try_new(
+            EnforcementState::Enforce,
+            false,
+            12,
+            None,
+            false,
+            false,
+            false,
+            false,
+            default_allowed_non_alphanumeric(),
+        )
+        .unwrap(),
+    );
+    s.registry = Some(registry);
+
+    let tenant_policy = admin(
+        &s,
+        "GET",
+        &format!("{V2}/passwordPolicy?key=fake-api-key&tenantId=tenant-a"),
+        &Value::Null,
+    );
+    assert_eq!(tenant_policy.0, 200, "{}", tenant_policy.1);
+    assert_eq!(
+        tenant_policy.1["customStrengthOptions"]["minPasswordLength"], 12,
+        "tenant policy must be read from the selected tenant store"
+    );
+
+    let unknown = admin(
+        &s,
+        "GET",
+        &format!("{V2}/passwordPolicy?key=fake-api-key&tenantId=missing-tenant"),
+        &Value::Null,
+    );
+    assert_eq!(unknown.0, 404, "{}", unknown.1);
+    assert_eq!(unknown.1["error"]["message"], "TENANT_NOT_FOUND");
+}
+
+#[test]
 fn conflicting_body_and_query_tenants_fail_without_mutation() {
     let mut s = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(

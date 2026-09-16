@@ -4459,13 +4459,27 @@ fn select_store(
             return Err(error(400, "TENANT_ID_MISMATCH"));
         }
     }
+    let requested_tenant = body_tenant.or(query_tenant.as_deref());
     let Some(registry) = &state.registry else {
+        if requested_tenant.is_some()
+            || routes::scoped_target(path).is_some_and(|(_, tenant)| tenant.is_some())
+        {
+            return Err(error(
+                if body_tenant.is_some() { 400 } else { 404 },
+                "TENANT_NOT_FOUND",
+            ));
+        }
         return Ok(state.store.clone());
     };
     if let Some((project, tenant)) = routes::scoped_target(path) {
-        return Ok(tenant
-            .and_then(|tenant| registry.tenant_store(project, tenant))
-            .or_else(|| registry.store_for(project))
+        if let Some(tenant) = tenant {
+            let Some(store) = registry.tenant_store(project, tenant) else {
+                return Err(error(404, "TENANT_NOT_FOUND"));
+            };
+            return Ok(store);
+        }
+        return Ok(registry
+            .store_for(project)
             .or_else(|| registry.routed_store_for(project))
             .unwrap_or_else(|| state.store.clone()));
     }
@@ -4473,31 +4487,38 @@ fn select_store(
         // A registry without a tenancy selector is the single-namespace adapter/test
         // configuration. It has no API-key ownership map to consult, so retain the historical
         // default-store behavior for compatibility keys such as the emulator's fake key.
-        let Some(tenancy) = state.tenancy.as_ref() else {
-            return Ok(state.store.clone());
-        };
-        let Ok(tenancy) = tenancy.read() else {
-            return Err(error(500, "INTERNAL"));
-        };
-        let Some(project) = tenancy.project_of_api_key(key).map(str::to_owned) else {
-            // The daemon creates an empty tenancy for its default, single namespace. Until a
-            // project session is registered, there is no selector to validate and the legacy
-            // client API-key behavior remains the default store. Once sessions exist, an
-            // unknown key must fail closed rather than fall back across that boundary.
-            if tenancy.registered().is_empty() {
-                return Ok(state.store.clone());
+        let selected_project = match state.tenancy.as_ref() {
+            None => None,
+            Some(tenancy) => {
+                let Ok(tenancy) = tenancy.read() else {
+                    return Err(error(500, "INTERNAL"));
+                };
+                match tenancy.project_of_api_key(key).map(str::to_owned) {
+                    Some(project) => Some(project),
+                    None if tenancy.registered().is_empty() => None,
+                    None => {
+                        // An explicit API-key selector is an assertion about the target
+                        // project. Never silently route an unknown key to the default namespace.
+                        return Err(error(400, "INVALID_API_KEY"));
+                    }
+                }
             }
-            // An explicit API-key selector is an assertion about the target project. Never
-            // silently route an unknown key to the default namespace.
-            return Err(error(400, "INVALID_API_KEY"));
         };
-        let tenant = str_field(body, "tenantId").or(query_tenant.as_deref());
-        if let Some(tenant) = tenant {
-            let Some(store) = registry.tenant_store(&project, tenant) else {
+        if let Some(tenant) = requested_tenant {
+            let project = selected_project
+                .as_deref()
+                .unwrap_or_else(|| registry.default_project());
+            let Some(store) = registry.tenant_store(project, tenant) else {
                 return Err(error(404, "TENANT_NOT_FOUND"));
             };
             return Ok(store);
         }
+        let Some(project) = selected_project else {
+            // With no registered tenancy sessions, preserve the historical fake-key behavior for
+            // the default namespace. An explicit tenant above still had to resolve through the
+            // registry, so it can never silently land in this store.
+            return Ok(state.store.clone());
+        };
         let Some(store) = registry
             .store_for(&project)
             .or_else(|| registry.routed_store_for(&project))

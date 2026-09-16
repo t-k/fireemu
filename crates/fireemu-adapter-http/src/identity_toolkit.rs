@@ -4451,6 +4451,15 @@ fn select_store(
     body: &Value,
     resolution: routes::Resolution<'_>,
 ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
+    let (api_key, query_tenant) = query_selectors(query);
+    let body_tenant = str_field(body, "tenantId");
+    if body_tenant
+        .as_deref()
+        .zip(query_tenant.as_deref())
+        .is_some_and(|(body, query)| body != query)
+    {
+        return Err(error(400, "TENANT_ID_MISMATCH"));
+    }
     let Some(registry) = &state.registry else {
         return Ok(state.store.clone());
     };
@@ -4461,14 +4470,24 @@ fn select_store(
             .or_else(|| registry.routed_store_for(project))
             .unwrap_or_else(|| state.store.clone()));
     }
-    let (api_key, query_tenant) = query_selectors(query);
     if let Some(key) = api_key.as_deref() {
-        let Some(project) = state
-            .tenancy
-            .as_ref()
-            .and_then(|t| t.read().ok())
-            .and_then(|t| t.project_of_api_key(key).map(str::to_owned))
-        else {
+        // A registry without a tenancy selector is the single-namespace adapter/test
+        // configuration. It has no API-key ownership map to consult, so retain the historical
+        // default-store behavior for compatibility keys such as the emulator's fake key.
+        let Some(tenancy) = state.tenancy.as_ref() else {
+            return Ok(state.store.clone());
+        };
+        let Ok(tenancy) = tenancy.read() else {
+            return Err(error(500, "INTERNAL"));
+        };
+        let Some(project) = tenancy.project_of_api_key(key).map(str::to_owned) else {
+            // The daemon creates an empty tenancy for its default, single namespace. Until a
+            // project session is registered, there is no selector to validate and the legacy
+            // client API-key behavior remains the default store. Once sessions exist, an
+            // unknown key must fail closed rather than fall back across that boundary.
+            if tenancy.registered().is_empty() {
+                return Ok(state.store.clone());
+            }
             // An explicit API-key selector is an assertion about the target project. Never
             // silently route an unknown key to the default namespace.
             return Err(error(400, "INVALID_API_KEY"));
@@ -4548,7 +4567,6 @@ fn select_store(
             RefreshTokenStoreMatch::NotFound => {}
         }
     }
-    let body_tenant = str_field(body, "tenantId");
     if let Some(tenant) = body_tenant.or(query_tenant.as_deref()) {
         let Some(store) = registry.tenant_store(registry.default_project(), tenant) else {
             // Preserve the client-body tenant error shape while refusing to route an

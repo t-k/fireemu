@@ -7990,3 +7990,64 @@ fn client_namespace_selectors_fail_closed_without_default_fallback() {
         .user_by_email("worker-auth@example.com")
         .is_some());
 }
+
+#[test]
+fn explicit_api_key_keeps_default_namespace_compatibility_without_tenancy_registry() {
+    let mut s = state();
+    s.registry = Some(Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    )));
+
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=fake-api-key"),
+        &json!({"email": "legacy-api-key@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["email"], "legacy-api-key@example.com");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("legacy-api-key@example.com")
+        .is_some());
+}
+
+#[test]
+fn conflicting_body_and_query_tenants_fail_without_mutation() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    registry.ensure_tenant("demo-app", "tenant-b").unwrap();
+    s.registry = Some(registry.clone());
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?tenantId=tenant-b"),
+        &json!({
+            "tenantId": "tenant-a",
+            "email": "conflicting-tenant@example.com",
+            "password": "password1"
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+    for store in [
+        s.store.clone(),
+        registry.tenant_store("demo-app", "tenant-a").unwrap(),
+        registry.tenant_store("demo-app", "tenant-b").unwrap(),
+    ] {
+        assert!(
+            store
+                .lock()
+                .unwrap()
+                .user_by_email("conflicting-tenant@example.com")
+                .is_none(),
+            "conflicting tenant selector must not mutate any namespace"
+        );
+    }
+}

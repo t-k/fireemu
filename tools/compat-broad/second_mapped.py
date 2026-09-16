@@ -599,7 +599,7 @@ def execute_45(a, output, runtime_identity):
                         )
                     if not absent:
                         versions[step["id"]] = body["updateTime"]
-                        if name not in a.creation_proofs:
+                        if step["id"] in ("original", "before"):
                             # The seed response may omit the document body on
                             # transports that acknowledge the write with an
                             # empty JSON object. Bind cleanup to the first

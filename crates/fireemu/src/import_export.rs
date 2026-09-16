@@ -1446,6 +1446,7 @@ fn read_auth_password_policies(
         .map_err(|error| ArtifactError::new("auth", &path, error.to_string()))
 }
 
+#[allow(clippy::too_many_lines)]
 fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, ArtifactError> {
     let section_dir = dir.join(&section.path);
     scan_import_tree(

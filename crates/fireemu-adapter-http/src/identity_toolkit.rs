@@ -26,7 +26,7 @@ use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with,
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
 use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy, ViolationCode};
 use fireemu_core_auth::signup_quota::{
-    QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+    QuotaAlgorithm, QuotaMode, SignupQuotaConfig, SignupReservation, TemporaryQuota,
 };
 use fireemu_core_auth::store::{
     AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
@@ -1682,6 +1682,8 @@ fn dispatch_with_blocking_hook(
     body: &Value,
     headers: &RequestHeaders,
     at: LogicalInstant,
+    quota_reservation: &mut Option<SignupReservation>,
+    quota_before: usize,
 ) -> JsonResponse {
     let pending_continuation = (handler == routes::Handler::MfaSignInFinalize)
         .then(|| str_field(body, "mfaPendingCredential"))
@@ -1854,7 +1856,7 @@ fn dispatch_with_blocking_hook(
             }
         }
     }
-    let commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
+    let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
         if tenant.is_some() {
             if let Some(denial) = tenant_policy_denial_with_metadata(handler, metadata, body) {
                 return denial;
@@ -2053,6 +2055,14 @@ fn dispatch_with_blocking_hook(
                         committed_response.body["emailVerified"] = json!(user.email_verified);
                     }
                 }
+            }
+        }
+        if let Some(reservation) = quota_reservation.clone() {
+            if is_new && committed.user_count() > quota_before {
+                if let Err(error) = committed.commit_signup(reservation, now(state)) {
+                    return auth_error(&error);
+                }
+                quota_reservation.take();
             }
         }
         *live = committed;
@@ -2384,9 +2394,27 @@ fn handle_with_policy(
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
     let quota_before = store.user_count();
-    let quota_reservation = if route.class == routes::RouteClass::EndUser
-        && request_may_create_end_user(route.handler, &store, body, at)
-    {
+    let quota_request = route.class == routes::RouteClass::EndUser
+        && request_may_create_end_user(route.handler, &store, body, at);
+    // Configuration PATCHes use this same namespace gate. Hold it for the complete
+    // end-user creation transaction so a quota reservation cannot be committed against a
+    // configuration snapshot that was replaced while the handler was running.
+    let quota_gate = if quota_request && !blocking_auth {
+        match state.registry.as_ref() {
+            Some(registry) => registry.operation_gate(&store_project, store_tenant.as_deref()),
+            None => Some(state.operation_gate.clone()),
+        }
+    } else {
+        None
+    };
+    let _quota_operation = match quota_gate.as_ref() {
+        Some(gate) => match gate.lock() {
+            Ok(operation) => Some(operation),
+            Err(_) => return error(500, "INTERNAL"),
+        },
+        None => None,
+    };
+    let mut quota_reservation = if quota_request {
         let peer_ip = headers.peer_ip.as_deref().unwrap_or("127.0.0.1");
         match store.reserve_signup(AuthPrincipal::EndUser, peer_ip, at) {
             Ok(reservation) => Some(reservation),
@@ -2446,7 +2474,45 @@ fn handle_with_policy(
             body,
             headers,
             at,
+            &mut quota_reservation,
+            quota_before,
         )
+    } else if let Some(reservation) = quota_reservation.clone() {
+        // Run quota-accounted creation on an isolated store copy. This gives the quota
+        // commit a real transaction boundary: if the effective policy or window changed
+        // before commit, neither the account nor its credentials reach the live store.
+        let mut candidate = store.clone();
+        let response = dispatch(
+            route.handler,
+            &mut candidate,
+            query,
+            body,
+            headers,
+            at,
+            state.into(),
+        );
+        let created = response.status == 200 && candidate.user_count() > quota_before;
+        if created {
+            if let Err(error) = candidate.commit_signup(reservation, now(state)) {
+                let _ = store.release_signup(
+                    quota_reservation
+                        .take()
+                        .expect("live quota reservation remains until candidate commit"),
+                );
+                return auth_error(&error);
+            }
+            quota_reservation.take();
+            *store = candidate;
+        } else {
+            let live_reservation = quota_reservation
+                .take()
+                .expect("live quota reservation remains until candidate dispatch completes");
+            if let Err(error) = store.release_signup(live_reservation) {
+                return auth_error(&error);
+            }
+        }
+        drop(store);
+        response
     } else {
         let response = dispatch(
             route.handler,
@@ -2479,7 +2545,7 @@ fn handle_with_policy(
             return error(500, "INTERNAL");
         };
         let result = if created {
-            store.commit_signup(reservation)
+            store.commit_signup(reservation, now(state))
         } else {
             store.release_signup(reservation)
         };

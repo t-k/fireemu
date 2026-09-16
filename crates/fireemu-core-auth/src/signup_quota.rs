@@ -151,6 +151,9 @@ pub enum QuotaError {
     BucketCapacity,
     /// The reservation does not belong to this quota instance or was already finalized.
     InvalidReservation,
+    /// The reservation was created under a different effective policy, window, or generation.
+    /// The reservation is released when this is returned.
+    StaleReservation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -172,6 +175,10 @@ struct Bucket {
 pub struct SignupReservation {
     key: Option<BucketKey>,
     token: u64,
+    generation: u64,
+    window_start: LogicalInstant,
+    limit: u64,
+    mode: QuotaMode,
     /// In observe mode this records that the request exceeded the configured limit.
     pub would_exceed: bool,
 }
@@ -181,7 +188,9 @@ pub struct SignupReservation {
 pub struct SignupQuota {
     config: SignupQuotaConfig,
     buckets: BTreeMap<BucketKey, Bucket>,
+    active_reservations: BTreeMap<u64, BucketKey>,
     next_token: u64,
+    generation: u64,
 }
 
 impl Default for SignupQuota {
@@ -197,7 +206,9 @@ impl SignupQuota {
         Ok(Self {
             config,
             buckets: BTreeMap::new(),
+            active_reservations: BTreeMap::new(),
             next_token: 1,
+            generation: 0,
         })
     }
 
@@ -211,6 +222,7 @@ impl SignupQuota {
     pub fn set_config(&mut self, config: SignupQuotaConfig) -> Result<(), QuotaConfigError> {
         config.validate()?;
         self.config = config;
+        self.generation = self.generation.wrapping_add(1).max(1);
         Ok(())
     }
 
@@ -247,6 +259,10 @@ impl SignupQuota {
             return Ok(SignupReservation {
                 key: None,
                 token: 0,
+                generation: self.generation,
+                window_start: window_start(now),
+                limit: self.limit_at(now),
+                mode: self.config.mode,
                 would_exceed: false,
             });
         }
@@ -282,24 +298,61 @@ impl SignupQuota {
         if would_exceed {
             bucket.observed_over_limit = bucket.observed_over_limit.saturating_add(1);
         }
-        let token = self.next_token;
-        self.next_token = self.next_token.wrapping_add(1).max(1);
+        let token = loop {
+            let token = self.next_token;
+            self.next_token = self.next_token.wrapping_add(1).max(1);
+            if !self.active_reservations.contains_key(&token) {
+                break token;
+            }
+        };
+        self.active_reservations.insert(token, key.clone());
         Ok(SignupReservation {
             key: Some(key),
             token,
+            generation: self.generation,
+            window_start: window_start(now),
+            limit,
+            mode: self.config.mode,
             would_exceed,
         })
     }
 
     /// Commits a previously accepted reservation after the account exists.
-    pub fn commit(&mut self, reservation: SignupReservation) -> Result<(), QuotaError> {
+    pub fn commit(
+        &mut self,
+        reservation: SignupReservation,
+        now: LogicalInstant,
+    ) -> Result<(), QuotaError> {
         let Some(key) = reservation.key else {
+            if reservation.token != 0
+                || reservation.generation != self.generation
+                || reservation.mode != self.config.mode
+                || self.config.mode != QuotaMode::Off
+            {
+                return Err(QuotaError::StaleReservation);
+            }
             return Ok(());
         };
+        if self.active_reservations.get(&reservation.token) != Some(&key) {
+            return Err(QuotaError::InvalidReservation);
+        }
+        if reservation.generation != self.generation
+            || reservation.window_start != window_start(now)
+            || reservation.limit != self.limit_at(now)
+            || reservation.mode != self.config.mode
+        {
+            self.release_tracked(&key, reservation.token)?;
+            return Err(QuotaError::StaleReservation);
+        }
         let Some(bucket) = self.buckets.get_mut(&key) else {
             return Err(QuotaError::InvalidReservation);
         };
-        if bucket.reserved == 0 {
+        if bucket.reserved == 0
+            || self
+                .active_reservations
+                .remove(&reservation.token)
+                .is_none()
+        {
             return Err(QuotaError::InvalidReservation);
         }
         bucket.reserved -= 1;
@@ -312,15 +365,23 @@ impl SignupQuota {
         let Some(key) = reservation.key else {
             return Ok(());
         };
-        let Some(bucket) = self.buckets.get_mut(&key) else {
+        self.release_tracked(&key, reservation.token)
+    }
+
+    fn release_tracked(&mut self, key: &BucketKey, token: u64) -> Result<(), QuotaError> {
+        if self.active_reservations.get(&token) != Some(key) {
+            return Err(QuotaError::InvalidReservation);
+        }
+        let Some(bucket) = self.buckets.get_mut(key) else {
             return Err(QuotaError::InvalidReservation);
         };
         if bucket.reserved == 0 {
             return Err(QuotaError::InvalidReservation);
         }
+        self.active_reservations.remove(&token);
         bucket.reserved -= 1;
         if bucket.committed == 0 && bucket.reserved == 0 && bucket.observed_over_limit == 0 {
-            self.buckets.remove(&key);
+            self.buckets.remove(key);
         }
         Ok(())
     }
@@ -360,7 +421,7 @@ mod tests {
         let mut quota = quota(QuotaMode::Off, 0);
         for _ in 0..3 {
             let reservation = quota.reserve("project", "192.0.2.1", T0).unwrap();
-            quota.commit(reservation).unwrap();
+            quota.commit(reservation, T0).unwrap();
         }
         assert_eq!(quota.tracked_bucket_count(), 0);
     }
@@ -376,7 +437,7 @@ mod tests {
         quota.release(first).unwrap();
         assert_eq!(quota.usage("project", "192.0.2.1", T0), (0, 0));
         let retry = quota.reserve("project", "192.0.2.1", T0).unwrap();
-        quota.commit(retry).unwrap();
+        quota.commit(retry, T0).unwrap();
         assert_eq!(quota.usage("project", "192.0.2.1", T0), (1, 0));
     }
 
@@ -384,10 +445,10 @@ mod tests {
     fn observe_records_overage_without_rejecting() {
         let mut quota = quota(QuotaMode::Observe, 1);
         let first = quota.reserve("project", "192.0.2.1", T0).unwrap();
-        quota.commit(first).unwrap();
+        quota.commit(first, T0).unwrap();
         let second = quota.reserve("project", "192.0.2.1", T0).unwrap();
         assert!(second.would_exceed);
-        quota.commit(second).unwrap();
+        quota.commit(second, T0).unwrap();
         assert_eq!(quota.usage("project", "192.0.2.1", T0), (2, 0));
     }
 
@@ -395,7 +456,7 @@ mod tests {
     fn keys_are_project_and_peer_isolated_and_windows_are_half_open() {
         let mut quota = quota(QuotaMode::Enforce, 1);
         let first = quota.reserve("project", "192.0.2.1", T0).unwrap();
-        quota.commit(first).unwrap();
+        quota.commit(first, T0).unwrap();
         assert!(quota.reserve("project", "192.0.2.2", T0).is_ok());
         assert!(quota.reserve("other", "192.0.2.1", T0).is_ok());
         let next_window = T0
@@ -415,9 +476,84 @@ mod tests {
         })
         .unwrap();
         let first = quota.reserve("project", "192.0.2.1", T0).unwrap();
-        quota.commit(first).unwrap();
+        quota.commit(first, T0).unwrap();
         assert!(quota.reserve("project", "192.0.2.1", T0).is_ok());
         let before = T0.checked_add(LogicalDuration::from_seconds(-1)).unwrap();
         assert!(quota.reserve("project", "192.0.2.2", before).is_ok());
+    }
+
+    #[test]
+    fn commit_rejects_a_reservation_after_configuration_changes() {
+        let mut quota = quota(QuotaMode::Enforce, 2);
+        let reservation = quota.reserve("project", "192.0.2.1", T0).unwrap();
+        let mut changed = quota.config().clone();
+        changed.default_quota_per_hour = 3;
+        quota.set_config(changed).unwrap();
+
+        assert_eq!(
+            quota.commit(reservation, T0),
+            Err(QuotaError::StaleReservation)
+        );
+        assert_eq!(quota.usage("project", "192.0.2.1", T0), (0, 0));
+        assert!(quota.reserve("project", "192.0.2.1", T0).is_ok());
+    }
+
+    #[test]
+    fn commit_rejects_a_reservation_after_the_hourly_window_changes() {
+        let mut quota = quota(QuotaMode::Enforce, 1);
+        let reservation = quota.reserve("project", "192.0.2.1", T0).unwrap();
+        let next_window = T0
+            .checked_add(LogicalDuration::from_seconds(3_600))
+            .unwrap();
+
+        assert_eq!(
+            quota.commit(reservation, next_window),
+            Err(QuotaError::StaleReservation)
+        );
+        assert_eq!(quota.tracked_bucket_count(), 0);
+        let retry = quota.reserve("project", "192.0.2.1", next_window).unwrap();
+        quota.commit(retry, next_window).unwrap();
+        assert_eq!(quota.usage("project", "192.0.2.1", next_window), (1, 0));
+    }
+
+    #[test]
+    fn commit_rejects_when_a_temporary_limit_changes_inside_the_window() {
+        let temporary = TemporaryQuota::new(
+            2,
+            T0.checked_add(LogicalDuration::from_seconds(60)).unwrap(),
+            LogicalDuration::from_seconds(60),
+        )
+        .unwrap();
+        let mut quota = SignupQuota::new(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 1,
+            temporary: Some(temporary),
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+        let reservation = quota.reserve("project", "192.0.2.1", T0).unwrap();
+        let during_temporary = T0.checked_add(LogicalDuration::from_seconds(60)).unwrap();
+
+        assert_eq!(
+            quota.commit(reservation, during_temporary),
+            Err(QuotaError::StaleReservation)
+        );
+        assert_eq!(quota.usage("project", "192.0.2.1", T0), (0, 0));
+        assert_eq!(
+            quota.usage("project", "192.0.2.1", during_temporary),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn each_reservation_can_be_finalized_only_once() {
+        let mut quota = quota(QuotaMode::Enforce, 2);
+        let reservation = quota.reserve("project", "192.0.2.1", T0).unwrap();
+        quota.commit(reservation.clone(), T0).unwrap();
+        assert_eq!(
+            quota.commit(reservation, T0),
+            Err(QuotaError::InvalidReservation)
+        );
+        assert_eq!(quota.usage("project", "192.0.2.1", T0), (1, 0));
     }
 }

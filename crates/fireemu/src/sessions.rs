@@ -117,6 +117,9 @@ impl ProjectHooks for Projects {
         let mut store = AuthStore::new(project, SplitMix64::new(seed), TotpPolicy::default());
         if let Ok(default) = self.registry.default_store().lock() {
             store.set_config(default.config());
+            store
+                .set_signup_quota_config(default.signup_quota().config().clone())
+                .map_err(|error| format!("cannot copy the default sign-up quota: {error:?}"))?;
             if let Some(signer) = default.signer_arc() {
                 store.set_signer(signer);
             }
@@ -1209,6 +1212,45 @@ pub(crate) mod tests {
         assert!(
             admits(&gate, &token(&gate)),
             "another project keeps its epoch"
+        );
+    }
+
+    #[test]
+    fn creating_a_session_project_inherits_quota_configuration_without_usage() {
+        use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
+
+        let gate = gate();
+        let hooks = projects(&gate);
+        let quota = SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 2,
+            max_tracked_buckets: 16,
+            ..SignupQuotaConfig::default()
+        };
+        hooks
+            .registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .set_signup_quota_config(quota.clone())
+            .unwrap();
+
+        hooks.create(SECOND_PROJECT).unwrap();
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .unwrap();
+
+        let registered = hooks.registry.store_for(SECOND_PROJECT).unwrap();
+        let registered = registered.lock().unwrap();
+        assert_eq!(registered.signup_quota().config(), &quota);
+        assert_eq!(
+            registered.signup_quota().usage(
+                SECOND_PROJECT,
+                "127.0.0.1",
+                fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            ),
+            (0, 0),
+            "a new session project inherits configuration but not the default project's usage"
         );
     }
 

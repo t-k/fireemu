@@ -1544,9 +1544,13 @@ impl AuthStore {
     }
 
     /// Commits a sign-up quota reservation once the account creation succeeded.
-    pub fn commit_signup(&mut self, reservation: SignupReservation) -> Result<(), AuthError> {
+    pub fn commit_signup(
+        &mut self,
+        reservation: SignupReservation,
+        now: LogicalInstant,
+    ) -> Result<(), AuthError> {
         self.signup_quota
-            .commit(reservation)
+            .commit(reservation, now)
             .map_err(Self::quota_error)
     }
 
@@ -1563,7 +1567,8 @@ impl AuthStore {
             QuotaError::InvalidPeerAddress
             | QuotaError::BucketCapacity
             | QuotaError::InvalidConfiguration(_)
-            | QuotaError::InvalidReservation => AuthError::SignupQuotaUnavailable,
+            | QuotaError::InvalidReservation
+            | QuotaError::StaleReservation => AuthError::SignupQuotaUnavailable,
         }
     }
 
@@ -8623,7 +8628,7 @@ mod password_policy_namespace_tests {
         default
             .lock()
             .expect("default store")
-            .commit_signup(reservation)
+            .commit_signup(reservation, LogicalInstant::UNIX_EPOCH)
             .expect("default reservation commits");
 
         let candidate = registry
@@ -8671,7 +8676,7 @@ mod quota_snapshot_tests {
             .reserve_signup(AuthPrincipal::EndUser, "192.0.2.1", NOW)
             .expect("source reservation succeeds");
         source
-            .commit_signup(source_reservation)
+            .commit_signup(source_reservation, NOW)
             .expect("source reservation commits");
         let snapshot = AuthSnapshot::capture(&source);
 
@@ -8688,7 +8693,7 @@ mod quota_snapshot_tests {
             .reserve_signup(AuthPrincipal::EndUser, "192.0.2.1", NOW)
             .expect("destination reservation succeeds");
         destination
-            .commit_signup(destination_reservation)
+            .commit_signup(destination_reservation, NOW)
             .expect("destination reservation commits");
 
         snapshot.restore_into(&mut destination);
@@ -8714,7 +8719,7 @@ mod quota_snapshot_tests {
             .reserve_signup(AuthPrincipal::EndUser, "192.0.2.2", NOW)
             .expect("source reservation succeeds");
         source
-            .commit_signup(source_reservation)
+            .commit_signup(source_reservation, NOW)
             .expect("source reservation commits");
         let snapshot = AuthSnapshot::capture(&source);
 

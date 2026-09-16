@@ -127,6 +127,12 @@ struct BeforeCreateOnlySuccessfulHook(Arc<Mutex<Vec<BlockingAuthEvent>>>);
 
 struct DelayedHookRelease(Arc<DelayedBlockingHook>);
 
+struct AdvancingQuotaHook {
+    clock: Arc<Mutex<VirtualClock>>,
+    advance: LogicalDuration,
+    advanced: AtomicBool,
+}
+
 impl Drop for DelayedHookRelease {
     fn drop(&mut self) {
         self.0.release.store(true, Ordering::SeqCst);
@@ -153,6 +159,19 @@ impl AuthBlockingHook for DelayedBlockingHook {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         self.active.fetch_sub(1, Ordering::SeqCst);
+        Ok(json!({}))
+    }
+}
+
+impl AuthBlockingHook for AdvancingQuotaHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if !self.advanced.swap(true, Ordering::SeqCst) {
+            self.clock.lock().unwrap().advance(self.advance).unwrap();
+        }
         Ok(json!({}))
     }
 }
@@ -7893,6 +7912,51 @@ fn signup_quota_is_enforced_for_end_user_creation_without_trusting_forwarded_hea
             LogicalInstant::from_unix_seconds(1_788_004_860)
         ),
         (1, 0)
+    );
+}
+
+#[test]
+fn stale_signup_quota_commit_does_not_publish_the_account_or_tokens() {
+    use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
+
+    let mut s = state();
+    s.store
+        .lock()
+        .unwrap()
+        .set_signup_quota_config(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 2,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+    s.blocking = Some(Arc::new(AdvancingQuotaHook {
+        clock: s.clock.clone(),
+        advance: LogicalDuration::from_seconds(3_540),
+        advanced: AtomicBool::new(false),
+    }));
+
+    let response = handle_with(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &RequestHeaders::default(),
+        &json!({"email": "stale-quota@example.com", "password": "password1"}),
+    );
+    assert_eq!(response.status, 500, "{}", response.body);
+    assert_eq!(
+        response.body["error"]["message"],
+        "SIGNUP_QUOTA_UNAVAILABLE"
+    );
+
+    let store = s.store.lock().unwrap();
+    assert!(store.user_by_email("stale-quota@example.com").is_none());
+    assert_eq!(
+        store.signup_quota().usage(
+            "demo-app",
+            "127.0.0.1",
+            LogicalInstant::from_unix_seconds(1_788_004_860)
+        ),
+        (0, 0)
     );
 }
 

@@ -175,13 +175,34 @@ fn parse_field_overrides(json: &Value, set: &mut IndexSet) -> Result<(), String>
                 let mode = match (
                     index.get("order").and_then(Value::as_str),
                     index.get("arrayConfig").and_then(Value::as_str),
+                    index.get("vectorConfig"),
                 ) {
-                    (Some("ASCENDING"), None) => IndexFieldMode::Ascending,
-                    (Some("DESCENDING"), None) => IndexFieldMode::Descending,
-                    (None, Some("CONTAINS")) => IndexFieldMode::Contains,
+                    (Some("ASCENDING"), None, None) => IndexFieldMode::Ascending,
+                    (Some("DESCENDING"), None, None) => IndexFieldMode::Descending,
+                    (None, Some("CONTAINS"), None) => IndexFieldMode::Contains,
+                    (None, None, Some(config)) => {
+                        let dimension = config
+                            .get("dimension")
+                            .and_then(|value| {
+                                value.as_u64().or_else(|| value.as_str()?.parse().ok())
+                            })
+                            .and_then(|value| u32::try_from(value).ok())
+                            .filter(|dimension| (1..=2048).contains(dimension))
+                            .ok_or_else(|| {
+                                format!(
+                                    "field override {path}: vectorConfig.dimension must be an integer from 1 through 2048"
+                                )
+                            })?;
+                        if !config.get("flat").is_some_and(Value::is_object) {
+                            return Err(format!(
+                                "field override {path}: vectorConfig.flat is required"
+                            ));
+                        }
+                        IndexFieldMode::Vector { dimension }
+                    }
                     _ => {
                         return Err(format!(
-                            "field override {path}: one order or arrayConfig required"
+                            "field override {path}: exactly one order, arrayConfig, or vectorConfig is required"
                         ))
                     }
                 };
@@ -326,5 +347,29 @@ mod tests {
         );
         let config = json!({"fieldOverrides":[{"collectionGroup":"tasks", "fieldPath":"a", "indexes":[{"order":"ASCENDING", "arrayConfig":"CONTAINS"}]}]});
         assert!(parse_indexes("test", &config.to_string()).is_err());
+    }
+
+    #[test]
+    fn parses_vector_field_override_configuration() {
+        let config = json!({
+            "fieldOverrides": [{
+                "collectionGroup": "items",
+                "fieldPath": "embedding",
+                "indexes": [{
+                    "queryScope": "COLLECTION",
+                    "vectorConfig": {"dimension": 3, "flat": {}}
+                }]
+            }]
+        });
+
+        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let collection = CollectionId::try_new("items").unwrap();
+        assert_eq!(
+            indexes.single_field_modes(&collection, &FieldPath::parse("embedding").unwrap()),
+            vec![(
+                IndexQueryScope::Collection,
+                IndexFieldMode::Vector { dimension: 3 }
+            )]
+        );
     }
 }

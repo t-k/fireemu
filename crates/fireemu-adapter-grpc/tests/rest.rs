@@ -518,6 +518,35 @@ fn batch_write_rest_rejects_non_array_writes_without_mutation() {
 }
 
 #[test]
+fn batch_write_rest_rejects_malformed_nested_repeated_values_without_mutation() {
+    let s = state(None);
+    let target = "projects/demo-app/databases/(default)/documents/batch-shape/nested";
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [{
+                "update": {
+                    "name": target,
+                    "fields": {
+                        "values": {"arrayValue": {"values": "not-an-array"}}
+                    }
+                }
+            }]
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+
+    let (status, after) = call(&s, "GET", &format!("/v1/{target}"), Value::Null);
+    assert_eq!(
+        status, 404,
+        "malformed nested values must not mutate state: {after}"
+    );
+}
+
+#[test]
 fn batch_write_rest_reports_write_without_operation_per_item() {
     let s = state(None);
     let target = "projects/demo-app/databases/(default)/documents/batch-shape/target";

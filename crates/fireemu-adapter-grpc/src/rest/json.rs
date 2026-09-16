@@ -339,17 +339,18 @@ fn vector_map_from_json(
     let Some(array) = array_value.get("arrayValue") else {
         return Ok(None);
     };
-    let values = array
-        .get("values")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|value| value_from_json_at(value, parent_depth))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
+    if !array.is_object() {
+        return err("arrayValue must be an object");
+    }
+    strict_keys(array, &["values"])?;
+    let values = match array.get("values") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|value| value_from_json_at(value, parent_depth))
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return err("arrayValue.values must be an array"),
+    };
     Ok(Some(pb::MapValue {
         fields: HashMap::from([
             (
@@ -368,6 +369,7 @@ fn vector_map_from_json(
     }))
 }
 
+#[allow(clippy::too_many_lines)]
 fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonError> {
     use pb::value::ValueType as V;
     let Some(obj) = v.as_object() else {
@@ -381,7 +383,18 @@ fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonErr
         .next()
         .map_or(("", &Value::Null), |(k, v)| (k.as_str(), v));
     let value_type = match key {
-        "nullValue" => V::NullValue(0),
+        "nullValue" => {
+            let valid = match inner {
+                Value::Null => true,
+                Value::String(name) => prost_types::NullValue::from_str_name(name).is_some(),
+                Value::Number(number) => number.as_i64() == Some(0),
+                _ => false,
+            };
+            if !valid {
+                return err("nullValue must be null, a string, or an integer");
+            }
+            V::NullValue(0)
+        }
         "booleanValue" => V::BooleanValue(
             inner
                 .as_bool()
@@ -446,6 +459,10 @@ fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonErr
         }
         "arrayValue" => V::ArrayValue(array_from_json(inner, parent_depth)?),
         "mapValue" => {
+            if !inner.is_object() {
+                return err("mapValue must be an object");
+            }
+            strict_keys(inner, &["fields"])?;
             if let Some(vector) = vector_map_from_json(inner, parent_depth)? {
                 V::MapValue(vector)
             } else {
@@ -463,18 +480,19 @@ fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonErr
 }
 
 fn array_from_json(inner: &Value, parent_depth: u32) -> Result<pb::ArrayValue, JsonError> {
+    if !inner.is_object() {
+        return err("arrayValue must be an object");
+    }
+    strict_keys(inner, &["values"])?;
     let depth = nested_depth(parent_depth)?;
-    let values = inner
-        .get("values")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|value| value_from_json_at(value, depth))
-                .collect::<Result<_, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
+    let values = match inner.get("values") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|value| value_from_json_at(value, depth))
+            .collect::<Result<_, _>>()?,
+        Some(_) => return err("arrayValue.values must be an array"),
+    };
     Ok(pb::ArrayValue { values })
 }
 
@@ -523,6 +541,9 @@ pub fn document_to_json(d: &pb::Document) -> Value {
 
 /// JSON → protobuf document (`name` may be absent for create).
 pub fn document_from_json(v: &Value) -> Result<pb::Document, JsonError> {
+    if !v.is_object() {
+        return err("document must be an object");
+    }
     Ok(pb::Document {
         name: v
             .get("name")
@@ -546,10 +567,8 @@ pub fn mask_from_json(v: Option<&Value>) -> Result<Option<pb::DocumentMask>, Jso
     };
     strict_keys(v, &["fieldPaths"])?;
     let field_paths = match v.get("fieldPaths") {
-        None => Vec::new(),
-        Some(paths) => paths
-            .as_array()
-            .ok_or_else(|| JsonError("mask.fieldPaths must be an array".into()))?
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(paths)) => paths
             .iter()
             .map(|p| {
                 p.as_str()
@@ -557,6 +576,7 @@ pub fn mask_from_json(v: Option<&Value>) -> Result<Option<pb::DocumentMask>, Jso
                     .ok_or_else(|| JsonError("field paths must be strings".into()))
             })
             .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return err("mask.fieldPaths must be an array"),
     };
     Ok(Some(pb::DocumentMask { field_paths }))
 }
@@ -606,36 +626,76 @@ fn transform_from_json(v: &Value) -> Result<pb::document_transform::FieldTransfo
         .ok_or_else(|| JsonError("fieldTransform.fieldPath is required".into()))?
         .to_owned();
     let array = |key: &str| -> Result<pb::ArrayValue, JsonError> {
+        let Some(inner) = v.get(key).filter(|value| !value.is_null()) else {
+            return Ok(pb::ArrayValue::default());
+        };
+        if !inner.is_object() {
+            return err(format!("{key} must be an object"));
+        }
+        strict_keys(inner, &["values"])?;
         Ok(pb::ArrayValue {
-            values: v
-                .get(key)
-                .and_then(|a| a.get("values"))
-                .and_then(Value::as_array)
-                .map(|items| items.iter().map(value_from_json).collect::<Result<_, _>>())
-                .transpose()?
-                .unwrap_or_default(),
+            values: match inner.get("values") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(value_from_json)
+                    .collect::<Result<_, _>>()?,
+                Some(_) => return err(format!("{key}.values must be an array")),
+            },
         })
     };
-    let transform_type = if let Some(sv) = v.get("setToServerValue") {
-        match sv.as_str() {
-            Some("REQUEST_TIME") => T::SetToServerValue(
-                pb::document_transform::field_transform::ServerValue::RequestTime as i32,
-            ),
-            other => return err(format!("unknown setToServerValue {other:?}")),
-        }
-    } else if let Some(x) = v.get("increment") {
-        T::Increment(value_from_json(x)?)
-    } else if let Some(x) = v.get("maximum") {
-        T::Maximum(value_from_json(x)?)
-    } else if let Some(x) = v.get("minimum") {
-        T::Minimum(value_from_json(x)?)
-    } else if v.get("appendMissingElements").is_some() {
-        T::AppendMissingElements(array("appendMissingElements")?)
-    } else if v.get("removeAllFromArray").is_some() {
-        T::RemoveAllFromArray(array("removeAllFromArray")?)
-    } else {
-        return err("fieldTransform without a transform");
-    };
+    let operation_count = [
+        "setToServerValue",
+        "increment",
+        "maximum",
+        "minimum",
+        "appendMissingElements",
+        "removeAllFromArray",
+    ]
+    .iter()
+    .filter(|key| v.get(**key).is_some_and(|value| !value.is_null()))
+    .count();
+    if operation_count > 1 {
+        return err("Payload isn't valid for request.");
+    }
+    let transform_type =
+        if let Some(sv) = v.get("setToServerValue").filter(|value| !value.is_null()) {
+            let server_value = match sv {
+                Value::String(name) => {
+                    pb::document_transform::field_transform::ServerValue::from_str_name(name)
+                }
+                Value::Number(number) => number
+                    .as_i64()
+                    .and_then(|number| i32::try_from(number).ok())
+                    .and_then(|number| {
+                        pb::document_transform::field_transform::ServerValue::try_from(number).ok()
+                    }),
+                _ => return err("setToServerValue must be a string or enum number"),
+            };
+            T::SetToServerValue(
+                server_value
+                    .map(|value| value as i32)
+                    .ok_or_else(|| JsonError("unknown setToServerValue".into()))?,
+            )
+        } else if let Some(x) = v.get("increment").filter(|value| !value.is_null()) {
+            T::Increment(value_from_json(x)?)
+        } else if let Some(x) = v.get("maximum").filter(|value| !value.is_null()) {
+            T::Maximum(value_from_json(x)?)
+        } else if let Some(x) = v.get("minimum").filter(|value| !value.is_null()) {
+            T::Minimum(value_from_json(x)?)
+        } else if v
+            .get("appendMissingElements")
+            .is_some_and(|value| !value.is_null())
+        {
+            T::AppendMissingElements(array("appendMissingElements")?)
+        } else if v
+            .get("removeAllFromArray")
+            .is_some_and(|value| !value.is_null())
+        {
+            T::RemoveAllFromArray(array("removeAllFromArray")?)
+        } else {
+            return err("fieldTransform without a transform");
+        };
     Ok(pb::document_transform::FieldTransform {
         field_path,
         transform_type: Some(transform_type),
@@ -679,40 +739,38 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
                 .to_owned(),
         ))
     } else if let Some(t) = v.get("transform").filter(|value| !value.is_null()) {
+        if !t.is_object() {
+            return err("transform must be an object");
+        }
+        strict_keys(t, &["document", "fieldTransforms"])?;
         Some(pb::write::Operation::Transform(pb::DocumentTransform {
             document: t
                 .get("document")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned(),
-            field_transforms: t
-                .get("fieldTransforms")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(transform_from_json)
-                        .collect::<Result<_, _>>()
-                })
-                .transpose()?
-                .unwrap_or_default(),
+            field_transforms: match t.get("fieldTransforms") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(transform_from_json)
+                    .collect::<Result<_, _>>()?,
+                Some(_) => return err("fieldTransforms must be an array"),
+            },
         }))
     } else {
         None
     };
     Ok(pb::Write {
         update_mask: mask_from_json(v.get("updateMask"))?,
-        update_transforms: v
-            .get("updateTransforms")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .map(transform_from_json)
-                    .collect::<Result<_, _>>()
-            })
-            .transpose()?
-            .unwrap_or_default(),
+        update_transforms: match v.get("updateTransforms") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(items)) => items
+                .iter()
+                .map(transform_from_json)
+                .collect::<Result<_, _>>()?,
+            Some(_) => return err("updateTransforms must be an array"),
+        },
         current_document: precondition_from_json(v.get("currentDocument"))?,
         operation,
     })
@@ -758,32 +816,36 @@ fn field_reference(v: Option<&Value>) -> Result<Option<sq::FieldReference>, Json
     }))
 }
 
-fn field_operator(name: &str) -> Result<i32, JsonError> {
+fn field_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     use sq::field_filter::Operator as O;
-    Ok(match name {
-        "LESS_THAN" => O::LessThan,
-        "LESS_THAN_OR_EQUAL" => O::LessThanOrEqual,
-        "GREATER_THAN" => O::GreaterThan,
-        "GREATER_THAN_OR_EQUAL" => O::GreaterThanOrEqual,
-        "EQUAL" => O::Equal,
-        "NOT_EQUAL" => O::NotEqual,
-        "ARRAY_CONTAINS" => O::ArrayContains,
-        "IN" => O::In,
-        "ARRAY_CONTAINS_ANY" => O::ArrayContainsAny,
-        "NOT_IN" => O::NotIn,
-        other => return err(format!("unknown field filter operator {other:?}")),
-    } as i32)
+    let value = value.ok_or_else(|| JsonError("fieldFilter.op is required".into()))?;
+    let operator = match value {
+        Value::String(name) => O::from_str_name(name),
+        Value::Number(number) => number
+            .as_i64()
+            .and_then(|number| i32::try_from(number).ok())
+            .and_then(|number| O::try_from(number).ok()),
+        _ => return err("fieldFilter.op must be a string or enum number"),
+    };
+    operator
+        .map(|operator| operator as i32)
+        .ok_or_else(|| JsonError("unknown field filter operator".into()))
 }
 
-fn unary_operator(name: &str) -> Result<i32, JsonError> {
+fn unary_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     use sq::unary_filter::Operator as O;
-    Ok(match name {
-        "IS_NAN" => O::IsNan,
-        "IS_NULL" => O::IsNull,
-        "IS_NOT_NAN" => O::IsNotNan,
-        "IS_NOT_NULL" => O::IsNotNull,
-        other => return err(format!("unknown unary filter operator {other:?}")),
-    } as i32)
+    let value = value.ok_or_else(|| JsonError("unaryFilter.op is required".into()))?;
+    let operator = match value {
+        Value::String(name) => O::from_str_name(name),
+        Value::Number(number) => number
+            .as_i64()
+            .and_then(|number| i32::try_from(number).ok())
+            .and_then(|number| O::try_from(number).ok()),
+        _ => return err("unaryFilter.op must be a string or enum number"),
+    };
+    operator
+        .map(|operator| operator as i32)
+        .ok_or_else(|| JsonError("unknown unary filter operator".into()))
 }
 
 fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
@@ -791,10 +853,21 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
         if !c.is_object() {
             return err("compositeFilter must be an object");
         }
-        let op = match c.get("op").and_then(Value::as_str) {
-            Some("AND") => sq::composite_filter::Operator::And,
-            Some("OR") => sq::composite_filter::Operator::Or,
-            _ => return err("compositeFilter.op must be AND or OR"),
+        let op = match c.get("op") {
+            Some(Value::String(name)) => sq::composite_filter::Operator::from_str_name(name)
+                .ok_or_else(|| JsonError("unknown composite filter operator".into()))?,
+            Some(Value::Number(number)) => {
+                let number = number
+                    .as_i64()
+                    .and_then(|number| i32::try_from(number).ok())
+                    .ok_or_else(|| {
+                        JsonError("compositeFilter.op must be a string or enum number".into())
+                    })?;
+                sq::composite_filter::Operator::try_from(number)
+                    .map_err(|_| JsonError("unknown composite filter operator".into()))?
+            }
+            Some(_) => return err("compositeFilter.op must be a string or enum number"),
+            None => return err("compositeFilter.op is required"),
         };
         sq::filter::FilterType::CompositeFilter(sq::CompositeFilter {
             op: op as i32,
@@ -811,12 +884,12 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
     } else if let Some(f) = v.get("fieldFilter") {
         sq::filter::FilterType::FieldFilter(sq::FieldFilter {
             field: field_reference(f.get("field"))?,
-            op: field_operator(f.get("op").and_then(Value::as_str).unwrap_or(""))?,
+            op: field_operator(f.get("op"))?,
             value: f.get("value").map(value_from_json).transpose()?,
         })
     } else if let Some(u) = v.get("unaryFilter") {
         sq::filter::FilterType::UnaryFilter(sq::UnaryFilter {
-            op: unary_operator(u.get("op").and_then(Value::as_str).unwrap_or(""))?,
+            op: unary_operator(u.get("op"))?,
             operand_type: field_reference(u.get("field"))?
                 .map(sq::unary_filter::OperandType::Field),
         })
@@ -916,15 +989,21 @@ fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNeare
         raw.get("queryVector")
             .ok_or_else(|| JsonError("findNearest.queryVector is required".into()))?,
     )?;
-    let distance_measure = match raw
-        .get("distanceMeasure")
-        .and_then(Value::as_str)
-        .ok_or_else(|| JsonError("findNearest.distanceMeasure is required".into()))?
-    {
-        "EUCLIDEAN" => sq::find_nearest::DistanceMeasure::Euclidean,
-        "COSINE" => sq::find_nearest::DistanceMeasure::Cosine,
-        "DOT_PRODUCT" => sq::find_nearest::DistanceMeasure::DotProduct,
-        other => return err(format!("unknown distance measure {other:?}")),
+    let distance_measure = match raw.get("distanceMeasure") {
+        Some(Value::String(name)) => sq::find_nearest::DistanceMeasure::from_str_name(name)
+            .ok_or_else(|| JsonError("unknown distance measure".into()))?,
+        Some(Value::Number(number)) => {
+            let number = number
+                .as_i64()
+                .and_then(|number| i32::try_from(number).ok())
+                .ok_or_else(|| {
+                    JsonError("findNearest.distanceMeasure must be a string or enum number".into())
+                })?;
+            sq::find_nearest::DistanceMeasure::try_from(number)
+                .map_err(|_| JsonError("unknown distance measure".into()))?
+        }
+        None => return err("findNearest.distanceMeasure is required"),
+        Some(_) => return err("findNearest.distanceMeasure must be a string or enum number"),
     };
     let limit = int32(raw.get("limit"), "findNearest.limit")?
         .ok_or_else(|| JsonError("findNearest.limit is required".into()))?;
@@ -1088,41 +1167,38 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
 /// JSON → aggregation query.
 pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregationQuery, JsonError> {
     use pb::structured_aggregation_query::aggregation as agg;
-    let aggregations = v
-        .get("aggregations")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|a| {
-                    let operator = if let Some(c) = a.get("count") {
-                        agg::Operator::Count(agg::Count {
-                            up_to: int32(c.get("upTo"), "count.upTo")?.map(i64::from),
-                        })
-                    } else if let Some(s) = a.get("sum") {
-                        agg::Operator::Sum(agg::Sum {
-                            field: field_reference(s.get("field"))?,
-                        })
-                    } else if let Some(s) = a.get("avg") {
-                        agg::Operator::Avg(agg::Avg {
-                            field: field_reference(s.get("field"))?,
-                        })
-                    } else {
-                        return err("aggregation must be count, sum or avg");
-                    };
-                    Ok(pb::structured_aggregation_query::Aggregation {
-                        alias: a
-                            .get("alias")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                        operator: Some(operator),
+    let aggregations = match v.get("aggregations") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|a| {
+                let operator = if let Some(c) = a.get("count") {
+                    agg::Operator::Count(agg::Count {
+                        up_to: int32(c.get("upTo"), "count.upTo")?.map(i64::from),
                     })
+                } else if let Some(s) = a.get("sum") {
+                    agg::Operator::Sum(agg::Sum {
+                        field: field_reference(s.get("field"))?,
+                    })
+                } else if let Some(s) = a.get("avg") {
+                    agg::Operator::Avg(agg::Avg {
+                        field: field_reference(s.get("field"))?,
+                    })
+                } else {
+                    return err("aggregation must be count, sum or avg");
+                };
+                Ok(pb::structured_aggregation_query::Aggregation {
+                    alias: a
+                        .get("alias")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    operator: Some(operator),
                 })
-                .collect::<Result<Vec<_>, JsonError>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
+            })
+            .collect::<Result<Vec<_>, JsonError>>(),
+        Some(_) => return err("aggregations must be an array"),
+    }?;
     let query_type = v
         .get("structuredQuery")
         .map(structured_query_from_json)
@@ -1234,53 +1310,128 @@ pub fn optional_timestamp_to_json(t: Option<&prost_types::Timestamp>) -> Value {
 // ------------------------------------------------------------------------------------------
 
 /// JSON → `ListenRequest`.
+#[allow(clippy::too_many_lines)]
 pub fn listen_request_from_json(v: &Value) -> Result<pb::ListenRequest, JsonError> {
-    let target_change = if let Some(t) = v.get("addTarget") {
-        let target_type = if let Some(q) = t.get("query") {
+    if !v.is_object() {
+        return err("ListenRequest must be an object");
+    }
+    strict_keys(
+        v,
+        &[
+            "database",
+            "labels",
+            "requestOptions",
+            "addTarget",
+            "removeTarget",
+        ],
+    )?;
+    let add_target = v.get("addTarget").filter(|value| !value.is_null());
+    let remove_target = v.get("removeTarget").filter(|value| !value.is_null());
+    if add_target.is_some() && remove_target.is_some() {
+        return err("Payload isn't valid for request.");
+    }
+    let target_change = if let Some(t) = add_target {
+        if !t.is_object() {
+            return err("addTarget must be an object");
+        }
+        strict_keys(
+            t,
+            &[
+                "targetId",
+                "once",
+                "expectedCount",
+                "query",
+                "documents",
+                "resumeToken",
+                "readTime",
+            ],
+        )?;
+        let query = t.get("query").filter(|value| !value.is_null());
+        let documents = t.get("documents").filter(|value| !value.is_null());
+        if query.is_some() && documents.is_some() {
+            return err("Payload isn't valid for request.");
+        }
+        let target_type = if let Some(q) = query {
+            if !q.is_object() {
+                return err("query must be an object");
+            }
+            strict_keys(q, &["parent", "structuredQuery"])?;
             Some(pb::target::TargetType::Query(pb::target::QueryTarget {
                 parent: q
                     .get("parent")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .ok_or_else(|| JsonError("query.parent must be a string".into()))
+                            .map(str::to_owned)
+                    })
+                    .transpose()?
+                    .unwrap_or_default(),
                 query_type: q
                     .get("structuredQuery")
+                    .filter(|value| !value.is_null())
                     .map(structured_query_from_json)
                     .transpose()?
                     .map(pb::target::query_target::QueryType::StructuredQuery),
             }))
-        } else {
-            t.get("documents").map(|d| {
-                pb::target::TargetType::Documents(pb::target::DocumentsTarget {
-                    documents: d
-                        .get("documents")
-                        .and_then(Value::as_array)
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_owned)
-                                .collect()
+        } else if let Some(d) = documents {
+            if !d.is_object() {
+                return err("documents must be an object");
+            }
+            strict_keys(d, &["documents"])?;
+            let documents = match d.get("documents") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        value.as_str().map(str::to_owned).ok_or_else(|| {
+                            JsonError(format!("documents[{index}] must be a string"))
                         })
-                        .unwrap_or_default(),
-                })
-            })
+                    })
+                    .collect::<Result<_, _>>()?,
+                Some(_) => return err("documents must be an array"),
+            };
+            Some(pb::target::TargetType::Documents(
+                pb::target::DocumentsTarget { documents },
+            ))
+        } else {
+            None
         };
-        let resume_type = if let Some(token) = t.get("resumeToken").and_then(Value::as_str) {
-            Some(pb::target::ResumeType::ResumeToken(base64_decode(token)?))
-        } else if let Some(rt) = t.get("readTime") {
+        let resume_token = t.get("resumeToken").filter(|value| !value.is_null());
+        let read_time = t.get("readTime").filter(|value| !value.is_null());
+        if resume_token.is_some() && read_time.is_some() {
+            return err("Payload isn't valid for request.");
+        }
+        let resume_type = if let Some(token) = resume_token {
+            Some(pb::target::ResumeType::ResumeToken(base64_decode(
+                token
+                    .as_str()
+                    .ok_or_else(|| JsonError("resumeToken must be a base64 string".into()))?,
+            )?))
+        } else if let Some(rt) = read_time {
             Some(pb::target::ResumeType::ReadTime(timestamp_from_json(rt)?))
         } else {
             None
         };
         Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
             target_id: int32(t.get("targetId"), "targetId")?.unwrap_or(0),
-            once: t.get("once").and_then(Value::as_bool).unwrap_or(false),
+            once: t
+                .get("once")
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    value
+                        .as_bool()
+                        .ok_or_else(|| JsonError("once must be a boolean".into()))
+                })
+                .transpose()?
+                .unwrap_or(false),
             expected_count: int32(t.get("expectedCount"), "expectedCount")?,
             target_type,
             resume_type,
         }))
-    } else if let Some(id) = v.get("removeTarget") {
+    } else if let Some(id) = remove_target {
         Some(pb::listen_request::TargetChange::RemoveTarget(
             int32(Some(id), "removeTarget")?.unwrap_or(0),
         ))
@@ -1301,6 +1452,28 @@ pub fn listen_request_from_json(v: &Value) -> Result<pb::ListenRequest, JsonErro
 
 /// JSON → `WriteRequest`.
 pub fn write_request_from_json(v: &Value) -> Result<pb::WriteRequest, JsonError> {
+    if !v.is_object() {
+        return err("WriteRequest must be an object");
+    }
+    strict_keys(
+        v,
+        &[
+            "database",
+            "streamId",
+            "writes",
+            "streamToken",
+            "labels",
+            "requestOptions",
+        ],
+    )?;
+    let writes = match v.get("writes") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(write_from_json)
+            .collect::<Result<_, _>>()?,
+        Some(_) => return err("writes must be an array"),
+    };
     Ok(pb::WriteRequest {
         database: v
             .get("database")
@@ -1312,12 +1485,7 @@ pub fn write_request_from_json(v: &Value) -> Result<pb::WriteRequest, JsonError>
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        writes: v
-            .get("writes")
-            .and_then(Value::as_array)
-            .map(|items| items.iter().map(write_from_json).collect::<Result<_, _>>())
-            .transpose()?
-            .unwrap_or_default(),
+        writes,
         stream_token: match v.get("streamToken").and_then(Value::as_str) {
             Some(t) => base64_decode(t)?,
             None => Vec::new(),
@@ -1489,6 +1657,191 @@ mod tests {
                 .0
                 .contains(&format!("{field} elements must be objects")));
         }
+    }
+
+    #[test]
+    fn protojson_value_messages_reject_scalar_container_payloads() {
+        for key in ["arrayValue", "mapValue"] {
+            let error = value_from_json(&json!({key: 1}))
+                .expect_err("a message field must not coerce a scalar to its default");
+            assert!(error.0.contains("must be an object"), "{key}: {error:?}");
+        }
+        let error = value_from_json(&json!({"nullValue": {"invalid": true}}))
+            .expect_err("NullValue is an enum and cannot consume an object");
+        assert!(error
+            .0
+            .contains("nullValue must be null, a string, or an integer"));
+    }
+
+    #[test]
+    fn protojson_query_enums_accept_numeric_wire_values() {
+        let query = structured_query_from_json(&json!({
+            "where": {
+                "compositeFilter": {
+                    "op": 1,
+                    "filters": [{
+                        "fieldFilter": {
+                            "field": {"fieldPath": "value"},
+                            "op": 5,
+                            "value": {"integerValue": "1"}
+                        }
+                    }]
+                }
+            },
+            "orderBy": [{"field": {"fieldPath": "value"}, "direction": 2}]
+        }))
+        .expect("numeric enum values use the protobuf wire numbers");
+        let Some(sq::filter::FilterType::CompositeFilter(composite)) =
+            query.r#where.and_then(|filter| filter.filter_type)
+        else {
+            panic!("expected composite filter");
+        };
+        assert_eq!(composite.op, 1);
+        let Some(sq::filter::FilterType::FieldFilter(field)) = composite
+            .filters
+            .into_iter()
+            .next()
+            .and_then(|filter| filter.filter_type)
+        else {
+            panic!("expected field filter");
+        };
+        assert_eq!(field.op, 5);
+        assert_eq!(query.order_by[0].direction, 2);
+
+        let nearest = structured_query_from_json(&json!({
+            "findNearest": {
+                "vectorField": {"fieldPath": "embedding"},
+                "queryVector": {"arrayValue": {"values": [{"doubleValue": 1.0}]}},
+                "distanceMeasure": 1,
+                "limit": 1
+            }
+        }))
+        .expect("numeric distance enum values use the protobuf wire numbers");
+        assert_eq!(nearest.find_nearest.unwrap().distance_measure, 1);
+
+        let write = write_from_json(&json!({
+            "transform": {
+                "document": "projects/demo/databases/(default)/documents/items/one",
+                "fieldTransforms": [{
+                    "fieldPath": "updated",
+                    "setToServerValue": 1
+                }]
+            }
+        }))
+        .expect("numeric server enum values use the protobuf wire numbers");
+        assert!(matches!(
+            write.operation,
+            Some(pb::write::Operation::Transform(transform))
+                if matches!(
+                    transform.field_transforms[0].transform_type,
+                    Some(
+                        pb::document_transform::field_transform::TransformType::SetToServerValue(1)
+                    )
+                )
+        ));
+    }
+
+    #[test]
+    fn protojson_repeated_fields_reject_non_arrays() {
+        let request_error = write_request_from_json(&json!("not-an-object"))
+            .expect_err("WriteRequest is a message and must be an object");
+        assert!(request_error.0.contains("WriteRequest must be an object"));
+
+        let write_error = write_request_from_json(&json!({"writes": "not-an-array"}))
+            .expect_err("WriteRequest.writes is repeated and must be an array");
+        assert!(write_error.0.contains("writes must be an array"));
+
+        let listen_error = listen_request_from_json(&json!({
+            "addTarget": {"documents": {"documents": "not-an-array"}}
+        }))
+        .expect_err("DocumentsTarget.documents is repeated and must be an array");
+        assert!(listen_error.0.contains("documents must be an array"));
+
+        let listen_message_error = listen_request_from_json(&json!({
+            "addTarget": {"documents": "not-an-object"}
+        }))
+        .expect_err("DocumentsTarget is a message and must be an object");
+        assert!(listen_message_error
+            .0
+            .contains("documents must be an object"));
+
+        let listen = listen_request_from_json(&json!({
+            "addTarget": null,
+            "removeTarget": null
+        }))
+        .expect("null oneof members are unset");
+        assert!(listen.target_change.is_none());
+
+        let transform_error = write_from_json(&json!({
+            "update": {"name": "projects/demo/databases/(default)/documents/items/one"},
+            "updateTransforms": "not-an-array"
+        }))
+        .expect_err("Write.updateTransforms is repeated and must be an array");
+        assert!(transform_error
+            .0
+            .contains("updateTransforms must be an array"));
+
+        let transform_message_error = write_from_json(&json!({
+            "transform": "not-an-object"
+        }))
+        .expect_err("DocumentTransform is a message and must be an object");
+        assert!(transform_message_error
+            .0
+            .contains("transform must be an object"));
+
+        let field_transform_error = write_from_json(&json!({
+            "transform": {
+                "document": "projects/demo/databases/(default)/documents/items/one",
+                "fieldTransforms": "not-an-array"
+            }
+        }))
+        .expect_err("DocumentTransform.fieldTransforms is repeated and must be an array");
+        assert!(field_transform_error
+            .0
+            .contains("fieldTransforms must be an array"));
+
+        let mask = mask_from_json(Some(&json!({"fieldPaths": null})))
+            .expect("a null repeated field is treated as an empty list");
+        assert!(mask
+            .expect("the mask message is present")
+            .field_paths
+            .is_empty());
+
+        let value_error = value_from_json(&json!({
+            "arrayValue": {"values": "not-an-array"}
+        }))
+        .expect_err("ArrayValue.values is repeated and must be an array");
+        assert!(value_error.0.contains("arrayValue.values must be an array"));
+
+        let aggregation_error = aggregation_query_from_json(&json!({
+            "aggregations": "not-an-array"
+        }))
+        .expect_err("StructuredAggregationQuery.aggregations is repeated and must be an array");
+        assert!(aggregation_error
+            .0
+            .contains("aggregations must be an array"));
+
+        let write = write_from_json(&json!({
+            "transform": {
+                "document": "projects/demo/databases/(default)/documents/items/one",
+                "fieldTransforms": [{
+                    "fieldPath": "value",
+                    "setToServerValue": null,
+                    "increment": {"integerValue": "1"}
+                }]
+            }
+        }))
+        .expect("a null oneof member is unset when another member is present");
+        assert!(matches!(
+            write.operation,
+            Some(pb::write::Operation::Transform(transform))
+                if matches!(
+                    transform.field_transforms[0].transform_type,
+                    Some(
+                        pb::document_transform::field_transform::TransformType::Increment(_)
+                    )
+                )
+        ));
     }
 
     fn query_vector_is_vector(value: &pb::Value) -> bool {

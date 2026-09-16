@@ -1040,6 +1040,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         )));
         if let Ok(mut store) = auth_store.lock() {
             let config = fireemu_core_auth::store::ProjectAuthConfig {
+                allow_duplicate_emails: cfg.auth_allow_duplicate_emails,
                 enable_improved_email_privacy: cfg.auth_improved_email_privacy,
                 ..store.config()
             };
@@ -1048,6 +1049,11 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 store.set_password_policy(policy.to_auth_policy());
             }
         }
+        // AUTH-CONFIG-REPAIR-001: configOverrides, client.permissions, blockingFunctions and quotaSimulation
+        // are parsed into the immutable RuntimeConfig, but their AuthStore/Functions bridge
+        // owners still need matching runtime APIs. Keeping them typed here prevents silent
+        // acceptance as if they were active; the integration ticket must wire them at the
+        // same namespace and commit boundaries as password policy.
         // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
         // wanted they are generated concurrently on blocking tasks. They are always separate
         // keys: the Auth key is derived from the session seed, the App Check key is drawn from

@@ -173,6 +173,28 @@
           "type": "boolean",
           "description": "Email enumeration protection, as production enables it for every new project: wrong-password and unknown-address sign-ins answer INVALID_LOGIN_CREDENTIALS and a password reset for an unknown address is acknowledged. Defaults to true; false restores the official Auth emulator's EMAIL_NOT_FOUND and INVALID_PASSWORD answers."
         },
+        "signIn": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowDuplicateEmails": { "type": "boolean", "default": false }
+          }
+        },
+        "client": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "permissions": { "$ref": "#/$defs/authClientPermissions" }
+          }
+        },
+        "configOverrides": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/authConfigOverride" },
+          "description": "Explicit project/tenant overrides for client.permissions and improvedEmailPrivacy. Password policies use passwordPolicyOverrides."
+        },
+        "blockingFunctions": { "$ref": "#/$defs/blockingFunctions" },
+        "quota": { "$ref": "#/$defs/authQuota" },
+        "quotaSimulation": { "$ref": "#/$defs/authQuotaSimulation" },
         "logActionCodes": {
           "type": "boolean",
           "description": "Print every email action link and SMS verification code to the daemon's standard output (and the Logging emulator) as the official Auth emulator does. Defaults to true. These lines carry credentials: set false where the console is shared or captured, and read the codes from /emulator/v1/projects/{project}/oobCodes and verificationCodes instead. --log-verbosity quiet also silences them."
@@ -320,6 +342,106 @@
             "requireNonAlphanumeric": { "type": "boolean", "default": false }
           }
         }
+      }
+    },
+    "authClientPermissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disabledUserSignup": { "type": "boolean", "default": false },
+        "disabledUserDeletion": { "type": "boolean", "default": false }
+      }
+    },
+    "authConfigOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "config"],
+      "properties": {
+        "projectId": { "type": "string", "minLength": 1 },
+        "tenantId": { "type": "string", "minLength": 1 },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "client": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "permissions": { "$ref": "#/$defs/authClientPermissions" }
+              }
+            },
+            "improvedEmailPrivacy": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "blockingFunctionTrigger": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["function"],
+          "properties": {
+            "function": { "type": "string", "minLength": 1 },
+            "region": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "blockingFunctions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "triggers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "beforeCreate": { "$ref": "#/$defs/blockingFunctionTrigger" },
+            "beforeSignIn": { "$ref": "#/$defs/blockingFunctionTrigger" }
+          }
+        },
+        "forwardInboundCredentials": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "idToken": { "type": "boolean", "default": false },
+            "accessToken": { "type": "boolean", "default": false },
+            "refreshToken": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    },
+    "authQuota": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "signUpQuotaConfig": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["quota", "startTime", "quotaDuration"],
+              "properties": {
+                "quota": { "type": "string", "pattern": "^[0-9]+$" },
+                "startTime": { "type": "string", "format": "date-time" },
+                "quotaDuration": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,9})?s$" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "authQuotaSimulation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["off", "observe", "enforce"], "default": "off" },
+        "algorithm": { "enum": ["fixed-window-v1"], "default": "fixed-window-v1" },
+        "defaultQuotaPerHour": { "type": "integer", "minimum": 0, "maximum": 1000000, "default": 100 },
+        "maxTrackedBuckets": { "type": "integer", "minimum": 1, "maximum": 65536, "default": 4096 }
       }
     },
     "appCheckMode": { "enum": ["off", "unenforced", "enforced"], "default": "off" },

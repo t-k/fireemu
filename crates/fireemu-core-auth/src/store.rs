@@ -5401,9 +5401,31 @@ impl AuthRegistry {
         patch: ProjectAuthConfigPatch,
         password_policy: Option<PasswordPolicy>,
     ) -> Option<ProjectAuthConfig> {
+        self.patch_project_config_with_password_policy_and_quota(
+            project,
+            patch,
+            password_policy,
+            None,
+        )
+    }
+
+    /// Applies a project Auth configuration, password-policy, and local sign-up quota update
+    /// under one namespace gate. The quota is project-scoped and is intentionally not copied to
+    /// existing tenants. A supplied quota is validated before any setting is published, so an
+    /// invalid candidate cannot leave a partially applied configuration behind.
+    pub fn patch_project_config_with_password_policy_and_quota(
+        &self,
+        project: &str,
+        patch: ProjectAuthConfigPatch,
+        password_policy: Option<PasswordPolicy>,
+        signup_quota: Option<SignupQuotaConfig>,
+    ) -> Option<ProjectAuthConfig> {
+        if let Some(quota) = signup_quota.as_ref() {
+            SignupQuota::new(quota.clone()).ok()?;
+        }
         let gate = self.operation_gate(project, None)?;
         let _operation = gate.lock().ok()?;
-        self.patch_project_config_under_gate(project, patch, password_policy)
+        self.patch_project_config_under_gate(project, patch, password_policy, signup_quota)
     }
 
     /// Registers a non-password Auth config override without creating the project namespace.
@@ -5651,6 +5673,7 @@ impl AuthRegistry {
         project: &str,
         patch: ProjectAuthConfigPatch,
         password_policy: Option<PasswordPolicy>,
+        signup_quota: Option<SignupQuotaConfig>,
     ) -> Option<ProjectAuthConfig> {
         let projects = self.projects.lock().ok()?;
         let parent = if project == self.default_project {
@@ -5661,7 +5684,7 @@ impl AuthRegistry {
                 .get(project)
                 .or_else(|| projects.routed.get(project))?
         };
-        if patch.is_empty() && password_policy.is_none() {
+        if patch.is_empty() && password_policy.is_none() && signup_quota.is_none() {
             return Some(parent.lock().ok()?.config());
         }
         if !patch.is_empty() {
@@ -5711,6 +5734,9 @@ impl AuthRegistry {
                     .expect("a password policy patch holds the override lock")
                     .insert(project.to_owned(), password_policy);
             }
+            if let Some(quota) = signup_quota {
+                parent.set_signup_quota_config(quota).ok()?;
+            }
             return Some(config);
         }
         let mut parent = parent.lock().ok()?;
@@ -5721,6 +5747,9 @@ impl AuthRegistry {
             };
             parent.set_password_policy(password_policy.clone());
             overrides.insert(project.to_owned(), password_policy);
+        }
+        if let Some(quota) = signup_quota {
+            parent.set_signup_quota_config(quota).ok()?;
         }
         Some(config)
     }

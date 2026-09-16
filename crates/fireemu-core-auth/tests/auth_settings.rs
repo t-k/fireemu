@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
 use fireemu_core_auth::store::{
     AuthError, AuthNamespaceConfigPatch, AuthPrincipal, AuthRegistry, AuthStore, NewUser,
     ProjectAuthConfig, ProjectAuthConfigPatch, TenantMetadataPatch,
@@ -90,6 +91,33 @@ fn project_config_patch_preserves_unselected_client_permission_fields() {
     assert!(!store.config().disabled_user_signup);
     assert!(store.config().disabled_user_deletion);
     assert!(store.config().allow_duplicate_emails);
+}
+
+#[test]
+fn project_config_and_quota_patch_commit_under_one_namespace_gate() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app"))));
+    let quota = SignupQuotaConfig {
+        mode: QuotaMode::Enforce,
+        default_quota_per_hour: 17,
+        max_tracked_buckets: 8,
+        ..SignupQuotaConfig::default()
+    };
+
+    let result = registry.patch_project_config_with_password_policy_and_quota(
+        "demo-app",
+        ProjectAuthConfigPatch {
+            disabled_user_signup: Some(true),
+            ..ProjectAuthConfigPatch::default()
+        },
+        None,
+        Some(quota.clone()),
+    );
+
+    assert_eq!(result.unwrap().disabled_user_signup, true);
+    let project = registry.default_store();
+    let project = project.lock().unwrap();
+    assert!(project.config().disabled_user_signup);
+    assert_eq!(project.signup_quota().config(), &quota);
 }
 
 #[test]

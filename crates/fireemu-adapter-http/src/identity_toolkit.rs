@@ -25,6 +25,9 @@ use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
 use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy, ViolationCode};
+use fireemu_core_auth::signup_quota::{
+    QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+};
 use fireemu_core_auth::store::{
     AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
     InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
@@ -51,6 +54,14 @@ const PASSWORD_POLICY_OPTION_FIELDS: [&str; 6] = [
     "containsNumericCharacter",
     "containsNonAlphanumericCharacter",
 ];
+const QUOTA_FIELDS: [&str; 2] = ["signUpQuotaConfig", "quotaSimulation"];
+const QUOTA_SIMULATION_FIELDS: [&str; 4] = [
+    "mode",
+    "algorithm",
+    "defaultQuotaPerHour",
+    "maxTrackedBuckets",
+];
+const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
 mod routes;
 pub mod widget;
@@ -2717,7 +2728,8 @@ fn apply_project_config_fields(
             }
             field
                 if field == "passwordPolicyConfig"
-                    || field.starts_with("passwordPolicyConfig.") => {}
+                    || field.starts_with("passwordPolicyConfig.")
+                    || valid_quota_field(field) => {}
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         }
     }
@@ -2976,7 +2988,279 @@ fn valid_project_config_field(field: &str) -> bool {
             | "passwordPolicyConfig.passwordPolicyEnforcementState"
             | "passwordPolicyConfig.forceUpgradeOnSignin"
             | "passwordPolicyConfig.passwordPolicyVersions"
+            | "quota"
+            | "quota.signUpQuotaConfig"
+            | "quota.quotaSimulation"
+            | "quota.quotaSimulation.mode"
+            | "quota.quotaSimulation.algorithm"
+            | "quota.quotaSimulation.defaultQuotaPerHour"
+            | "quota.quotaSimulation.maxTrackedBuckets"
     )
+}
+
+fn valid_quota_field(field: &str) -> bool {
+    field == "quota"
+        || field == "quota.signUpQuotaConfig"
+        || field == "quota.quotaSimulation"
+        || matches!(
+            field,
+            "quota.quotaSimulation.mode"
+                | "quota.quotaSimulation.algorithm"
+                | "quota.quotaSimulation.defaultQuotaPerHour"
+                | "quota.quotaSimulation.maxTrackedBuckets"
+        )
+}
+
+fn quota_duration_from_json(value: &Value) -> Result<LogicalDuration, JsonResponse> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    let body = text
+        .strip_suffix('s')
+        .filter(|body| !body.is_empty() && !body.starts_with(['+', '-']))
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    let (seconds, fraction) = body
+        .split_once('.')
+        .map_or((body, None), |(seconds, fraction)| {
+            (seconds, Some(fraction))
+        });
+    if !seconds.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let seconds = seconds
+        .parse::<i128>()
+        .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+    let fraction_nanos = match fraction {
+        None => 0,
+        Some(fraction)
+            if !fraction.is_empty()
+                && fraction.len() <= 9
+                && fraction.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            fraction
+                .parse::<i128>()
+                .map_err(|_| error(400, "INVALID_ARGUMENT"))?
+                .checked_mul(10_i128.pow(u32::try_from(9 - fraction.len()).unwrap_or(0)))
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
+        }
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let nanos = seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(fraction_nanos))
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    Ok(LogicalDuration::from_nanos(nanos))
+}
+
+fn quota_mode_from_json(value: &Value) -> Result<QuotaMode, JsonResponse> {
+    match value
+        .as_str()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
+    {
+        "off" => Ok(QuotaMode::Off),
+        "observe" => Ok(QuotaMode::Observe),
+        "enforce" => Ok(QuotaMode::Enforce),
+        _ => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+fn quota_config_from_json(
+    value: &Value,
+    current: &SignupQuotaConfig,
+) -> Result<SignupQuotaConfig, JsonResponse> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    if object
+        .keys()
+        .any(|field| field != "signUpQuotaConfig" && field != "quotaSimulation")
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let mut next = current.clone();
+    if let Some(value) = object.get("signUpQuotaConfig") {
+        next.temporary = if value.is_null() {
+            None
+        } else {
+            let quota_object = value
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if quota_object
+                .keys()
+                .any(|field| !SIGNUP_QUOTA_FIELDS.contains(&field.as_str()))
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            let quota_number = quota_object
+                .get("quota")
+                .and_then(Value::as_str)
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.bytes().all(|byte| byte.is_ascii_digit())
+                        && value
+                            .parse::<u64>()
+                            .is_ok_and(|value| i64::try_from(value).is_ok())
+                })
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
+                .parse::<u64>()
+                .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+            let start_time = LogicalInstant::parse_rfc3339(
+                quota_object
+                    .get("startTime")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+            )
+            .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+            let duration = quota_duration_from_json(
+                quota_object
+                    .get("quotaDuration")
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+            )?;
+            Some(
+                TemporaryQuota::new(quota_number, start_time, duration)
+                    .map_err(|_| error(400, "INVALID_ARGUMENT"))?,
+            )
+        };
+    }
+    if let Some(value) = object.get("quotaSimulation") {
+        let simulation = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if simulation
+            .keys()
+            .any(|field| !QUOTA_SIMULATION_FIELDS.contains(&field.as_str()))
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if let Some(value) = simulation.get("mode") {
+            next.mode = quota_mode_from_json(value)?;
+        }
+        if let Some(value) = simulation.get("algorithm") {
+            if value.as_str() != Some("fixed-window-v1") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            next.algorithm = QuotaAlgorithm::FixedWindowV1;
+        }
+        if let Some(value) = simulation.get("defaultQuotaPerHour") {
+            next.default_quota_per_hour = value
+                .as_u64()
+                .filter(|value| *value <= 1_000_000)
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        }
+        if let Some(value) = simulation.get("maxTrackedBuckets") {
+            next.max_tracked_buckets = value
+                .as_u64()
+                .filter(|value| (1..=65_536).contains(value))
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        }
+    }
+    next.validate()
+        .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+    Ok(next)
+}
+
+fn quota_config_from_update(
+    current: &SignupQuotaConfig,
+    body: &Value,
+    fields: &[String],
+) -> Result<Option<SignupQuotaConfig>, JsonResponse> {
+    let quota_fields = fields
+        .iter()
+        .filter(|field| valid_quota_field(field))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if quota_fields.is_empty() {
+        return Ok(None);
+    }
+    if quota_fields.iter().any(|field| *field == "quota") && quota_fields.len() != 1 {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let Some(quota) = body.get("quota") else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let quota = quota
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    // Validate every supplied quota member before applying the mask. A malformed value outside
+    // the selected mask must not be smuggled through as a successful partial update.
+    quota_config_from_json(&Value::Object(quota.clone()), current)?;
+    let mut selected = serde_json::Map::new();
+    if quota_fields
+        .iter()
+        .any(|field| *field == "quota" || *field == "quota.signUpQuotaConfig")
+    {
+        if let Some(value) = quota.get("signUpQuotaConfig") {
+            selected.insert("signUpQuotaConfig".to_owned(), value.clone());
+        }
+    }
+    if quota_fields
+        .iter()
+        .any(|field| *field == "quota" || *field == "quota.quotaSimulation")
+    {
+        if let Some(value) = quota.get("quotaSimulation") {
+            selected.insert("quotaSimulation".to_owned(), value.clone());
+        }
+    }
+    if quota_fields
+        .iter()
+        .any(|field| field.starts_with("quota.quotaSimulation."))
+    {
+        let mut simulation = serde_json::Map::new();
+        let value = quota
+            .get("quotaSimulation")
+            .and_then(Value::as_object)
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        for field in quota_fields
+            .iter()
+            .filter_map(|field| field.strip_prefix("quota.quotaSimulation."))
+        {
+            if let Some(value) = value.get(field) {
+                simulation.insert(field.to_owned(), value.clone());
+            }
+        }
+        selected.insert("quotaSimulation".to_owned(), Value::Object(simulation));
+    }
+    quota_config_from_json(&Value::Object(selected), current).map(Some)
+}
+
+fn quota_config_json(quota: &SignupQuotaConfig) -> Value {
+    let mode = match quota.mode {
+        QuotaMode::Off => "off",
+        QuotaMode::Observe => "observe",
+        QuotaMode::Enforce => "enforce",
+    };
+    let mut quota_object = serde_json::Map::new();
+    if let Some(temporary) = quota.temporary {
+        let nanos = temporary.duration.as_nanos();
+        let seconds = nanos.div_euclid(1_000_000_000);
+        let fraction = nanos.rem_euclid(1_000_000_000);
+        let duration = if fraction == 0 {
+            format!("{seconds}s")
+        } else {
+            format!("{seconds}.{fraction:09}s")
+                .trim_end_matches('0')
+                .to_owned()
+        };
+        quota_object.insert(
+            "signUpQuotaConfig".to_owned(),
+            json!({
+                "quota": temporary.quota.to_string(),
+                "startTime": temporary.start_time.to_rfc3339().unwrap_or_default(),
+                "quotaDuration": duration,
+            }),
+        );
+    }
+    quota_object.insert(
+        "quotaSimulation".to_owned(),
+        json!({
+            "mode": mode,
+            "algorithm": "fixed-window-v1",
+            "defaultQuotaPerHour": quota.default_quota_per_hour,
+            "maxTrackedBuckets": quota.max_tracked_buckets,
+        }),
+    );
+    Value::Object(quota_object)
 }
 
 fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
@@ -2986,7 +3270,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
     for key in object.keys() {
         if !matches!(
             key.as_str(),
-            "signIn" | "emailPrivacyConfig" | "client" | "passwordPolicyConfig"
+            "signIn" | "emailPrivacyConfig" | "client" | "passwordPolicyConfig" | "quota"
         ) {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
@@ -3029,6 +3313,41 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
     }
+    if let Some(value) = object.get("quota") {
+        let quota = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if quota
+            .keys()
+            .any(|key| !QUOTA_FIELDS.contains(&key.as_str()))
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if let Some(value) = quota.get("signUpQuotaConfig") {
+            if !value.is_null() {
+                let config = value
+                    .as_object()
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                if config
+                    .keys()
+                    .any(|key| !SIGNUP_QUOTA_FIELDS.contains(&key.as_str()))
+                {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                }
+            }
+        }
+        if let Some(value) = quota.get("quotaSimulation") {
+            let simulation = value
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if simulation
+                .keys()
+                .any(|key| !QUOTA_SIMULATION_FIELDS.contains(&key.as_str()))
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -3052,7 +3371,11 @@ fn project_config_management(
         };
         return JsonResponse {
             status: 200,
-            body: project_config_json_with_password_policy(store.config(), store.password_policy()),
+            body: project_config_json_with_auth_settings(
+                store.config(),
+                store.password_policy(),
+                store.signup_quota().config(),
+            ),
         };
     }
     if !body.is_object() {
@@ -3081,6 +3404,11 @@ fn project_config_management(
             if body.get("passwordPolicyConfig").is_some() {
                 fields.push("passwordPolicyConfig".to_owned());
             }
+            if let Some(quota) = body.get("quota").and_then(Value::as_object) {
+                for field in quota.keys() {
+                    fields.push(format!("quota.{field}"));
+                }
+            }
             fields
         }
         Err(response) => return response,
@@ -3095,6 +3423,10 @@ fn project_config_management(
         Ok(store) => store.password_policy().clone(),
         Err(_) => return error(500, "INTERNAL"),
     };
+    let current_quota = match selected_store.lock() {
+        Ok(store) => store.signup_quota().config().clone(),
+        Err(_) => return error(500, "INTERNAL"),
+    };
     let password_policy = match password_policy_from_update(&current_policy, body, &fields) {
         Ok(policy) => policy,
         Err(response) => return response,
@@ -3103,15 +3435,23 @@ fn project_config_management(
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
+    let signup_quota = match quota_config_from_update(&current_quota, body, &fields) {
+        Ok(quota) => quota,
+        Err(response) => return response,
+    };
     let has_policy = password_policy.is_some();
+    let has_quota = signup_quota.is_some();
     let config = if let Some(registry) = state
         .registry
         .as_ref()
         .filter(|_| pending_project.is_none())
     {
-        let Some(config) =
-            registry.patch_project_config_with_password_policy(project, patch, password_policy)
-        else {
+        let Some(config) = registry.patch_project_config_with_password_policy_and_quota(
+            project,
+            patch,
+            password_policy,
+            signup_quota,
+        ) else {
             return error(500, "INTERNAL");
         };
         config
@@ -3128,9 +3468,14 @@ fn project_config_management(
         if let Some(policy) = password_policy {
             store.set_password_policy(policy);
         }
+        if let Some(quota) = signup_quota {
+            if store.set_signup_quota_config(quota).is_err() {
+                return error(400, "INVALID_ARGUMENT");
+            }
+        }
         config
     };
-    if !patch.is_empty() || has_policy {
+    if !patch.is_empty() || has_policy || has_quota {
         if let Some(project) = pending_project {
             if let Err(response) = install_routed_candidate(state, project, selected_store) {
                 return response;
@@ -3143,7 +3488,11 @@ fn project_config_management(
             let Ok(store) = selected_store.lock() else {
                 return error(500, "INTERNAL");
             };
-            project_config_json_with_password_policy(config, store.password_policy())
+            project_config_json_with_auth_settings(
+                config,
+                store.password_policy(),
+                store.signup_quota().config(),
+            )
         },
     }
 }
@@ -8617,6 +8966,16 @@ fn project_config_json_with_password_policy(
 ) -> Value {
     let mut result = project_config_json(config);
     result["passwordPolicyConfig"] = password_policy_config_json(policy);
+    result
+}
+
+fn project_config_json_with_auth_settings(
+    config: fireemu_core_auth::store::ProjectAuthConfig,
+    policy: &PasswordPolicy,
+    quota: &SignupQuotaConfig,
+) -> Value {
+    let mut result = project_config_json_with_password_policy(config, policy);
+    result["quota"] = quota_config_json(quota);
     result
 }
 

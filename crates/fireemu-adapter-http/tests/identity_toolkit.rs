@@ -7189,6 +7189,116 @@ fn admin_v2_password_policy_leaf_masks_preserve_unselected_fields() {
 }
 
 #[test]
+fn admin_v2_project_quota_settings_patch_and_readback_are_atomic() {
+    let s = state();
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let quota = json!({
+        "signUpQuotaConfig": {
+            "quota": "2",
+            "startTime": "2030-01-01T00:00:00Z",
+            "quotaDuration": "3600s"
+        },
+        "quotaSimulation": {
+            "mode": "enforce",
+            "algorithm": "fixed-window-v1",
+            "defaultQuotaPerHour": 17,
+            "maxTrackedBuckets": 8
+        }
+    });
+
+    let updated = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=quota.signUpQuotaConfig,quota.quotaSimulation"),
+        &json!({"quota": quota}),
+    );
+    assert_eq!(updated.0, 200, "{}", updated.1);
+    assert_eq!(updated.1["quota"], quota);
+
+    let read = admin(&s, "GET", path, &json!({}));
+    assert_eq!(read.0, 200, "{}", read.1);
+    assert_eq!(read.1["quota"], quota);
+
+    let mixed = admin(
+        &s,
+        "PATCH",
+        &format!(
+            "{path}?updateMask=passwordPolicyConfig.passwordPolicyEnforcementState,client.permissions.disabledUserSignup,quota.quotaSimulation.mode"
+        ),
+        &json!({
+            "passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": "ENFORCE"
+            },
+            "client": {"permissions": {"disabledUserSignup": true}},
+            "quota": {"quotaSimulation": {"mode": "observe"}}
+        }),
+    );
+    assert_eq!(mixed.0, 200, "{}", mixed.1);
+    assert_eq!(
+        mixed.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+        "ENFORCE"
+    );
+    assert_eq!(mixed.1["client"]["permissions"]["disabledUserSignup"], true);
+    assert_eq!(mixed.1["quota"]["quotaSimulation"]["mode"], "observe");
+    assert_eq!(
+        mixed.1["quota"]["signUpQuotaConfig"],
+        quota["signUpQuotaConfig"]
+    );
+    let mut quota_after_mixed = quota.clone();
+    quota_after_mixed["quotaSimulation"]["mode"] = json!("observe");
+
+    let rejected = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=quota.signUpQuotaConfig,quota.quotaSimulation"),
+        &json!({
+            "quota": {
+                "signUpQuotaConfig": {
+                    "quota": "not-a-number",
+                    "startTime": "2030-01-01T00:00:00Z",
+                    "quotaDuration": "3600s"
+                },
+                "quotaSimulation": {
+                    "mode": "observe",
+                    "algorithm": "fixed-window-v1",
+                    "defaultQuotaPerHour": 21,
+                    "maxTrackedBuckets": 9
+                }
+            }
+        }),
+    );
+    assert_eq!(rejected.0, 400, "{}", rejected.1);
+
+    let unchanged = admin(&s, "GET", path, &json!({}));
+    assert_eq!(unchanged.0, 200, "{}", unchanged.1);
+    assert_eq!(unchanged.1["quota"], quota_after_mixed);
+
+    let unsupported_mask = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=quota.signUpQuotaConfig.quota"),
+        &json!({
+            "quota": {
+                "signUpQuotaConfig": {
+                    "quota": "3",
+                    "startTime": "2030-01-01T00:00:00Z",
+                    "quotaDuration": "3600s"
+                }
+            }
+        }),
+    );
+    assert_eq!(unsupported_mask.0, 400, "{}", unsupported_mask.1);
+
+    let after_unsupported_mask = admin(&s, "GET", path, &json!({}));
+    assert_eq!(
+        after_unsupported_mask.0, 200,
+        "{}",
+        after_unsupported_mask.1
+    );
+    assert_eq!(after_unsupported_mask.1["quota"], quota_after_mixed);
+}
+
+#[test]
 fn admin_v2_password_policy_invalid_selected_update_is_atomic() {
     let s = state();
     let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";

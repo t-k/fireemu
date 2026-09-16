@@ -2786,14 +2786,21 @@ fn export_auth(
 ) -> Result<(), ArtifactError> {
     let section_dir = dir.join(AUTH_PATH);
     create_private_dir(&section_dir).map_err(|e| ArtifactError::new("auth", &section_dir, e))?;
-    let store = endpoints.auth.default_store();
-    let store = store
-        .lock()
-        .map_err(|_| ArtifactError::new("auth", &section_dir, "the Auth store is poisoned"))?
-        .clone();
+    let snapshot = endpoints
+        .auth
+        .capture_export_snapshot(endpoints.project)
+        .map_err(|error| ArtifactError::new("auth", &section_dir, error))?
+        .ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                &section_dir,
+                format!("Auth project {:?} is not available", endpoints.project),
+            )
+        })?;
+    let store = snapshot.default_store();
     let mut file = AccountsFile::default();
     for user in store.users_by_creation() {
-        file.users.push(exported_account(&store, user, None));
+        file.users.push(exported_account(store, user, None));
     }
     let accounts_path = section_dir.join(ACCOUNTS_FILE);
     write_private_file(&accounts_path, file.to_json().as_bytes())
@@ -2813,31 +2820,11 @@ fn export_auth(
     let project_quota = store.signup_quota().config().clone();
     let mut tenant_policies = Vec::new();
     let mut tenant_settings = Vec::new();
-    for tenant in endpoints.auth.tenants(endpoints.project) {
-        let tenant_store = endpoints
-            .auth
-            .tenant_store(endpoints.project, &tenant)
-            .ok_or_else(|| {
-                ArtifactError::new(
-                    "auth",
-                    &section_dir,
-                    format!("tenant {tenant:?} disappeared during export"),
-                )
-            })?;
-        let tenant_store = tenant_store
-            .lock()
-            .map_err(|_| {
-                ArtifactError::new(
-                    "auth",
-                    &section_dir,
-                    format!("tenant {tenant:?} store is poisoned"),
-                )
-            })?
-            .clone();
+    for (tenant, tenant_store) in snapshot.tenant_stores() {
         let tenant_policy = exported_password_policy(tenant_store.password_policy());
         if tenant_policy != exported_password_policy(&PasswordPolicy::default()) {
             tenant_policies.push(PasswordPolicyNamespace {
-                tenant_id: Some(tenant.clone()),
+                tenant_id: Some(tenant.to_owned()),
                 policy: tenant_policy,
             });
         }
@@ -2847,7 +2834,7 @@ fn export_auth(
             || tenant_quota != SignupQuotaConfig::default()
         {
             tenant_settings.push(AuthSettingsNamespace {
-                tenant_id: Some(tenant.clone()),
+                tenant_id: Some(tenant.to_owned()),
                 settings: AuthSettingsRecord {
                     config: Some(AuthConfig {
                         allow_duplicate_emails: Some(tenant_config.allow_duplicate_emails),
@@ -2866,7 +2853,7 @@ fn export_auth(
         let mut file = AccountsFile::default();
         for user in tenant_store.users_by_creation() {
             file.users
-                .push(exported_account(&tenant_store, user, Some(&tenant)));
+                .push(exported_account(tenant_store, user, Some(tenant)));
         }
         let path = section_dir.join(format!("accounts-{tenant}.json"));
         write_private_file(&path, file.to_json().as_bytes())

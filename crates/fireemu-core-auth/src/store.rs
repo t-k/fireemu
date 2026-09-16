@@ -3768,6 +3768,39 @@ impl AuthSnapshot {
     }
 }
 
+/// A consistent export view of one Auth project and all of its published tenants.
+///
+/// The view is captured while the project's operation gate and every participating store lock
+/// are held. Callers can then serialize the owned copies without keeping registry locks or
+/// blocking Auth mutations during file I/O.
+#[derive(Debug)]
+pub struct AuthExportSnapshot {
+    project: String,
+    default: AuthStore,
+    tenants: Vec<(String, AuthStore)>,
+}
+
+impl AuthExportSnapshot {
+    /// The project captured by this view.
+    #[must_use]
+    pub fn project_id(&self) -> &str {
+        &self.project
+    }
+
+    /// The project-level Auth store captured by this view.
+    #[must_use]
+    pub const fn default_store(&self) -> &AuthStore {
+        &self.default
+    }
+
+    /// Tenant stores captured by this view in lexical tenant-ID order.
+    pub fn tenant_stores(&self) -> impl Iterator<Item = (&str, &AuthStore)> {
+        self.tenants
+            .iter()
+            .map(|(tenant, store)| (tenant.as_str(), store))
+    }
+}
+
 type SharedAuthStore = Arc<Mutex<AuthStore>>;
 type TenantKey = (String, String);
 
@@ -5196,6 +5229,91 @@ impl AuthRegistry {
         Some(gate)
     }
 
+    /// Captures the project store and every published tenant store as one export view.
+    ///
+    /// The project operation gate excludes configuration and tenant-publication transitions
+    /// while the membership registries are inspected. Every participating store is then locked
+    /// before any clone is made, so user records and namespace settings come from one coherent
+    /// point in time. The locks are released before the caller serializes the copies. A
+    /// provisional session is rejected rather than exporting an uncommitted namespace.
+    pub fn capture_export_snapshot(
+        &self,
+        project: &str,
+    ) -> Result<Option<AuthExportSnapshot>, &'static str> {
+        let gate = self
+            .operation_gate(project, None)
+            .ok_or("the Auth operation-gate registry is poisoned")?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let projects = self
+            .projects
+            .lock()
+            .map_err(|_| "project registry is poisoned")?;
+        if projects.pending_sessions.contains_key(project) {
+            return Err("an Auth project session is still provisional");
+        }
+        let default = if project == self.default_project {
+            self.default.clone()
+        } else {
+            let Some(store) = projects
+                .registered
+                .get(project)
+                .or_else(|| projects.routed.get(project))
+                .cloned()
+            else {
+                return Ok(None);
+            };
+            store
+        };
+        let tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let tenant_entries = tenants
+            .iter()
+            .filter(|((candidate, _), _)| candidate == project)
+            .map(|((_, tenant), store)| (tenant.clone(), store.clone()))
+            .collect::<Vec<_>>();
+
+        let default_guard = default
+            .lock()
+            .map_err(|_| "the project Auth store is poisoned")?;
+        let tenant_guards = tenant_entries
+            .iter()
+            .map(|(_, store)| store.lock().map_err(|_| "an Auth tenant store is poisoned"))
+            .collect::<Result<Vec<_>, _>>()?;
+        // Authentication reads hold a namespace store before reading tenant metadata. Keep the
+        // same order here so an in-flight request cannot hold a store while waiting for metadata
+        // that an export is holding while waiting for that store.
+        let metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let metadata_tenants = metadata
+            .keys()
+            .filter(|(candidate, _)| candidate == project)
+            .map(|(_, tenant)| tenant.clone())
+            .collect::<Vec<_>>();
+        let tenant_ids = tenant_entries
+            .iter()
+            .map(|(tenant, _)| tenant.clone())
+            .collect::<Vec<_>>();
+        if tenant_ids != metadata_tenants {
+            return Err("tenant store and metadata membership differ");
+        }
+        let snapshot = AuthExportSnapshot {
+            project: project.to_owned(),
+            default: default_guard.clone(),
+            tenants: tenant_entries
+                .iter()
+                .zip(&tenant_guards)
+                .map(|((tenant, _), store)| (tenant.clone(), (*store).clone()))
+                .collect(),
+        };
+        Ok(Some(snapshot))
+    }
+
     fn effective_tenant_config_override(
         &self,
         key: &TenantKey,
@@ -6572,8 +6690,8 @@ mod index_invariant_tests {
 #[cfg(test)]
 mod compatibility_routing_tests {
     use super::{
-        AuthRegistry, AuthStore, CompatibilityUserStoreMatch, NewUser, RefreshTokenStoreMatch,
-        RoutedStoreInstall, TenantMetadata, TenantMetadataPatch,
+        AuthRegistry, AuthStore, CompatibilityUserStoreMatch, NewUser, ProjectAuthConfig,
+        RefreshTokenStoreMatch, RoutedStoreInstall, TenantMetadata, TenantMetadataPatch,
     };
     use crate::jwt::{encode_unsigned, verify_id_token, verify_rules_token, TokenAcceptance};
     use crate::mfa::TotpPolicy;
@@ -6907,6 +7025,98 @@ mod compatibility_routing_tests {
                 registry.default.lock().unwrap().config()
             );
         }
+    }
+
+    #[test]
+    fn export_scope_capture_waits_for_the_project_operation_gate() {
+        let default = store("demo-app", 1);
+        let registry = Arc::new(AuthRegistry::new("demo-app", default.clone()));
+        let tenant = registry.ensure_tenant("demo-app", "customer").unwrap();
+        let initial_config = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: true,
+            disabled_user_signup: false,
+            disabled_user_deletion: false,
+        };
+        default.lock().unwrap().set_config(initial_config);
+        tenant.lock().unwrap().set_config(initial_config);
+        let tenant_operation = tenant.lock().unwrap();
+        let gate = registry.operation_gate("demo-app", None).unwrap();
+        let operation = gate.lock().unwrap();
+        let capture_registry = registry.clone();
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (captured_tx, captured_rx) = mpsc::sync_channel(1);
+        let capture = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let snapshot = capture_registry
+                .capture_export_snapshot("demo-app")
+                .unwrap()
+                .unwrap();
+            captured_tx.send(snapshot).unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(
+            captured_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "export capture must wait for the project operation gate"
+        );
+        drop(operation);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut default_lock_observed = false;
+        while Instant::now() < deadline {
+            match default.try_lock() {
+                Ok(guard) => drop(guard),
+                Err(TryLockError::WouldBlock) => {
+                    default_lock_observed = true;
+                    break;
+                }
+                Err(TryLockError::Poisoned(_)) => panic!("default store poisoned"),
+            }
+            std::thread::yield_now();
+        }
+        assert!(
+            default_lock_observed,
+            "capture must retain the project lock while acquiring every tenant lock"
+        );
+
+        let next_config = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: true,
+            disabled_user_signup: true,
+            disabled_user_deletion: true,
+        };
+        let writer_default = default.clone();
+        let (writer_done_tx, writer_done_rx) = mpsc::sync_channel(1);
+        let writer = std::thread::spawn(move || {
+            writer_default.lock().unwrap().set_config(next_config);
+            writer_done_tx.send(()).unwrap();
+        });
+        assert!(
+            writer_done_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "a store mutation must wait until the complete export view is captured"
+        );
+        drop(tenant_operation);
+
+        let snapshot = captured_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("export capture completes after the gate is released");
+        capture.join().unwrap();
+        writer
+            .join()
+            .expect("the post-capture store mutation completes");
+        assert_eq!(snapshot.default_store().config(), initial_config);
+        assert_eq!(
+            snapshot
+                .tenant_stores()
+                .find(|(id, _)| *id == "customer")
+                .map(|(_, store)| store.config()),
+            Some(initial_config)
+        );
     }
 
     #[test]

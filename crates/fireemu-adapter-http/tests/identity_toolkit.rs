@@ -34,6 +34,18 @@ struct ConfigurableBlockingHook {
     settings: Arc<Mutex<Value>>,
 }
 
+struct InterveningBlockingSettingsWriter {
+    settings: Arc<Mutex<Value>>,
+    intervene: AtomicBool,
+}
+
+struct BlockingSettingsGateProbe {
+    settings: Arc<Mutex<Value>>,
+    entered: Arc<AtomicBool>,
+    updates: Arc<AtomicUsize>,
+    release: Arc<AtomicBool>,
+}
+
 impl AuthBlockingHook for ConfigurableBlockingHook {
     fn invoke(
         &self,
@@ -70,6 +82,77 @@ impl AuthBlockingHook for ConfigurableBlockingHook {
 
     fn update_blocking_auth_settings(&self, settings: &Value) -> Result<(), String> {
         self.validate_blocking_auth_settings(settings)?;
+        *self.settings.lock().unwrap() = settings.clone();
+        Ok(())
+    }
+}
+
+impl AuthBlockingHook for InterveningBlockingSettingsWriter {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("settings regression hook is not used for Auth requests")
+    }
+
+    fn blocking_auth_settings(&self) -> Option<Value> {
+        Some(self.settings.lock().unwrap().clone())
+    }
+
+    fn blocking_auth_project(&self) -> Option<&str> {
+        Some("demo-app")
+    }
+
+    fn validate_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn update_blocking_auth_settings(&self, settings: &Value) -> Result<(), String> {
+        *self.settings.lock().unwrap() = settings.clone();
+        if self.intervene.swap(false, Ordering::SeqCst) {
+            // Model a writer that commits after this request publishes its blocking candidate
+            // but before the paired Auth update reports failure.
+            *self.settings.lock().unwrap() = json!({
+                "triggers": {
+                    "beforeCreate": null,
+                    "beforeSignIn": null,
+                }
+            });
+        }
+        Ok(())
+    }
+}
+
+impl AuthBlockingHook for BlockingSettingsGateProbe {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("settings regression hook is not used for Auth requests")
+    }
+
+    fn blocking_auth_settings(&self) -> Option<Value> {
+        Some(self.settings.lock().unwrap().clone())
+    }
+
+    fn blocking_auth_project(&self) -> Option<&str> {
+        Some("demo-app")
+    }
+
+    fn validate_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn update_blocking_auth_settings(&self, settings: &Value) -> Result<(), String> {
+        let update = self.updates.fetch_add(1, Ordering::SeqCst);
+        if update == 0 {
+            self.entered.store(true, Ordering::SeqCst);
+            while !self.release.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
         *self.settings.lock().unwrap() = settings.clone();
         Ok(())
     }
@@ -1877,6 +1960,124 @@ fn project_blocking_update_rolls_back_when_auth_namespace_commit_fails() {
     );
     assert_eq!(status, 500, "{rejected}");
     assert_eq!(settings.lock().unwrap().clone(), before);
+}
+
+#[test]
+fn project_blocking_rollback_does_not_overwrite_an_intervening_writer() {
+    let settings = Arc::new(Mutex::new(json!({
+        "triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/checkRegistration"},
+            "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+        }
+    })));
+    let hook = Arc::new(InterveningBlockingSettingsWriter {
+        settings: settings.clone(),
+        intervene: AtomicBool::new(true),
+    });
+    let mut s = state();
+    s.blocking = Some(hook);
+
+    // An Auth registry that does not contain demo-app forces the paired Auth update to fail.
+    // The hook has already committed a different setting in the configured writer's
+    // interleaving. Rollback must leave that newer value intact.
+    let other_store = Arc::new(Mutex::new(AuthStore::new(
+        "other-app",
+        SplitMix64::new(23),
+        TotpPolicy::default(),
+    )));
+    s.registry = Some(Arc::new(AuthRegistry::new("other-app", other_store)));
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let (status, rejected) = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=blockingFunctions"),
+        &json!({"blockingFunctions": {"triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/changed"},
+            "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+        }}}),
+    );
+    assert_eq!(status, 500, "{rejected}");
+    assert_eq!(
+        settings.lock().unwrap().clone(),
+        json!({
+            "triggers": {
+                "beforeCreate": null,
+                "beforeSignIn": null,
+            }
+        })
+    );
+}
+
+#[test]
+fn project_blocking_updates_are_serialized_before_the_candidate_is_published() {
+    let settings = Arc::new(Mutex::new(json!({
+        "triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/checkRegistration"},
+            "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+        }
+    })));
+    let probe = Arc::new(BlockingSettingsGateProbe {
+        settings,
+        entered: Arc::new(AtomicBool::new(false)),
+        updates: Arc::new(AtomicUsize::new(0)),
+        release: Arc::new(AtomicBool::new(false)),
+    });
+    let mut base = state();
+    base.blocking = Some(probe.clone());
+    base.registry = Some(Arc::new(AuthRegistry::new("demo-app", base.store.clone())));
+    let state = Arc::new(base);
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let entered = probe.entered.clone();
+    let release = probe.release.clone();
+    let updates = probe.updates.clone();
+
+    std::thread::scope(|scope| {
+        let first_state = Arc::clone(&state);
+        scope.spawn(move || {
+            let response = admin(
+                &first_state,
+                "PATCH",
+                &format!("{path}?updateMask=blockingFunctions"),
+                &json!({"blockingFunctions": {"triggers": {
+                    "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/first"},
+                    "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+                }}}),
+            );
+            assert_eq!(response.0, 200, "{}", response.1);
+        });
+
+        let entered_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !entered.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < entered_deadline,
+                "the first blocking settings update did not reach the probe"
+            );
+            std::thread::yield_now();
+        }
+
+        let second_state = Arc::clone(&state);
+        let second = scope.spawn(move || {
+            admin(
+                &second_state,
+                "PATCH",
+                &format!("{path}?updateMask=blockingFunctions"),
+                &json!({"blockingFunctions": {"triggers": {
+                    "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/second"},
+                    "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+                }}}),
+            )
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(
+            updates.load(Ordering::SeqCst),
+            1,
+            "a second PATCH reached the blocking writer before the first committed"
+        );
+        release.store(true, Ordering::SeqCst);
+        let response = second.join().unwrap();
+        assert_eq!(response.0, 200, "{}", response.1);
+    });
 }
 
 struct ReentrantAdminHook {

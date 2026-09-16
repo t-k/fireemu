@@ -473,6 +473,25 @@ pub trait AuthBlockingHook: Send + Sync {
         self.update_blocking_auth_settings(snapshot)
     }
 
+    /// Restores a snapshot only when the public blocking settings still equal the candidate
+    /// written by this request. The project config route holds its Auth operation gate across
+    /// this check and the paired Auth update, so an intervening config request cannot be erased
+    /// by rollback. Runtime-backed implementations may override this when their settings store
+    /// provides a stronger compare-and-swap primitive.
+    fn restore_blocking_auth_settings_snapshot_if_unchanged(
+        &self,
+        snapshot: &Value,
+        candidate: &Value,
+    ) -> Result<(), String> {
+        let current = self
+            .blocking_auth_settings()
+            .ok_or_else(|| "blocking Auth settings are unavailable".to_owned())?;
+        if current != *candidate {
+            return Err("blocking Auth settings changed during the transaction".to_owned());
+        }
+        self.restore_blocking_auth_settings_snapshot(snapshot)
+    }
+
     /// Validates a complete logical blocking settings projection without changing state.
     fn validate_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
         Err("blocking Auth settings are not configurable for this hook".to_owned())
@@ -2165,6 +2184,33 @@ fn handle_with_policy(
     let at = now(state);
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let resolution = routes::resolve(method, path);
+    // Project configuration and blocking Auth requests share this adapter-level gate. The
+    // registry owns the Auth namespace gate used by the core project update below, so keeping
+    // this outer gate separate lets the blocking candidate and Auth update remain serialized
+    // without recursively locking the registry gate.
+    let settings_boundary = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if matches!(
+                route.handler,
+                routes::Handler::AdminGetProjectConfig
+                    | routes::Handler::AdminUpdateProjectConfig
+            )
+    ) || state.blocking.as_deref().is_some_and(|blocking| {
+        matches!(
+            resolution,
+            routes::Resolution::Matched { route, .. }
+                if handler_may_invoke_blocking_auth(blocking, route.handler)
+        )
+    });
+    let _settings_operation = if settings_boundary {
+        match state.operation_gate.lock() {
+            Ok(operation) => Some(operation),
+            Err(_) => return error(500, "INTERNAL"),
+        }
+    } else {
+        None
+    };
     let routed_project = match resolution {
         routes::Resolution::Matched {
             route,
@@ -2246,7 +2292,7 @@ fn handle_with_policy(
                 if handler_may_invoke_blocking_auth(blocking, route.handler)
         )
     });
-    let operation_gate = if blocking_auth {
+    let operation_gate = if blocking_auth && state.registry.is_some() {
         let gate = match state.registry.as_ref() {
             Some(registry) => {
                 let Some(gate) = registry.operation_gate(&store_project, store_tenant.as_deref())
@@ -2255,7 +2301,7 @@ fn handle_with_policy(
                 };
                 gate
             }
-            None => state.operation_gate.clone(),
+            None => unreachable!("registry presence checked above"),
         };
         Some(gate)
     } else {
@@ -3900,14 +3946,15 @@ fn project_config_management(
         {
             return error(400, "INVALID_ARGUMENT");
         }
-        Some((blocking, snapshot))
+        Some((blocking, snapshot, settings.clone()))
     } else {
         None
     };
 
     let rollback_blocking = |response: JsonResponse| {
-        if let Some((blocking, snapshot)) = &blocking_transaction {
-            let _ = blocking.restore_blocking_auth_settings_snapshot(snapshot);
+        if let Some((blocking, snapshot, candidate)) = &blocking_transaction {
+            let _ =
+                blocking.restore_blocking_auth_settings_snapshot_if_unchanged(snapshot, candidate);
         }
         response
     };

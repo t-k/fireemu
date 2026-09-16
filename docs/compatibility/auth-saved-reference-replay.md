@@ -23,3 +23,9 @@ uv run --project tools/compat-inventory --locked --python 3.12 \
   --output /tmp/auth-saved-reference-replay/comparison.json \
   --source-commit 78b1da35071f93504c872b21dd9f92858d3e1fd3
 ```
+
+## Current feature replay (`577eaad5`)
+
+The same immutable production receipts were replayed through the current feature source `577eaad53c7e914f141405a715b246248dcd6ae8`. One freshly built local artifact (`95ffc5825108db895c0e298d10865c288ffe423038eee8d6cef74f0a6ba774e6`) completed all four owned corpora with 48/48 `MATCH` rows. The generated run manifest is bound by `5cb9484c8b16f5dac23e22e26e07ff84459ecea77b2bd8b8dae78d67b595cdbb`, and the comparison digest is `ef054f4ee9ef0daea008042466b6081dc693be3cfb023e3b649cbc9a1ba7aaff`. The candidate result is [`577eaad5-auth-saved-reference-replay.json`](../../spec/compatibility/broad-runs/577eaad5-auth-saved-reference-replay.json).
+
+This is a saved-production-reference comparison only. It does not add production traffic or promote `AUTH-ACCOUNT`; provider lifecycle, alternate hash formats, policy boundaries, MFA, OOB, tenant, blocking, token-signature and SDK conditions remain separately declared.

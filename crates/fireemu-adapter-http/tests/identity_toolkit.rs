@@ -8341,24 +8341,28 @@ fn duplicate_query_selectors_fail_closed_without_mutation() {
             .is_none());
     }
 
-    for query in [
+    for (index, query) in [
         "key=fake-api-key&key=fake-api-key",
         "key=fake-api-key&apiKey=fake-api-key",
         "apiKey=fake-api-key&key=fake-api-key",
+        "key=fake-api-key&%61piKey=fake-api-key",
+        "%6bey=fake-api-key&apiKey=fake-api-key",
         "key=first-key&apiKey=second-key",
         "apiKey=second-key&key=first-key",
-    ] {
-        let response = admin(
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let email = format!("duplicate-query-key-{index}@example.com");
+        let (status, refused) = post(
             &s,
-            "GET",
-            &format!("{V2}/passwordPolicy?{query}"),
-            &Value::Null,
+            &format!("{V1}/accounts:signUp?{query}"),
+            &json!({"email": email, "password": "password1"}),
         );
-        assert_eq!(response.0, 400, "{query}: {}", response.1);
-        assert_eq!(
-            response.1["error"]["message"], "INVALID_ARGUMENT",
-            "{query}"
-        );
+        assert_eq!(status, 400, "{query}: {refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_ARGUMENT", "{query}");
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_none());
+        assert!(tenant.lock().unwrap().user_by_email(&email).is_none());
     }
 
     let policy = admin(
@@ -8389,8 +8393,11 @@ fn malformed_query_selectors_fail_closed_without_mutation() {
         "key=valid-key&tenantId",
         "tenantId&key=valid-key",
         "tenantId=",
+        "%74enantId=",
         "key=",
         "apiKey=",
+        "%6bey=",
+        "%61piKey=%ZZ",
         "tenantId=%ZZ",
         "key=valid%ZZ",
         "apiKey=%A",
@@ -8410,18 +8417,20 @@ fn malformed_query_selectors_fail_closed_without_mutation() {
         assert!(tenant.lock().unwrap().user_by_email(&email).is_none());
     }
 
-    let (status, created) = post(
-        &s,
-        &format!("{V1}/accounts:signUp?ignored=kept&%74enantId=tenant%2Da"),
-        &json!({
-            "email": "valid-selector-with-unrelated-query@example.com",
-            "password": "password1",
-        }),
-    );
-    assert_eq!(status, 200, "{created}");
-    assert!(tenant
-        .lock()
-        .unwrap()
-        .user_by_email("valid-selector-with-unrelated-query@example.com")
-        .is_some());
+    for (index, query) in [
+        "ignored&%74enantId=tenant%2Da",
+        "ignored=%ZZ&tenantId=tenant-a",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let email = format!("valid-selector-with-unrelated-query-{index}@example.com");
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp?{query}"),
+            &json!({"email": email, "password": "password1"}),
+        );
+        assert_eq!(status, 200, "{query}: {created}");
+        assert!(tenant.lock().unwrap().user_by_email(&email).is_some());
+    }
 }

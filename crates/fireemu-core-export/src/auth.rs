@@ -39,7 +39,10 @@ pub const PASSWORD_POLICIES_FILE: &str = "fireemu-password-policies.json";
 /// the official `config.json`, such as the local sign-up quota simulator.
 pub const AUTH_SETTINGS_FILE: &str = "fireemu-auth-settings.json";
 /// Version of the fireemu-only Auth runtime settings sidecar format.
-pub const AUTH_SETTINGS_VERSION: i64 = 1;
+///
+/// Version 2 records whether a tenant config is an explicit override. Version 1 remains
+/// readable, but its ambiguous effective tenant configs are migrated as inherited.
+pub const AUTH_SETTINGS_VERSION: i64 = 2;
 /// Version of the fireemu-only Auth password policy sidecar format.
 pub const PASSWORD_POLICIES_VERSION: i64 = 1;
 /// The `kind` member the Identity Toolkit answers with.
@@ -84,7 +87,8 @@ const KNOWN_PASSWORD_POLICY_MEMBERS: [&str; 9] = [
     "allowedNonAlphanumericCharacters",
 ];
 const KNOWN_AUTH_SETTINGS_MEMBERS: [&str; 4] = ["version", "projectId", "project", "namespaces"];
-const KNOWN_AUTH_SETTINGS_NAMESPACE_MEMBERS: [&str; 3] = ["tenantId", "settings", "metadata"];
+const KNOWN_AUTH_SETTINGS_NAMESPACE_MEMBERS: [&str; 4] =
+    ["tenantId", "settings", "metadata", "configExplicit"];
 const KNOWN_AUTH_SETTINGS_RECORD_MEMBERS: [&str; 3] = ["config", "quota", "blocking"];
 const KNOWN_TENANT_METADATA_MEMBERS: [&str; 8] = [
     "displayName",
@@ -344,6 +348,10 @@ pub struct AuthSettingsNamespace {
     pub tenant_id: Option<String>,
     /// Settings for that namespace.
     pub settings: AuthSettingsRecord,
+    /// Whether the namespace `settings.config` is an explicit override rather than an
+    /// effective inherited snapshot. Version 1 artifacts omit this marker and are migrated as
+    /// inherited to avoid freezing project settings based on ambiguous historical output.
+    pub config_is_explicit: bool,
     /// Complete tenant authorization metadata, when captured by fireemu.
     ///
     /// This is optional so an older artifact without the extension keeps the legacy import
@@ -424,7 +432,7 @@ impl AuthSettings {
             .ok_or_else(|| {
                 AuthExportError("Auth settings sidecar has no integer version".to_owned())
             })?;
-        if version != AUTH_SETTINGS_VERSION {
+        if version != 1 && version != AUTH_SETTINGS_VERSION {
             return refuse(format!(
                 "unsupported Auth settings sidecar version {version}"
             ));
@@ -478,10 +486,28 @@ impl AuthSettings {
                         &format!("Auth settings namespace {index}.metadata"),
                     )?),
                 };
+                let config_is_explicit = if version == 1 {
+                    if entry.get("configExplicit").is_some() {
+                        return refuse(format!(
+                            "Auth settings namespace {index} uses configExplicit with version 1"
+                        ));
+                    }
+                    false
+                } else {
+                    entry
+                        .get("configExplicit")
+                        .and_then(JsonValue::as_bool)
+                        .ok_or_else(|| {
+                            AuthExportError(format!(
+                                "Auth settings namespace {index} has no boolean configExplicit"
+                            ))
+                        })?
+                };
                 namespaces.push(AuthSettingsNamespace {
                     tenant_id: Some(tenant_id),
                     settings,
                     metadata,
+                    config_is_explicit,
                 });
             }
         } else if let Some(value) = value.get("namespaces") {
@@ -515,6 +541,7 @@ impl AuthSettings {
                         namespace
                             .insert_some("tenantId", entry.tenant_id.as_ref().map(Json::string));
                         namespace.insert("settings", write_auth_settings_record(&entry.settings));
+                        namespace.insert("configExplicit", Json::Bool(entry.config_is_explicit));
                         namespace.insert_some(
                             "metadata",
                             entry.metadata.as_ref().map(write_tenant_metadata),
@@ -1990,6 +2017,7 @@ mod tests {
                     quota: None,
                     blocking: None,
                 },
+                config_is_explicit: true,
                 metadata: Some(TenantMetadataRecord {
                     display_name: Some("Tenant A".to_owned()),
                     allow_password_signup: false,
@@ -2198,6 +2226,42 @@ mod tests {
             blocking.before_sign_in,
             BlockingAuthSelectionRecord::Disabled
         );
+    }
+
+    #[test]
+    fn legacy_auth_settings_do_not_promote_effective_tenant_config_to_an_override() {
+        let legacy = AuthSettings::parse(
+            r#"{
+              "version": 1,
+              "projectId": "demo-app",
+              "project": {},
+              "namespaces": [{
+                "tenantId": "tenant-a",
+                "settings": {"config": {"signIn": {"allowDuplicateEmails": true}}}
+              }]
+            }"#,
+        )
+        .expect("legacy settings parse");
+        assert!(!legacy.namespaces[0].config_is_explicit);
+        assert!(legacy.to_json().contains("\"configExplicit\": false"));
+        assert!(AuthSettings::parse(
+            r#"{
+              "version": 2,
+              "projectId": "demo-app",
+              "project": {},
+              "namespaces": [{"tenantId": "tenant-a", "settings": {}, "configExplicit": true}]
+            }"#
+        )
+        .is_ok());
+        assert!(AuthSettings::parse(
+            r#"{
+              "version": 2,
+              "projectId": "demo-app",
+              "project": {},
+              "namespaces": [{"tenantId": "tenant-a", "settings": {}}]
+            }"#
+        )
+        .is_err());
     }
 
     #[test]

@@ -616,7 +616,7 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
             if let Some(config) = &settings.settings.config {
                 candidate.set_config(auth_config_from_settings(config, candidate.config()));
                 let config_patch = auth_namespace_config_patch(config);
-                if !config_patch.is_empty() {
+                if settings.config_is_explicit && !config_patch.is_empty() {
                     imported_tenant_config_overrides.insert(tenant.clone(), config_patch);
                 }
                 metadata.disabled_user_signup = config
@@ -2971,16 +2971,16 @@ fn export_auth(
             });
         }
         let tenant_quota = tenant_store.signup_quota().config().clone();
+        let tenant_config_override = snapshot.tenant_config_override(tenant);
         tenant_settings.push(AuthSettingsNamespace {
             tenant_id: Some(tenant.to_owned()),
             settings: AuthSettingsRecord {
-                config: snapshot
-                    .tenant_config_override(tenant)
-                    .map(exported_tenant_config_patch),
+                config: tenant_config_override.map(exported_tenant_config_patch),
                 quota: (tenant_quota != SignupQuotaConfig::default())
                     .then(|| exported_quota_settings(&tenant_quota)),
                 blocking: None,
             },
+            config_is_explicit: tenant_config_override.is_some(),
             metadata: Some(exported_tenant_metadata(tenant_metadata)),
         });
         let mut file = AccountsFile::default();

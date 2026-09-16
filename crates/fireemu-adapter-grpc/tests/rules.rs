@@ -1471,6 +1471,96 @@ async fn aggregation_implicit_order_does_not_change_security_rules_query_metadat
     h.handle.abort();
 }
 
+#[tokio::test]
+async fn query_proof_preserves_same_field_range_with_negation_filters() {
+    use sq::field_filter::Operator as Op;
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /scores/{id} { allow list: if resource.data.score > 0; }
+  }
+}",
+        )
+        .unwrap();
+    let int = |value: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(value)),
+    };
+    let query = |range_value: i64, negation: sq::Filter| {
+        let mut request = list("scores");
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+            &mut request.query_type
+        {
+            query.r#where = Some(sq::Filter {
+                filter_type: Some(sq::filter::FilterType::CompositeFilter(
+                    sq::CompositeFilter {
+                        op: sq::composite_filter::Operator::And as i32,
+                        filters: vec![
+                            sq::Filter {
+                                filter_type: Some(sq::filter::FilterType::FieldFilter(
+                                    sq::FieldFilter {
+                                        field: Some(sq::FieldReference {
+                                            field_path: "score".to_owned(),
+                                        }),
+                                        op: Op::GreaterThan as i32,
+                                        value: Some(int(range_value)),
+                                    },
+                                )),
+                            },
+                            negation,
+                        ],
+                    },
+                )),
+            });
+        }
+        request
+    };
+    let not_equal = |value| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::NotEqual as i32,
+            value: Some(int(value)),
+        })),
+    };
+    let not_in = sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::NotIn as i32,
+            value: Some(arr(vec![int(20), int(30)])),
+        })),
+    };
+
+    // The range proves score > 0; the negation only removes values from that range.
+    assert!(h
+        .client
+        .run_query(with_bearer(query(10, not_equal(20)), &alice_token))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(query(10, not_in), &alice_token))
+        .await
+        .is_ok());
+
+    // A range that still includes non-positive values cannot prove the rule.
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(query(-10, not_equal(20)), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    h.handle.abort();
+}
+
 async fn query_code(
     h: &mut Harness,
     token: &str,

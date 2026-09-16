@@ -996,11 +996,11 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
             }
         }
     }
-    for (field, range) in ranges {
+    for (field, range) in &ranges {
         set_nested(
             &mut data,
             field,
-            range.map_or(RulesValue::Unknown, RulesValue::Range),
+            range.clone().map_or(RulesValue::Unknown, RulesValue::Range),
         );
     }
     for atom in disjunction {
@@ -1040,19 +1040,23 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                 }
                 // Exists, is not null and differs from the listed values.
                 FieldOp::NotEqual => {
-                    set_nested(
-                        &mut data,
-                        field,
-                        RulesValue::NotOneOf(vec![rules_value(value)]),
-                    );
-                }
-                FieldOp::NotIn => {
-                    if let Value::Array(items) = value {
+                    if !ranges.contains_key(field) {
                         set_nested(
                             &mut data,
                             field,
-                            RulesValue::NotOneOf(items.iter().map(rules_value).collect()),
+                            RulesValue::NotOneOf(vec![rules_value(value)]),
                         );
+                    }
+                }
+                FieldOp::NotIn => {
+                    if !ranges.contains_key(field) {
+                        if let Value::Array(items) = value {
+                            set_nested(
+                                &mut data,
+                                field,
+                                RulesValue::NotOneOf(items.iter().map(rules_value).collect()),
+                            );
+                        }
                     }
                 }
                 _ => {}

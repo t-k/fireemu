@@ -3147,10 +3147,20 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
             "emailPrivacyConfig": {"enableImprovedEmailPrivacy": "wrong type"}
         }),
     );
-    assert_eq!(outside_mask.status, 200, "{}", outside_mask.body);
-    assert_eq!(outside_mask.body["signIn"]["allowDuplicateEmails"], false);
+    assert_eq!(outside_mask.status, 400, "{}", outside_mask.body);
+    assert_eq!(outside_mask.body["error"]["message"], "INVALID_ARGUMENT");
+    let after_outside_mask = read();
     assert_eq!(
-        outside_mask.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        after_outside_mask.status, 200,
+        "{}",
+        after_outside_mask.body
+    );
+    assert_eq!(
+        after_outside_mask.body["signIn"]["allowDuplicateEmails"],
+        true
+    );
+    assert_eq!(
+        after_outside_mask.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
         true
     );
 
@@ -3167,7 +3177,7 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
     assert_eq!(invalid.status, 400, "{}", invalid.body);
     let after_invalid = read();
     assert_eq!(after_invalid.status, 200, "{}", after_invalid.body);
-    assert_eq!(after_invalid.body["signIn"]["allowDuplicateEmails"], false);
+    assert_eq!(after_invalid.body["signIn"]["allowDuplicateEmails"], true);
     assert_eq!(
         after_invalid.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
         true

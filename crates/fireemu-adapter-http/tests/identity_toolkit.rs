@@ -7794,6 +7794,55 @@ fn project_client_permissions_are_exposed_and_applied_atomically() {
 }
 
 #[test]
+fn project_config_rejects_malformed_unmasked_fields_without_mutation() {
+    let s = state();
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let before = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(before.0, 200, "{}", before.1);
+    let before_bytes = serde_json::to_vec(&before.1).unwrap();
+
+    for (label, body) in [
+        (
+            "sign-in",
+            json!({
+                "client": {"permissions": {"disabledUserSignup": true}},
+                "signIn": {"allowDuplicateEmails": "true"}
+            }),
+        ),
+        (
+            "password-policy",
+            json!({
+                "client": {"permissions": {"disabledUserSignup": true}},
+                "passwordPolicyConfig": {"passwordPolicyEnforcementState": "NOTIFY"}
+            }),
+        ),
+        (
+            "quota",
+            json!({
+                "client": {"permissions": {"disabledUserSignup": true}},
+                "quota": {"quotaSimulation": {"mode": "invalid"}}
+            }),
+        ),
+    ] {
+        let refused = admin(
+            &s,
+            "PATCH",
+            &format!("{path}?updateMask=client.permissions.disabledUserSignup"),
+            &body,
+        );
+        assert_eq!(refused.0, 400, "{label}: {}", refused.1);
+
+        let after = admin(&s, "GET", path, &Value::Null);
+        assert_eq!(after.0, 200, "{label}: {}", after.1);
+        assert_eq!(
+            serde_json::to_vec(&after.1).unwrap(),
+            before_bytes,
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn tenant_client_permissions_and_privacy_are_namespaced_and_atomic_with_password_policy() {
     let mut s = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
@@ -7869,6 +7918,54 @@ fn tenant_client_permissions_and_privacy_are_namespaced_and_atomic_with_password
         &json!({"tenantId": "tenant-a", "email": "tenant-a@example.com", "password": "password1"}),
     );
     assert_eq!(denied.status, 400, "{}", denied.body);
+}
+
+#[test]
+fn tenant_config_rejects_malformed_unmasked_fields_without_mutation() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    s.registry = Some(registry);
+    let path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/tenant-a";
+    let before = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(before.0, 200, "{}", before.1);
+    let before_bytes = serde_json::to_vec(&before.1).unwrap();
+
+    for (label, body) in [
+        (
+            "client-permissions",
+            json!({
+                "displayName": "must-not-apply",
+                "client": {"permissions": {"disabledUserSignup": "true"}}
+            }),
+        ),
+        (
+            "password-policy",
+            json!({
+                "displayName": "must-not-apply",
+                "passwordPolicyConfig": {"passwordPolicyEnforcementState": "NOTIFY"}
+            }),
+        ),
+    ] {
+        let refused = admin(
+            &s,
+            "PATCH",
+            &format!("{path}?updateMask=displayName"),
+            &body,
+        );
+        assert_eq!(refused.0, 400, "{label}: {}", refused.1);
+
+        let after = admin(&s, "GET", path, &Value::Null);
+        assert_eq!(after.0, 200, "{label}: {}", after.1);
+        assert_eq!(
+            serde_json::to_vec(&after.1).unwrap(),
+            before_bytes,
+            "{label}"
+        );
+    }
 }
 
 #[test]

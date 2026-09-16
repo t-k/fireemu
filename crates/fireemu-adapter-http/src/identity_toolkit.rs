@@ -3522,6 +3522,12 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
         if sign_in.keys().any(|key| key != "allowDuplicateEmails") {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
+        if sign_in
+            .get("allowDuplicateEmails")
+            .is_some_and(|value| !value.is_boolean() && !value.is_null())
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
     }
     if let Some(value) = object.get("emailPrivacyConfig") {
         let privacy = value
@@ -3530,6 +3536,12 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
         if privacy
             .keys()
             .any(|key| key != "enableImprovedEmailPrivacy")
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if privacy
+            .get("enableImprovedEmailPrivacy")
+            .is_some_and(|value| !value.is_boolean() && !value.is_null())
         {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
@@ -3551,6 +3563,19 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
             .any(|key| key != "disabledUserSignup" && key != "disabledUserDeletion")
         {
             return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        for key in ["disabledUserSignup", "disabledUserDeletion"] {
+            if permissions
+                .get(key)
+                .is_some_and(|value| !value.is_boolean() && !value.is_null())
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+        }
+    }
+    if let Some(value) = object.get("passwordPolicyConfig") {
+        if !value.is_null() {
+            password_policy_from_config_json(value)?;
         }
     }
     if let Some(value) = object.get("quota") {
@@ -3587,6 +3612,9 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
         }
+        // Validate the complete supplied quota before applying updateMask. This catches a
+        // malformed unselected member without changing the current namespace.
+        quota_config_from_json(value, &SignupQuotaConfig::default())?;
     }
     if let Some(value) = object.get("blockingFunctions") {
         let blocking = value
@@ -4822,6 +4850,110 @@ fn tenant_client_config_patch(body: &Value) -> fireemu_core_auth::store::TenantM
     }
 }
 
+fn validate_tenant_update_payload(body: &Value) -> Result<(), JsonResponse> {
+    const FIELDS: [&str; 9] = [
+        "tenantId",
+        "displayName",
+        "allowPasswordSignup",
+        "enableEmailLinkSignin",
+        "enableAnonymousUser",
+        "disableAuth",
+        "client",
+        "emailPrivacyConfig",
+        "passwordPolicyConfig",
+    ];
+    let object = body
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    if object.keys().any(|field| !FIELDS.contains(&field.as_str())) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+
+    if object
+        .get("tenantId")
+        .is_some_and(|value| !value.is_null() && value.as_str().is_none_or(str::is_empty))
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    if object
+        .get("displayName")
+        .is_some_and(|value| !value.is_string() && !value.is_null())
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    for field in [
+        "allowPasswordSignup",
+        "enableEmailLinkSignin",
+        "enableAnonymousUser",
+        "disableAuth",
+    ] {
+        if object
+            .get(field)
+            .is_some_and(|value| !value.is_boolean() && !value.is_null())
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+
+    if let Some(value) = object.get("client") {
+        if !value.is_null() {
+            let client = value
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if client.keys().any(|field| field != "permissions") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            if let Some(permissions) = client.get("permissions") {
+                if !permissions.is_null() {
+                    let permissions = permissions
+                        .as_object()
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    if permissions.keys().any(|field| {
+                        field != "disabledUserSignup" && field != "disabledUserDeletion"
+                    }) {
+                        return Err(error(400, "INVALID_ARGUMENT"));
+                    }
+                    for field in ["disabledUserSignup", "disabledUserDeletion"] {
+                        if permissions
+                            .get(field)
+                            .is_some_and(|value| !value.is_boolean() && !value.is_null())
+                        {
+                            return Err(error(400, "INVALID_ARGUMENT"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(value) = object.get("emailPrivacyConfig") {
+        if !value.is_null() {
+            let privacy = value
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if privacy
+                .keys()
+                .any(|field| field != "enableImprovedEmailPrivacy")
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            if privacy
+                .get("enableImprovedEmailPrivacy")
+                .is_some_and(|value| !value.is_boolean() && !value.is_null())
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+        }
+    }
+
+    if let Some(value) = object.get("passwordPolicyConfig") {
+        if !value.is_null() {
+            password_policy_from_config_json(value)?;
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn tenant_management(
     state: &AuthState,
@@ -4919,6 +5051,9 @@ fn tenant_management(
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
             };
+            if let Err(response) = validate_tenant_update_payload(body) {
+                return response;
+            }
             let fields = match update_mask(query) {
                 Ok(Some(fields)) => fields,
                 Ok(None) => {

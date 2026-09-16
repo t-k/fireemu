@@ -702,7 +702,14 @@ def run(output: Path) -> dict:
     # campaign result is a public summary and must not copy those bodies.
     safe_runtime.pop("localObservations", None)
     result = {
-        "completed": report["status"] == "completed",
+        # Do not hand off a campaign whose transport completed but whose
+        # operation/state assertions were absent or failed. A semantic
+        # mismatch is represented by a complete, state-validated report and
+        # must still reach comparison.
+        "completed": (
+            report["status"] == "completed"
+            and report.get("stateValidation") is True
+        ),
         "productionExecuted": False,
         "target": "owned-fireemu-artifact",
         "runtime": safe_runtime,

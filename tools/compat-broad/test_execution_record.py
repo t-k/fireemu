@@ -16,7 +16,7 @@ def closed_origin():
         yield f"http://127.0.0.1:{sock.getsockname()[1]}"
 
 
-@pytest.mark.parametrize("mode", ["success", "failure", "timeout"])
+@pytest.mark.parametrize("mode", ["success", "failure", "timeout", "invalid-state"])
 def test_initial_manifest_survives_real_child_outcomes(tmp_path, mode, closed_origin):
     child = tmp_path / "child.py"
     child.write_text("""import json,os,subprocess,sys,time
@@ -25,9 +25,9 @@ p=Path(sys.argv[1]); mode=sys.argv[2]
 r=json.loads((p/'manifest.json').read_text()); assert r['artifactSha256']=='bound-before-launch'
 c=subprocess.Popen([sys.executable,'-c','pass']); c.wait()
 (p/'instance.json').write_text(json.dumps(dict(pid=c.pid,argv=[sys.executable,'-c','pass'],parentPid=os.getpid(),nonce='n',authOrigin=sys.argv[3],firestoreOrigin=sys.argv[3],controlOrigin=sys.argv[3])))
-(p/'cases.json').write_text(json.dumps(dict(recordingComplete=mode=='success',historicalReplayPrograms=[dict(id='legacy')],historicalReplayObservations={'legacy':{'steps':{}}},cases=[dict(id='partial',status='observed',family='test')],artifactSha256='child-must-not-replace-parent')))
+(p/'cases.json').write_text(json.dumps(dict(recordingComplete=mode in ('success','invalid-state'),stateValidation=mode=='success',historicalReplayPrograms=[dict(id='legacy')],historicalReplayObservations={'legacy':{'steps':{}}},cases=[dict(id='partial',status='observed',family='test')],artifactSha256='child-must-not-replace-parent')))
 if mode=='timeout': time.sleep(10)
-sys.exit(0 if mode=='success' else 7)
+sys.exit(0 if mode in ('success','invalid-state') else 7)
 """)
     report = {
         "status": "incomplete",
@@ -60,9 +60,11 @@ sys.exit(0 if mode=='success' else 7)
             "success": "child-completed",
             "failure": "child-nonzero",
             "timeout": "child-timeout",
+            "invalid-state": "child-completed",
         }[mode]
     )
-    assert stored["recordingComplete"] is (mode == "success")
+    assert stored["recordingComplete"] is (mode in ("success", "invalid-state"))
+    assert stored["stateValidation"] is (mode == "success")
 
 
 def test_start_failure_still_records_initial_inputs(tmp_path):

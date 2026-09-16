@@ -164,6 +164,30 @@ def test_shadow_public_result_keeps_state_validation_independent(tmp_path):
         result = campaign_auth_list_shadow.run(tmp_path)
     assert result["recordingComplete"] is True
     assert result["stateValidation"] is False
+    assert result["completed"] is False
+
+
+@pytest.mark.parametrize("state_validation", [False, None])
+def test_shadow_does_not_handoff_without_state_validation(tmp_path, state_validation):
+    report = {
+        "status": "completed",
+        "recordingComplete": True,
+        "stateValidation": state_validation,
+        "ownedProcess": {"listenersClosed": True},
+        "localObservations": [],
+        "failure": None,
+        "stopReason": "child-completed",
+    }
+    worker = tmp_path / "worker"
+    worker.mkdir()
+    (worker / "result.json").write_text(json.dumps({"gate": {}}))
+    shadow = tmp_path / "shadow"
+    shadow.mkdir()
+    with patch("broad.run", return_value=report):
+        result = campaign_auth_list_shadow.run(shadow)
+    assert result["recordingComplete"] is True
+    assert result["stateValidation"] is state_validation
+    assert result["completed"] is False
 
 
 def test_comparator_keeps_mismatch_and_same_wrong_operation_visible():

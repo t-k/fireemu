@@ -504,6 +504,12 @@ def supervise(command, output, nonce, report, *, timeout=240, recovery_grace=0.2
         complete = (
             report.get("stopReason") == "child-completed"
             and report["recordingComplete"]
+            # A complete transport/cleanup receipt is not a valid campaign
+            # handoff unless the child proved the declared state invariants.
+            # Semantic mismatches keep stateValidation=true and remain
+            # eligible for the comparator; missing/false validation is an
+            # incomplete campaign.
+            and report.get("stateValidation") is True
             and stopped
             and closed is True
             and not any(

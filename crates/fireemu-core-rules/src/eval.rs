@@ -1004,8 +1004,8 @@ fn walk_match<'a>(
                 .into_iter()
                 .map(|(n, v)| {
                     let placeholder = match &v {
-                        RulesValue::String(s) => s == ABSTRACT_SEGMENT,
-                        RulesValue::Path(p) => p.iter().any(|s| s == ABSTRACT_SEGMENT),
+                        RulesValue::String(s) => is_abstract_segment(s),
+                        RulesValue::Path(p) => p.iter().any(|s| is_abstract_segment(s)),
                         _ => false,
                     };
                     (n, if placeholder { RulesValue::Unknown } else { v })

@@ -2380,6 +2380,19 @@ impl fireemu_core_rules::eval::DocumentAccess for MapAccess {
     }
 }
 
+#[test]
+fn collection_group_recursive_capture_does_not_expose_the_abstract_prefix() {
+    let rules = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{path=**}/reviews/{id} { allow list: if path == path('/fireemu-any-prefix/fireemu-any-prefix'); } } }";
+    let query = abstract_ctx(
+        "/databases/(default)/documents/fireemu-any-prefix/fireemu-any-prefix/reviews/fireemu-placeholder",
+        vec![],
+    );
+
+    // The collection-group prefix is a sentinel for an arbitrary ancestor chain. A recursive
+    // capture that consumes it must remain undetermined, just like a capture of the document id.
+    assert!(!allows(rules, &query));
+}
+
 fn resource(fields: Vec<(&str, RulesValue)>) -> RulesValue {
     let mut m = BTreeMap::new();
     m.insert(

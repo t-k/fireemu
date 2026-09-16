@@ -113,7 +113,7 @@ fn project_config_and_quota_patch_commit_under_one_namespace_gate() {
         Some(quota.clone()),
     );
 
-    assert_eq!(result.unwrap().disabled_user_signup, true);
+    assert!(result.unwrap().disabled_user_signup);
     let project = registry.default_store();
     let project = project.lock().unwrap();
     assert!(project.config().disabled_user_signup);

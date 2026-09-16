@@ -3173,7 +3173,7 @@ fn quota_config_from_update(
     if quota_fields.is_empty() {
         return Ok(None);
     }
-    if quota_fields.iter().any(|field| *field == "quota") && quota_fields.len() != 1 {
+    if quota_fields.contains(&"quota") && quota_fields.len() != 1 {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
     let Some(quota) = body.get("quota") else {

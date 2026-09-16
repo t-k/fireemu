@@ -2951,6 +2951,7 @@ fn blocking_auth_response_failure(
 impl BlockingAuthBridge {
     /// Builds the production bridge with Identity Platform's seven-second deadline.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new(runtime: Arc<FunctionsRuntime>) -> Self {
         Self::new_with_selection(
             runtime,
@@ -2961,6 +2962,7 @@ impl BlockingAuthBridge {
 
     /// Builds a bridge with the explicit raw credential forwarding policy.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new_with_forward_inbound_credentials(
         runtime: Arc<FunctionsRuntime>,
         forward_inbound_credentials: bool,
@@ -2978,6 +2980,7 @@ impl BlockingAuthBridge {
     /// `true` bit while the global switch is disabled is rejected instead of being silently
     /// ignored, because that configuration would claim to enable a capability the daemon has
     /// globally disabled.
+    #[allow(dead_code)]
     pub fn try_new_with_forwarding_policy(
         runtime: Arc<FunctionsRuntime>,
         forward_inbound_credentials: bool,
@@ -2998,6 +3001,7 @@ impl BlockingAuthBridge {
     /// reload cannot silently switch Auth to another function. The underlying Functions runtime
     /// remains responsible for runner generations and admission.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new_with_selections(
         runtime: Arc<FunctionsRuntime>,
         selections: fireemu_core_functions::manifest::BlockingAuthSelections,
@@ -3036,6 +3040,7 @@ impl BlockingAuthBridge {
     ///
     /// Prefer [`Self::new_with_selections`] when `beforeCreate` and `beforeSignIn` differ.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new_with_selection(
         runtime: Arc<FunctionsRuntime>,
         selection: fireemu_core_functions::manifest::BlockingAuthSelection,

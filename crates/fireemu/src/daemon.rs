@@ -17,9 +17,7 @@ use fireemu_core_auth::jwt::IdTokenSigner;
 use fireemu_core_auth::signup_quota::{
     QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
 };
-use fireemu_core_auth::store::{
-    AuthStore, ProjectAuthConfig, ProjectAuthConfigPatch, TenantMetadataPatch,
-};
+use fireemu_core_auth::store::{AuthNamespaceConfigPatch, AuthStore, ProjectAuthConfig};
 use fireemu_core_firestore::index::{IndexSet, PlanningContext};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
@@ -169,18 +167,19 @@ fn apply_auth_password_policy_overrides(
 /// These values are applied only to the default project store here. Namespace-specific
 /// `configOverrides` are applied separately after the registry has been created, so a missing
 /// project or tenant is never created as a side effect of reading the configuration.
-fn auth_project_config(cfg: &RuntimeConfig, current: ProjectAuthConfig) -> ProjectAuthConfig {
+fn auth_project_config(cfg: &RuntimeConfig) -> ProjectAuthConfig {
     ProjectAuthConfig {
         allow_duplicate_emails: cfg.auth_allow_duplicate_emails,
         enable_improved_email_privacy: cfg.auth_improved_email_privacy,
         disabled_user_signup: cfg.auth_client_permissions.disabled_user_signup,
         disabled_user_deletion: cfg.auth_client_permissions.disabled_user_deletion,
-        ..current
     }
 }
 
-fn auth_config_patch(config: crate::config::AuthNamespaceConfig) -> ProjectAuthConfigPatch {
-    ProjectAuthConfigPatch {
+fn auth_namespace_config_patch(
+    config: crate::config::AuthNamespaceConfig,
+) -> AuthNamespaceConfigPatch {
+    AuthNamespaceConfigPatch {
         enable_improved_email_privacy: config.improved_email_privacy,
         disabled_user_signup: config
             .client_permissions
@@ -188,7 +187,6 @@ fn auth_config_patch(config: crate::config::AuthNamespaceConfig) -> ProjectAuthC
         disabled_user_deletion: config
             .client_permissions
             .map(|permissions| permissions.disabled_user_deletion),
-        ..ProjectAuthConfigPatch::default()
     }
 }
 
@@ -203,7 +201,7 @@ fn apply_auth_config_overrides(
     registry: &fireemu_core_auth::store::AuthRegistry,
 ) -> Result<(), String> {
     for (index, override_config) in cfg.auth_config_overrides.iter().enumerate() {
-        let patch = auth_config_patch(override_config.config);
+        let patch = auth_namespace_config_patch(override_config.config);
         if patch.is_empty() {
             continue;
         }
@@ -213,48 +211,9 @@ fn apply_auth_config_overrides(
         );
         let applied = match override_config.tenant_id.as_deref() {
             Some(tenant) => {
-                if registry
-                    .tenant_store(&override_config.project_id, tenant)
-                    .is_none()
-                {
-                    // No auto-creation: a future namespace needs the registry's pending override
-                    // API, which is intentionally outside this daemon-only change.
-                    continue;
-                }
-                let metadata_patch = TenantMetadataPatch {
-                    enable_improved_email_privacy: patch.enable_improved_email_privacy,
-                    disabled_user_signup: patch.disabled_user_signup,
-                    disabled_user_deletion: patch.disabled_user_deletion,
-                    ..TenantMetadataPatch::default()
-                };
-                registry
-                    .patch_tenant(&override_config.project_id, tenant, metadata_patch)
-                    .is_some()
+                registry.register_tenant_config_override(&override_config.project_id, tenant, patch)
             }
-            None => {
-                if registry.store_for(&override_config.project_id).is_none()
-                    && registry
-                        .routed_store_for(&override_config.project_id)
-                        .is_none()
-                {
-                    continue;
-                }
-                if registry.store_for(&override_config.project_id).is_some() {
-                    registry
-                        .patch_project_config(&override_config.project_id, patch)
-                        .is_some()
-                } else if let Some(store) = registry.routed_store_for(&override_config.project_id) {
-                    let Ok(mut store) = store.lock() else {
-                        return Err(format!(
-                            "cannot apply auth.configOverrides[{index}] to {namespace}: store lock poisoned"
-                        ));
-                    };
-                    store.set_config(patch.apply_to(store.config()));
-                    true
-                } else {
-                    false
-                }
-            }
+            None => registry.register_project_config_override(&override_config.project_id, patch),
         };
         if !applied {
             return Err(format!(
@@ -1254,7 +1213,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             cfg.auth_totp.unwrap_or_default(),
         )));
         if let Ok(mut store) = auth_store.lock() {
-            let config = auth_project_config(&cfg, store.config());
+            let config = auth_project_config(&cfg);
             store.set_config(config);
             if let Some(policy) = &cfg.auth_password_policy {
                 store.set_password_policy(policy.to_auth_policy());
@@ -1532,7 +1491,7 @@ mod tests {
         .expect("valid Auth settings");
 
         assert_eq!(
-            auth_project_config(&cfg, ProjectAuthConfig::default()),
+            auth_project_config(&cfg),
             ProjectAuthConfig {
                 allow_duplicate_emails: true,
                 enable_improved_email_privacy: false,

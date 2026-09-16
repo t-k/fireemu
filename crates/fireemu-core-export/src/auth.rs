@@ -97,6 +97,7 @@ const KNOWN_TEMPORARY_QUOTA_MEMBERS: [&str; 3] = ["quota", "startTime", "quotaDu
 
 /// One validated password policy in the fireemu export extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct PasswordPolicyRecord {
     /// `OFF` or `ENFORCE`.
     pub enforcement_state: String,

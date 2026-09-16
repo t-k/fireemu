@@ -59,6 +59,18 @@
       "adminControl": "crates/fireemu-adapter-http/tests/auth_flows.rs"
     },
     {
+      "id": "AUTH-CONFIG-SDK.password-policy-validation",
+      "runner": "password-policy-sdk.mjs",
+      "transport": "firebase-auth-client-sdk",
+      "obligations": [
+        "fixed local fireemu artifact and SHA-256 binding",
+        "password policy projection shape and schema version",
+        "weak and compliant password validation status",
+        "tenant selection remains explicit",
+        "local-only evidence is separated from production compatibility"
+      ]
+    },
+    {
       "id": "AUTH-FS-CROSS.auth-switch-rules-listen",
       "runner": "pending-switch.mjs",
       "transport": "firebase-auth-and-firestore",

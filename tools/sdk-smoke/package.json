@@ -27,7 +27,9 @@
     "smoke:firestore-contention": "node firestore-contention.mjs",
     "smoke:pending-switch": "node pending-switch.mjs",
     "smoke:auth-config": "node auth-config-sdk.mjs",
+    "smoke:password-policy": "node password-policy-sdk.mjs",
     "test:sdk-pins": "node --test sdk-pins.test.mjs",
+    "test:password-policy": "node --test password-policy-sdk.test.mjs",
     "smoke:server-timestamp-query": "node server-timestamp-transaction-query.mjs",
     "smoke:listener-replacement": "node listener-replacement.mjs",
     "test:listener-runtime": "node --test listener-runtime-compat.test.mjs"

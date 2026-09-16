@@ -5,6 +5,15 @@ import { stat } from "node:fs/promises";
 
 const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
+const passwordValidationStatusFields = [
+  ["containsLowercaseCharacter", "containsLowercaseLetter"],
+  ["containsUppercaseCharacter", "containsUppercaseLetter"],
+  ["containsNumericCharacter", "containsNumericCharacter"],
+  ["containsNonAlphanumericCharacter", "containsNonAlphanumericCharacter"],
+  ["meetsMinPasswordLength", "meetsMinPasswordLength"],
+  ["meetsMaxPasswordLength", "meetsMaxPasswordLength"],
+];
+
 export async function assertLocalArtifactBinding() {
   const artifact = process.env.FIREEMU_ARTIFACT;
   const expectedSha256 = process.env.FIREEMU_ARTIFACT_SHA256;
@@ -17,6 +26,20 @@ export async function assertLocalArtifactBinding() {
   const bytes = await readFile(artifact);
   assert.equal(createHash("sha256").update(bytes).digest("hex"), expectedSha256);
   return { artifact, artifactSha256: expectedSha256 };
+}
+
+export function mapPasswordValidationStatus(status) {
+  assert.equal(typeof status, "object");
+  assert.ok(status && !Array.isArray(status));
+  assert.equal(typeof status.isValid, "boolean", "isValid");
+
+  return Object.fromEntries(
+    passwordValidationStatusFields.map(([collectorKey, sdkKey]) => {
+      const value = status[sdkKey];
+      assert.ok(value === undefined || typeof value === "boolean", sdkKey);
+      return [collectorKey, value];
+    }),
+  );
 }
 
 function summarizePolicy(policy) {
@@ -78,18 +101,12 @@ export async function runPasswordPolicySmoke() {
   for (const [password, label] of passwords) {
     const result = await validatePassword(auth, password);
     const policy = summarizePolicy(result.passwordPolicy);
+    const status = mapPasswordValidationStatus(result);
     checks.push({
       label,
       passwordLength: password.length,
       isValid: result.isValid,
-      status: {
-        containsLowercaseCharacter: result.containsLowercaseCharacter,
-        containsUppercaseCharacter: result.containsUppercaseCharacter,
-        containsNumericCharacter: result.containsNumericCharacter,
-        containsNonAlphanumericCharacter: result.containsNonAlphanumericCharacter,
-        meetsMinPasswordLength: result.meetsMinPasswordLength,
-        meetsMaxPasswordLength: result.meetsMaxPasswordLength,
-      },
+      status,
       policy,
     });
   }

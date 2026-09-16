@@ -4,7 +4,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { assertLocalArtifactBinding } from "./password-policy-sdk.mjs";
+import {
+  assertLocalArtifactBinding,
+  mapPasswordValidationStatus,
+} from "./password-policy-sdk.mjs";
 
 test("password policy smoke refuses an unbound or non-fireemu artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "password-policy-sdk-"));
@@ -36,4 +39,39 @@ test("password policy smoke output contains no password material", async () => {
   assert.match(source, /passwordLength/);
   assert.doesNotMatch(source, /console\.log\(password/);
   assert.match(source, /production: "unobserved"/);
+});
+
+test("password policy status mapping preserves SDK booleans and undefined optional fields", () => {
+  const requiredStatus = {
+    isValid: false,
+    meetsMinPasswordLength: false,
+    meetsMaxPasswordLength: true,
+    containsLowercaseLetter: false,
+    containsUppercaseLetter: true,
+    containsNumericCharacter: false,
+    containsNonAlphanumericCharacter: undefined,
+  };
+  assert.deepEqual(mapPasswordValidationStatus(requiredStatus), {
+    containsLowercaseCharacter: false,
+    containsUppercaseCharacter: true,
+    containsNumericCharacter: false,
+    containsNonAlphanumericCharacter: undefined,
+    meetsMinPasswordLength: false,
+    meetsMaxPasswordLength: true,
+  });
+
+  const optionalStatus = {
+    isValid: true,
+    meetsMinPasswordLength: undefined,
+    meetsMaxPasswordLength: undefined,
+    containsLowercaseLetter: undefined,
+    containsUppercaseLetter: undefined,
+    containsNumericCharacter: undefined,
+    containsNonAlphanumericCharacter: undefined,
+  };
+  const mappedOptionalStatus = mapPasswordValidationStatus(optionalStatus);
+  assert.equal(mappedOptionalStatus.containsLowercaseCharacter, undefined);
+  assert.equal(mappedOptionalStatus.containsUppercaseCharacter, undefined);
+  assert.equal(mappedOptionalStatus.meetsMinPasswordLength, undefined);
+  assert.equal(mappedOptionalStatus.meetsMaxPasswordLength, undefined);
 });

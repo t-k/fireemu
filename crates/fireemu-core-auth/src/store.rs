@@ -5133,6 +5133,32 @@ impl AuthRegistry {
 
     /// Creates an explicitly configured tenant and returns its generated ID.
     pub fn create_tenant(&self, project: &str, metadata: TenantMetadata) -> Option<String> {
+        self.create_tenant_with_password_policy(
+            project,
+            metadata,
+            TenantMetadataPatch::default(),
+            None,
+        )
+        .map(|(tenant, _, _)| tenant)
+    }
+
+    /// Creates an explicitly configured tenant and publishes its metadata, inherited config,
+    /// and password policy under one project operation gate.
+    ///
+    /// The metadata patch contains only fields explicitly supplied by the caller. This is
+    /// important for inherited project settings: an omitted field must not be represented by a
+    /// default `false` and overwrite a project update that committed before publication.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn create_tenant_with_password_policy(
+        &self,
+        project: &str,
+        metadata: TenantMetadata,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
+        if project.is_empty() || project.contains(['/', '\\']) {
+            return None;
+        }
         let gate = self.operation_gate(project, None)?;
         let _operation = gate.lock().ok()?;
         let projects = self.projects.lock().ok()?;
@@ -5155,8 +5181,27 @@ impl AuthRegistry {
             {
                 patch.apply_to_metadata(&mut metadata);
             }
-            match self.publish_tenant((project.to_owned(), tenant.clone()), store, metadata) {
-                TenantPublication::Published(_) => return Some(tenant),
+            let mut next_metadata = metadata.clone();
+            patch.apply_to(&mut next_metadata);
+            let mut store_guard = store.lock().ok()?;
+            let mut next_config = store_guard.config();
+            patch.apply_to_project_config(&mut next_config);
+            store_guard.set_config(next_config);
+            let next_policy = password_policy
+                .clone()
+                .unwrap_or_else(|| store_guard.password_policy.clone());
+            if let Some(policy) = &password_policy {
+                store_guard.set_password_policy(policy.clone());
+            }
+            drop(store_guard);
+            match self.publish_tenant(
+                (project.to_owned(), tenant.clone()),
+                store,
+                next_metadata.clone(),
+            ) {
+                TenantPublication::Published(_) => {
+                    return Some((tenant, next_metadata, next_policy));
+                }
                 TenantPublication::Existing {
                     unpublished_metadata,
                     ..
@@ -6270,7 +6315,7 @@ mod index_invariant_tests {
 mod compatibility_routing_tests {
     use super::{
         AuthRegistry, AuthStore, CompatibilityUserStoreMatch, NewUser, RefreshTokenStoreMatch,
-        RoutedStoreInstall, TenantMetadata,
+        RoutedStoreInstall, TenantMetadata, TenantMetadataPatch,
     };
     use crate::jwt::{encode_unsigned, verify_id_token, verify_rules_token, TokenAcceptance};
     use crate::mfa::TotpPolicy;
@@ -6604,6 +6649,38 @@ mod compatibility_routing_tests {
                 registry.default.lock().unwrap().config()
             );
         }
+    }
+
+    #[test]
+    fn created_tenant_preserves_inherited_config_for_omitted_initial_fields() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        assert!(registry
+            .patch_project_config(
+                "demo-app",
+                super::ProjectAuthConfigPatch {
+                    enable_improved_email_privacy: Some(true),
+                    ..super::ProjectAuthConfigPatch::default()
+                }
+            )
+            .is_some());
+
+        let (tenant, _, _) = registry
+            .create_tenant_with_password_policy(
+                "demo-app",
+                TenantMetadata::default(),
+                TenantMetadataPatch::default(),
+                None,
+            )
+            .unwrap();
+        assert!(
+            registry
+                .tenant_store("demo-app", &tenant)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .config()
+                .enable_improved_email_privacy
+        );
     }
 
     #[test]

@@ -3402,6 +3402,47 @@ fn admin_v2_config_racing_tenant_publication_keeps_inherited_config_current() {
 }
 
 #[test]
+fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut base = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", base.store.clone()));
+    base.registry = Some(registry.clone());
+    let state = base;
+    let config_path =
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy";
+    let enabled = handle_with(
+        &state,
+        "PATCH",
+        config_path,
+        &owner(),
+        &json!({
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+        }),
+    );
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+
+    let created = handle_with(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
+        &owner(),
+        &json!({"displayName": "inherited config tenant"}),
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+    let tenant = created.body["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    assert!(registry
+        .tenant_store("demo-app", tenant)
+        .and_then(|store| store.lock().ok().map(|store| store.config()))
+        .is_some_and(|config| config.enable_improved_email_privacy));
+}
+
+#[test]
 fn email_enumeration_protection_requires_verified_email_changes_but_keeps_signup_linking() {
     let s = state();
     let enabled = handle_with(

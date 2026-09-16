@@ -4103,13 +4103,25 @@ fn tenant_json_with_policy(
     result
 }
 
-fn tenant_client_config_patch(
-    metadata: &fireemu_core_auth::store::TenantMetadata,
-) -> fireemu_core_auth::store::TenantMetadataPatch {
+fn tenant_client_config_patch(body: &Value) -> fireemu_core_auth::store::TenantMetadataPatch {
+    let disabled_user_signup = body
+        .get("client")
+        .and_then(|client| client.get("permissions"))
+        .and_then(|permissions| permissions.get("disabledUserSignup"))
+        .and_then(Value::as_bool);
+    let disabled_user_deletion = body
+        .get("client")
+        .and_then(|client| client.get("permissions"))
+        .and_then(|permissions| permissions.get("disabledUserDeletion"))
+        .and_then(Value::as_bool);
+    let enable_improved_email_privacy = body
+        .get("emailPrivacyConfig")
+        .and_then(|config| config.get("enableImprovedEmailPrivacy"))
+        .and_then(Value::as_bool);
     fireemu_core_auth::store::TenantMetadataPatch {
-        disabled_user_signup: Some(metadata.disabled_user_signup),
-        disabled_user_deletion: Some(metadata.disabled_user_deletion),
-        enable_improved_email_privacy: Some(metadata.enable_improved_email_privacy),
+        disabled_user_signup,
+        disabled_user_deletion,
+        enable_improved_email_privacy,
         ..Default::default()
     }
 }
@@ -4143,17 +4155,17 @@ fn tenant_management(
                     Err(response) => return response,
                 },
             };
-            let Some(tenant) = registry.create_tenant(project, metadata.clone()) else {
-                return error(400, "INVALID_PROJECT_ID");
-            };
-            let Some((metadata, policy)) = registry.patch_tenant_with_password_policy(
+            let Some((tenant, metadata, policy)) = registry.create_tenant_with_password_policy(
                 project,
-                &tenant,
-                tenant_client_config_patch(&metadata),
+                metadata,
+                tenant_client_config_patch(body),
                 password_policy,
             ) else {
-                let _ = registry.delete_tenant(project, &tenant);
-                return error(500, "INTERNAL");
+                return if registry.store_for(project).is_some() {
+                    error(500, "INTERNAL")
+                } else {
+                    error(400, "INVALID_PROJECT_ID")
+                };
             };
             JsonResponse {
                 status: 200,

@@ -1487,6 +1487,7 @@ service cloud.firestore {
     match /exact/{id} { allow list: if resource.data.score == 20; }
     match /membership/{id} { allow list: if resource.data.score in [20, 30]; }
     match /not-membership/{id} { allow list: if !(resource.data.score in [20, 30]); }
+    match /unknown-membership/{id} { allow list: if !(resource.data.score in [resource.data.other]); }
   }
 }",
         )
@@ -1601,7 +1602,7 @@ service cloud.firestore {
     assert!(h
         .client
         .run_query(with_bearer(
-            query("not-membership", 10, not_in),
+            query("not-membership", 10, not_in.clone()),
             &alice_token
         ))
         .await
@@ -1633,6 +1634,18 @@ service cloud.firestore {
             .run_query(with_bearer(
                 query("not-membership", 10, nonexcluded),
                 &alice_token
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    // An unknown member in the membership RHS stays undecidable and must not panic.
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query("unknown-membership", 10, not_in.clone()),
+                &alice_token,
             ))
             .await
             .unwrap_err()

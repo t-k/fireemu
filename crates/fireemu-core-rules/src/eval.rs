@@ -2100,7 +2100,9 @@ impl<'a> Evaluator<'a> {
                     return Err(EvalError::Unknown);
                 }
             }
-            (BinaryOp::In, V::RangeExcluding { excluded, .. }, V::List(items)) => {
+            (BinaryOp::In, V::RangeExcluding { excluded, .. }, V::List(items))
+                if !undetermined(&r) =>
+            {
                 if items
                     .iter()
                     .all(|i| excluded.iter().any(|e| values_equal(e, i)))

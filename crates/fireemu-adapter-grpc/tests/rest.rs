@@ -469,6 +469,14 @@ fn batch_write_rest_rejects_non_array_writes_without_mutation() {
 fn batch_write_rest_rejects_write_without_operation_before_dispatch() {
     let s = state(None);
     let target = "projects/demo-app/databases/(default)/documents/batch-shape/target";
+    let (status, created) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/batch-shape?documentId=target"),
+        json!({"fields": {"v": {"integerValue": "0"}}}),
+    );
+    assert_eq!(status, 200, "{created}");
+
     let (status, body) = call(
         &s,
         "POST",
@@ -483,11 +491,12 @@ fn batch_write_rest_rejects_write_without_operation_before_dispatch() {
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
 
-    let (status, after) = call(&s, "GET", target, Value::Null);
+    let (status, after) = call(&s, "GET", &format!("/v1/{target}"), Value::Null);
     assert_eq!(
-        status, 404,
+        status, 200,
         "a malformed write must not dispatch its valid suffix: {after}"
     );
+    assert_eq!(after["fields"]["v"]["integerValue"], "0", "{after}");
 }
 
 #[test]

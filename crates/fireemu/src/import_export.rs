@@ -1767,7 +1767,11 @@ fn parse_protobuf_duration_text(text: &str, path: &Path) -> Result<LogicalDurati
             "the Auth settings sidecar has a negative quota duration",
         ));
     }
-    let (seconds, fraction) = body.split_once('.').map_or((body, ""), |parts| parts);
+    let (seconds, fraction) = body
+        .split_once('.')
+        .map_or((body, None), |(seconds, fraction)| {
+            (seconds, Some(fraction))
+        });
     let seconds = seconds.parse::<i128>().map_err(|_| {
         ArtifactError::new(
             "auth",
@@ -1775,20 +1779,26 @@ fn parse_protobuf_duration_text(text: &str, path: &Path) -> Result<LogicalDurati
             "the Auth settings sidecar has an invalid quota duration seconds value",
         )
     })?;
-    if fraction.is_empty()
-        || fraction.len() > 9
-        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err(ArtifactError::new(
-            "auth",
-            path,
-            "the Auth settings sidecar has an invalid quota duration fraction",
-        ));
-    }
-    let fraction_nanos = fraction
-        .parse::<i128>()
-        .unwrap_or(0)
-        .saturating_mul(10_i128.pow(u32::try_from(9 - fraction.len()).unwrap_or(0)));
+    let fraction_nanos = match fraction {
+        None => 0,
+        Some(fraction)
+            if !fraction.is_empty()
+                && fraction.len() <= 9
+                && fraction.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            fraction
+                .parse::<i128>()
+                .unwrap_or(0)
+                .saturating_mul(10_i128.pow(u32::try_from(9 - fraction.len()).unwrap_or(0)))
+        }
+        Some(_) => {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                "the Auth settings sidecar has an invalid quota duration fraction",
+            ))
+        }
+    };
     let nanos = seconds
         .checked_mul(1_000_000_000)
         .and_then(|value| value.checked_add(fraction_nanos))

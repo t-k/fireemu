@@ -1643,7 +1643,12 @@ mod tests {
         reapply_explicit_auth_config(&explicit, &registry).expect("reapply explicit config");
         assert_eq!(
             default_store.lock().unwrap().config(),
-            ProjectAuthConfig::default()
+            ProjectAuthConfig {
+                allow_duplicate_emails: false,
+                enable_improved_email_privacy: true,
+                disabled_user_signup: false,
+                disabled_user_deletion: false,
+            }
         );
     }
 

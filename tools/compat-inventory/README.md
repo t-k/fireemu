@@ -12,6 +12,10 @@ uv run --project tools/compat-inventory --locked tools/compat-inventory/publish.
 
 The gate checks snapshot component hashes, the pinned protobuf sources, candidate receipt assertions and cleanup, and deterministic Markdown. Checks do not contact Google or start fireemu. A deliberately edited manifest can still redefine the baseline: hashes are integrity checks, not signed authenticity or approval. Code review is required for baseline changes.
 
+## Firestore protobuf denominator companion
+
+The pinned [Firestore v1 gRPC denominator companion](../../spec/compatibility/denominators/firestore-v1-grpc-2026-09-16.v1.json) records 502 protobuf surfaces, including 468 Firestore Standard/Native target rows and 34 explicit Enterprise exclusions. Every surface remains `waiting-oracle`; structural enumeration is not production compatibility evidence. SDK and platform combinations are tracked as bounded debt because protobuf descriptors do not enumerate those package and transport contracts. The companion is fail-closed against its pinned upstream source, generator, and parent denominator digests.
+
 The automatic compatibility workflow also runs `cargo run --locked -p compat-check` and `cargo test --locked -p compat-check` to protect requirement/capability references and all generated feature tables. Python dependencies are resolved by the committed `uv.lock`; the workflow pins uv itself. These checks run on PRs, main pushes and manual dispatch, not on feature-branch pushes alone.
 
 Historical receipts retain their original harness bytes and digest through the index's `historicalTools` mapping. The 2026-09-09 aggregation harness had an incomplete stream validator; its stored extracted values cannot prove the original full response was well-formed. It is archived solely as provenance, not as a recommended executable. The fixed probe inspects every response element and permits only a result and valid `readTime` progress metadata for this corpus, which requests neither transactions nor explain metrics. Historical observations are not relabeled as executions of the new validator.

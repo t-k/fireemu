@@ -1,14 +1,14 @@
 # Firestore Write and transaction campaign preparation
 
-The current package prepares the next bounded Oracle campaign for `FS-DATA-WRITE` and `FS-TRANSACTION` at feature head `b31d088ed150c11d732ef596778f35605ad0078d`. It is preparation and local-shadow evidence only. It does not contain a production receipt, does not authorize a Cloud request and does not promote either parent group. The earlier `FS-WRITE-TXN-PRECEDENCE-01` package remains preserved as an immutable historical binding to the earlier source and artifact.
+The current package prepares the next bounded Oracle campaign for `FS-DATA-WRITE` and `FS-TRANSACTION` at feature head `c4883258c06d769cec9d3e2081c2160bd4794ba2`. It is preparation and local-shadow evidence only. It does not contain a production receipt, does not authorize a Cloud request and does not promote either parent group. The earlier `FS-WRITE-TXN-PRECEDENCE-01` package remains preserved as an immutable historical binding to the earlier source and artifact.
 
-The current machine-readable package is [`fs-write-txn-precedence-01-v3.json`](../../spec/compatibility/broad-runs/fs-write-txn-precedence-01-v3.json). Its companion binding is [`fs-write-txn-precedence-01-v3-binding.json`](../../spec/compatibility/broad-runs/fs-write-txn-precedence-01-v3-binding.json), and the local-only shadow plan is [`fs-write-txn-precedence-01-v3-local-shadow.json`](../../spec/compatibility/broad-runs/fs-write-txn-precedence-01-v3-local-shadow.json). The prior v2 package and the historical package remain preserved as immutable bindings; v3 was generated after the Auth settings integration at the current feature head.
+The current machine-readable package is [`fs-write-txn-precedence-01-v4.json`](../../spec/compatibility/broad-runs/fs-write-txn-precedence-01-v4.json). Its companion binding is [`fs-write-txn-precedence-01-v4-binding.json`](../../spec/compatibility/broad-runs/fs-write-txn-precedence-01-v4-binding.json), and the local-only shadow plan is [`fs-write-txn-precedence-01-v4-local-shadow.json`](../../spec/compatibility/broad-runs/fs-write-txn-precedence-01-v4-local-shadow.json). The historical package and v2/v3 packages remain preserved as immutable bindings; v4 is the current-head package after the Auth settings integration.
 
 ## Current, next and backlog
 
 | Queue position | Campaign | Scope | State |
 | --- | --- | --- | --- |
-| CURRENT | `FS-WRITE-TXN-PRECEDENCE-01-V3` | A Write stream request contending with an active read-write transaction, followed by owned document-size and nesting controls | `BLOCKED_OWNER` and `BLOCKED_TECHNICAL` |
+| CURRENT | `FS-WRITE-TXN-PRECEDENCE-01-V4` | A Write stream request contending with an active read-write transaction, followed by owned document-size and nesting controls | `BLOCKED_OWNER` and `BLOCKED_TECHNICAL` |
 | NEXT | `FS-DATA-WRITE-LIMITS-02` | Representative Commit operation-count and field-transform boundaries through the existing REST adapter | Preparation only; duplicate coverage and the current artifact must be checked before freezing |
 | BACKLOG | `FS-TRANSACTION-SDK-RETRY-01` | SDK `retryTransaction` and conflict recovery | Requires a fixed SDK and a separate SDK collector |
 | BACKLOG | `FS-DATA-WRITE-LIMITS-03` | Index-entry and total request-size boundaries | Deferred because the request, response and cost envelope is larger |
@@ -34,7 +34,7 @@ The local shadow reuses the existing shared gate and the current Rust gRPC and R
 
 The existing [`batch_adapter.py`](../../tools/compat-broad/batch_adapter.py) is frozen for REST document-limit cases. The checked-in Rust stream test is frozen as a local harness. There is currently no production gRPC Write collector in the repository, and the existing REST adapter cannot collect a bidirectional Write stream. The current shared comparator also does not bind stream events or transaction-token lifecycle. These are technical blockers, not reasons to weaken the adapter, add a production backdoor or treat local test output as production evidence.
 
-The current binding freezes the source head, local artifact SHA-256 `e3d72d5a97d6e29bac5050d20655d45b581434af588ab760b55378a576bb41e5` (built with `cargo build --locked --release -p fireemu`), shared gate digest, REST adapter digest, stream harness digest, limit catalog digest and current comparator digest. A production collector and a versioned stream comparator must be added or explicitly supplied before the campaign can become `READY_FOR_GATE`.
+The current binding freezes the source head, local artifact SHA-256 `a1d2e1bf202183ab0f37ad01eb6d374bae602a04b4e2ceff0493bfc80f7ab64b` (built with `CARGO_TARGET_DIR=target/o3-fs-write-v4 cargo build --locked --release -p fireemu`), shared gate digest, REST adapter digest, stream harness digest, limit catalog digest and current comparator digest. A production collector and a versioned stream comparator must be added or explicitly supplied before the campaign can become `READY_FOR_GATE`.
 
 ## Gate state and evidence boundary
 

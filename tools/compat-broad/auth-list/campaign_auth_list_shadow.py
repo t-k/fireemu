@@ -283,13 +283,13 @@ def validate_auth_lookup(body, expected_uid: str) -> None:
 
 def validate_deleted_lookup(status: int, body) -> None:
     """Require an explicit, typed acknowledgement that the account is absent."""
-    absent = status == 200 and isinstance(body, dict) and body.get("users") == []
+    kind_only = body == {"kind": "identitytoolkit#GetAccountInfoResponse"}
     not_found = (
         status == 404
         and isinstance(body, dict)
         and body.get("error", {}).get("status") == "USER_NOT_FOUND"
     )
-    if not (absent or not_found):
+    if not (status == 200 and kind_only) and not not_found:
         raise ValueError("owned account absence unconfirmed")
 
 

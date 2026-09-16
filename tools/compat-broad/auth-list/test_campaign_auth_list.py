@@ -267,7 +267,9 @@ def test_deleted_lookup_validation_requires_explicit_empty_users():
         validate(200, {})
     with pytest.raises(ValueError):
         validate(200, {"users": [{"localId": "still-present"}]})
-    validate(200, {"users": []})
+    with pytest.raises(ValueError):
+        validate(200, {"users": []})
+    validate(200, {"kind": "identitytoolkit#GetAccountInfoResponse"})
     validate(404, {"error": {"status": "USER_NOT_FOUND"}})
 
 

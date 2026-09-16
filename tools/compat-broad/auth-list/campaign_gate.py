@@ -93,6 +93,13 @@ class CampaignGate(FrozenGate):
                 and isinstance(body, dict)
                 and body.get("users", []) == []
             )
+            absent_ok = absent_ok or (
+                operation["operationType"] == "auth-lookup"
+                and status == 404
+                and isinstance(body, dict)
+                and isinstance(body.get("error"), dict)
+                and body["error"].get("status") == "USER_NOT_FOUND"
+            )
             if absent_ok:
                 route = operation["path"].split("?", 1)[0].removeprefix("/v1/")
                 with self.locked() as state:

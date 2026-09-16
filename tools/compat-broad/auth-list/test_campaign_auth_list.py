@@ -656,3 +656,41 @@ def test_gate_finish_rejects_unclosed_recovery(tmp_path):
     gate.claim()
     with pytest.raises(ValueError, match="cleanup incomplete"):
         gate.finish()
+
+
+def test_gate_records_typed_not_found_auth_lookup_as_absent(tmp_path):
+    from campaign_gate import CampaignGate, create
+
+    plan = campaign_manifest("2" * 32)
+    operation = next(
+        item
+        for item in plan["jobs"]["auth-list"]["recovery"]
+        if item["operationType"] == "auth-lookup"
+    )
+    plan["jobs"]["auth-list"]["recovery"] = [operation]
+    create(tmp_path / "gate", plan)
+    gate = CampaignGate(tmp_path / "gate", "auth-list")
+    gate.coordinator_call(0, lambda: (200, {}))
+    gate.coordinator_call(1, lambda: (200, {}))
+    gate.claim()
+    gate.dispatch(
+        operation,
+        True,
+        lambda: (404, {"error": {"status": "USER_NOT_FOUND"}}),
+    )
+
+    route = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+    assert route in gate.snapshot()["jobs"]["auth-list"]["absent"]
+
+
+def test_shadow_cli_returns_nonzero_for_incomplete_result(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign_auth_list_shadow,
+        "run",
+        lambda _output: {"completed": False, "failure": "cleanup incomplete"},
+    )
+
+    assert (
+        campaign_auth_list_shadow.main(["--output", str(tmp_path / "shadow")])
+        == 2
+    )

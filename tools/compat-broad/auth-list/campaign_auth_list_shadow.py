@@ -734,18 +734,24 @@ def run(output: Path) -> dict:
     return result
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path)
     parser.add_argument("--child", type=Path)
     parser.add_argument("--nonce")
     parser.add_argument("--legacy-fixture", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.child is not None:
         if not args.nonce:
             parser.error("--nonce is required with --child")
         _real_child(args.child.resolve(), args.nonce)
-    elif args.output is not None:
-        print(json.dumps((run_fixture if args.legacy_fixture else run)(args.output.resolve())))
-    else:
-        parser.error("--output is required")
+        return 0
+    if args.output is not None:
+        result = (run_fixture if args.legacy_fixture else run)(args.output.resolve())
+        print(json.dumps(result))
+        return 0 if result.get("completed") is True else 2
+    parser.error("--output is required")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

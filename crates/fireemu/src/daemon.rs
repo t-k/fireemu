@@ -17,7 +17,9 @@ use fireemu_core_auth::jwt::IdTokenSigner;
 use fireemu_core_auth::signup_quota::{
     QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
 };
-use fireemu_core_auth::store::{AuthNamespaceConfigPatch, AuthStore, ProjectAuthConfig};
+use fireemu_core_auth::store::{
+    AuthNamespaceConfigPatch, AuthStore, ProjectAuthConfig, ProjectAuthConfigPatch,
+};
 use fireemu_core_firestore::index::{IndexSet, PlanningContext};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
@@ -222,6 +224,39 @@ fn apply_auth_config_overrides(
         }
     }
     Ok(())
+}
+
+/// Applies only root Auth settings explicitly present in the startup file after an import.
+/// Omitted values must remain those restored from the imported namespace.
+fn reapply_explicit_auth_config(
+    cfg: &RuntimeConfig,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+) -> Result<(), String> {
+    let patch = ProjectAuthConfigPatch {
+        allow_duplicate_emails: cfg
+            .auth_allow_duplicate_emails_explicit
+            .then_some(cfg.auth_allow_duplicate_emails),
+        enable_improved_email_privacy: cfg
+            .auth_improved_email_privacy_explicit
+            .then_some(cfg.auth_improved_email_privacy),
+        disabled_user_signup: cfg
+            .auth_client_permissions_explicit
+            .then_some(cfg.auth_client_permissions.disabled_user_signup),
+        disabled_user_deletion: cfg
+            .auth_client_permissions_explicit
+            .then_some(cfg.auth_client_permissions.disabled_user_deletion),
+    };
+    if !patch.is_empty()
+        && registry
+            .patch_project_config(&cfg.auth_project, patch)
+            .is_none()
+    {
+        return Err(format!(
+            "cannot apply explicit root Auth settings to {}",
+            cfg.auth_project
+        ));
+    }
+    apply_auth_config_overrides(cfg, registry)
 }
 
 fn auth_signup_quota_config(cfg: &RuntimeConfig) -> Result<SignupQuotaConfig, String> {
@@ -676,7 +711,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     // Startup configuration is the final layer over imported Auth state. The import remains
     // authoritative when the corresponding setting was not explicitly configured.
     reapply_explicit_auth_password_policies(&cfg, &registry)?;
-    apply_auth_config_overrides(&cfg, &registry)?;
+    reapply_explicit_auth_config(&cfg, &registry)?;
     let hub_state = Arc::new(hub::HubState {
         project: cfg.auth_project.clone(),
         addr: hub_addr.unwrap_or(http_addr),
@@ -1472,7 +1507,7 @@ mod tests {
     use super::{
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
         auth_signup_quota_config, blocking_auth_selection, close_functions_source_admission,
-        function_log_input, reapply_explicit_auth_password_policies,
+        function_log_input, reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
     };
 
     #[test]
@@ -1562,6 +1597,54 @@ mod tests {
         assert!(config.disabled_user_deletion);
         assert!(!config.enable_improved_email_privacy);
         assert!(registry.store_for("future-project").is_none());
+    }
+
+    #[test]
+    fn omitted_root_auth_settings_preserve_imported_config_after_startup() {
+        let default_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(4),
+            TotpPolicy::default(),
+        )));
+        default_store.lock().unwrap().set_config(ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: false,
+            disabled_user_signup: true,
+            disabled_user_deletion: true,
+        });
+        let registry = AuthRegistry::new("demo-app", default_store.clone());
+        let omitted = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1
+        }))
+        .expect("omitted Auth settings");
+        reapply_explicit_auth_config(&omitted, &registry).expect("reapply omitted config");
+        assert_eq!(
+            default_store.lock().unwrap().config(),
+            ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                enable_improved_email_privacy: false,
+                disabled_user_signup: true,
+                disabled_user_deletion: true,
+            }
+        );
+
+        let explicit = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "signIn": {"allowDuplicateEmails": false},
+                "client": {"permissions": {
+                    "disabledUserSignup": false,
+                    "disabledUserDeletion": false
+                }},
+                "improvedEmailPrivacy": true
+            }
+        }))
+        .expect("explicit Auth settings");
+        reapply_explicit_auth_config(&explicit, &registry).expect("reapply explicit config");
+        assert_eq!(
+            default_store.lock().unwrap().config(),
+            ProjectAuthConfig::default()
+        );
     }
 
     #[test]

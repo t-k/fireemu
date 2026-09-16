@@ -61,6 +61,7 @@ pub struct PasswordPolicyConfig {
 
 /// Password strength constraints from `auth.passwordPolicy.constraints`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct PasswordPolicyConstraints {
     /// Minimum UTF-16 code units accepted by the local policy evaluator.
     pub min_length: u32,
@@ -81,7 +82,7 @@ pub struct PasswordPolicyOverride {
 }
 
 /// End-user account creation and deletion switches from `auth.client.permissions`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AuthClientPermissions {
     /// When true, end-user account creation is refused. Administrative creation remains
     /// available; the runtime owner for this switch is tracked separately from this loader.
@@ -89,15 +90,6 @@ pub struct AuthClientPermissions {
     /// When true, end-user account deletion is refused. Administrative deletion remains
     /// available; the runtime owner for this switch is tracked separately from this loader.
     pub disabled_user_deletion: bool,
-}
-
-impl Default for AuthClientPermissions {
-    fn default() -> Self {
-        Self {
-            disabled_user_signup: false,
-            disabled_user_deletion: false,
-        }
-    }
 }
 
 /// Settings that may be overridden for one project/tenant namespace.
@@ -573,14 +565,14 @@ fn parse_auth_config_overrides(
             .ok_or_else(|| ConfigError(format!("{entry_path}.config is required")))?;
         let config =
             parse_auth_config_override_value(config_value, &format!("{entry_path}.config"))?;
-        if tenant_id.is_none() && project_id == default_project {
-            if (root_client_configured && config.client_permissions.is_some())
-                || (root_privacy_configured && config.improved_email_privacy.is_some())
-            {
-                return Err(ConfigError(format!(
-                    "auth config override at {entry_path} duplicates explicitly configured default-project settings"
-                )));
-            }
+        if tenant_id.is_none()
+            && project_id == default_project
+            && ((root_client_configured && config.client_permissions.is_some())
+                || (root_privacy_configured && config.improved_email_privacy.is_some()))
+        {
+            return Err(ConfigError(format!(
+                "auth config override at {entry_path} duplicates explicitly configured default-project settings"
+            )));
         }
         overrides.push(AuthConfigOverride {
             project_id,
@@ -751,7 +743,9 @@ fn parse_protobuf_duration(value: &Value, path: &str) -> Result<LogicalDuration,
         let nanos = fraction_text
             .parse::<i128>()
             .map_err(|_| ConfigError(format!("{path} fraction is outside the supported range")))?;
-        nanos * 10_i128.pow((9 - fraction_text.len()) as u32)
+        let exponent = u32::try_from(9 - fraction_text.len())
+            .expect("validated protobuf fraction length is at most nine");
+        nanos * 10_i128.pow(exponent)
     };
     let nanos = seconds
         .checked_mul(1_000_000_000)
@@ -800,7 +794,7 @@ fn parse_auth_quota(
                 && value.bytes().all(|byte| byte.is_ascii_digit())
                 && value
                     .parse::<u64>()
-                    .is_ok_and(|number| number <= i64::MAX as u64)
+                    .is_ok_and(|number| i64::try_from(number).is_ok())
         })
         .ok_or_else(|| {
             ConfigError(format!(
@@ -956,6 +950,8 @@ pub struct RuntimeConfig {
     /// answers `INVALID_LOGIN_CREDENTIALS`, and a password reset for an unknown address is
     /// acknowledged. `false` restores the official Auth emulator's revealing answers.
     pub auth_improved_email_privacy: bool,
+    /// Whether auth.improvedEmailPrivacy was explicitly present in the input.
+    pub auth_improved_email_privacy_explicit: bool,
     /// `auth.logActionCodes`: print every email action link and SMS code to the daemon's
     /// standard output as the official Auth emulator does, on by default. `false` keeps the
     /// codes off the console; they stay readable from the emulator inspection routes.
@@ -967,8 +963,12 @@ pub struct RuntimeConfig {
     /// `auth.signIn.allowDuplicateEmails`, with the existing Auth default preserved when the
     /// section is omitted.
     pub auth_allow_duplicate_emails: bool,
+    /// Whether auth.signIn.allowDuplicateEmails was explicitly present in the input.
+    pub auth_allow_duplicate_emails_explicit: bool,
     /// `auth.client.permissions` for the default Auth namespace.
     pub auth_client_permissions: AuthClientPermissions,
+    /// Whether auth.client.permissions was explicitly present in the input.
+    pub auth_client_permissions_explicit: bool,
     /// Explicit project/tenant overrides for the non-password Auth settings.
     pub auth_config_overrides: Vec<AuthConfigOverride>,
     /// Explicit blocking function selection and per-token forwarding settings.
@@ -1231,11 +1231,14 @@ impl Default for RuntimeConfig {
             auth_totp: None,
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
+            auth_improved_email_privacy_explicit: false,
             auth_log_action_codes: true,
             auth_password_policy: None,
             auth_password_policy_overrides: Vec::new(),
             auth_allow_duplicate_emails: false,
+            auth_allow_duplicate_emails_explicit: false,
             auth_client_permissions: AuthClientPermissions::default(),
+            auth_client_permissions_explicit: false,
             auth_config_overrides: Vec::new(),
             auth_blocking_functions: None,
             auth_signup_quota: None,
@@ -3144,6 +3147,7 @@ impl RuntimeConfig {
                 cfg.auth_improved_email_privacy = privacy.as_bool().ok_or_else(|| {
                     ConfigError("auth.improvedEmailPrivacy must be a boolean".to_owned())
                 })?;
+                cfg.auth_improved_email_privacy_explicit = true;
             }
             if let Some(log) = auth.get("logActionCodes") {
                 cfg.auth_log_action_codes = log.as_bool().ok_or_else(|| {
@@ -3164,6 +3168,7 @@ impl RuntimeConfig {
                     Some(value) => {
                         cfg.auth_client_permissions =
                             parse_auth_client_permissions(value, "auth.client.permissions")?;
+                        cfg.auth_client_permissions_explicit = true;
                         true
                     }
                 }
@@ -3181,6 +3186,8 @@ impl RuntimeConfig {
                 }
                 cfg.auth_allow_duplicate_emails =
                     parse_strict_bool(sign_in, "allowDuplicateEmails", "auth.signIn", false)?;
+                cfg.auth_allow_duplicate_emails_explicit =
+                    sign_in.contains_key("allowDuplicateEmails");
             }
             if let Some(overrides) = auth.get("configOverrides") {
                 cfg.auth_config_overrides = parse_auth_config_overrides(

@@ -975,8 +975,13 @@ pub struct RuntimeConfig {
     pub auth_blocking_functions: Option<BlockingFunctionsConfig>,
     /// Official-shaped temporary sign-up quota configuration.
     pub auth_signup_quota: Option<AuthSignUpQuotaConfig>,
+    /// Whether `auth.quota` was explicitly present in the startup file, including an explicit
+    /// null `signUpQuotaConfig` that clears an imported temporary override.
+    pub auth_signup_quota_explicit: bool,
     /// fireemu-local deterministic sign-up quota simulation.
     pub auth_quota_simulation: AuthQuotaSimulationConfig,
+    /// Whether `auth.quotaSimulation` was explicitly present in the startup file.
+    pub auth_quota_simulation_explicit: bool,
     /// Path of `firestore.indexes.json`, if configured.
     pub index_file: Option<String>,
     /// Path of `firestore.text-indexes.json`, if configured.
@@ -1242,7 +1247,9 @@ impl Default for RuntimeConfig {
             auth_config_overrides: Vec::new(),
             auth_blocking_functions: None,
             auth_signup_quota: None,
+            auth_signup_quota_explicit: false,
             auth_quota_simulation: AuthQuotaSimulationConfig::default(),
+            auth_quota_simulation_explicit: false,
             index_file: None,
             text_index_file: None,
             rules_file: None,
@@ -3206,9 +3213,11 @@ impl RuntimeConfig {
                 )?);
             }
             if let Some(quota) = auth.get("quota") {
+                cfg.auth_signup_quota_explicit = true;
                 cfg.auth_signup_quota = parse_auth_quota(quota, "auth.quota")?;
             }
             if let Some(simulation) = auth.get("quotaSimulation") {
+                cfg.auth_quota_simulation_explicit = true;
                 cfg.auth_quota_simulation =
                     parse_auth_quota_simulation(simulation, "auth.quotaSimulation")?;
             }

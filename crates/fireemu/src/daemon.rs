@@ -372,6 +372,34 @@ fn reapply_explicit_auth_password_policies(
     apply_auth_password_policy_overrides(cfg, registry)
 }
 
+/// Reapplies explicitly configured sign-up quota settings after an import. The quota counters are
+/// runtime state and remain with the imported namespace; only a startup file that explicitly
+/// mentions `auth.quota` or `auth.quotaSimulation` replaces the imported configuration.
+fn reapply_explicit_auth_quota(
+    cfg: &RuntimeConfig,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+) -> Result<(), String> {
+    if !cfg.auth_signup_quota_explicit && !cfg.auth_quota_simulation_explicit {
+        return Ok(());
+    }
+    let quota = auth_signup_quota_config(cfg)?;
+    if registry
+        .patch_project_config_with_password_policy_and_quota(
+            &cfg.auth_project,
+            ProjectAuthConfigPatch::default(),
+            None,
+            Some(quota),
+        )
+        .is_none()
+    {
+        return Err(format!(
+            "cannot apply explicit Auth quota settings to {}",
+            cfg.auth_project
+        ));
+    }
+    Ok(())
+}
+
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let BoundStartup {
         cfg,
@@ -713,6 +741,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     // authoritative when the corresponding setting was not explicitly configured.
     reapply_explicit_auth_password_policies(&cfg, &registry)?;
     reapply_explicit_auth_config(&cfg, &registry)?;
+    reapply_explicit_auth_quota(&cfg, &registry)?;
     let hub_state = Arc::new(hub::HubState {
         project: cfg.auth_project.clone(),
         addr: hub_addr.unwrap_or(http_addr),
@@ -1509,6 +1538,7 @@ mod tests {
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
         auth_signup_quota_config, blocking_auth_selection, close_functions_source_admission,
         function_log_input, reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
+        reapply_explicit_auth_quota,
     };
 
     #[test]
@@ -1561,6 +1591,54 @@ mod tests {
         assert_eq!(quota.default_quota_per_hour, 17);
         assert_eq!(quota.max_tracked_buckets, 8);
         assert_eq!(quota.temporary.expect("temporary quota").quota, 2);
+    }
+
+    #[test]
+    fn explicit_quota_settings_override_imported_configuration_without_usage_reset() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "quota": {"signUpQuotaConfig": null},
+                "quotaSimulation": {"mode": "enforce", "defaultQuotaPerHour": 7}
+            }
+        }))
+        .expect("valid explicit quota settings");
+        assert!(cfg.auth_signup_quota_explicit);
+        assert!(cfg.auth_quota_simulation_explicit);
+
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let imported = fireemu_core_auth::signup_quota::SignupQuotaConfig {
+            mode: QuotaMode::Observe,
+            default_quota_per_hour: 99,
+            ..Default::default()
+        };
+        registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .set_signup_quota_config(imported)
+            .expect("imported quota is valid");
+        reapply_explicit_auth_quota(&cfg, &registry).expect("explicit quota reapplies");
+
+        let store = registry.default_store();
+        let store = store.lock().unwrap();
+        assert_eq!(store.signup_quota().config().mode, QuotaMode::Enforce);
+        assert_eq!(store.signup_quota().config().default_quota_per_hour, 7);
+        assert_eq!(
+            store.signup_quota().usage(
+                "demo-app",
+                "127.0.0.1",
+                fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            ),
+            (0, 0)
+        );
     }
 
     #[test]

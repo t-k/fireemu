@@ -4089,15 +4089,10 @@ impl AuthRegistry {
             Some(_) => Some(self.next_lifecycle_epoch()?),
             None => None,
         };
-        let (policy, config, quota, signer) = {
-            let default = self.default.lock().ok()?;
-            (
-                *default.policy(),
-                default.config(),
-                default.signup_quota().config().clone(),
-                default.signer_arc(),
-            )
-        };
+        // Registry override locks are acquired before any AuthStore lock throughout the
+        // routing path. Taking the snapshots first prevents a concurrent project PATCH (which
+        // updates an override while holding the namespace gate) from deadlocking a routed
+        // request that is reading the default store.
         let explicit_password_policy = self
             .project_password_policy_overrides
             .lock()
@@ -4110,6 +4105,15 @@ impl AuthRegistry {
             .ok()?
             .get(project)
             .copied();
+        let (policy, config, quota, signer) = {
+            let default = self.default.lock().ok()?;
+            (
+                *default.policy(),
+                default.config(),
+                default.signup_quota().config().clone(),
+                default.signer_arc(),
+            )
+        };
         let seed = project
             .bytes()
             .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
@@ -4994,6 +4998,16 @@ impl AuthRegistry {
         tenant: &str,
         parent: &SharedAuthStore,
     ) -> Option<Arc<Mutex<AuthStore>>> {
+        let key = (project.to_owned(), tenant.to_owned());
+        // Snapshot namespace overrides before locking the inherited parent store. This is the
+        // same registry-wide lock order used by routed candidates and project PATCHes.
+        let explicit_password_policy = self
+            .password_policy_overrides
+            .lock()
+            .ok()?
+            .get(&key)
+            .cloned();
+        let explicit_config = self.tenant_config_overrides.lock().ok()?.get(&key).copied();
         let (policy, config, signer, number, lifecycle_enabled) = {
             let parent = parent.lock().ok()?;
             (
@@ -5004,18 +5018,6 @@ impl AuthRegistry {
                 parent.lifecycle_epoch.is_some(),
             )
         };
-        let explicit_password_policy = self
-            .password_policy_overrides
-            .lock()
-            .ok()?
-            .get(&(project.to_owned(), tenant.to_owned()))
-            .cloned();
-        let explicit_config = self
-            .tenant_config_overrides
-            .lock()
-            .ok()?
-            .get(&(project.to_owned(), tenant.to_owned()))
-            .copied();
         let seed = project
             .bytes()
             .chain(tenant.bytes())
@@ -5048,6 +5050,14 @@ impl AuthRegistry {
         tenant: &str,
         parent: &SharedAuthStore,
     ) -> Option<AuthStore> {
+        let key = (project.to_owned(), tenant.to_owned());
+        let explicit_password_policy = self
+            .password_policy_overrides
+            .lock()
+            .ok()?
+            .get(&key)
+            .cloned();
+        let explicit_config = self.tenant_config_overrides.lock().ok()?.get(&key).copied();
         let (policy, config, signer, number) = {
             let parent = parent.lock().ok()?;
             (
@@ -5057,18 +5067,6 @@ impl AuthRegistry {
                 parent.project_number(),
             )
         };
-        let explicit_password_policy = self
-            .password_policy_overrides
-            .lock()
-            .ok()?
-            .get(&(project.to_owned(), tenant.to_owned()))
-            .cloned();
-        let explicit_config = self
-            .tenant_config_overrides
-            .lock()
-            .ok()?
-            .get(&(project.to_owned(), tenant.to_owned()))
-            .copied();
         let seed = project
             .bytes()
             .chain(tenant.bytes())
@@ -5696,13 +5694,13 @@ impl AuthRegistry {
             return false;
         };
         let existing = tenants.get(&key).cloned();
+        let Ok(mut metadata) = self.tenant_metadata.lock() else {
+            return false;
+        };
         let Ok(mut overrides) = self.tenant_config_overrides.lock() else {
             return false;
         };
         if let Some(store) = existing {
-            let Ok(mut metadata) = self.tenant_metadata.lock() else {
-                return false;
-            };
             let Some(current_metadata) = metadata.get(&key).cloned() else {
                 return false;
             };
@@ -5753,6 +5751,18 @@ impl AuthRegistry {
             {
                 return None;
             }
+            // A project update changes inherited fields on every tenant, but must reapply each
+            // tenant's own override so an unrelated project PATCH cannot enable a disabled
+            // tenant. The registry lock order is membership -> tenant metadata -> overrides ->
+            // stores; take a snapshot before acquiring any store lock.
+            let tenant_overrides = self
+                .tenant_config_overrides
+                .lock()
+                .ok()?
+                .iter()
+                .filter(|((candidate, _), _)| candidate == project)
+                .map(|(key, patch)| (key.clone(), *patch))
+                .collect::<BTreeMap<_, _>>();
             let tenant_stores = tenants
                 .iter()
                 .filter(|((candidate, _), _)| candidate == project)
@@ -5775,11 +5785,19 @@ impl AuthRegistry {
                 tenant_guards.push(store.lock().ok()?);
             }
             parent.set_config(config);
-            for tenant in &mut tenant_guards {
-                tenant.set_config(config);
+            for ((key, _), tenant) in tenant_stores.iter().zip(&mut tenant_guards) {
+                let tenant_config = tenant_overrides
+                    .get(key)
+                    .copied()
+                    .map_or(config, |override_patch| override_patch.apply_to(config));
+                tenant.set_config(tenant_config);
             }
             for (key, _) in &tenant_stores {
-                metadata.get_mut(key)?.apply_effective_config(config);
+                let tenant_config = tenant_overrides
+                    .get(key)
+                    .copied()
+                    .map_or(config, |override_patch| override_patch.apply_to(config));
+                metadata.get_mut(key)?.apply_effective_config(tenant_config);
             }
             if let Some(password_policy) = password_policy {
                 parent.set_password_policy(password_policy.clone());
@@ -5793,14 +5811,18 @@ impl AuthRegistry {
             }
             return Some(config);
         }
+        let mut overrides = match password_policy.as_ref() {
+            Some(_) => Some(self.project_password_policy_overrides.lock().ok()?),
+            None => None,
+        };
         let mut parent = parent.lock().ok()?;
         let config = patch.apply_to(parent.config());
         if let Some(password_policy) = password_policy {
-            let Ok(mut overrides) = self.project_password_policy_overrides.lock() else {
-                return None;
-            };
             parent.set_password_policy(password_policy.clone());
-            overrides.insert(project.to_owned(), password_policy);
+            overrides
+                .as_mut()
+                .expect("a password policy patch holds the override lock")
+                .insert(project.to_owned(), password_policy);
         }
         if let Some(quota) = signup_quota {
             parent.set_signup_quota_config(quota).ok()?;
@@ -8332,6 +8354,59 @@ mod password_policy_namespace_tests {
                 .unwrap()
                 .get("demo-app"),
             Some(&policy)
+        );
+    }
+
+    #[test]
+    fn project_config_patch_preserves_explicit_tenant_overrides() {
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is created");
+        assert!(registry.register_tenant_config_override(
+            "demo-app",
+            "tenant-a",
+            AuthNamespaceConfigPatch {
+                disabled_user_signup: Some(true),
+                ..AuthNamespaceConfigPatch::default()
+            },
+        ));
+
+        registry
+            .patch_project_config_with_password_policy(
+                "demo-app",
+                ProjectAuthConfigPatch {
+                    disabled_user_signup: Some(false),
+                    disabled_user_deletion: Some(true),
+                    enable_improved_email_privacy: Some(true),
+                    ..ProjectAuthConfigPatch::default()
+                },
+                None,
+            )
+            .expect("project patch succeeds");
+
+        assert_eq!(
+            tenant.lock().unwrap().config(),
+            ProjectAuthConfig {
+                disabled_user_signup: true,
+                disabled_user_deletion: true,
+                enable_improved_email_privacy: true,
+                ..ProjectAuthConfig::default()
+            }
+        );
+        assert!(
+            registry
+                .tenant_metadata("demo-app", "tenant-a")
+                .expect("tenant metadata")
+                .disabled_user_signup,
+            "the explicit tenant override remains effective after a project update"
         );
     }
 

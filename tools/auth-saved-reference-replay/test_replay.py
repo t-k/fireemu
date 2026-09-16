@@ -9,7 +9,18 @@ from pathlib import Path
 
 import pytest
 import run_replay
-from replay import CORPORA, compare, evaluate, load_spec, typed_equal
+from replay import (
+    BUILD_COMMAND,
+    CORPORA,
+    compare,
+    digest,
+    evaluate,
+    expected_probe_inputs,
+    expected_runtime_inputs,
+    file_digest,
+    load_spec,
+    typed_equal,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "compat-inventory"))
 import owned_runner
@@ -42,6 +53,73 @@ def local_from_saved(name, source="a" * 40):
             "value": {"profile": "strict", "schemaVersion": 1},
         },
     }
+
+
+def write_complete_failed_bundle(tmp_path):
+    root = tmp_path / "complete-failed-bundle"
+    root.mkdir(mode=0o700)
+    source = "a" * 40
+    artifact = "b" * 64
+    configuration = {
+        "sha256": "c" * 64,
+        "fileSha256": "d" * 64,
+        "value": {"profile": "strict", "schemaVersion": 1},
+    }
+    inputs = expected_runtime_inputs()
+    corpora = {}
+    for name in CORPORA:
+        report = local_from_saved(name, source)
+        report.update(
+            {
+                "status": "failed",
+                "artifact": {"kind": "local-build", "sha256": artifact},
+                "build": {
+                    "artifactSha256": artifact,
+                    "exitCode": 0,
+                    "inputs": inputs,
+                },
+                "ownedProcess": {
+                    "exitCode": 0,
+                    "stopped": True,
+                    "listenersClosed": True,
+                },
+                "configuration": configuration,
+                "probeInputs": expected_probe_inputs(name),
+            }
+        )
+        corpus = root / name
+        corpus.mkdir(mode=0o700)
+        report_path = corpus / "local.json"
+        report_path.write_text(json.dumps(report, sort_keys=True) + "\n")
+        corpora[name] = {
+            "status": "failed",
+            "localReport": f"{name}/local.json",
+            "localReportSha256": file_digest(report_path),
+            "localReportBytes": report_path.stat().st_size,
+            "artifactSha256": artifact,
+            "runtimeSourceCommit": source,
+            "cleanup": {"uidAbsent": True, "emailAbsent": True},
+            "listenersClosed": True,
+            "processExitCode": 0,
+            "probeInputsSha256": digest(report["probeInputs"]),
+            "configurationSha256": configuration["sha256"],
+            "configurationFileSha256": configuration["fileSha256"],
+        }
+    manifest = {
+        "schemaVersion": 2,
+        "kind": "auth-saved-reference-replay-local-v2",
+        "sourceCommit": source,
+        "build": {
+            "command": BUILD_COMMAND,
+            "exitCode": 0,
+            "artifactSha256": artifact,
+            "inputs": inputs,
+        },
+        "artifactSha256": artifact,
+        "corpora": corpora,
+    }
+    (root / "run-manifest.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
+    return root, source
 
 
 def test_replay_spec_binds_runtime_to_the_run_manifest():
@@ -182,6 +260,44 @@ def test_fixed_bundle_evaluation_is_deterministic(tmp_path):
     )
     assert first["comparisonDigest"] == second["comparisonDigest"]
     assert first["allCasesMatch"] is True
+
+
+def test_evaluate_validates_a_complete_failed_profile_fixture(tmp_path):
+    bundle, source = write_complete_failed_bundle(tmp_path)
+    result = evaluate(bundle, tmp_path / "result.json", source)
+    assert result["allCasesMatch"] is True
+    assert result["corpora"]["auth-profile"]["classification"] == "MATCH"
+
+
+def test_evaluate_rejects_tampered_failed_status_after_real_validation(tmp_path):
+    bundle, source = write_complete_failed_bundle(tmp_path)
+    manifest_path = bundle / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["corpora"]["auth-profile"]["status"] = "passed"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+    with pytest.raises(ValueError, match="status does not match"):
+        evaluate(bundle, tmp_path / "result.json", source)
+
+
+@pytest.mark.parametrize("collision", ["regular", "symlink", "hardlink"])
+def test_evaluate_preserves_input_bytes_for_real_fixture_collisions(tmp_path, collision):
+    bundle, source = write_complete_failed_bundle(tmp_path)
+    target = tmp_path / "result.json"
+    if collision == "regular":
+        target.write_bytes(b"original")
+        protected = target
+    elif collision == "symlink":
+        protected = tmp_path / "symlink-target"
+        protected.write_bytes(b"original")
+        target.symlink_to(protected)
+    else:
+        protected = tmp_path / "hardlink-source"
+        protected.write_bytes(b"original")
+        target.hardlink_to(protected)
+    before = protected.read_bytes()
+    with pytest.raises(ValueError, match="already exists"):
+        evaluate(bundle, target, source)
+    assert protected.read_bytes() == before
 
 
 def test_run_accepts_a_complete_failed_report_and_writes_the_manifest(

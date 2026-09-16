@@ -355,3 +355,13 @@ These results are local Firestore evidence only. Production conflict precedence,
 The four immutable Auth production receipts were replayed through source `577eaad53c7e914f141405a715b246248dcd6ae8` using one local artifact. `auth-basic-v2`, `auth-display-name`, `auth-password` and `auth-profile` each matched all 12 rows, for 48/48 `MATCH`. The candidate result is [`577eaad5-auth-saved-reference-replay.json`](../../spec/compatibility/broad-runs/577eaad5-auth-saved-reference-replay.json), bound to artifact `95ffc5825108db895c0e298d10865c288ffe423038eee8d6cef74f0a6ba774e6`, run-manifest digest `5cb9484c8b16f5dac23e22e26e07ff84459ecea77b2bd8b8dae78d67b595cdbb` and comparison digest `ef054f4ee9ef0daea008042466b6081dc693be3cfb023e3b649cbc9a1ba7aaff`.
 
 This is saved-production-reference evidence only. It does not promote `AUTH-ACCOUNT`; provider lifecycle, alternate hash formats, configured policies and the remaining credential, MFA, OOB, tenant, blocking and SDK conditions still require their declared evidence. No production operation, Cloud read or historical receipt rewrite occurred.
+
+## Current-head Rules provenance sink closure (`8f456536`)
+
+The Rules query-proof evaluator now keeps declaration-scope isolation for static provenance lookups and preserves numeric provenance for known List/Set and partial-list containers before member and index access. Regression coverage includes caller `resource` shadowing of the global resource in both dot and bracket access, and list-derived numeric values used in comparison, membership and map indexing. The prior query-derived arithmetic, direct comparison, type-test, path and function/let alias guards remain in place.
+
+The affected RegexAuthorization, RegexEvaluationCache and RulesetActivation Quint evidence was regenerated with the repository generator. Post-refresh `fireemu-core-rules` nextest passed 158/158; `traceability-check`, `compat-check`, rustfmt and diff checks passed. This is local evaluator and formal-evidence maintenance only. No production operation, Cloud read, receipt rewrite or nonce reuse occurred.
+
+`COMPAT_VERIFIED` remains `0 / 14`. `FS-RULES` and `FS-QUERY-INDEX` still require declared production comparisons, while `FS-DATA-WRITE` remains the nearest closure candidate with production stream/transaction precedence and bounded request/operation-limit observations outstanding. The next document-size-boundary campaign remains `BLOCKED_OWNER` pending owner identity, permission reference, execution window, fresh nonce, current configuration/pricing acceptance, recovery owner and fixed collector/manifest/comparator bindings.
+
+Updated feature head: `8f456536cf6cec322bec3deb6e72eb1975f75d6e`.

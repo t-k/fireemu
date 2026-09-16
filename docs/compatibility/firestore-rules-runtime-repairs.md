@@ -36,3 +36,9 @@ The core regressions cover direct equality and negation, membership and cardinal
 Query proofs now fail closed for representation-sensitive numeric access. Numeric query-derived indices, slice bounds and `path.bind()` values return `Unknown` before indexing, slicing or path interpolation. Provenance is preserved through direct expressions and declaration-scoped function/`let` aliases. Concrete Rules behavior and constant access remain unchanged. Core and real gRPC regressions cover integer query representatives against floating-point stored values, valid controls, owner stream completion, and denied user direct/query access.
 
 `RegexAuthorization`, `RegexEvaluationCache` and `RulesetActivation` Quint evidence was regenerated with the official repository generator and validated. Workspace nextest passed 2,410 tests with 81 documented skips; workspace Clippy, rustfmt and diff checks passed. Independent Rules review and Security Specialist review found no blocker. These are local evaluator and evidence checks; production Rules/query parity remains unobserved.
+
+## Current query-provenance sink closure (`8f456536`)
+
+Static query-provenance lookups now resolve global declarations without caller bindings, and known List/Set and partial-list values retain their numeric provenance through member and index access. Local regressions cover caller `resource` shadowing through dot and bracket access plus list-derived comparison, membership and map indexing. The change preserves the earlier conservative handling of query-derived arithmetic, direct comparisons, type checks, paths and aliases.
+
+The three source-bound Quint evidence files were refreshed with the repository generator and validated. The Rules-core regression passed 158/158 tests; production Rules compiler and query-proof parity remain unobserved.

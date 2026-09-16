@@ -206,6 +206,7 @@ fn project_config_override_waits_for_exact_namespace_registration() {
 fn tenant_config_override_waits_for_exact_namespace_and_preserves_siblings() {
     let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app"))));
     let patch = AuthNamespaceConfigPatch {
+        allow_duplicate_emails: None,
         disabled_user_signup: Some(true),
         disabled_user_deletion: Some(true),
         enable_improved_email_privacy: Some(false),

@@ -461,12 +461,15 @@ impl ProjectAuthConfigPatch {
     }
 }
 
-/// The non-password settings accepted by `auth.configOverrides` for one namespace.
+/// The non-password settings represented for one namespace.
 ///
-/// This deliberately excludes account-linking and password-policy fields so a config override
-/// cannot silently change a different Auth setting group. `None` preserves the current value.
+/// `auth.configOverrides` currently populates the client permission and improved email privacy
+/// fields. Tenant management patches can additionally select duplicate-email behavior. Password
+/// policy remains a separate setting group, and `None` preserves the current value.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AuthNamespaceConfigPatch {
+    /// Whether duplicate email accounts are allowed.
+    pub allow_duplicate_emails: Option<bool>,
     /// Whether end-user account creation is disabled.
     pub disabled_user_signup: Option<bool>,
     /// Whether end-user self-deletion is disabled.
@@ -479,7 +482,8 @@ impl AuthNamespaceConfigPatch {
     /// Whether this override selects no values.
     #[must_use]
     pub const fn is_empty(self) -> bool {
-        self.disabled_user_signup.is_none()
+        self.allow_duplicate_emails.is_none()
+            && self.disabled_user_signup.is_none()
             && self.disabled_user_deletion.is_none()
             && self.enable_improved_email_privacy.is_none()
     }
@@ -487,6 +491,9 @@ impl AuthNamespaceConfigPatch {
     /// Applies the selected values to a project or tenant store configuration.
     #[must_use]
     pub fn apply_to(self, mut config: ProjectAuthConfig) -> ProjectAuthConfig {
+        if let Some(value) = self.allow_duplicate_emails {
+            config.allow_duplicate_emails = value;
+        }
         if let Some(value) = self.disabled_user_signup {
             config.disabled_user_signup = value;
         }
@@ -508,6 +515,21 @@ impl AuthNamespaceConfigPatch {
         }
         if let Some(value) = self.enable_improved_email_privacy {
             metadata.enable_improved_email_privacy = value;
+        }
+    }
+
+    fn merge(self, update: Self) -> Self {
+        Self {
+            allow_duplicate_emails: update
+                .allow_duplicate_emails
+                .or(self.allow_duplicate_emails),
+            disabled_user_signup: update.disabled_user_signup.or(self.disabled_user_signup),
+            disabled_user_deletion: update
+                .disabled_user_deletion
+                .or(self.disabled_user_deletion),
+            enable_improved_email_privacy: update
+                .enable_improved_email_privacy
+                .or(self.enable_improved_email_privacy),
         }
     }
 }
@@ -3853,6 +3875,9 @@ pub struct AuthRegistry {
     password_policy_overrides: Mutex<BTreeMap<TenantKey, PasswordPolicy>>,
     /// Explicit non-password settings configured before a tenant namespace is published.
     tenant_config_overrides: Mutex<BTreeMap<TenantKey, AuthNamespaceConfigPatch>>,
+    /// Non-password settings changed through the tenant management API. These are scoped to the
+    /// current tenant lifetime and are discarded when that tenant is deleted.
+    tenant_runtime_config_overrides: Mutex<BTreeMap<TenantKey, AuthNamespaceConfigPatch>>,
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
@@ -3917,6 +3942,8 @@ pub struct TenantMetadataPatch {
     pub enable_anonymous_user: Option<bool>,
     /// `None` leaves the field unchanged.
     pub disable_auth: Option<bool>,
+    /// `None` leaves the tenant duplicate-email setting unchanged.
+    pub allow_duplicate_emails: Option<bool>,
     /// `None` leaves the end-user signup permission unchanged.
     pub disabled_user_signup: Option<bool>,
     /// `None` leaves the end-user deletion permission unchanged.
@@ -3954,6 +3981,9 @@ impl TenantMetadataPatch {
     }
 
     fn apply_to_project_config(&self, config: &mut ProjectAuthConfig) {
+        if let Some(setting) = self.allow_duplicate_emails {
+            config.allow_duplicate_emails = setting;
+        }
         if let Some(setting) = self.disabled_user_signup {
             config.disabled_user_signup = setting;
         }
@@ -3962,6 +3992,15 @@ impl TenantMetadataPatch {
         }
         if let Some(setting) = self.enable_improved_email_privacy {
             config.enable_improved_email_privacy = setting;
+        }
+    }
+
+    fn config_override(&self) -> AuthNamespaceConfigPatch {
+        AuthNamespaceConfigPatch {
+            allow_duplicate_emails: self.allow_duplicate_emails,
+            disabled_user_signup: self.disabled_user_signup,
+            disabled_user_deletion: self.disabled_user_deletion,
+            enable_improved_email_privacy: self.enable_improved_email_privacy,
         }
     }
 }
@@ -4041,6 +4080,7 @@ impl AuthRegistry {
             tenant_metadata: Mutex::new(BTreeMap::new()),
             password_policy_overrides: Mutex::new(BTreeMap::new()),
             tenant_config_overrides: Mutex::new(BTreeMap::new()),
+            tenant_runtime_config_overrides: Mutex::new(BTreeMap::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             membership_generation: AtomicU64::new(0),
             lifecycle_incarnation: None,
@@ -5007,7 +5047,7 @@ impl AuthRegistry {
             .ok()?
             .get(&key)
             .cloned();
-        let explicit_config = self.tenant_config_overrides.lock().ok()?.get(&key).copied();
+        let explicit_config = self.effective_tenant_config_override(&key);
         let (policy, config, signer, number, lifecycle_enabled) = {
             let parent = parent.lock().ok()?;
             (
@@ -5057,7 +5097,7 @@ impl AuthRegistry {
             .ok()?
             .get(&key)
             .cloned();
-        let explicit_config = self.tenant_config_overrides.lock().ok()?.get(&key).copied();
+        let explicit_config = self.effective_tenant_config_override(&key);
         let (policy, config, signer, number) = {
             let parent = parent.lock().ok()?;
             (
@@ -5132,6 +5172,28 @@ impl AuthRegistry {
         Some(gate)
     }
 
+    fn effective_tenant_config_override(
+        &self,
+        key: &TenantKey,
+    ) -> Option<AuthNamespaceConfigPatch> {
+        let startup = self
+            .tenant_config_overrides
+            .lock()
+            .ok()?
+            .get(key)
+            .copied()
+            .unwrap_or_default();
+        let runtime = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .ok()?
+            .get(key)
+            .copied()
+            .unwrap_or_default();
+        let merged = startup.merge(runtime);
+        (!merged.is_empty()).then_some(merged)
+    }
+
     /// Returns a tenant store, creating its isolated namespace on first use.
     pub fn ensure_tenant(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
         if tenant.is_empty() || tenant.contains(['/', '\\']) {
@@ -5156,7 +5218,7 @@ impl AuthRegistry {
             enable_anonymous_user: true,
             ..TenantMetadata::default()
         };
-        if let Some(patch) = self.tenant_config_overrides.lock().ok()?.get(&key).copied() {
+        if let Some(patch) = self.effective_tenant_config_override(&key) {
             patch.apply_to_metadata(&mut tenant_metadata);
         }
         let effective_config = store.lock().ok()?.config();
@@ -5212,12 +5274,8 @@ impl AuthRegistry {
             let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
             let tenant = format!("fireemu-{sequence:020}");
             let store = self.build_tenant_store(project, &tenant, parent)?;
-            if let Some(patch) = self
-                .tenant_config_overrides
-                .lock()
-                .ok()?
-                .get(&(project.to_owned(), tenant.clone()))
-                .copied()
+            if let Some(patch) =
+                self.effective_tenant_config_override(&(project.to_owned(), tenant.clone()))
             {
                 patch.apply_to_metadata(&mut metadata);
             }
@@ -5301,8 +5359,9 @@ impl AuthRegistry {
     ///
     /// The tenant store and metadata entry are validated and locked before either is changed.
     /// A policy supplied here is a runtime update; it is intentionally not recorded as a
-    /// pending startup override. The returned policy is the newly supplied policy, or the
-    /// current policy when this operation only changes metadata.
+    /// pending startup override. Non-password values supplied here are retained for the current
+    /// tenant lifetime so later project updates preserve them. The returned policy is the newly
+    /// supplied policy, or the current policy when this operation only changes metadata.
     #[allow(clippy::needless_pass_by_value)]
     pub fn patch_tenant_with_password_policy(
         &self,
@@ -5325,6 +5384,12 @@ impl AuthRegistry {
         let store = tenants.get(&key).cloned()?;
         let mut metadata = self.tenant_metadata.lock().ok()?;
         let current_metadata = metadata.get(&key)?.clone();
+        let config_override = patch.config_override();
+        let mut overrides = if config_override.is_empty() {
+            None
+        } else {
+            Some(self.tenant_runtime_config_overrides.lock().ok()?)
+        };
         let mut store = store.lock().ok()?;
 
         let mut next_metadata = current_metadata;
@@ -5340,6 +5405,10 @@ impl AuthRegistry {
         store.set_config(next_config);
         if let Some(policy) = password_policy {
             store.set_password_policy(policy.clone());
+        }
+        if let Some(overrides) = &mut overrides {
+            let previous = overrides.get(&key).copied().unwrap_or_default();
+            overrides.insert(key, previous.merge(config_override));
         }
         Some((next_metadata, next_policy))
     }
@@ -5755,19 +5824,21 @@ impl AuthRegistry {
             // tenant's own override so an unrelated project PATCH cannot enable a disabled
             // tenant. The registry lock order is membership -> tenant metadata -> overrides ->
             // stores; take a snapshot before acquiring any store lock.
-            let tenant_overrides = self
-                .tenant_config_overrides
-                .lock()
-                .ok()?
-                .iter()
-                .filter(|((candidate, _), _)| candidate == project)
-                .map(|(key, patch)| (key.clone(), *patch))
-                .collect::<BTreeMap<_, _>>();
+            let startup_overrides = self.tenant_config_overrides.lock().ok()?;
+            let runtime_overrides = self.tenant_runtime_config_overrides.lock().ok()?;
             let tenant_stores = tenants
                 .iter()
                 .filter(|((candidate, _), _)| candidate == project)
                 .map(|(key, store)| (key.clone(), store))
                 .collect::<Vec<_>>();
+            let tenant_overrides = tenant_stores
+                .iter()
+                .map(|(key, _)| {
+                    let startup = startup_overrides.get(key).copied().unwrap_or_default();
+                    let runtime = runtime_overrides.get(key).copied().unwrap_or_default();
+                    (key.clone(), startup.merge(runtime))
+                })
+                .collect::<BTreeMap<_, _>>();
             if tenant_stores
                 .iter()
                 .any(|(key, _)| !metadata.contains_key(key))
@@ -5847,8 +5918,12 @@ impl AuthRegistry {
         let key = (project.to_owned(), tenant.to_owned());
         let removed = self.tenants.lock().ok().and_then(|mut stores| {
             let mut metadata = self.tenant_metadata.lock().ok()?;
+            let mut runtime_overrides = self.tenant_runtime_config_overrides.lock().ok()?;
             let removed = stores.remove(&key).is_some();
             metadata.remove(&key);
+            if removed {
+                runtime_overrides.remove(&key);
+            }
             Some(removed)
         });
         if let Ok(mut gates) = self.operation_gates.lock() {
@@ -8378,6 +8453,16 @@ mod password_policy_namespace_tests {
                 ..AuthNamespaceConfigPatch::default()
             },
         ));
+        registry
+            .patch_tenant(
+                "demo-app",
+                "tenant-a",
+                TenantMetadataPatch {
+                    enable_improved_email_privacy: Some(false),
+                    ..TenantMetadataPatch::default()
+                },
+            )
+            .expect("tenant patch succeeds");
 
         registry
             .patch_project_config_with_password_policy(
@@ -8397,7 +8482,7 @@ mod password_policy_namespace_tests {
             ProjectAuthConfig {
                 disabled_user_signup: true,
                 disabled_user_deletion: true,
-                enable_improved_email_privacy: true,
+                enable_improved_email_privacy: false,
                 ..ProjectAuthConfig::default()
             }
         );
@@ -8407,6 +8492,69 @@ mod password_policy_namespace_tests {
                 .expect("tenant metadata")
                 .disabled_user_signup,
             "the explicit tenant override remains effective after a project update"
+        );
+    }
+
+    #[test]
+    fn tenant_metadata_patch_preserves_effective_config_after_project_update() {
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is created");
+        tenant.lock().unwrap().set_config(ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: true,
+            disabled_user_signup: true,
+            disabled_user_deletion: true,
+        });
+
+        registry
+            .patch_tenant(
+                "demo-app",
+                "tenant-a",
+                TenantMetadataPatch {
+                    allow_duplicate_emails: Some(true),
+                    disabled_user_signup: Some(true),
+                    disabled_user_deletion: Some(true),
+                    enable_improved_email_privacy: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+            )
+            .expect("tenant patch succeeds");
+        registry
+            .patch_project_config(
+                "demo-app",
+                ProjectAuthConfigPatch {
+                    allow_duplicate_emails: Some(false),
+                    enable_improved_email_privacy: Some(false),
+                    disabled_user_signup: Some(false),
+                    disabled_user_deletion: Some(false),
+                },
+            )
+            .expect("project patch succeeds");
+
+        assert_eq!(
+            tenant.lock().unwrap().config(),
+            ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                enable_improved_email_privacy: true,
+                disabled_user_signup: true,
+                disabled_user_deletion: true,
+            }
+        );
+        assert!(
+            !tenant
+                .lock()
+                .unwrap()
+                .allows_user_signup(AuthPrincipal::EndUser),
+            "the tenant permission remains enforced after project propagation"
         );
     }
 

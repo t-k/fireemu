@@ -182,6 +182,7 @@ fn auth_namespace_config_patch(
     config: crate::config::AuthNamespaceConfig,
 ) -> AuthNamespaceConfigPatch {
     AuthNamespaceConfigPatch {
+        allow_duplicate_emails: None,
         enable_improved_email_privacy: config.improved_email_privacy,
         disabled_user_signup: config
             .client_permissions
@@ -265,8 +266,18 @@ fn auth_signup_quota_config(cfg: &RuntimeConfig) -> Result<SignupQuotaConfig, St
         crate::config::AuthQuotaSimulationMode::Observe => QuotaMode::Observe,
         crate::config::AuthQuotaSimulationMode::Enforce => QuotaMode::Enforce,
     };
-    let temporary = cfg
-        .auth_signup_quota
+    let temporary = auth_temporary_quota_config(cfg)?;
+    Ok(SignupQuotaConfig {
+        mode,
+        algorithm: QuotaAlgorithm::FixedWindowV1,
+        default_quota_per_hour: cfg.auth_quota_simulation.default_quota_per_hour,
+        max_tracked_buckets: cfg.auth_quota_simulation.max_tracked_buckets,
+        temporary,
+    })
+}
+
+fn auth_temporary_quota_config(cfg: &RuntimeConfig) -> Result<Option<TemporaryQuota>, String> {
+    cfg.auth_signup_quota
         .as_ref()
         .map(|value| {
             let quota = value.quota.parse::<u64>().map_err(|_| {
@@ -275,14 +286,7 @@ fn auth_signup_quota_config(cfg: &RuntimeConfig) -> Result<SignupQuotaConfig, St
             TemporaryQuota::new(quota, value.start_time, value.quota_duration)
                 .map_err(|error| format!("auth.quota.signUpQuotaConfig: {error:?}"))
         })
-        .transpose()?;
-    Ok(SignupQuotaConfig {
-        mode,
-        algorithm: QuotaAlgorithm::FixedWindowV1,
-        default_quota_per_hour: cfg.auth_quota_simulation.default_quota_per_hour,
-        max_tracked_buckets: cfg.auth_quota_simulation.max_tracked_buckets,
-        temporary,
-    })
+        .transpose()
 }
 
 fn blocking_auth_selection(
@@ -382,16 +386,33 @@ fn reapply_explicit_auth_quota(
     if !cfg.auth_signup_quota_explicit && !cfg.auth_quota_simulation_explicit {
         return Ok(());
     }
-    let quota = auth_signup_quota_config(cfg)?;
-    if registry
-        .patch_project_config_with_password_policy_and_quota(
+    let applied = registry
+        .patch_project_config_with_current_settings(
             &cfg.auth_project,
             ProjectAuthConfigPatch::default(),
-            None,
-            Some(quota),
+            |_, current| {
+                let mut next = current.clone();
+                if cfg.auth_signup_quota_explicit {
+                    next.temporary = auth_temporary_quota_config(cfg)?;
+                }
+                if cfg.auth_quota_simulation_explicit {
+                    next.mode = match cfg.auth_quota_simulation.mode {
+                        crate::config::AuthQuotaSimulationMode::Off => QuotaMode::Off,
+                        crate::config::AuthQuotaSimulationMode::Observe => QuotaMode::Observe,
+                        crate::config::AuthQuotaSimulationMode::Enforce => QuotaMode::Enforce,
+                    };
+                    if cfg.auth_quota_simulation.algorithm != "fixed-window-v1" {
+                        return Err("auth.quotaSimulation.algorithm is not supported".to_owned());
+                    }
+                    next.algorithm = QuotaAlgorithm::FixedWindowV1;
+                    next.default_quota_per_hour = cfg.auth_quota_simulation.default_quota_per_hour;
+                    next.max_tracked_buckets = cfg.auth_quota_simulation.max_tracked_buckets;
+                }
+                Ok((None, Some(next)))
+            },
         )
-        .is_none()
-    {
+        .map_err(|error| error.clone())?;
+    if applied.is_none() {
         return Err(format!(
             "cannot apply explicit Auth quota settings to {}",
             cfg.auth_project
@@ -1529,9 +1550,12 @@ mod tests {
     use fireemu_core_auth::password_policy::{
         default_allowed_non_alphanumeric, EnforcementState, PasswordPolicy,
     };
-    use fireemu_core_auth::signup_quota::QuotaMode;
-    use fireemu_core_auth::store::{AuthRegistry, AuthStore, ProjectAuthConfig};
+    use fireemu_core_auth::signup_quota::{
+        QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+    };
+    use fireemu_core_auth::store::{AuthPrincipal, AuthRegistry, AuthStore, ProjectAuthConfig};
     use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
     use serde_json::json;
 
     use super::{
@@ -1639,6 +1663,196 @@ mod tests {
             ),
             (0, 0)
         );
+    }
+
+    #[test]
+    fn explicit_quota_only_preserves_imported_simulation_and_usage() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"quota": {"signUpQuotaConfig": {
+                "quota": "2",
+                "startTime": "2030-01-01T00:00:00Z",
+                "quotaDuration": "3600s"
+            }}}
+        }))
+        .expect("valid explicit quota settings");
+        assert!(cfg.auth_signup_quota_explicit);
+        assert!(!cfg.auth_quota_simulation_explicit);
+
+        let imported = SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour: 99,
+            max_tracked_buckets: 16,
+            temporary: Some(
+                TemporaryQuota::new(
+                    7,
+                    LogicalInstant::UNIX_EPOCH,
+                    fireemu_core_types::time::LogicalDuration::from_seconds(60),
+                )
+                .expect("temporary quota is valid"),
+            ),
+        };
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let store = registry.default_store();
+        store
+            .lock()
+            .unwrap()
+            .set_signup_quota_config(imported.clone())
+            .expect("imported quota is valid");
+        let reservation = store
+            .lock()
+            .unwrap()
+            .reserve_signup(
+                AuthPrincipal::EndUser,
+                "127.0.0.1",
+                LogicalInstant::UNIX_EPOCH,
+            )
+            .expect("imported quota accepts the first signup");
+        store
+            .lock()
+            .unwrap()
+            .commit_signup(reservation, LogicalInstant::UNIX_EPOCH)
+            .expect("imported quota commits the first signup");
+
+        reapply_explicit_auth_quota(&cfg, &registry).expect("explicit quota reapplies");
+
+        let store = store.lock().unwrap();
+        assert_eq!(store.signup_quota().config().mode, imported.mode);
+        assert_eq!(
+            store.signup_quota().config().default_quota_per_hour,
+            imported.default_quota_per_hour
+        );
+        assert_eq!(
+            store.signup_quota().config().max_tracked_buckets,
+            imported.max_tracked_buckets
+        );
+        assert_eq!(
+            store.signup_quota().config().temporary,
+            Some(
+                TemporaryQuota::new(
+                    2,
+                    LogicalInstant::parse_rfc3339("2030-01-01T00:00:00Z").unwrap(),
+                    fireemu_core_types::time::LogicalDuration::from_seconds(3_600),
+                )
+                .unwrap()
+            )
+        );
+        assert_eq!(
+            store
+                .signup_quota()
+                .usage("demo-app", "127.0.0.1", LogicalInstant::UNIX_EPOCH,),
+            (1, 0)
+        );
+    }
+
+    #[test]
+    fn explicit_quota_simulation_only_preserves_imported_temporary_quota() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"quotaSimulation": {
+                "mode": "enforce",
+                "defaultQuotaPerHour": 7,
+                "maxTrackedBuckets": 8
+            }}
+        }))
+        .expect("valid explicit quota simulation settings");
+        assert!(!cfg.auth_signup_quota_explicit);
+        assert!(cfg.auth_quota_simulation_explicit);
+
+        let imported_temporary = TemporaryQuota::new(
+            3,
+            LogicalInstant::UNIX_EPOCH,
+            fireemu_core_types::time::LogicalDuration::from_seconds(60),
+        )
+        .expect("temporary quota is valid");
+        let imported = SignupQuotaConfig {
+            mode: QuotaMode::Observe,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour: 99,
+            max_tracked_buckets: 16,
+            temporary: Some(imported_temporary),
+        };
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let store = registry.default_store();
+        store
+            .lock()
+            .unwrap()
+            .set_signup_quota_config(imported)
+            .expect("imported quota is valid");
+
+        reapply_explicit_auth_quota(&cfg, &registry).expect("explicit simulation reapplies");
+
+        let store = store.lock().unwrap();
+        assert_eq!(store.signup_quota().config().mode, QuotaMode::Enforce);
+        assert_eq!(store.signup_quota().config().default_quota_per_hour, 7);
+        assert_eq!(store.signup_quota().config().max_tracked_buckets, 8);
+        assert_eq!(
+            store.signup_quota().config().temporary,
+            Some(imported_temporary)
+        );
+    }
+
+    #[test]
+    fn explicit_null_quota_only_clears_imported_temporary_quota() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"quota": {"signUpQuotaConfig": null}}
+        }))
+        .expect("valid explicit quota clear");
+        assert!(cfg.auth_signup_quota_explicit);
+        assert!(!cfg.auth_quota_simulation_explicit);
+
+        let imported = SignupQuotaConfig {
+            mode: QuotaMode::Observe,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour: 99,
+            max_tracked_buckets: 16,
+            temporary: Some(
+                TemporaryQuota::new(
+                    3,
+                    LogicalInstant::UNIX_EPOCH,
+                    fireemu_core_types::time::LogicalDuration::from_seconds(60),
+                )
+                .expect("temporary quota is valid"),
+            ),
+        };
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let store = registry.default_store();
+        store
+            .lock()
+            .unwrap()
+            .set_signup_quota_config(imported.clone())
+            .expect("imported quota is valid");
+
+        reapply_explicit_auth_quota(&cfg, &registry).expect("explicit quota clear reapplies");
+
+        let store = store.lock().unwrap();
+        assert_eq!(store.signup_quota().config().mode, imported.mode);
+        assert_eq!(store.signup_quota().config().default_quota_per_hour, 99);
+        assert_eq!(store.signup_quota().config().max_tracked_buckets, 16);
+        assert_eq!(store.signup_quota().config().temporary, None);
     }
 
     #[test]

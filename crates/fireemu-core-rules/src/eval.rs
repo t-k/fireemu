@@ -1756,7 +1756,18 @@ impl<'a> Evaluator<'a> {
                     visiting,
                 );
                 match self.query_static_value(expr) {
-                    Some(RulesValue::Int(_) | RulesValue::Float(_)) | None => source,
+                    Some(
+                        RulesValue::Int(_)
+                        | RulesValue::Float(_)
+                        | RulesValue::Map(_)
+                        | RulesValue::PartialMap(_)
+                        | RulesValue::PartialMapExcluding { .. }
+                        | RulesValue::List(_)
+                        | RulesValue::Set(_)
+                        | RulesValue::PartialList(_)
+                        | RulesValue::PartialListAny(_),
+                    )
+                    | None => source,
                     Some(_) => false,
                 }
             }
@@ -1773,7 +1784,18 @@ impl<'a> Evaluator<'a> {
                     visiting,
                 );
                 match self.query_static_value(expr) {
-                    Some(RulesValue::Int(_) | RulesValue::Float(_)) | None => source,
+                    Some(
+                        RulesValue::Int(_)
+                        | RulesValue::Float(_)
+                        | RulesValue::Map(_)
+                        | RulesValue::PartialMap(_)
+                        | RulesValue::PartialMapExcluding { .. }
+                        | RulesValue::List(_)
+                        | RulesValue::Set(_)
+                        | RulesValue::PartialList(_)
+                        | RulesValue::PartialListAny(_),
+                    )
+                    | None => source,
                     Some(_) => false,
                 }
             }
@@ -2492,25 +2514,17 @@ impl<'a> Evaluator<'a> {
                     let argument_provenance = args
                         .iter()
                         .map(|argument| {
-                            (
-                                self.function_expression_query_derived(
-                                    argument,
-                                    query_locals,
-                                    environment,
-                                    visiting,
-                                ),
-                                self.function_expression_query_stringification_sensitive(
-                                    argument,
-                                    query_locals,
-                                    sensitive_locals,
-                                    environment,
-                                    visiting,
-                                ),
+                            self.function_expression_query_numeric_source(
+                                argument,
+                                query_locals,
+                                sensitive_locals,
+                                environment,
+                                visiting,
                             )
                         })
                         .collect::<Vec<_>>();
                     function_in_environment(environment, name).is_some_and(|function| {
-                        self.function_body_query_stringification_sensitive(
+                        self.function_body_query_numeric_source(
                             function,
                             &argument_provenance,
                             visiting,
@@ -2659,6 +2673,7 @@ impl<'a> Evaluator<'a> {
                             | "union"
                             | "intersection"
                             | "difference"
+                            | "bind"
                             | "matches"
                             | "replace"
                     ) =>
@@ -4467,6 +4482,7 @@ impl<'a> Evaluator<'a> {
                             | "union"
                             | "intersection"
                             | "difference"
+                            | "bind"
                             | "matches"
                             | "replace"
                     );

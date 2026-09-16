@@ -1585,6 +1585,19 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
         "rules_version = '2';\nservice cloud.firestore { function text() { return string(float(resource.data.value)); } function wrapped() { return text(); } match /databases/{d}/documents { match /notes/{id} { allow list: if wrapped() == '0'; } } }",
         &zero
     ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function number() { return float(resource.data.value); } function text() { return string(number()); } match /databases/{d}/documents { match /notes/{id} { allow list: if text() == '0'; } } }",
+        &zero
+    ));
+    for condition in ["{'0': true, '-0': false}[text()]", "['0'].hasAny([text()])"] {
+        let nested_numeric_rules = format!(
+            "rules_version = '2';\nservice cloud.firestore {{ function number() {{ return float(resource.data.value); }} function text() {{ return string(number()); }} match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+        );
+        assert!(
+            !allows(&nested_numeric_rules, &zero),
+            "{condition} must preserve numeric provenance through nested wrappers"
+        );
+    }
     for condition in [
         "{'0': true, '-0': false}[wrapped()]",
         "['0'].hasAny([wrapped()])",
@@ -2266,6 +2279,55 @@ fn resource(fields: Vec<(&str, RulesValue)>) -> RulesValue {
         RulesValue::Map(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
     );
     RulesValue::Map(m)
+}
+
+#[test]
+fn query_proof_rejects_numeric_path_bindings_for_document_access() {
+    use fireemu_core_rules::eval::evaluate_request_with;
+
+    let access = MapAccess(BTreeMap::from([(
+        "databases/(default)/documents/gates/0".to_owned(),
+        resource(vec![("ok", RulesValue::Bool(true))]),
+    )]));
+    let query_context = abstract_ctx(
+        "/databases/(default)/documents/notes/query",
+        vec![("value", RulesValue::Int(0))],
+    );
+    let concrete_context = RequestContext {
+        service: RulesService::Firestore,
+        method: Method::List,
+        path: "/databases/(default)/documents/notes/concrete".to_owned(),
+        auth: None,
+        resource: Some(resource(vec![("value", RulesValue::Float(-0.0))])),
+        request_resource: None,
+        time_unix_nanos: 1_788_004_860_i128 * 1_000_000_000,
+        abstract_path: false,
+        request_query: None,
+    };
+    let path = "path('/databases/(default)/documents/gates/{id}').bind({'id': string(float(resource.data.value))})";
+    for condition in [
+        format!("exists({path})"),
+        format!("get({path}).data.ok == true"),
+        format!("firestore.exists({path})"),
+        format!("firestore.get({path}).data.ok == true"),
+    ] {
+        let rules = format!(
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+        );
+        let ruleset = parse_ruleset(&rules).unwrap();
+        let query_decision =
+            evaluate_request_with(&ruleset, &query_context, Some(&access)).decision;
+        assert!(
+            !matches!(query_decision, Decision::Allow),
+            "{condition} must not authorize from one numeric path representation"
+        );
+        let concrete_decision =
+            evaluate_request_with(&ruleset, &concrete_context, Some(&access)).decision;
+        assert!(
+            !matches!(concrete_decision, Decision::Allow),
+            "{condition} should deny the concrete negative-zero path"
+        );
+    }
 }
 
 #[test]

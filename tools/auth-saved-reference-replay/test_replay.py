@@ -204,7 +204,10 @@ def test_replay_rejects_exact_type_tampering_in_cleanup_and_process():
 
 def private_bundle_copy(tmp_path, suffix="bundle"):
     if not PRIVATE_BUNDLE.is_dir():
-        pytest.skip("private fixed replay bundle is not available")
+        pytest.skip(
+            "historical private v1 replay bundle is unavailable; "
+            "current schema-v2 validation is covered by synthetic fixtures"
+        )
     destination = tmp_path / suffix
     shutil.copytree(PRIVATE_BUNDLE, destination)
     return destination
@@ -321,6 +324,50 @@ def test_evaluate_preserves_input_bytes_for_real_fixture_collisions(tmp_path, co
     with pytest.raises(ValueError, match="already exists"):
         evaluate(bundle, target, source)
     assert protected.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "input_kind", ["production-receipt", "local-report", "run-manifest"]
+)
+@pytest.mark.parametrize("collision", ["regular", "symlink", "hardlink"])
+def test_evaluate_rejects_collision_with_bound_input_paths(
+    tmp_path, input_kind, collision
+):
+    bundle, source = write_complete_failed_bundle(tmp_path)
+    if input_kind == "production-receipt":
+        target = tmp_path / "saved-production" / "auth-profile-receipt.json"
+        target.parent.mkdir()
+        target.write_bytes(CORPORA["auth-profile"]["receipt"].read_bytes())
+    elif input_kind == "local-report":
+        target = bundle / "auth-profile/local.json"
+    else:
+        target = bundle / "run-manifest.json"
+
+    original_inputs = {
+        path: path.read_bytes()
+        for path in [
+            bundle / "auth-profile/local.json",
+            bundle / "run-manifest.json",
+        ]
+    }
+    if collision == "regular":
+        protected = target
+    else:
+        protected = tmp_path / f"{input_kind}-{collision}-target"
+        protected.write_bytes(target.read_bytes())
+        target.unlink()
+        if collision == "symlink":
+            target.symlink_to(protected)
+        else:
+            target.hardlink_to(protected)
+
+    before = protected.read_bytes()
+    with pytest.raises(ValueError, match="already exists"):
+        evaluate(bundle, target, source)
+
+    assert protected.read_bytes() == before
+    for path, content in original_inputs.items():
+        assert path.read_bytes() == content
 
 
 def test_run_accepts_a_complete_failed_report_and_writes_the_manifest(

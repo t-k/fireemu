@@ -9262,6 +9262,41 @@ fn scoped_tenant_selectors_must_match_body_and_query_before_auth_work() {
 }
 
 #[test]
+fn body_tenant_mismatch_preserves_invalid_id_token_precedence() {
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    for tenant in ["tenant-a", "tenant-b"] {
+        registry.ensure_tenant("demo-app", tenant).unwrap();
+    }
+    s.registry = Some(registry);
+
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "tenantId": "tenant-a",
+            "email": "body-tenant-precedence@example.com",
+            "password": "password1"
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    // A body tenant is validated as part of the authenticated operation. Preserve the
+    // existing INVALID_ID_TOKEN precedence instead of treating it like an explicit query
+    // namespace assertion.
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:lookup?key=fake-api-key"),
+        &json!({
+            "tenantId": "tenant-b",
+            "idToken": created["idToken"]
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN");
+}
+
+#[test]
 fn query_tenant_selector_must_match_id_token_before_auth_work() {
     let mut s = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(

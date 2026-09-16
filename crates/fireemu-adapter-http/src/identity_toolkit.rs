@@ -5484,7 +5484,10 @@ fn select_store(
             })
     });
     if let Some((_, token_tenant)) = id_token_target.as_ref() {
-        if requested_tenant.is_some_and(|requested| token_tenant.as_deref() != Some(requested)) {
+        if query_tenant
+            .as_ref()
+            .is_some_and(|requested| token_tenant.as_deref() != Some(requested.as_str()))
+        {
             // A query tenant is an explicit namespace assertion. Do not let a tenant
             // embedded in the ID token override it, and do not let a project-scoped token
             // silently fall back to the project store for a tenant request.

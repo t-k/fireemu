@@ -2241,17 +2241,31 @@ impl<'a> Evaluator<'a> {
                     let argument_provenance = args
                         .iter()
                         .map(|argument| {
-                            self.function_expression_query_numeric_source(
-                                argument,
-                                query_locals,
-                                sensitive_locals,
-                                environment,
-                                visiting,
+                            (
+                                self.function_expression_query_derived(
+                                    argument,
+                                    query_locals,
+                                    environment,
+                                    visiting,
+                                ) || self.function_expression_query_numeric_source(
+                                    argument,
+                                    query_locals,
+                                    sensitive_locals,
+                                    environment,
+                                    visiting,
+                                ),
+                                self.function_expression_query_stringification_sensitive(
+                                    argument,
+                                    query_locals,
+                                    sensitive_locals,
+                                    environment,
+                                    visiting,
+                                ),
                             )
                         })
                         .collect::<Vec<_>>();
                     function_in_environment(environment, name).is_some_and(|function| {
-                        self.function_body_query_numeric_source(
+                        self.function_body_query_stringification_sensitive(
                             function,
                             &argument_provenance,
                             visiting,
@@ -2645,6 +2659,8 @@ impl<'a> Evaluator<'a> {
                             | "union"
                             | "intersection"
                             | "difference"
+                            | "matches"
+                            | "replace"
                     ) =>
                 {
                     self.query_numeric_stringification_sensitive_with(object)
@@ -4396,6 +4412,18 @@ impl<'a> Evaluator<'a> {
             ExprKind::Member { object, name } => {
                 if let ExprKind::Ident(ns) = object.kind() {
                     if NAMESPACES.contains(&ns.as_str()) && !self.has_binding(ns.as_str()) {
+                        if self.query_proof
+                            && ns == "math"
+                            && args.iter().any(|argument| {
+                                self.query_numeric_expression_source(argument)
+                                    || self.query_float_zero_source(argument)
+                            })
+                        {
+                            // Namespace math operations can expose integer/double differences
+                            // that are not represented by the ordinary Rules comparison guard
+                            // (for example pow(-0, -1) changes the sign of infinity).
+                            return Err(EvalError::Unknown);
+                        }
                         let values = args
                             .iter()
                             .map(|a| self.eval(a))
@@ -4439,6 +4467,8 @@ impl<'a> Evaluator<'a> {
                             | "union"
                             | "intersection"
                             | "difference"
+                            | "matches"
+                            | "replace"
                     );
                     if lookup_or_membership
                         && (receiver_is_representation_sensitive

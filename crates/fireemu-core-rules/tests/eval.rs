@@ -1582,6 +1582,19 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
         &zero
     ));
     assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function text() { return string(float(resource.data.value)); } function wrapped() { return text(); } match /databases/{d}/documents { match /notes/{id} { allow list: if wrapped() == '0'; } } }",
+        &zero
+    ));
+    for condition in [
+        "{'0': true, '-0': false}[wrapped()]",
+        "['0'].hasAny([wrapped()])",
+    ] {
+        let wrapped_rules = format!(
+            "rules_version = '2';\nservice cloud.firestore {{ function text() {{ return string(float(resource.data.value)); }} function wrapped() {{ return text(); }} match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+        );
+        assert!(!allows(&wrapped_rules, &zero), "{condition}");
+    }
+    assert!(!allows(
         "rules_version = '2';\nservice cloud.firestore { function identity(value) { return value; } match /databases/{d}/documents { match /notes/{id} { allow list: if string(identity(float(resource.data.value))).size() + 1 == 2; } } }",
         &zero
     ));
@@ -1612,6 +1625,8 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
         "['0'].hasAny([string(float(resource.data.value))])",
         "['0', string(float(resource.data.value))].hasOnly(['0'])",
         "['0', string(float(resource.data.value))].toSet().size() == 1",
+        "'0'.matches(string(float(resource.data.value)))",
+        "'0'.replace(string(float(resource.data.value)), 'x') == 'x'",
         "path('/notes/{id}').bind({id: string(float(resource.data.value))}) == path('/notes/0')",
     ] {
         assert!(
@@ -1627,6 +1642,10 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
     assert!(!allows(
         "rules_version = '2';\nservice cloud.firestore { function check(resource) { return int(string(resource)) / 2 == 576460752303423488; } match /databases/{d}/documents { match /notes/{id} { allow list: if check(resource.data.value); } } }",
         &large_int
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if math.pow(float(resource.data.value), -1) > 0; } } }",
+        &zero
     ));
     let empty = abstract_ctx(
         "/databases/(default)/documents/notes/fireemu-placeholder",

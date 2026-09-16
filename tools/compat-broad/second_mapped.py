@@ -568,33 +568,9 @@ def execute_45(a, output, runtime_identity):
                 "PATCH",
                 True,
             )
-            status, body = a.send(op)
-            if (
-                status != 200
-                or not isinstance(body, dict)
-                or body.get("name") != name
-                or body.get("fields") != seed_body["fields"]
-                or not isinstance(body.get("updateTime"), str)
-            ):
-                raise ValueError("seed acknowledgement mismatch")
-            # Cleanup requires the acknowledged creation version and field
-            # digest. Record the proof at the same boundary as ownership so
-            # every later conditional delete is bound to this seed.
-            a.creation_proofs[name] = {
-                "name": name,
-                "updateTime": body["updateTime"],
-                "fieldsDigest": digest(body["fields"]),
-                "responseDigest": digest(body),
-            }
-            a.record(
-                {
-                    "kind": "document-created",
-                    "name": name,
-                    "updateTime": body["updateTime"],
-                    "fieldsDigest": digest(body["fields"]),
-                    "responseDigest": digest(body),
-                }
-            )
+            status, _ = a.send(op)
+            if status != 200:
+                raise ValueError("seed failed")
             versions, reads = {}, {}
             a.versions = versions
             for step in program["steps"]:
@@ -623,6 +599,26 @@ def execute_45(a, output, runtime_identity):
                         )
                     if not absent:
                         versions[step["id"]] = body["updateTime"]
+                        if step["id"] == "original":
+                            # The seed response may omit the document body on
+                            # transports that acknowledge the write with an
+                            # empty JSON object. Bind cleanup to the first
+                            # complete readback instead.
+                            a.creation_proofs[name] = {
+                                "name": name,
+                                "updateTime": body["updateTime"],
+                                "fieldsDigest": digest(body["fields"]),
+                                "responseDigest": digest(body),
+                            }
+                            a.record(
+                                {
+                                    "kind": "document-created",
+                                    "name": name,
+                                    "updateTime": body["updateTime"],
+                                    "fieldsDigest": digest(body["fields"]),
+                                    "responseDigest": digest(body),
+                                }
+                            )
                     reads[step["id"]] = None if absent else body
                 rows.append(
                     {

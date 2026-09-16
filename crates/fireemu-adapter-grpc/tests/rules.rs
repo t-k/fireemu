@@ -1302,6 +1302,8 @@ service cloud.firestore {
         ),
     }
 
+    let map_equal_query = list_where("records", "tags", arr(vec![map(&[("score", integer(1))])]));
+
     h.rules
         .replace_source(
             "rules_version = '2';
@@ -1316,7 +1318,7 @@ service cloud.firestore {
         .unwrap();
     let mut owner_stream = h
         .client
-        .run_query(with_bearer(map_query.clone(), "owner"))
+        .run_query(with_bearer(map_equal_query.clone(), "owner"))
         .await
         .unwrap()
         .into_inner();
@@ -1342,7 +1344,7 @@ service cloud.firestore {
     );
     match h
         .client
-        .run_query(with_bearer(map_query, &alice_token))
+        .run_query(with_bearer(map_equal_query, &alice_token))
         .await
     {
         Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),

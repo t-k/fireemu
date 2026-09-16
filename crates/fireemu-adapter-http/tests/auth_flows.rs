@@ -2784,6 +2784,7 @@ fn tenant_authentication_flags_are_enforced() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep the tenant policy matrix and credential lifecycle together.
 fn tenant_authentication_flags_cover_lookup_oob_and_password_reset() {
     use fireemu_core_auth::store::{AuthRegistry, TenantMetadata};
 
@@ -2809,11 +2810,24 @@ fn tenant_authentication_flags_cover_lookup_oob_and_password_reset() {
     assert_eq!(status, 200, "{created}");
     let id_token = created["idToken"].as_str().unwrap();
 
+    let (status, issued) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"tenantId": tenant, "requestType": "PASSWORD_RESET", "email": "flags@example.com"}),
+    );
+    assert_eq!(status, 200, "{issued}");
+    let tenant_oob_codes = format!("{EMU}/tenants/{tenant}/oobCodes");
+    let codes_before = handle_with(&s, "GET", &tenant_oob_codes, &owner(), &json!({})).body;
+    let reset_code = codes_before["oobCodes"][0]["oobCode"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
     assert!(registry.update_tenant(
         "demo-app",
         &tenant,
         TenantMetadata {
-            allow_password_signup: true,
+            allow_password_signup: false,
             enable_email_link_signin: false,
             ..TenantMetadata::default()
         },
@@ -2825,6 +2839,38 @@ fn tenant_authentication_flags_cover_lookup_oob_and_password_reset() {
     );
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+    assert_eq!(
+        handle_with(&s, "GET", &tenant_oob_codes, &owner(), &json!({})).body,
+        codes_before
+    );
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"tenantId": tenant, "oobCode": reset_code}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+    assert_eq!(
+        handle_with(&s, "GET", &tenant_oob_codes, &owner(), &json!({})).body,
+        codes_before
+    );
+
+    assert!(registry.update_tenant(
+        "demo-app",
+        &tenant,
+        TenantMetadata {
+            allow_password_signup: true,
+            enable_email_link_signin: true,
+            ..TenantMetadata::default()
+        },
+    ));
+    let (status, verified) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"tenantId": tenant, "oobCode": reset_code}),
+    );
+    assert_eq!(status, 200, "{verified}");
 
     assert!(registry.update_tenant(
         "demo-app",
@@ -2867,6 +2913,24 @@ fn tenant_authentication_flags_cover_lookup_oob_and_password_reset() {
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "PROJECT_DISABLED");
     }
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"tenantId": tenant, "requestType": "PASSWORD_RESET", "email": "flags@example.com"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "PROJECT_DISABLED");
+
+    let admin_view = handle_with(
+        &s,
+        "GET",
+        &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts:batchGet"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(admin_view.status, 200, "{}", admin_view.body);
+    assert_eq!(admin_view.body["users"].as_array().unwrap().len(), 1);
 }
 
 #[test]

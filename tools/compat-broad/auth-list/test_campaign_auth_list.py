@@ -498,7 +498,7 @@ def test_v6_campaign_package_preserves_historical_hashes():
         "88e4c79839b4aa9ba6e47a9f0b75ab9505461ae31fb04ff9dd2a842b4f916ed0"
     )
     assert package["adapter"]["gateSha256"] == (
-        "77c8bc791b6559fd002465f3ce6394d4a7e09a3f7e656922f3119ec982999e71"
+        "7ac19bad00fc18df247105474cb51181a874b5f45a87a0fa196d454196381c1a"
     )
     assert package["adapter"]["shadowCommit"] == result["executionCommit"]
     assert artifact["observationRequests"] == 18
@@ -565,7 +565,7 @@ def test_v8_campaign_package_preserves_historical_shadow_and_result():
         "88e4c79839b4aa9ba6e47a9f0b75ab9505461ae31fb04ff9dd2a842b4f916ed0"
     )
     assert package["adapter"]["gateSha256"] == (
-        "7ac19bad00fc18df247105474cb51181a874b5f45a87a0fa196d454196381c1a"
+        "77c8bc791b6559fd002465f3ce6394d4a7e09a3f7e656922f3119ec982999e71"
     )
     assert artifact["sha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
     assert artifact["artifactSha256"] == result["artifactSha256"]

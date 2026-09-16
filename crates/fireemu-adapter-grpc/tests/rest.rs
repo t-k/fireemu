@@ -2790,6 +2790,93 @@ fn a_phantom_rest_write_succeeds_after_the_query_transaction_finishes() {
     contended_rest_commit_waits(true);
 }
 
+#[test]
+fn rest_retry_transaction_starts_fresh_transaction_and_replay_is_refused() {
+    let s = state(None);
+    let locked = "projects/demo-app/databases/(default)/documents/retry-contention/locked";
+    let (status, seeded) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/retry-contention/locked"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{seeded}");
+
+    let begin = || {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        body["transaction"].as_str().unwrap().to_owned()
+    };
+    let first = begin();
+    let second = begin();
+    for transaction in [&first, &second] {
+        let (status, body) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/retry-contention/locked?transaction={transaction}"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+
+    let (status, first_error) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({
+            "transaction": first,
+            "writes": [{"update": {"name": locked, "fields": {"v": {"integerValue": "2"}}}}]
+        }),
+    );
+    assert_eq!(status, 409, "{first_error}");
+    assert_eq!(first_error["error"]["status"], "ABORTED");
+
+    let (status, second_error) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({
+            "transaction": second,
+            "writes": [{"update": {"name": locked, "fields": {"v": {"integerValue": "3"}}}}]
+        }),
+    );
+    assert_eq!(status, 409, "{second_error}");
+    assert_eq!(second_error["error"]["status"], "ABORTED");
+
+    let (status, retried) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {"retryTransaction": second}}}),
+    );
+    assert_eq!(status, 200, "{retried}");
+    let fresh = retried["transaction"].as_str().unwrap();
+    assert!(!fresh.is_empty());
+    assert_ne!(fresh, second);
+
+    let (status, replay) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {"retryTransaction": second}}}),
+    );
+    assert_eq!(status, 400, "{replay}");
+    assert_eq!(replay["error"]["status"], "INVALID_ARGUMENT");
+
+    let (status, rolled_back) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:rollback"),
+        json!({"transaction": fresh}),
+    );
+    assert_eq!(status, 200, "{rolled_back}");
+}
+
 fn contended_rest_commit_waits(query_lock: bool) {
     let gateway = Gateway {
         enforce_limits: true,

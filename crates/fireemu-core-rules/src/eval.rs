@@ -1406,6 +1406,16 @@ fn member_access_chain<'a>(
     }
 }
 
+fn expression_root_identifier(expression: &Expr) -> Option<&str> {
+    match expression.kind() {
+        ExprKind::Ident(name) => Some(name.as_str()),
+        ExprKind::Member { object, .. }
+        | ExprKind::Index { object, .. }
+        | ExprKind::Slice { object, .. } => expression_root_identifier(object),
+        _ => None,
+    }
+}
+
 impl<'a> Evaluator<'a> {
     fn lookup(&mut self, name: &str) -> Result<Option<RulesValue>, EvalError> {
         if let Some(index) = self
@@ -1748,14 +1758,31 @@ impl<'a> Evaluator<'a> {
                 .get(name.as_str())
                 .copied()
                 .unwrap_or(name == "resource"),
-            ExprKind::Member { object, .. } => self.function_expression_query_numeric_source_only(
-                object,
-                numeric_locals,
-                environment,
-                visiting,
-            ),
+            ExprKind::Member { object, .. } => {
+                let source = self.function_expression_query_numeric_source_only(
+                    object,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                );
+                if !source
+                    || expression_root_identifier(object)
+                        .is_some_and(|name| numeric_locals.contains_key(name))
+                {
+                    return source;
+                }
+                match self.query_static_value(expr) {
+                    Some(RulesValue::Int(_) | RulesValue::Float(_)) | None => source,
+                    Some(
+                        RulesValue::Map(_)
+                        | RulesValue::PartialMap(_)
+                        | RulesValue::PartialMapExcluding { .. },
+                    ) => source,
+                    Some(_) => false,
+                }
+            }
             ExprKind::Index { object, index } => {
-                self.function_expression_query_numeric_source_only(
+                let source = self.function_expression_query_numeric_source_only(
                     object,
                     numeric_locals,
                     environment,
@@ -1765,7 +1792,26 @@ impl<'a> Evaluator<'a> {
                     numeric_locals,
                     environment,
                     visiting,
-                )
+                );
+                if !source
+                    || expression_root_identifier(object)
+                        .is_some_and(|name| numeric_locals.contains_key(name))
+                {
+                    return source;
+                }
+                match self.query_static_value(expr) {
+                    Some(RulesValue::Int(_) | RulesValue::Float(_)) | None => source,
+                    Some(
+                        RulesValue::Map(_)
+                        | RulesValue::PartialMap(_)
+                        | RulesValue::PartialMapExcluding { .. }
+                        | RulesValue::List(_)
+                        | RulesValue::Set(_)
+                        | RulesValue::PartialList(_)
+                        | RulesValue::PartialListAny(_),
+                    ) => source,
+                    Some(_) => false,
+                }
             }
             ExprKind::Slice { object, start, end } => {
                 self.function_expression_query_numeric_source_only(

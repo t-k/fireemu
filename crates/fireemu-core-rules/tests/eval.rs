@@ -1593,6 +1593,14 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
         "rules_version = '2';\nservice cloud.firestore { function pick(value) { return value.n; } function check(value) { return string(pick({'n': resource.data.value})) == '0'; } match /databases/{d}/documents { match /notes/{id} { allow list: if check({'n': 'unrelated'}); } } }",
         &zero
     ));
+    let known_string = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::String("abc".to_owned()))],
+    );
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { function value() { return resource.data.value; } match /databases/{d}/documents { match /notes/{id} { allow list: if string(value()) == 'abc'; } } }",
+        &known_string
+    ));
     for condition in ["{'0': true, '-0': false}[text()]", "['0'].hasAny([text()])"] {
         let nested_numeric_rules = format!(
             "rules_version = '2';\nservice cloud.firestore {{ function number() {{ return float(resource.data.value); }} function text() {{ return string(number()); }} match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"

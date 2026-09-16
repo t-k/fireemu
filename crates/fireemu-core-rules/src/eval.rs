@@ -1445,16 +1445,25 @@ impl<'a> Evaluator<'a> {
         if visiting.contains(&key) {
             return false;
         }
+        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+            return true;
+        };
         visiting.push(key);
         let mut locals = BTreeMap::new();
         for parameter in &function.params {
             locals.insert(parameter.as_str(), false);
         }
         for binding in &function.lets {
-            let derived = self.function_expression_query_derived(&binding.value, &locals, visiting);
+            let derived = self.function_expression_query_derived(
+                &binding.value,
+                &locals,
+                environment,
+                visiting,
+            );
             locals.insert(binding.name.as_str(), derived);
         }
-        let derived = self.function_expression_query_derived(&function.body, &locals, visiting);
+        let derived =
+            self.function_expression_query_derived(&function.body, &locals, environment, visiting);
         visiting.pop();
         derived
     }
@@ -1463,6 +1472,7 @@ impl<'a> Evaluator<'a> {
         &self,
         expr: &Expr,
         locals: &BTreeMap<&str, bool>,
+        environment: &FunctionEnvironment<'a>,
         visiting: &mut Vec<usize>,
     ) -> bool {
         match expr.kind() {
@@ -1471,42 +1481,51 @@ impl<'a> Evaluator<'a> {
                 .copied()
                 .unwrap_or(name == "resource"),
             ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
-                self.function_expression_query_derived(object, locals, visiting)
+                self.function_expression_query_derived(object, locals, environment, visiting)
             }
             ExprKind::Slice { object, start, end } => {
-                self.function_expression_query_derived(object, locals, visiting)
-                    || self.function_expression_query_derived(start, locals, visiting)
-                    || self.function_expression_query_derived(end, locals, visiting)
+                self.function_expression_query_derived(object, locals, environment, visiting)
+                    || self.function_expression_query_derived(start, locals, environment, visiting)
+                    || self.function_expression_query_derived(end, locals, environment, visiting)
             }
-            ExprKind::List(items) => items
-                .iter()
-                .any(|item| self.function_expression_query_derived(item, locals, visiting)),
-            ExprKind::Map(entries) => entries
-                .iter()
-                .any(|(_, value)| self.function_expression_query_derived(value, locals, visiting)),
+            ExprKind::List(items) => items.iter().any(|item| {
+                self.function_expression_query_derived(item, locals, environment, visiting)
+            }),
+            ExprKind::Map(entries) => entries.iter().any(|(_, value)| {
+                self.function_expression_query_derived(value, locals, environment, visiting)
+            }),
             ExprKind::Unary { expr, .. } => {
-                self.function_expression_query_derived(expr, locals, visiting)
+                self.function_expression_query_derived(expr, locals, environment, visiting)
             }
             ExprKind::Binary { left, right, .. } => {
-                self.function_expression_query_derived(left, locals, visiting)
-                    || self.function_expression_query_derived(right, locals, visiting)
+                self.function_expression_query_derived(left, locals, environment, visiting)
+                    || self.function_expression_query_derived(right, locals, environment, visiting)
             }
             ExprKind::Ternary {
                 cond,
                 then,
                 otherwise,
             } => {
-                self.function_expression_query_derived(cond, locals, visiting)
-                    || self.function_expression_query_derived(then, locals, visiting)
-                    || self.function_expression_query_derived(otherwise, locals, visiting)
+                self.function_expression_query_derived(cond, locals, environment, visiting)
+                    || self.function_expression_query_derived(then, locals, environment, visiting)
+                    || self.function_expression_query_derived(
+                        otherwise,
+                        locals,
+                        environment,
+                        visiting,
+                    )
             }
             ExprKind::Call { callee, args, .. } => {
-                self.function_expression_query_derived(callee, locals, visiting)
+                self.function_expression_query_derived(callee, locals, environment, visiting)
                     || args.iter().any(|argument| {
-                        self.function_expression_query_derived(argument, locals, visiting)
+                        self.function_expression_query_derived(
+                            argument,
+                            locals,
+                            environment,
+                            visiting,
+                        )
                     })
-                    || matches!(callee.kind(), ExprKind::Ident(name) if self
-                        .function(name)
+                    || matches!(callee.kind(), ExprKind::Ident(name) if function_in_environment(environment, name)
                         .is_some_and(|function| self.function_body_query_derived(function, visiting)))
             }
             _ => false,
@@ -3119,6 +3138,12 @@ fn method_call(
         (V::List(items), "removeAll") => {
             arity(1)?;
             let removed = list_arg(&args[0])?;
+            if query_derived
+                && (items.iter().any(contains_nested_numeric)
+                    || removed.iter().any(contains_nested_numeric))
+            {
+                return Err(EvalError::Unknown);
+            }
             V::List(
                 items
                     .iter()
@@ -3129,6 +3154,9 @@ fn method_call(
         }
         (V::List(items), "toSet") => {
             arity(0)?;
+            if query_derived && items.iter().any(contains_nested_numeric) {
+                return Err(EvalError::Unknown);
+            }
             make_set(items.iter().cloned())
         }
         // A `set` is its own type: it compares unordered, `is` never recognises it, and its
@@ -3141,6 +3169,12 @@ fn method_call(
                     args[0].type_name()
                 )));
             };
+            if query_derived
+                && (items.iter().any(contains_nested_numeric)
+                    || other.iter().any(contains_nested_numeric))
+            {
+                return Err(EvalError::Unknown);
+            }
             match name {
                 "union" => make_set(items.iter().chain(other).cloned()),
                 "intersection" => make_set(

@@ -1271,7 +1271,7 @@ service cloud.firestore {
             tonic::Code::PermissionDenied
         ),
     }
-    let mut map_any_query = map_query;
+    let mut map_any_query = map_query.clone();
     if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) =
         &mut map_any_query.query_type
     {
@@ -1296,6 +1296,62 @@ service cloud.firestore {
                 .next()
                 .await
                 .expect("array-contains-any query must be denied")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.tags.toSet().difference([{ score: 1 }].toSet()).size() == 0;
+    }
+  }
+}",
+        )
+        .unwrap();
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(map_query.clone(), "owner"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner transformation query should return the stored document")
+            .unwrap()
+            .document
+            .expect("owner transformation query document")
+            .name,
+        format!("{DOCS}/records/map-membership")
+    );
+    assert!(owner_stream.next().await.is_none());
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/map-membership"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(map_query, &alice_token))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("transformation query must be denied")
                 .unwrap_err()
                 .code(),
             tonic::Code::PermissionDenied

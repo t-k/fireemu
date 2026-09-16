@@ -1510,6 +1510,38 @@ fn query_equality_provenance_survives_function_and_let_aliases() {
 }
 
 #[test]
+fn query_provenance_uses_each_function_declaration_scope() {
+    let rules = "rules_version = '2';
+service cloud.firestore {
+  function source() { return resource.data.meta.payload; }
+  function getter() { return source(); }
+  match /databases/{d}/documents {
+    match /notes/{id} {
+      function source() { return [1]; }
+      allow read: if getter() != [1.0];
+    }
+  }
+}";
+    let payload = RulesValue::List(vec![RulesValue::Int(1)]);
+    let meta = RulesValue::Map(BTreeMap::from([("payload".to_owned(), payload)]));
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("meta", meta)],
+    );
+    assert!(!allows(rules, &query));
+
+    let mut concrete = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete.resource = Some(doc(&[(
+        "meta",
+        RulesValue::Map(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::List(vec![RulesValue::Float(1.0)]),
+        )])),
+    )]));
+    assert!(!allows(rules, &concrete));
+}
+
+#[test]
 fn partial_query_list_membership_does_not_assume_nested_numeric_representation() {
     let rules = |condition: &str| {
         format!(
@@ -1532,23 +1564,75 @@ fn partial_query_list_membership_does_not_assume_nested_numeric_representation()
 fn query_derived_list_and_set_membership_methods_remain_conservative() {
     let rules = |condition: &str| {
         format!(
-            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow read: if {condition}; }} }} }}"
         )
     };
-    let tag = RulesValue::Map(BTreeMap::from([("score".to_owned(), RulesValue::Int(1))]));
-    let tags = abstract_ctx(
+    let same_tag = RulesValue::Map(BTreeMap::from([(
+        "score".to_owned(),
+        RulesValue::String("same".to_owned()),
+    )]));
+    let same = abstract_ctx(
         "/databases/(default)/documents/notes/fireemu-placeholder",
-        vec![("tags", RulesValue::List(vec![tag]))],
+        vec![("tags", RulesValue::List(vec![same_tag]))],
     );
     for condition in [
-        "resource.data.tags.hasAny([{score: 1.0}])",
-        "resource.data.tags.hasAll([{score: 1.0}])",
-        "resource.data.tags.hasOnly([{score: 1.0}])",
-        "resource.data.tags.toSet().hasAny([{score: 1.0}])",
-        "resource.data.tags.toSet().hasAll([{score: 1.0}])",
-        "resource.data.tags.toSet().hasOnly([{score: 1.0}])",
+        "resource.data.tags == [{score: 'same'}]",
+        "resource.data.tags.hasAny([{score: 'same'}])",
+        "resource.data.tags.hasAll([{score: 'same'}])",
+        "resource.data.tags.hasOnly([{score: 'same'}])",
+        "resource.data.tags.toSet().hasAny([{score: 'same'}])",
+        "resource.data.tags.toSet().hasAll([{score: 'same'}])",
+        "resource.data.tags.toSet().hasOnly([{score: 'same'}])",
     ] {
-        assert!(!allows(&rules(condition), &tags), "condition: {condition}");
+        assert!(allows(&rules(condition), &same), "condition: {condition}");
+    }
+
+    let query_tag = RulesValue::Map(BTreeMap::from([("score".to_owned(), RulesValue::Int(1))]));
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("tags", RulesValue::List(vec![query_tag]))],
+    );
+    for condition in [
+        "resource.data.tags == [{score: 1.0}]",
+        "!(resource.data.tags == [{score: 1.0}])",
+        "resource.data.tags != [{score: 1.0}]",
+        "resource.data.tags.hasAny([{score: 1}])",
+        "!resource.data.tags.hasAny([{score: 1.0}])",
+        "resource.data.tags.hasAll([{score: 1}])",
+        "!resource.data.tags.hasAll([{score: 1.0}])",
+        "resource.data.tags.hasOnly([{score: 1}])",
+        "!resource.data.tags.hasOnly([{score: 1.0}])",
+        "resource.data.tags.toSet().hasAny([{score: 1}])",
+        "!resource.data.tags.toSet().hasAny([{score: 1.0}])",
+        "resource.data.tags.removeAll([{score: 1}]).size() == 0",
+        "resource.data.tags.toSet().difference([{score: 1}].toSet()).size() == 0",
+    ] {
+        assert!(!allows(&rules(condition), &query), "condition: {condition}");
+    }
+
+    let mut concrete = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete.resource = Some(doc(&[(
+        "tags",
+        RulesValue::List(vec![RulesValue::Map(BTreeMap::from([(
+            "score".to_owned(),
+            RulesValue::Float(1.0),
+        )]))]),
+    )]));
+    for condition in [
+        "resource.data.tags != [{score: 1.0}]",
+        "resource.data.tags.hasAny([{score: 1}])",
+        "!resource.data.tags.hasAny([{score: 1.0}])",
+        "resource.data.tags.hasAll([{score: 1}])",
+        "!resource.data.tags.hasAll([{score: 1.0}])",
+        "resource.data.tags.hasOnly([{score: 1}])",
+        "!resource.data.tags.hasOnly([{score: 1.0}])",
+        "resource.data.tags.removeAll([{score: 1}]).size() == 0",
+        "resource.data.tags.toSet().difference([{score: 1}].toSet()).size() == 0",
+    ] {
+        assert!(
+            !allows(&rules(condition), &concrete),
+            "condition: {condition}"
+        );
     }
 }
 

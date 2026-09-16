@@ -93,6 +93,7 @@ struct ServiceAssembly {
     log_bus: fireemu_adapter_logging::LogBus,
     firestore_policy: Option<Arc<fireemu_core_app_check::ServiceAdmission>>,
     auth: Arc<AuthState>,
+    auth_operation_gate: Arc<Mutex<()>>,
     storage: Arc<fireemu_adapter_http::storage::StorageState>,
     control: Arc<fireemu_adapter_http::control::ControlState>,
     pubsub: fireemu_adapter_pubsub::PubSubHandle,
@@ -514,6 +515,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     );
     let log_bus = fireemu_adapter_logging::LogBus::new();
     // Auth user events reach the functions runtime after each Auth request.
+    // This adapter-level gate is also shared with the export seam so an Auth export cannot
+    // capture stores and Blocking Functions settings from different logical generations.
+    let auth_operation_gate = Arc::new(Mutex::new(()));
     let auth = Arc::new(AuthState {
         store: auth_store.clone(),
         clock: clock.clone(),
@@ -547,7 +551,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             }
             None => None,
         },
-        operation_gate: Arc::new(Mutex::new(())),
+        operation_gate: auth_operation_gate.clone(),
         control_token: Some(control_token.clone()),
         registry: Some(registry.clone()),
         allow_routed_projects: cfg.profile == crate::config::CompatibilityProfile::Emulator,
@@ -687,6 +691,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         functions_runtime,
         firestore_policy,
         auth,
+        auth_operation_gate,
         storage,
         control,
         pubsub: pubsub_handle,
@@ -720,6 +725,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         functions_runtime,
         firestore_policy,
         auth,
+        auth_operation_gate,
         storage,
         control,
         pubsub,
@@ -740,6 +746,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         project: cfg.auth_project.clone(),
         products: import_export::Products::from(&only),
         blocking: auth.blocking.clone(),
+        auth_operation_gate,
     });
     // The import happens before the command starts and before the banner claims the
     // suite is ready: a run that cannot install its fixture must not run at all.

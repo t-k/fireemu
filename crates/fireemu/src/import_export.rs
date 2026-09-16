@@ -150,6 +150,10 @@ pub struct Endpoints<'a> {
     /// The optional runtime-owned Blocking Auth bridge. Only its logical project settings cross
     /// the export seam; runner addresses, ports and secrets stay in the live runtime.
     pub blocking: Option<&'a dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>,
+    /// Adapter-level Auth settings gate shared with project configuration and blocking requests.
+    /// Export captures Auth stores and blocking settings while this gate is held, then releases
+    /// it before serializing files.
+    pub auth_operation_gate: Option<&'a Arc<Mutex<()>>>,
 }
 
 impl Endpoints<'_> {
@@ -2860,17 +2864,49 @@ fn export_auth(
 ) -> Result<(), ArtifactError> {
     let section_dir = dir.join(AUTH_PATH);
     create_private_dir(&section_dir).map_err(|e| ArtifactError::new("auth", &section_dir, e))?;
-    let snapshot = endpoints
-        .auth
-        .capture_export_snapshot(endpoints.project)
-        .map_err(|error| ArtifactError::new("auth", &section_dir, error))?
-        .ok_or_else(|| {
-            ArtifactError::new(
-                "auth",
-                &section_dir,
-                format!("Auth project {:?} is not available", endpoints.project),
-            )
-        })?;
+    // Capture the Auth stores and the logical Blocking Functions projection under the same
+    // adapter-level gate used by project configuration PATCH and blocking Auth requests. This
+    // prevents an export from combining two settings generations. The gate is released before
+    // any file I/O so ordinary Auth requests are not held up by serialization.
+    let (snapshot, project_blocking) = {
+        let _operation = match endpoints.auth_operation_gate {
+            Some(gate) => Some(gate.lock().map_err(|_| {
+                ArtifactError::new("auth", &section_dir, "the Auth settings gate is poisoned")
+            })?),
+            None => None,
+        };
+        let snapshot = endpoints
+            .auth
+            .capture_export_snapshot(endpoints.project)
+            .map_err(|error| ArtifactError::new("auth", &section_dir, error))?
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    &section_dir,
+                    format!("Auth project {:?} is not available", endpoints.project),
+                )
+            })?;
+        let project_blocking = if let Some(blocking) = endpoints.blocking {
+            if blocking
+                .blocking_auth_project()
+                .is_some_and(|project| project != endpoints.project)
+            {
+                return Err(ArtifactError::new(
+                    "auth",
+                    &section_dir,
+                    "blocking settings belong to a different project",
+                ));
+            }
+            blocking
+                .blocking_auth_settings_for_export()
+                .map_err(|error| ArtifactError::new("auth", &section_dir, error))?
+                .map(|value| blocking_settings_record_from_json(&value, &section_dir))
+                .transpose()?
+        } else {
+            None
+        };
+        (snapshot, project_blocking)
+    };
     let store = snapshot.default_store();
     let mut file = AccountsFile::default();
     for user in store.users_by_creation() {
@@ -2953,25 +2989,6 @@ fn export_auth(
         write_private_file(&path, policies.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
-    let project_blocking = if let Some(blocking) = endpoints.blocking {
-        if blocking
-            .blocking_auth_project()
-            .is_some_and(|project| project != endpoints.project)
-        {
-            return Err(ArtifactError::new(
-                "auth",
-                &section_dir,
-                "blocking settings belong to a different project",
-            ));
-        }
-        blocking
-            .blocking_auth_settings_for_export()
-            .map_err(|error| ArtifactError::new("auth", &section_dir, error))?
-            .map(|value| blocking_settings_record_from_json(&value, &section_dir))
-            .transpose()?
-    } else {
-        None
-    };
     if project_quota != SignupQuotaConfig::default()
         || project_blocking.is_some()
         || !tenant_settings.is_empty()
@@ -3733,6 +3750,7 @@ mod tests {
             clock: &clock,
             project: "demo-app",
             blocking: None,
+            auth_operation_gate: None,
         };
         let root = std::env::temp_dir().join(format!(
             "fireemu-windows-export-entry-{}",
@@ -4351,6 +4369,7 @@ mod tests {
             clock: &clock,
             project: "demo-app",
             blocking: Some(&blocking),
+            auth_operation_gate: None,
         };
         let imported_blocking = BlockingAuthSettingsRecord {
             before_create: BlockingAuthSelectionRecord::Disabled,

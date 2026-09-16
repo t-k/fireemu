@@ -2142,6 +2142,7 @@ struct Exporter {
     project: String,
     products: import_export::Products,
     blocking: Option<Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>>,
+    auth_operation_gate: Arc<Mutex<()>>,
 }
 
 impl Exporter {
@@ -2153,6 +2154,7 @@ impl Exporter {
             clock: &self.clock,
             project: &self.project,
             blocking: self.blocking.as_deref(),
+            auth_operation_gate: Some(&self.auth_operation_gate),
         }
     }
 }

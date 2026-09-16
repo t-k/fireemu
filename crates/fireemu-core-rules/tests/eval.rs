@@ -1542,6 +1542,88 @@ service cloud.firestore {
 }
 
 #[test]
+fn query_provenance_includes_resource_derived_index_expressions() {
+    let rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{d}/documents {
+    match /notes/{id} {
+      allow read: if [1, 1.0][resource.data.index] is int;
+    }
+  }
+}";
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("index", RulesValue::Int(0))],
+    );
+    assert!(!allows(rules, &query));
+
+    let function_rules = "rules_version = '2';
+service cloud.firestore {
+  function pick() { return [1, 1.0][resource.data.index] is int; }
+  match /databases/{d}/documents {
+    match /notes/{id} { allow read: if pick(); }
+  }
+}";
+    assert!(!allows(function_rules, &query));
+
+    let mut concrete = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete.resource = Some(doc(&[("index", RulesValue::Int(1))]));
+    assert!(!allows(rules, &concrete));
+}
+
+#[test]
+fn query_provenance_includes_resource_derived_document_paths() {
+    use fireemu_core_rules::eval::evaluate_request_with;
+
+    let rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow read: if get(/databases/$(database)/documents/other/$(resource.data.target)).data.payload == [1.0];
+    }
+  }
+}";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("target", RulesValue::String("a".to_owned()))],
+    );
+    let access = MapAccess(BTreeMap::from([(
+        "databases/(default)/documents/other/a".to_owned(),
+        resource(vec![(
+            "payload",
+            RulesValue::List(vec![RulesValue::Float(1.0)]),
+        )]),
+    )]));
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &query, Some(&access)).decision,
+        Decision::Deny(_)
+    ));
+
+    let mut concrete = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete.resource = Some(doc(&[("target", RulesValue::String("a".to_owned()))]));
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &concrete, Some(&access)).decision,
+        Decision::Allow
+    ));
+
+    let function_rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function check() {
+      return get(/databases/$(database)/documents/other/$(resource.data.target)).data.payload == [1.0];
+    }
+    match /notes/{id} { allow read: if check(); }
+  }
+}";
+    let function_ruleset = parse_ruleset(function_rules).unwrap();
+    assert!(matches!(
+        evaluate_request_with(&function_ruleset, &query, Some(&access)).decision,
+        Decision::Deny(_)
+    ));
+}
+
+#[test]
 fn partial_query_list_membership_does_not_assume_nested_numeric_representation() {
     let rules = |condition: &str| {
         format!(

@@ -1395,8 +1395,10 @@ impl<'a> Evaluator<'a> {
                 .map_or(name == "resource", |index| {
                     self.scope.bindings[index].query_derived
                 }),
-            ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+            ExprKind::Member { object, .. } => self.query_derived_expression_with(object, visiting),
+            ExprKind::Index { object, index } => {
                 self.query_derived_expression_with(object, visiting)
+                    || self.query_derived_expression_with(index, visiting)
             }
             ExprKind::Slice { object, start, end } => {
                 self.query_derived_expression_with(object, visiting)
@@ -1409,6 +1411,14 @@ impl<'a> Evaluator<'a> {
             ExprKind::Map(entries) => entries
                 .iter()
                 .any(|(_, value)| self.query_derived_expression_with(value, visiting)),
+            ExprKind::Path(segments) => segments.iter().any(|segment| match segment {
+                PathSegment::Binding(expression) => {
+                    self.query_derived_expression_with(expression, visiting)
+                }
+                PathSegment::Literal(_)
+                | PathSegment::Capture { .. }
+                | PathSegment::RecursiveWildcard { .. } => false,
+            }),
             ExprKind::Unary { expr, .. } => self.query_derived_expression_with(expr, visiting),
             ExprKind::Binary { left, right, .. } => {
                 self.query_derived_expression_with(left, visiting)
@@ -1480,8 +1490,12 @@ impl<'a> Evaluator<'a> {
                 .get(name.as_str())
                 .copied()
                 .unwrap_or(name == "resource"),
-            ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+            ExprKind::Member { object, .. } => {
                 self.function_expression_query_derived(object, locals, environment, visiting)
+            }
+            ExprKind::Index { object, index } => {
+                self.function_expression_query_derived(object, locals, environment, visiting)
+                    || self.function_expression_query_derived(index, locals, environment, visiting)
             }
             ExprKind::Slice { object, start, end } => {
                 self.function_expression_query_derived(object, locals, environment, visiting)
@@ -1493,6 +1507,17 @@ impl<'a> Evaluator<'a> {
             }),
             ExprKind::Map(entries) => entries.iter().any(|(_, value)| {
                 self.function_expression_query_derived(value, locals, environment, visiting)
+            }),
+            ExprKind::Path(segments) => segments.iter().any(|segment| match segment {
+                PathSegment::Binding(expression) => self.function_expression_query_derived(
+                    expression,
+                    locals,
+                    environment,
+                    visiting,
+                ),
+                PathSegment::Literal(_)
+                | PathSegment::Capture { .. }
+                | PathSegment::RecursiveWildcard { .. } => false,
             }),
             ExprKind::Unary { expr, .. } => {
                 self.function_expression_query_derived(expr, locals, environment, visiting)

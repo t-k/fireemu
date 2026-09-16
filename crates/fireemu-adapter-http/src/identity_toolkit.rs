@@ -546,6 +546,31 @@ fn handler_may_invoke_blocking_auth(
         || (may_sign_in && blocking.handles(BeforeSignIn))
 }
 
+/// Returns whether a blocking hook is allowed to observe the selected Auth project.
+///
+/// A runtime-backed bridge reports the project owned by its Functions runtime. Hooks that do not
+/// report a binding are legacy in-process hooks: they remain valid for the default store, but a
+/// registry-backed adapter must not pass them users from a routed project. This check belongs at
+/// the adapter boundary because the default `invoke_for` implementation cannot know which stores
+/// the adapter exposes.
+fn blocking_hook_applies_to_project(
+    state: &AuthState,
+    blocking: &dyn AuthBlockingHook,
+    project: &str,
+) -> bool {
+    let bound_project = blocking.blocking_auth_project();
+    if bound_project.is_some_and(|bound_project| bound_project != project) {
+        return false;
+    }
+    if bound_project.is_some() || state.registry.is_none() {
+        return true;
+    }
+    state
+        .store
+        .lock()
+        .is_ok_and(|store| store.project_id() == project)
+}
+
 pub(crate) fn request_may_invoke_blocking_auth(
     blocking: Option<&dyn AuthBlockingHook>,
     method: &str,
@@ -2289,7 +2314,7 @@ fn handle_with_policy(
             resolution,
             routes::Resolution::Matched { route, .. }
                 if handler_may_invoke_blocking_auth(blocking, route.handler)
-        )
+        ) && blocking_hook_applies_to_project(state, blocking, &store_project)
     });
     let operation_gate = if blocking_auth && state.registry.is_some() {
         let gate = match state.registry.as_ref() {
@@ -2538,11 +2563,10 @@ fn handle_with_policy(
         return finish_token_response(response, signer.as_deref(), &store_arc, at);
     }
     let signer = store.signer_arc();
-    let response = if let Some(blocking) = state
-        .blocking
-        .as_deref()
-        .filter(|blocking| handler_may_invoke_blocking_auth(*blocking, route.handler))
-    {
+    let response = if let Some(blocking) = state.blocking.as_deref().filter(|blocking| {
+        handler_may_invoke_blocking_auth(*blocking, route.handler)
+            && blocking_hook_applies_to_project(state, *blocking, &store_project)
+    }) {
         dispatch_with_blocking_hook(
             state,
             blocking,

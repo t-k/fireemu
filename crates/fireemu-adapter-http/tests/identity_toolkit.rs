@@ -2371,7 +2371,7 @@ fn a_poisoned_tenant_operation_gate_fails_closed_before_authentication() {
         panic!("poison the tenant operation gate");
     })
     .join();
-    state.registry = Some(registry);
+    state.registry = Some(registry.clone());
     state.blocking = Some(Arc::new(UpdatingBlockingHook));
 
     let (status, body) = post(
@@ -2384,7 +2384,7 @@ fn a_poisoned_tenant_operation_gate_fails_closed_before_authentication() {
 }
 
 #[test]
-fn blocking_auth_dispatch_carries_the_selected_project_and_tenant_namespace() {
+fn unbound_blocking_auth_runs_for_default_but_not_routed_projects() {
     use fireemu_core_auth::store::AuthRegistry;
 
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -2395,7 +2395,7 @@ fn blocking_auth_dispatch_carries_the_selected_project_and_tenant_namespace() {
         "demo-worker",
         AuthStore::new("demo-worker", SplitMix64::new(6), TotpPolicy::default())
     ));
-    state.registry = Some(registry);
+    state.registry = Some(registry.clone());
     let mut tenancy = Tenancy::new("demo-app");
     tenancy
         .register("demo-worker", &[], &["worker-key".to_owned()])
@@ -2438,18 +2438,15 @@ fn blocking_auth_dispatch_carries_the_selected_project_and_tenant_namespace() {
                 Some("customer".to_owned()),
                 BlockingAuthEvent::BeforeSignIn,
             ),
-            (
-                "demo-worker".to_owned(),
-                None,
-                BlockingAuthEvent::BeforeCreate,
-            ),
-            (
-                "demo-worker".to_owned(),
-                None,
-                BlockingAuthEvent::BeforeSignIn,
-            ),
         ]
     );
+    assert!(registry
+        .store_for("demo-worker")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_email("worker@example.com")
+        .is_some());
 }
 
 #[test]

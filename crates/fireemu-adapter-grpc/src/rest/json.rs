@@ -598,7 +598,7 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
                 .unwrap_or_default(),
         }))
     } else {
-        None
+        return err("write operation is required");
     };
     Ok(pb::Write {
         update_mask: mask_from_json(v.get("updateMask"))?,
@@ -616,6 +616,24 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
         current_document: precondition_from_json(v.get("currentDocument"))?,
         operation,
     })
+}
+
+/// JSON writes for `BatchWrite`.
+///
+/// An empty write object is valid JSON and must reach the backend so BatchWrite can report its
+/// invalid operation in that row's status. Other operation-less objects remain malformed REST
+/// payloads and are rejected before execution.
+pub fn batch_writes_from_json(items: &[Value]) -> Result<Vec<pb::Write>, JsonError> {
+    items
+        .iter()
+        .map(|item| {
+            if item.as_object().is_some_and(serde_json::Map::is_empty) {
+                Ok(pb::Write::default())
+            } else {
+                write_from_json(item)
+            }
+        })
+        .collect()
 }
 
 /// Write result → JSON.
@@ -1147,5 +1165,19 @@ mod tests {
         let error = value_from_json(&nested_map_with_vector(MAX_NESTING_DEPTH + 1))
             .expect_err("one enclosing map past the limit is rejected");
         assert!(error.0.contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
+    }
+
+    #[test]
+    fn empty_write_is_only_allowed_for_batch_write_rows() {
+        let empty = json!({});
+        assert!(write_from_json(&empty).is_err());
+        let rows = batch_writes_from_json(std::slice::from_ref(&empty)).unwrap();
+        assert_eq!(rows, vec![pb::Write::default()]);
+    }
+
+    #[test]
+    fn malformed_batch_write_row_is_rejected_before_execution() {
+        let malformed = json!({"updateMask": {"fieldPaths": ["value"]}});
+        assert!(batch_writes_from_json(std::slice::from_ref(&malformed)).is_err());
     }
 }

@@ -173,6 +173,33 @@ fn document_crud_over_rest() {
 }
 
 #[test]
+fn batch_write_reports_an_unspecified_operation_per_row() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [
+                {"update": {"name": format!("projects/demo-app/databases/(default)/documents/items/one"), "fields": {"value": {"integerValue": "1"}}}},
+                {}
+            ]
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["status"][0]["code"], 0);
+    assert_eq!(response["status"][1]["code"], 3);
+
+    let (status, document) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/items/one"),
+        json!({}),
+    );
+    assert_eq!(status, 200, "{document}");
+}
+
+#[test]
 fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() {
     let s = state(None);
     let mut read_time = String::new();

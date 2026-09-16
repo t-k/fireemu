@@ -200,6 +200,38 @@ fn batch_write_reports_an_unspecified_operation_per_row() {
 }
 
 #[test]
+fn batch_write_rest_keeps_valid_rows_around_an_unspecified_operation() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [
+                {"update": {"name": format!("projects/demo-app/databases/(default)/documents/rows/prefix"), "fields": {"value": {"integerValue": "1"}}}},
+                {},
+                {"update": {"name": format!("projects/demo-app/databases/(default)/documents/rows/suffix"), "fields": {"value": {"integerValue": "3"}}}}
+            ]
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["status"][0]["code"], 0);
+    assert_eq!(response["status"][1]["code"], 3);
+    assert_eq!(response["status"][2]["code"], 0);
+
+    for (name, value) in [("prefix", "1"), ("suffix", "3")] {
+        let (status, document) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/rows/{name}"),
+            json!({}),
+        );
+        assert_eq!(status, 200, "{document}");
+        assert_eq!(document["fields"]["value"]["integerValue"], value);
+    }
+}
+
+#[test]
 fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() {
     let s = state(None);
     let mut read_time = String::new();

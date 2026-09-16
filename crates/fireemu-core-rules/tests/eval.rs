@@ -1425,6 +1425,73 @@ fn undetermined_values_never_prove_a_condition() {
 }
 
 #[test]
+fn query_equality_keeps_nested_numeric_values_conservative() {
+    let rules = |condition: &str| {
+        format!(
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+        )
+    };
+    let query_value = RulesValue::List(vec![RulesValue::Int(1)]);
+    let nested = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![(
+            "meta",
+            RulesValue::Map(BTreeMap::from([("payload".to_owned(), query_value)])),
+        )],
+    );
+
+    // Firestore equality accepts the stored double as equal to the query integer, so the
+    // proof cannot establish that a Rules comparison against the double is different.
+    assert!(!allows(
+        &rules("resource.data.meta.payload != [1.0]"),
+        &nested
+    ));
+    assert!(!allows(
+        &rules("resource.data.meta.payload == [1.0]"),
+        &nested
+    ));
+    assert!(!allows(
+        &rules("resource.data.meta.payload == [1]"),
+        &nested
+    ));
+    assert!(!allows(
+        &rules("resource.data.meta.payload != [1]"),
+        &nested
+    ));
+    assert!(!allows(
+        &rules("resource.data.meta.payload in [[1.0]]"),
+        &nested
+    ));
+    assert!(!allows(
+        &rules("!(resource.data.meta.payload in [[1.0]])"),
+        &nested
+    ));
+    // The query does not preserve integer versus double representation, including through
+    // an index into a nested list.
+    assert!(!allows(
+        &rules("resource.data.meta.payload[0] is int"),
+        &nested
+    ));
+    assert!(allows(
+        &rules("resource.data.meta.payload[0] is number"),
+        &nested
+    ));
+
+    let nested_map_payload =
+        RulesValue::Map(BTreeMap::from([("score".to_owned(), RulesValue::Int(1))]));
+    let nested_map_meta =
+        RulesValue::Map(BTreeMap::from([("payload".to_owned(), nested_map_payload)]));
+    let nested_map = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("meta", nested_map_meta)],
+    );
+    assert!(!allows(
+        &rules("resource.data.meta != { payload: { score: 1.0 } }"),
+        &nested_map
+    ));
+}
+
+#[test]
 fn recursive_wildcards_backtrack_and_bind_undetermined_captures_in_proofs() {
     let group = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{path=**}/reviews/{r} { allow list: if true; } } }";
     for path in [

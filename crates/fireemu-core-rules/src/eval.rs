@@ -344,6 +344,9 @@ struct Evaluator<'a> {
     nesting: u32,
     request: Arc<RulesValue>,
     resource: Arc<RulesValue>,
+    /// Abstract resources are query proofs: equality filters preserve Firestore's numeric
+    /// equivalence even after a nested member is projected to a concrete Rules value.
+    query_proof: bool,
     /// `get()` / `exists()` provider (`None` = unsupported).
     access: Option<&'a dyn DocumentAccess>,
     /// Documents read so far, keyed by (`getAfter`?, path): a path is charged once per
@@ -526,6 +529,7 @@ fn evaluate_prepared(
             nesting: 0,
             request: Arc::clone(request),
             resource: Arc::clone(resource),
+            query_proof: ctx.abstract_path,
             access,
             doc_cache: BTreeMap::new(),
             regex_cache: BTreeMap::new(),
@@ -1317,6 +1321,16 @@ fn undetermined(v: &RulesValue) -> bool {
     }
 }
 
+fn is_resource_expression(expr: &Expr) -> bool {
+    match expr.kind() {
+        ExprKind::Ident(name) => name == "resource",
+        ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+            is_resource_expression(object)
+        }
+        _ => false,
+    }
+}
+
 fn member_access_chain<'a>(
     expression: &'a Expr,
     members: &mut Vec<(&'a Expr, &'a str)>,
@@ -1879,6 +1893,15 @@ impl<'a> Evaluator<'a> {
                 if matches!(v, RulesValue::Unknown) {
                     return Err(EvalError::Unknown);
                 }
+                let query_resource_value = self.query_proof && is_resource_expression(expr);
+                if query_resource_value
+                    && matches!(type_name.as_str(), "int" | "float")
+                    && matches!(v, RulesValue::Int(_) | RulesValue::Float(_))
+                {
+                    // Firestore equality is numeric across integer and double encodings. An
+                    // exact query value therefore cannot establish its Rules representation.
+                    return Err(EvalError::Unknown);
+                }
                 if let RulesValue::Range(r) | RulesValue::RangeExcluding { range: r, .. } = &v {
                     // Every member shares the range's class; `int` vs `float` stays open.
                     let class = r.class().ok_or(EvalError::Unknown)?;
@@ -1888,6 +1911,14 @@ impl<'a> Evaluator<'a> {
                     };
                 }
                 if let RulesValue::OneOf(members) = &v {
+                    if query_resource_value
+                        && matches!(type_name.as_str(), "int" | "float")
+                        && members
+                            .iter()
+                            .any(|m| matches!(m, RulesValue::Int(_) | RulesValue::Float(_)))
+                    {
+                        return Err(EvalError::Unknown);
+                    }
                     // Decided when every member answers the same.
                     let answers: Vec<bool> =
                         members.iter().map(|m| is_type(m, type_name)).collect();
@@ -1988,10 +2019,12 @@ impl<'a> Evaluator<'a> {
         }
         let l = self.eval(left)?;
         let r = self.eval(right)?;
+        let query_resource_value =
+            self.query_proof && (is_resource_expression(left) || is_resource_expression(right));
         Ok(match (op, &l, &r) {
             // Membership in a partially known container is provable only positively.
             (BinaryOp::In, item, V::PartialList(known)) if !undetermined(item) => {
-                if known.iter().any(|x| values_equal(x, item)) {
+                if known.iter().any(|x| query_values_equal(x, item)) {
                     V::Bool(true)
                 } else {
                     return Err(EvalError::Unknown);
@@ -2000,7 +2033,8 @@ impl<'a> Evaluator<'a> {
             // At least one candidate is present: membership is certain only when every
             // candidate is the item.
             (BinaryOp::In, item, V::PartialListAny(candidates)) if !undetermined(item) => {
-                if !candidates.is_empty() && candidates.iter().all(|c| values_equal(c, item)) {
+                if !candidates.is_empty() && candidates.iter().all(|c| query_values_equal(c, item))
+                {
                     V::Bool(true)
                 } else {
                     return Err(EvalError::Unknown);
@@ -2094,18 +2128,22 @@ impl<'a> Evaluator<'a> {
                 }
             }
             // A set of candidates: decided when every candidate answers the same.
-            (_, V::OneOf(members), c) if !undetermined(c) => V::Bool(unanimous(
-                members.iter().map(|m| binary_concrete(op, m, c)),
-            )?),
-            (_, c, V::OneOf(members)) if !undetermined(c) => V::Bool(unanimous(
-                members.iter().map(|m| binary_concrete(op, c, m)),
-            )?),
+            (_, V::OneOf(members), c) if !undetermined(c) => {
+                V::Bool(unanimous(members.iter().map(|m| {
+                    binary_concrete_query(op, m, c, query_resource_value)
+                }))?)
+            }
+            (_, c, V::OneOf(members)) if !undetermined(c) => {
+                V::Bool(unanimous(members.iter().map(|m| {
+                    binary_concrete_query(op, c, m, query_resource_value)
+                }))?)
+            }
             // A value known to differ from some values: only equality is ever decided.
             (BinaryOp::Eq | BinaryOp::Ne, V::NotOneOf(excluded), c)
             | (BinaryOp::Eq | BinaryOp::Ne, c, V::NotOneOf(excluded))
                 if !undetermined(c) =>
             {
-                if excluded.iter().any(|e| values_equal(e, c)) {
+                if excluded.iter().any(|e| query_values_equal(e, c)) {
                     V::Bool(op == BinaryOp::Ne)
                 } else {
                     return Err(EvalError::Unknown);
@@ -2117,7 +2155,10 @@ impl<'a> Evaluator<'a> {
             (BinaryOp::Eq | BinaryOp::Ne, V::PartialMapExcluding { fields, excluded }, c)
                 if !undetermined(c) =>
             {
-                if excluded.iter().any(|excluded| values_equal(excluded, c)) {
+                if excluded
+                    .iter()
+                    .any(|excluded| query_values_equal(excluded, c))
+                {
                     V::Bool(op == BinaryOp::Ne)
                 } else {
                     V::Bool(partial_map_relation(op, fields, c)?)
@@ -2129,7 +2170,10 @@ impl<'a> Evaluator<'a> {
             (BinaryOp::Eq | BinaryOp::Ne, c, V::PartialMapExcluding { fields, excluded })
                 if !undetermined(c) =>
             {
-                if excluded.iter().any(|excluded| values_equal(excluded, c)) {
+                if excluded
+                    .iter()
+                    .any(|excluded| query_values_equal(excluded, c))
+                {
                     V::Bool(op == BinaryOp::Ne)
                 } else {
                     V::Bool(partial_map_relation(op, fields, c)?)
@@ -2138,7 +2182,7 @@ impl<'a> Evaluator<'a> {
             (BinaryOp::In, V::NotOneOf(excluded), V::List(items)) if !undetermined(&r) => {
                 if items
                     .iter()
-                    .all(|i| excluded.iter().any(|e| values_equal(e, i)))
+                    .all(|i| excluded.iter().any(|e| query_values_equal(e, i)))
                 {
                     V::Bool(false)
                 } else {
@@ -2150,7 +2194,7 @@ impl<'a> Evaluator<'a> {
             {
                 if items
                     .iter()
-                    .all(|i| excluded.iter().any(|e| values_equal(e, i)))
+                    .all(|i| excluded.iter().any(|e| query_values_equal(e, i)))
                 {
                     V::Bool(false)
                 } else {
@@ -2158,10 +2202,22 @@ impl<'a> Evaluator<'a> {
                 }
             }
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
-            (BinaryOp::Eq, a, b) => V::Bool(values_equal(a, b)),
-            (BinaryOp::Ne, a, b) => V::Bool(!values_equal(a, b)),
+            (BinaryOp::Eq, a, b) => V::Bool(if query_resource_value {
+                query_equality_result(BinaryOp::Eq, a, b)?
+            } else {
+                values_equal(a, b)
+            }),
+            (BinaryOp::Ne, a, b) => V::Bool(if query_resource_value {
+                query_equality_result(BinaryOp::Ne, a, b)?
+            } else {
+                !values_equal(a, b)
+            }),
             (BinaryOp::In, item, V::List(items) | V::Set(items)) => {
-                V::Bool(items.iter().any(|x| values_equal(x, item)))
+                V::Bool(if query_resource_value {
+                    query_membership_result(items, item)?
+                } else {
+                    items.iter().any(|x| values_equal(x, item))
+                })
             }
             (BinaryOp::In, V::String(k), V::Map(m)) => V::Bool(m.contains_key(k)),
             (BinaryOp::In, _, other) => return Err(soft(format!("`in` on {}", other.type_name()))),
@@ -3320,6 +3376,75 @@ fn binary_concrete(op: BinaryOp, a: &RulesValue, b: &RulesValue) -> Result<bool,
             })
         }
         _ => Err(EvalError::Unknown),
+    }
+}
+
+fn binary_concrete_query(
+    op: BinaryOp,
+    a: &RulesValue,
+    b: &RulesValue,
+    query_resource_value: bool,
+) -> Result<bool, EvalError> {
+    if query_resource_value {
+        return match op {
+            BinaryOp::Eq | BinaryOp::Ne => query_equality_result(op, a, b),
+            BinaryOp::In => match b {
+                RulesValue::List(items) | RulesValue::Set(items) => {
+                    query_membership_result(items, a)
+                }
+                _ => binary_concrete(op, a, b),
+            },
+            _ => binary_concrete(op, a, b),
+        };
+    }
+    binary_concrete(op, a, b)
+}
+
+fn query_equality_result(op: BinaryOp, a: &RulesValue, b: &RulesValue) -> Result<bool, EvalError> {
+    // Query equality can widen numeric equivalence inside containers. That proves neither
+    // branch of the Rules comparison when the concrete Rules result is representation-sensitive.
+    let query_equal = query_values_equal(a, b);
+    let rules_equal = values_equal(a, b);
+    if query_equal != rules_equal
+        || (query_equal && contains_nested_numeric(a) && contains_nested_numeric(b))
+    {
+        return Err(EvalError::Unknown);
+    }
+    Ok(if op == BinaryOp::Eq {
+        rules_equal
+    } else {
+        !rules_equal
+    })
+}
+
+fn query_membership_result(items: &[RulesValue], item: &RulesValue) -> Result<bool, EvalError> {
+    let mut uncertain = false;
+    for candidate in items {
+        match query_equality_result(BinaryOp::Eq, candidate, item) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(EvalError::Unknown) => uncertain = true,
+            Err(error) => return Err(error),
+        }
+    }
+    if uncertain {
+        Err(EvalError::Unknown)
+    } else {
+        Ok(false)
+    }
+}
+
+fn contains_nested_numeric(value: &RulesValue) -> bool {
+    match value {
+        RulesValue::List(items) | RulesValue::Set(items) => items.iter().any(|item| {
+            matches!(item, RulesValue::Int(_) | RulesValue::Float(_))
+                || contains_nested_numeric(item)
+        }),
+        RulesValue::Map(fields) => fields.values().any(|item| {
+            matches!(item, RulesValue::Int(_) | RulesValue::Float(_))
+                || contains_nested_numeric(item)
+        }),
+        _ => false,
     }
 }
 

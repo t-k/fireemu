@@ -944,6 +944,7 @@ service cloud.firestore {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn query_proof_does_not_treat_nested_numeric_representation_as_difference() {
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");
@@ -1001,7 +1002,7 @@ service cloud.firestore {
     match h
         .client
         .run_query(with_bearer(
-            list_where("records", "meta.payload", query_payload),
+            list_where("records", "meta.payload", query_payload.clone()),
             &alice_token,
         ))
         .await
@@ -1016,6 +1017,112 @@ service cloud.firestore {
                 .unwrap_err();
             assert_eq!(query_error.code(), tonic::Code::PermissionDenied);
         }
+    }
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.meta.payload != [1.0];
+    }
+  }
+}",
+        )
+        .unwrap();
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload.clone()),
+            "owner",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner query should return the stored document")
+            .unwrap()
+            .document
+            .expect("owner query document")
+            .name,
+        format!("{DOCS}/records/numeric")
+    );
+    assert!(
+        owner_stream.next().await.is_none(),
+        "owner query should end without a terminal stream error"
+    );
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/numeric"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload.clone()),
+            &alice_token,
+        ))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.meta.payload[0] is int;
+    }
+  }
+}",
+        )
+        .unwrap();
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/numeric"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload),
+            &alice_token,
+        ))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
     }
     h.handle.abort();
 }

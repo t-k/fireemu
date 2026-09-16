@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC_PATH = ROOT / "spec/compatibility/broad-runs/auth-saved-reference-replay-v1.json"
+SPEC_PATH = ROOT / "spec/compatibility/broad-runs/auth-saved-reference-replay-v2.json"
 CORPORA = {
     "auth-basic-v2": {
         "receipt": ROOT / "spec/compatibility/evidence/auth-basic-v2/receipt.json",

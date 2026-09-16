@@ -989,6 +989,9 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 ..store.config()
             };
             store.set_config(config);
+            if let Some(policy) = &cfg.auth_password_policy {
+                store.set_password_policy(policy.to_auth_policy());
+            }
         }
         // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
         // wanted they are generated concurrently on blocking tasks. They are always separate
@@ -1025,6 +1028,18 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 crate::random_u128()?,
             ),
         );
+        for override_config in &cfg.auth_password_policy_overrides {
+            let policy = override_config.password_policy.to_auth_policy();
+            if let Some(tenant) = override_config.tenant_id.as_deref() {
+                if let Some(store) = registry.tenant_store(&override_config.project_id, tenant) {
+                    if let Ok(mut store) = store.lock() {
+                        store.set_password_policy(policy);
+                    }
+                }
+            } else {
+                registry.set_project_password_policy(&override_config.project_id, policy);
+            }
+        }
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {

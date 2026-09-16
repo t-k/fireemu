@@ -24,6 +24,7 @@ use fireemu_core_auth::base32;
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
+use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy};
 use fireemu_core_auth::store::{
     AuthError, AuthStore, CredentialNotice, FederatedIdentity, InboundSamlProviderConfig, LocalId,
     NewUser, OAuthResponseType, OidcProviderConfig, OobRequestType, PendingSignInId, PhoneCodeUse,
@@ -2525,6 +2526,7 @@ fn dispatch(
                 "recaptchaSiteKey": "Fake-key__Do-not-send-this-to-Recaptcha_",
             }),
         },
+        Handler::PasswordPolicy => password_policy_json(store.password_policy()),
         Handler::MfaEnrollmentStart => {
             mfa_enrollment_start(store, body, at, options.totp_extension_enabled)
         }
@@ -2627,10 +2629,86 @@ fn apply_project_config_fields(
                     "enableImprovedEmailPrivacy",
                 )?);
             }
+            field
+                if field == "passwordPolicyConfig"
+                    || field.starts_with("passwordPolicyConfig.") => {}
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         }
     }
     Ok(())
+}
+
+fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, JsonResponse> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    let state = match object
+        .get("passwordPolicyEnforcementState")
+        .and_then(Value::as_str)
+        .unwrap_or("OFF")
+    {
+        "OFF" => EnforcementState::Off,
+        "ENFORCE" => EnforcementState::Enforce,
+        _ => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let force = object.get("forceUpgradeOnSignin").map_or(Ok(false), |v| {
+        v.as_bool().ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+    })?;
+    let options = object
+        .get("passwordPolicyVersions")
+        .and_then(Value::as_array)
+        .filter(|versions| versions.len() == 1)
+        .and_then(|versions| versions[0].get("customStrengthOptions"))
+        .and_then(Value::as_object);
+    let number = |key: &str, default: usize| {
+        options.and_then(|o| o.get(key)).map_or(Ok(default), |v| {
+            v.as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+        })
+    };
+    let boolean = |key: &str| {
+        options.and_then(|o| o.get(key)).map_or(Ok(false), |v| {
+            v.as_bool().ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+        })
+    };
+    let max = options
+        .and_then(|o| o.get("maxPasswordLength"))
+        .filter(|v| !v.is_null())
+        .map(|v| {
+            v.as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+        })
+        .transpose()?;
+    PasswordPolicy::try_new(
+        state,
+        force,
+        number("minPasswordLength", 6)?,
+        max,
+        boolean("containsUppercaseCharacter")?,
+        boolean("containsLowercaseCharacter")?,
+        boolean("containsNumericCharacter")?,
+        boolean("containsNonAlphanumericCharacter")?,
+        fireemu_core_auth::password_policy::default_allowed_non_alphanumeric(),
+    )
+    .map_err(|_| error(400, "INVALID_ARGUMENT"))
+}
+
+fn password_policy_fields(fields: &[String]) -> bool {
+    fields
+        .iter()
+        .any(|field| field == "passwordPolicyConfig" || field.starts_with("passwordPolicyConfig."))
+}
+
+fn valid_password_policy_field(field: &str) -> bool {
+    matches!(
+        field,
+        "passwordPolicyConfig"
+            | "passwordPolicyConfig.passwordPolicyEnforcementState"
+            | "passwordPolicyConfig.forceUpgradeOnSignin"
+            | "passwordPolicyConfig.passwordPolicyVersions"
+    )
 }
 
 fn apply_project_config_parent(
@@ -2692,7 +2770,7 @@ fn project_config_management(
         };
         return JsonResponse {
             status: 200,
-            body: project_config_json(store.config()),
+            body: project_config_json_with_password_policy(store.config(), store.password_policy()),
         };
     }
     if !body.is_object() {
@@ -2700,11 +2778,33 @@ fn project_config_management(
     }
     let fields = match update_mask(query) {
         Ok(Some(fields)) => fields,
-        Ok(None) => vec![
-            "signIn.allowDuplicateEmails".to_owned(),
-            "emailPrivacyConfig.enableImprovedEmailPrivacy".to_owned(),
-        ],
+        Ok(None) => {
+            let mut fields = vec![
+                "signIn.allowDuplicateEmails".to_owned(),
+                "emailPrivacyConfig.enableImprovedEmailPrivacy".to_owned(),
+            ];
+            if body.get("passwordPolicyConfig").is_some() {
+                fields.push("passwordPolicyConfig".to_owned());
+            }
+            fields
+        }
         Err(response) => return response,
+    };
+    if fields.iter().any(|field| {
+        field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field)
+    }) {
+        return error(400, "INVALID_ARGUMENT");
+    }
+    let password_policy = if password_policy_fields(&fields) {
+        let Some(value) = body.get("passwordPolicyConfig") else {
+            return error(400, "INVALID_ARGUMENT");
+        };
+        match password_policy_from_config_json(value) {
+            Ok(policy) => Some(policy),
+            Err(response) => return response,
+        }
+    } else {
+        None
     };
     let mut patch = ProjectAuthConfigPatch::default();
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
@@ -2729,6 +2829,18 @@ fn project_config_management(
         }
         config
     };
+    if let Some(policy) = password_policy {
+        let updated = state
+            .registry
+            .as_ref()
+            .is_some_and(|registry| registry.set_project_password_policy(project, policy.clone()));
+        if !updated {
+            let Ok(mut store) = selected_store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            store.set_password_policy(policy);
+        }
+    }
     if !patch.is_empty() {
         if let Some(project) = pending_project {
             if let Err(response) = install_routed_candidate(state, project, selected_store) {
@@ -2738,7 +2850,12 @@ fn project_config_management(
     }
     JsonResponse {
         status: 200,
-        body: project_config_json(config),
+        body: {
+            let Ok(store) = selected_store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            project_config_json_with_password_policy(config, store.password_policy())
+        },
     }
 }
 
@@ -3474,7 +3591,10 @@ fn tenant_metadata_patch(
         },
         |mask| mask.split(',').filter(|field| !field.is_empty()).collect(),
     );
-    if fields.iter().any(|field| !FIELDS.contains(field)) {
+    if fields
+        .iter()
+        .any(|field| !FIELDS.contains(field) && *field != "passwordPolicyConfig")
+    {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
     let mut patch = fireemu_core_auth::store::TenantMetadataPatch::default();
@@ -3497,6 +3617,7 @@ fn tenant_metadata_patch(
                 patch.enable_anonymous_user = Some(bool_update(body, field)?);
             }
             "disableAuth" => patch.disable_auth = Some(bool_update(body, field)?),
+            "passwordPolicyConfig" => {}
             _ => unreachable!("tenant update mask was validated"),
         }
     }
@@ -3525,6 +3646,21 @@ fn tenant_json(
         "disableAuth": metadata.disable_auth,
         "mfaConfig": {"state": "DISABLED", "enabledProviders": []},
     })
+}
+
+fn tenant_json_with_policy(
+    project: &str,
+    tenant: &str,
+    metadata: &fireemu_core_auth::store::TenantMetadata,
+    policy: &PasswordPolicy,
+) -> Value {
+    let mut result = tenant_json(project, tenant, metadata);
+    result["passwordPolicyConfig"] = project_config_json_with_password_policy(
+        fireemu_core_auth::store::ProjectAuthConfig::default(),
+        policy,
+    )["passwordPolicyConfig"]
+        .clone();
+    result
 }
 
 fn tenant_management(
@@ -3589,14 +3725,30 @@ fn tenant_management(
             let Some(metadata) = registry.tenant_metadata(project, tenant) else {
                 return error(404, "TENANT_NOT_FOUND");
             };
+            let Some(store) = registry.tenant_store(project, tenant) else {
+                return error(404, "TENANT_NOT_FOUND");
+            };
+            let Ok(store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
             JsonResponse {
                 status: 200,
-                body: tenant_json(project, tenant, &metadata),
+                body: tenant_json_with_policy(project, tenant, &metadata, store.password_policy()),
             }
         }
         Handler::TenantUpdate => {
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
+            };
+            let password_policy = if body.get("passwordPolicyConfig").is_some() {
+                match password_policy_from_config_json(
+                    body.get("passwordPolicyConfig").expect("checked above"),
+                ) {
+                    Ok(policy) => Some(policy),
+                    Err(response) => return response,
+                }
+            } else {
+                None
             };
             let patch = match tenant_metadata_patch(body, query) {
                 Ok(patch) => patch,
@@ -3605,9 +3757,20 @@ fn tenant_management(
             let Some(metadata) = registry.patch_tenant(project, tenant, patch) else {
                 return error(404, "TENANT_NOT_FOUND");
             };
+            if let Some(policy) = password_policy {
+                if !registry.set_tenant_password_policy(project, tenant, policy) {
+                    return error(404, "TENANT_NOT_FOUND");
+                }
+            }
+            let Some(store) = registry.tenant_store(project, tenant) else {
+                return error(404, "TENANT_NOT_FOUND");
+            };
+            let Ok(store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
             JsonResponse {
                 status: 200,
-                body: tenant_json(project, tenant, &metadata),
+                body: tenant_json_with_policy(project, tenant, &metadata, store.password_policy()),
             }
         }
         Handler::TenantDelete => {
@@ -7659,6 +7822,60 @@ fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> V
         "signIn": {"allowDuplicateEmails": config.allow_duplicate_emails},
         "emailPrivacyConfig": {"enableImprovedEmailPrivacy": config.enable_improved_email_privacy},
     })
+}
+
+fn project_config_json_with_password_policy(
+    config: fireemu_core_auth::store::ProjectAuthConfig,
+    policy: &PasswordPolicy,
+) -> Value {
+    let mut result = project_config_json(config);
+    result["passwordPolicyConfig"] = json!({
+        "passwordPolicyEnforcementState": match policy.enforcement_state {
+            EnforcementState::Off => "OFF",
+            EnforcementState::Enforce => "ENFORCE",
+        },
+        "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
+        "passwordPolicyVersions": [{
+            "customStrengthOptions": {
+                "minPasswordLength": policy.min_length,
+                "maxPasswordLength": policy.max_length,
+                "containsUppercaseCharacter": policy.require_uppercase,
+                "containsLowercaseCharacter": policy.require_lowercase,
+                "containsNumericCharacter": policy.require_numeric,
+                "containsNonAlphanumericCharacter": policy.require_non_alphanumeric,
+            }
+        }]
+    });
+    result
+}
+
+fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
+    let mut allowed: Vec<String> = policy
+        .allowed_non_alphanumeric
+        .iter()
+        .map(char::to_string)
+        .collect();
+    allowed.sort();
+    JsonResponse {
+        status: 200,
+        body: json!({
+            "customStrengthOptions": {
+                "minPasswordLength": policy.min_length,
+                "maxPasswordLength": policy.max_length,
+                "containsUppercaseCharacter": policy.require_uppercase,
+                "containsLowercaseCharacter": policy.require_lowercase,
+                "containsNumericCharacter": policy.require_numeric,
+                "containsNonAlphanumericCharacter": policy.require_non_alphanumeric,
+            },
+            "allowedNonAlphanumericCharacters": allowed,
+            "enforcementState": match policy.enforcement_state {
+                EnforcementState::Off => "OFF",
+                EnforcementState::Enforce => "ENFORCE",
+            },
+            "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
+            "schemaVersion": 1,
+        }),
+    }
 }
 
 #[cfg(test)]

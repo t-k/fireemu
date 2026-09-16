@@ -211,6 +211,7 @@ pub(crate) enum Handler {
     CreateAuthUri,
     Projects,
     RecaptchaParams,
+    PasswordPolicy,
     MfaEnrollmentStart,
     MfaEnrollmentFinalize,
     MfaEnrollmentWithdraw,
@@ -267,6 +268,7 @@ impl Handler {
         Self::CreateAuthUri,
         Self::Projects,
         Self::RecaptchaParams,
+        Self::PasswordPolicy,
         Self::MfaEnrollmentStart,
         Self::MfaEnrollmentFinalize,
         Self::MfaEnrollmentWithdraw,
@@ -642,6 +644,12 @@ pub(crate) const ROUTES: &[Route] = &[
         concat_v1!("recaptchaParams"),
         "recaptchaParams",
         Handler::RecaptchaParams,
+    ),
+    end_user(
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/passwordPolicy",
+        "passwordPolicy",
+        Handler::PasswordPolicy,
     ),
     end_user(
         "POST",
@@ -1217,6 +1225,11 @@ mod tests {
 
     #[test]
     fn unknown_paths_and_wrong_methods_resolve_distinctly() {
+        assert!(matches!(
+            resolve("GET", "/identitytoolkit.googleapis.com/v2/passwordPolicy"),
+            Resolution::Matched { route, project: None, tenant: None, .. }
+                if route.handler == Handler::PasswordPolicy
+        ));
         assert_eq!(
             resolve(
                 "POST",

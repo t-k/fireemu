@@ -80,6 +80,29 @@ pub struct PasswordPolicyOverride {
     pub password_policy: PasswordPolicyConfig,
 }
 
+impl PasswordPolicyConfig {
+    /// Converts the validated file representation into the Auth runtime representation.
+    #[must_use]
+    pub fn to_auth_policy(&self) -> fireemu_core_auth::password_policy::PasswordPolicy {
+        let state = match self.enforcement_state.as_str() {
+            "ENFORCE" => fireemu_core_auth::password_policy::EnforcementState::Enforce,
+            _ => fireemu_core_auth::password_policy::EnforcementState::Off,
+        };
+        fireemu_core_auth::password_policy::PasswordPolicy::try_new(
+            state,
+            self.force_upgrade_on_signin,
+            self.constraints.min_length as usize,
+            self.constraints.max_length.map(|value| value as usize),
+            self.constraints.require_uppercase,
+            self.constraints.require_lowercase,
+            self.constraints.require_numeric,
+            self.constraints.require_non_alphanumeric,
+            fireemu_core_auth::password_policy::default_allowed_non_alphanumeric(),
+        )
+        .expect("validated password policy configuration")
+    }
+}
+
 impl CompatibilityProfile {
     /// Parses the canonical configuration value.
     #[must_use]

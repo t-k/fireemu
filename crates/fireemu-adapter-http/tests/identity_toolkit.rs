@@ -5144,6 +5144,85 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
 }
 
 #[test]
+fn unauthenticated_local_id_update_cannot_select_an_account_for_privileged_fields() {
+    let s = state();
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "selector-owner@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    let uid = signed["localId"].as_str().unwrap();
+    let (_, seeded) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": uid,
+            "displayName": "before",
+            "customAttributes": "{\"role\":\"member\"}",
+            "emailVerified": true,
+            "disableUser": false
+        }),
+    );
+    assert_eq!(seeded["displayName"], "before", "{seeded}");
+    let (_, before) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+
+    let attempts = [
+        ("customAttributes", json!("{\"role\":\"attacker\"}")),
+        ("emailVerified", json!(false)),
+        ("disableUser", json!(true)),
+        (
+            "mfa",
+            json!({"enrollments": [{"phoneInfo": "+16505550111"}]}),
+        ),
+        (
+            "linkProviderUserInfo",
+            json!({"providerId": "google.com", "rawId": "selector-attacker"}),
+        ),
+    ];
+    for (field, value) in attempts {
+        let mut request = json!({"localId": uid, "displayName": "must-not-apply"});
+        request[field] = value;
+        let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+        assert_eq!(status, 400, "{field}: {refused}");
+        assert_eq!(refused["error"]["message"], "MISSING_ID_TOKEN", "{field}");
+        assert!(refused.get("idToken").is_none(), "{field}: {refused}");
+        assert!(refused.get("refreshToken").is_none(), "{field}: {refused}");
+        let (_, after) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        assert_eq!(after, before, "{field}: rejected selector must not mutate");
+    }
+
+    let (status, updated) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "customAttributes": "{\"role\":\"admin\"}"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["localId"], uid);
+    let (_, after_admin) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert_eq!(
+        after_admin["users"][0]["customAttributes"],
+        "{\"role\":\"admin\"}"
+    );
+}
+
+#[test]
 fn admin_fields_rejection_does_not_consume_an_oob_code() {
     let s = state();
     let (_, signed) = post(

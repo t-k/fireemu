@@ -159,6 +159,27 @@ fn apply_auth_password_policy_overrides(
     Ok(())
 }
 
+/// Reapplies every explicitly configured password policy after an import.
+///
+/// An imported sidecar is an input for the namespace it describes, but an explicit startup
+/// configuration has higher precedence. Reapplying through the registry's normal setters keeps
+/// the update at the existing namespace boundary and leaves missing projects or tenants pending
+/// without creating them or inheriting a policy into another namespace.
+fn reapply_explicit_auth_password_policies(
+    cfg: &RuntimeConfig,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+) -> Result<(), String> {
+    if let Some(policy) = &cfg.auth_password_policy {
+        if !registry.set_project_password_policy(&cfg.auth_project, policy.to_auth_policy()) {
+            return Err(format!(
+                "cannot apply auth.passwordPolicy to {}",
+                cfg.auth_project
+            ));
+        }
+    }
+    apply_auth_password_policy_overrides(cfg, registry)
+}
+
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let BoundStartup {
         cfg,
@@ -479,6 +500,9 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             println!("  imported: {} ({summary})", dir.display());
         }
     }
+    // Startup configuration is the final layer over imported Auth state. The import remains
+    // authoritative when the corresponding setting was not explicitly configured.
+    reapply_explicit_auth_password_policies(&cfg, &registry)?;
     let hub_state = Arc::new(hub::HubState {
         project: cfg.auth_project.clone(),
         addr: hub_addr.unwrap_or(http_addr),
@@ -1262,12 +1286,16 @@ mod tests {
 
     use fireemu_adapter_logging::wire::build_bundle;
     use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_auth::password_policy::{
+        default_allowed_non_alphanumeric, EnforcementState, PasswordPolicy,
+    };
     use fireemu_core_auth::store::{AuthRegistry, AuthStore};
     use fireemu_core_types::determinism::SplitMix64;
     use serde_json::json;
 
     use super::{
         apply_auth_password_policy_overrides, close_functions_source_admission, function_log_input,
+        reapply_explicit_auth_password_policies,
     };
 
     #[test]
@@ -1381,5 +1409,86 @@ mod tests {
                 .min_length,
             13
         );
+    }
+
+    #[test]
+    fn explicit_password_policy_replaces_imported_policy_without_creating_namespaces() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "passwordPolicy": {
+                    "enforcementState": "ENFORCE",
+                    "constraints": {"minLength": 12}
+                },
+                "passwordPolicyOverrides": [{
+                    "projectId": "demo-app",
+                    "tenantId": "tenant-a",
+                    "passwordPolicy": {
+                        "enforcementState": "ENFORCE",
+                        "constraints": {"minLength": 13}
+                    }
+                }]
+            }
+        }))
+        .expect("valid password-policy configuration");
+        let default_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        let registry = AuthRegistry::new("demo-app", default_store.clone());
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant store");
+
+        let imported_policy = |min_length| {
+            PasswordPolicy::try_new(
+                EnforcementState::Enforce,
+                false,
+                min_length,
+                None,
+                false,
+                false,
+                false,
+                false,
+                default_allowed_non_alphanumeric(),
+            )
+            .expect("valid imported policy")
+        };
+
+        // Model an import that installed different policies before the explicit configuration
+        // layer is applied. The tenant already exists, while an unrelated project does not.
+        default_store
+            .lock()
+            .expect("default store lock")
+            .set_password_policy(imported_policy(8));
+        tenant
+            .lock()
+            .expect("tenant store lock")
+            .set_password_policy(imported_policy(9));
+
+        reapply_explicit_auth_password_policies(&cfg, &registry)
+            .expect("explicit policies reapply");
+
+        assert_eq!(
+            default_store
+                .lock()
+                .expect("default store lock")
+                .password_policy()
+                .min_length,
+            12
+        );
+        assert_eq!(
+            tenant
+                .lock()
+                .expect("tenant store lock")
+                .password_policy()
+                .min_length,
+            13
+        );
+        assert!(registry.store_for("unrelated-project").is_none());
+        assert!(registry
+            .tenant_store("demo-app", "unrelated-tenant")
+            .is_none());
     }
 }

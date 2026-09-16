@@ -7077,3 +7077,238 @@ fn second45_invalid_token_precedes_new_shape_validation_without_mutation() {
         }
     }
 }
+
+#[test]
+fn admin_v2_password_policy_leaf_masks_preserve_unselected_fields() {
+    let s = state();
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let policy = json!({
+        "passwordPolicyEnforcementState": "ENFORCE",
+        "forceUpgradeOnSignin": true,
+        "passwordPolicyVersions": [{"customStrengthOptions": {
+            "minPasswordLength": 12,
+            "maxPasswordLength": 100,
+            "containsUppercaseCharacter": true,
+            "containsLowercaseCharacter": true,
+            "containsNumericCharacter": true,
+            "containsNonAlphanumericCharacter": true
+        }}]
+    });
+    let initial = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=passwordPolicyConfig"),
+        &json!({"passwordPolicyConfig": policy}),
+    );
+    assert_eq!(initial.0, 200, "{}", initial.1);
+
+    let state_only = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=passwordPolicyConfig.passwordPolicyEnforcementState"),
+        &json!({
+            "passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": "OFF",
+                "forceUpgradeOnSignin": false,
+                "passwordPolicyVersions": [{"customStrengthOptions": {
+                    "minPasswordLength": 6,
+                    "maxPasswordLength": 8
+                }}]
+            }
+        }),
+    );
+    assert_eq!(state_only.0, 200, "{}", state_only.1);
+    assert_eq!(
+        state_only.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+        "OFF"
+    );
+    assert_eq!(
+        state_only.1["passwordPolicyConfig"]["forceUpgradeOnSignin"],
+        true
+    );
+    assert_eq!(
+        state_only.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["minPasswordLength"],
+        12
+    );
+    assert_eq!(
+        state_only.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["maxPasswordLength"],
+        100
+    );
+
+    let force_and_state = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=passwordPolicyConfig.passwordPolicyEnforcementState,passwordPolicyConfig.forceUpgradeOnSignin"),
+        &json!({
+            "passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "forceUpgradeOnSignin": false,
+                "passwordPolicyVersions": [{"customStrengthOptions": {
+                    "minPasswordLength": 6
+                }}]
+            }
+        }),
+    );
+    assert_eq!(force_and_state.0, 200, "{}", force_and_state.1);
+    assert_eq!(
+        force_and_state.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+        "ENFORCE"
+    );
+    assert_eq!(
+        force_and_state.1["passwordPolicyConfig"]["forceUpgradeOnSignin"],
+        false
+    );
+    assert_eq!(
+        force_and_state.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]
+            ["customStrengthOptions"]["minPasswordLength"],
+        12
+    );
+}
+
+#[test]
+fn admin_v2_password_policy_invalid_selected_update_is_atomic() {
+    let s = state();
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let initial = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=passwordPolicyConfig"),
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "forceUpgradeOnSignin": true,
+            "passwordPolicyVersions": [{"customStrengthOptions": {
+                "minPasswordLength": 12,
+                "containsNumericCharacter": true
+            }}]
+        }}),
+    );
+    assert_eq!(initial.0, 200, "{}", initial.1);
+
+    for body in [
+        json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "OFF",
+            "passwordPolicyVersions": [{}]
+        }}),
+        json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "OFF",
+            "passwordPolicyVersions": [{"customStrengthOptions": {
+                "minPasswordLength": 5
+            }}]
+        }}),
+        json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "OFF",
+            "unexpected": true
+        }}),
+    ] {
+        let refused = admin(
+            &s,
+            "PATCH",
+            &format!("{path}?updateMask=passwordPolicyConfig.passwordPolicyVersions,passwordPolicyConfig.passwordPolicyEnforcementState"),
+            &body,
+        );
+        assert_eq!(refused.0, 400, "{}", refused.1);
+        let after = admin(&s, "GET", path, &Value::Null);
+        assert_eq!(after.0, 200, "{}", after.1);
+        assert_eq!(
+            after.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+            "ENFORCE"
+        );
+        assert_eq!(
+            after.1["passwordPolicyConfig"]["forceUpgradeOnSignin"],
+            true
+        );
+        assert_eq!(
+            after.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+                ["minPasswordLength"],
+            12
+        );
+        assert_eq!(
+            after.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+                ["containsNumericCharacter"],
+            true
+        );
+    }
+}
+
+#[test]
+fn password_policy_projections_omit_unset_custom_maximum() {
+    let s = state();
+    let config_path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let config = admin(&s, "GET", config_path, &Value::Null);
+    assert_eq!(config.0, 200, "{}", config.1);
+    assert!(
+        config.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            .get("maxPasswordLength")
+            .is_none()
+    );
+
+    let sdk = admin(
+        &s,
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/passwordPolicy?key=fake-api-key",
+        &Value::Null,
+    );
+    assert_eq!(sdk.0, 200, "{}", sdk.1);
+    assert!(sdk.1["customStrengthOptions"]
+        .get("maxPasswordLength")
+        .is_none());
+}
+
+#[test]
+fn tenant_password_policy_leaf_mask_preserves_unselected_fields() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    s.registry = Some(registry);
+    let path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/tenant-a";
+    let initial = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=passwordPolicyConfig"),
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "forceUpgradeOnSignin": true,
+            "passwordPolicyVersions": [{"customStrengthOptions": {
+                "minPasswordLength": 12,
+                "maxPasswordLength": 100
+            }}]
+        }}),
+    );
+    assert_eq!(initial.0, 200, "{}", initial.1);
+    let state_only = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=passwordPolicyConfig.passwordPolicyEnforcementState"),
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "OFF",
+            "forceUpgradeOnSignin": false,
+            "passwordPolicyVersions": [{"customStrengthOptions": {
+                "minPasswordLength": 6
+            }}]
+        }}),
+    );
+    assert_eq!(state_only.0, 200, "{}", state_only.1);
+    assert_eq!(
+        state_only.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+        "OFF"
+    );
+    assert_eq!(
+        state_only.1["passwordPolicyConfig"]["forceUpgradeOnSignin"],
+        true
+    );
+    assert_eq!(
+        state_only.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["minPasswordLength"],
+        12
+    );
+    assert_eq!(
+        state_only.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["maxPasswordLength"],
+        100
+    );
+}

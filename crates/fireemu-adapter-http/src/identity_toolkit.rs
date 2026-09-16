@@ -38,6 +38,20 @@ use fireemu_core_types::json::JsonValue;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
+const PASSWORD_POLICY_FIELDS: [&str; 3] = [
+    "passwordPolicyEnforcementState",
+    "forceUpgradeOnSignin",
+    "passwordPolicyVersions",
+];
+const PASSWORD_POLICY_OPTION_FIELDS: [&str; 6] = [
+    "minPasswordLength",
+    "maxPasswordLength",
+    "containsUppercaseCharacter",
+    "containsLowercaseCharacter",
+    "containsNumericCharacter",
+    "containsNonAlphanumericCharacter",
+];
+
 mod routes;
 pub mod widget;
 mod widget_templates;
@@ -2642,25 +2656,49 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
     let object = value
         .as_object()
         .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-    let state = match object
-        .get("passwordPolicyEnforcementState")
-        .and_then(Value::as_str)
-        .unwrap_or("OFF")
+    if object
+        .keys()
+        .any(|field| !PASSWORD_POLICY_FIELDS.contains(&field.as_str()))
     {
-        "OFF" => EnforcementState::Off,
-        "ENFORCE" => EnforcementState::Enforce,
-        _ => return Err(error(400, "INVALID_ARGUMENT")),
-    };
-    let force = object.get("forceUpgradeOnSignin").map_or(Ok(false), |v| {
-        v.as_bool().ok_or_else(|| error(400, "INVALID_ARGUMENT"))
-    })?;
-    let options = match object.get("passwordPolicyVersions") {
-        None => None,
-        Some(Value::Array(versions)) if versions.len() == 1 => versions[0]
-            .get("customStrengthOptions")
-            .and_then(Value::as_object),
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let state = match object.get("passwordPolicyEnforcementState") {
+        None => EnforcementState::Off,
+        Some(Value::String(value)) => match value.as_str() {
+            "OFF" => EnforcementState::Off,
+            "ENFORCE" => EnforcementState::Enforce,
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        },
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
     };
+    let force = match object.get("forceUpgradeOnSignin") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let options = match object.get("passwordPolicyVersions") {
+        None => None,
+        Some(Value::Array(versions)) if versions.len() == 1 => {
+            let version = versions[0]
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if version.keys().any(|field| field != "customStrengthOptions") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            match version.get("customStrengthOptions") {
+                Some(Value::Object(options)) => Some(options),
+                None | Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+            }
+        }
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    if options.is_some_and(|options| {
+        options
+            .keys()
+            .any(|field| !PASSWORD_POLICY_OPTION_FIELDS.contains(&field.as_str()))
+    }) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
     let number = |key: &str, default: usize| {
         options.and_then(|o| o.get(key)).map_or(Ok(default), |v| {
             v.as_u64()
@@ -2696,10 +2734,93 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
     .map_err(|_| error(400, "INVALID_ARGUMENT"))
 }
 
-fn password_policy_fields(fields: &[String]) -> bool {
-    fields
+fn password_policy_config_json(policy: &PasswordPolicy) -> Value {
+    let mut options = serde_json::Map::from_iter([
+        ("minPasswordLength".to_owned(), json!(policy.min_length)),
+        (
+            "containsUppercaseCharacter".to_owned(),
+            json!(policy.require_uppercase),
+        ),
+        (
+            "containsLowercaseCharacter".to_owned(),
+            json!(policy.require_lowercase),
+        ),
+        (
+            "containsNumericCharacter".to_owned(),
+            json!(policy.require_numeric),
+        ),
+        (
+            "containsNonAlphanumericCharacter".to_owned(),
+            json!(policy.require_non_alphanumeric),
+        ),
+    ]);
+    if let Some(max) = policy.max_length {
+        options.insert("maxPasswordLength".to_owned(), json!(max));
+    }
+    json!({
+        "passwordPolicyEnforcementState": match policy.enforcement_state {
+            EnforcementState::Off => "OFF",
+            EnforcementState::Enforce => "ENFORCE",
+        },
+        "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
+        "passwordPolicyVersions": [{"customStrengthOptions": options}],
+    })
+}
+
+fn password_policy_from_update(
+    current: &PasswordPolicy,
+    body: &Value,
+    fields: &[String],
+) -> Result<Option<PasswordPolicy>, JsonResponse> {
+    let policy_fields: Vec<&str> = fields
         .iter()
-        .any(|field| field == "passwordPolicyConfig" || field.starts_with("passwordPolicyConfig."))
+        .map(String::as_str)
+        .filter(|field| {
+            *field == "passwordPolicyConfig" || field.starts_with("passwordPolicyConfig.")
+        })
+        .collect();
+    if policy_fields.is_empty() {
+        return Ok(None);
+    }
+    let Some(value) = body.get("passwordPolicyConfig") else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    // Validate the complete supplied policy before applying the mask. A malformed policy
+    // payload must never become a partial successful update merely because its malformed
+    // member was outside the selected mask.
+    let _supplied_policy = password_policy_from_config_json(value)?;
+    if policy_fields.contains(&"passwordPolicyConfig") {
+        if policy_fields.len() != 1 {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        return password_policy_from_config_json(value).map(Some);
+    }
+
+    let mut merged = password_policy_config_json(current);
+    let merged_object = merged
+        .as_object_mut()
+        .expect("password policy projection is an object");
+    for field in policy_fields {
+        let child = field
+            .strip_prefix("passwordPolicyConfig.")
+            .expect("nested password policy field");
+        match child {
+            "passwordPolicyEnforcementState"
+            | "forceUpgradeOnSignin"
+            | "passwordPolicyVersions" => {
+                if let Some(value) = object.get(child) {
+                    merged_object.insert(child.to_owned(), value.clone());
+                } else {
+                    merged_object.remove(child);
+                }
+            }
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    password_policy_from_config_json(&merged).map(Some)
 }
 
 fn valid_password_policy_field(field: &str) -> bool {
@@ -2796,16 +2917,13 @@ fn project_config_management(
     }) {
         return error(400, "INVALID_ARGUMENT");
     }
-    let password_policy = if password_policy_fields(&fields) {
-        let Some(value) = body.get("passwordPolicyConfig") else {
-            return error(400, "INVALID_ARGUMENT");
-        };
-        match password_policy_from_config_json(value) {
-            Ok(policy) => Some(policy),
-            Err(response) => return response,
-        }
-    } else {
-        None
+    let current_policy = match selected_store.lock() {
+        Ok(store) => store.password_policy().clone(),
+        Err(_) => return error(500, "INTERNAL"),
+    };
+    let password_policy = match password_policy_from_update(&current_policy, body, &fields) {
+        Ok(policy) => policy,
+        Err(response) => return response,
     };
     let mut patch = ProjectAuthConfigPatch::default();
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
@@ -3594,7 +3712,7 @@ fn tenant_metadata_patch(
     );
     if fields
         .iter()
-        .any(|field| !FIELDS.contains(field) && *field != "passwordPolicyConfig")
+        .any(|field| !FIELDS.contains(field) && !valid_password_policy_field(field))
     {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
@@ -3618,7 +3736,7 @@ fn tenant_metadata_patch(
                 patch.enable_anonymous_user = Some(bool_update(body, field)?);
             }
             "disableAuth" => patch.disable_auth = Some(bool_update(body, field)?),
-            "passwordPolicyConfig" => {}
+            field if valid_password_policy_field(field) => {}
             _ => unreachable!("tenant update mask was validated"),
         }
     }
@@ -3664,6 +3782,7 @@ fn tenant_json_with_policy(
     result
 }
 
+#[allow(clippy::too_many_lines)]
 fn tenant_management(
     state: &AuthState,
     handler: routes::Handler,
@@ -3741,15 +3860,41 @@ fn tenant_management(
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
             };
-            let password_policy = if body.get("passwordPolicyConfig").is_some() {
-                match password_policy_from_config_json(
-                    body.get("passwordPolicyConfig").expect("checked above"),
-                ) {
-                    Ok(policy) => Some(policy),
-                    Err(response) => return response,
+            let fields = match update_mask(query) {
+                Ok(Some(fields)) => fields,
+                Ok(None) => {
+                    if body.get("passwordPolicyConfig").is_some() {
+                        vec!["passwordPolicyConfig".to_owned()]
+                    } else {
+                        Vec::new()
+                    }
                 }
+                Err(response) => return response,
+            };
+            if fields.iter().any(|field| {
+                field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field)
+            }) {
+                return error(400, "INVALID_ARGUMENT");
+            }
+            let current_policy = if fields.iter().any(|field| {
+                field == "passwordPolicyConfig" || field.starts_with("passwordPolicyConfig.")
+            }) {
+                let Some(store) = registry.tenant_store(project, tenant) else {
+                    return error(404, "TENANT_NOT_FOUND");
+                };
+                let Ok(store) = store.lock() else {
+                    return error(500, "INTERNAL");
+                };
+                Some(store.password_policy().clone())
             } else {
                 None
+            };
+            let password_policy = match current_policy {
+                Some(current) => match password_policy_from_update(&current, body, &fields) {
+                    Ok(policy) => policy,
+                    Err(response) => return response,
+                },
+                None => None,
             };
             // Validate namespace existence before committing metadata. The registry currently
             // exposes separate metadata/policy mutators; preflighting both prevents ordinary
@@ -7865,23 +8010,7 @@ fn project_config_json_with_password_policy(
     policy: &PasswordPolicy,
 ) -> Value {
     let mut result = project_config_json(config);
-    result["passwordPolicyConfig"] = json!({
-        "passwordPolicyEnforcementState": match policy.enforcement_state {
-            EnforcementState::Off => "OFF",
-            EnforcementState::Enforce => "ENFORCE",
-        },
-        "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
-        "passwordPolicyVersions": [{
-            "customStrengthOptions": {
-                "minPasswordLength": policy.min_length,
-                "maxPasswordLength": policy.max_length,
-                "containsUppercaseCharacter": policy.require_uppercase,
-                "containsLowercaseCharacter": policy.require_lowercase,
-                "containsNumericCharacter": policy.require_numeric,
-                "containsNonAlphanumericCharacter": policy.require_non_alphanumeric,
-            }
-        }]
-    });
+    result["passwordPolicyConfig"] = password_policy_config_json(policy);
     result
 }
 
@@ -7892,17 +8021,17 @@ fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
         .map(char::to_string)
         .collect();
     allowed.sort();
+    let options = password_policy_config_json(policy)
+        .get("passwordPolicyVersions")
+        .and_then(Value::as_array)
+        .and_then(|versions| versions.first())
+        .and_then(|version| version.get("customStrengthOptions"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     JsonResponse {
         status: 200,
         body: json!({
-            "customStrengthOptions": {
-                "minPasswordLength": policy.min_length,
-                "maxPasswordLength": policy.max_length,
-                "containsUppercaseCharacter": policy.require_uppercase,
-                "containsLowercaseCharacter": policy.require_lowercase,
-                "containsNumericCharacter": policy.require_numeric,
-                "containsNonAlphanumericCharacter": policy.require_non_alphanumeric,
-            },
+            "customStrengthOptions": options,
             "allowedNonAlphanumericCharacters": allowed,
             "enforcementState": match policy.enforcement_state {
                 EnforcementState::Off => "OFF",

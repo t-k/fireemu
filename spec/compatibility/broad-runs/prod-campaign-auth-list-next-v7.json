@@ -3,12 +3,12 @@
     "contract": "shared-local-v2",
     "gateCommit": "e7bab4e0f30c195ea642e35914d1872edad77f20",
     "gatePath": "tools/compat-broad/auth-list/campaign_gate.py",
-    "gateSha256": "7ac19bad00fc18df247105474cb51181a874b5f45a87a0fa196d454196381c1a",
+    "gateSha256": "77c8bc791b6559fd002465f3ce6394d4a7e09a3f7e656922f3119ec982999e71",
     "id": "auth-list-campaign-v7",
     "path": "tools/compat-broad/auth-list/campaign_auth_list.py",
-    "shadowCommit": "91a31197b79b3324f51530cf76e261f98353dfa3",
+    "shadowCommit": "34bcbdfbe1ca79305bd5cc5b591380b21f99458e",
     "shadowPath": "tools/compat-broad/auth-list/campaign_auth_list_shadow.py",
-    "shadowSha256": "c98972a2b3f3e120a360537b4f4fef20b0c91a795dadd4a46634953b483533f3",
+    "shadowSha256": "53d737a625f89c102299fc13c455a1f008f611362b6f5aef07c34427801dd70c",
     "sourceCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
     "sourceSha256": "88e4c79839b4aa9ba6e47a9f0b75ab9505461ae31fb04ff9dd2a842b4f916ed0"
   },
@@ -105,9 +105,9 @@
       "status": "immutable-legacy-fixture"
     },
     "ownedArtifact": {
-      "artifactSha256": "233e8911e0e7bb0ca7e25e3334b94e95f8933ab3d7280f731a4471b57807f73a",
+      "artifactSha256": "5512ab4ad481be4d6e0ad708f402b8a07a0d841ba2d23587adc11b371915bd4a",
       "cleanupComplete": true,
-      "executionCommit": "91a31197b79b3324f51530cf76e261f98353dfa3",
+      "executionCommit": "34bcbdfbe1ca79305bd5cc5b591380b21f99458e",
       "observationRequests": 18,
       "observerSha256": "f4724b420f1a2da2db0fec200478f8b78aeaa394b1c1e4194533047fa74c91ea",
       "path": "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact-v7/result.json",
@@ -115,12 +115,12 @@
       "productionExecuted": false,
       "recordingComplete": true,
       "recoveryRequests": 19,
-      "sha256": "5b5c5d810d38f15be4bb4d5adcc17734ca5a0f69afeb0a7595d44b9e80292bac",
+      "sha256": "fea698df09b58d66eb5f67f885c487d0154aa768983a3ef6465352a314e761f7",
       "stateValidation": true,
       "status": "passed-owned-loopback-artifact",
       "totalRequests": 39,
       "configurationDigest": "faecb4ac71ff8df1a872b56660a1e7dbccb05e66ffa5efc0ae071504033e2d6f",
-      "parentManifestSha256": "8c992e440b6aa2b02aa63b6bb0282a1902026393452676e37577e11e518ad47f",
+      "parentManifestSha256": "f0285e37f680f5e6f96aef75a5a96da9afa5066f6cac8502457a71c3040dca51",
       "totalWireRequests": 39,
       "kind": "production-campaign-auth-list-next-local-artifact-v7"
     }

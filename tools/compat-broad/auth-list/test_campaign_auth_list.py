@@ -497,7 +497,7 @@ def test_v7_campaign_package_binds_current_shadow_and_result():
     result = json.loads(result_path.read_bytes())
     artifact = package["localShadow"]["ownedArtifact"]
     assert hashlib.sha256(package_path.read_bytes()).hexdigest() == (
-        "02d66be29949efef2ce5acbc3b12a1630a86c5125f5b1eafe7baa3cccb5ad178"
+        "c7a57c8e930692223b0c8fba22d03c8957ad16ccaf53a46fa335246889db4457"
     )
     assert package["kind"] == "production-campaign-auth-list-next-v7"
     assert package["adapter"]["shadowCommit"] == result["executionCommit"]

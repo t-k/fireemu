@@ -5,8 +5,8 @@
   "runtime": {
     "status": "completed",
     "productionExecuted": false,
-    "executionCommit": "91a31197b79b3324f51530cf76e261f98353dfa3",
-    "artifactSha256": "233e8911e0e7bb0ca7e25e3334b94e95f8933ab3d7280f731a4471b57807f73a",
+    "executionCommit": "34bcbdfbe1ca79305bd5cc5b591380b21f99458e",
+    "artifactSha256": "5512ab4ad481be4d6e0ad708f402b8a07a0d841ba2d23587adc11b371915bd4a",
     "runtimeInputs": {
       ".cargo/mutants.toml": "a93fcfc891d19ad6a3ef41c3914f6afd95a954fddf39eb0f635d8e112cfbbf33",
       "Cargo.lock": "3646a0440871b536c9018520d343214d2aca7cf737ee93f94f66a321196adf05",
@@ -448,9 +448,9 @@
       "tools/compat-broad/test_execution_record.py": "0fd2720c03bcff6ab3c35c7ad64f367394b6ac0fe76e78eb64d3c2dfe0111485",
       "tools/compat-broad/broad.py": "d8cdaa88fb7f2af55200b00bb9f95975788b6a570712178e5d7bc0a3da47b64e",
       "tools/compat-broad/test_second.py": "a86f176897e704e17f7afc5832e409567cd80800e86432e67e877444ba28be1d",
-      "tools/compat-broad/test_batch.py": "8b6f4eca978280d2128e58a3c7a2f58b92bbf4cfc7e8d5bbd106c3b7603232dd",
+      "tools/compat-broad/test_batch.py": "01aec6e1255291fb90e7b04f57e6cef07ef5bc92fdafd30b264e8f170d8458bd",
       "tools/compat-broad/test_current_contract.py": "bac104961e1f207b1968dd1279452645677acf37e0dac3607a025da20cb41f58",
-      "tools/compat-broad/batch_adapter.py": "7e83bdbbff036558608a79a62b4dfadeae3bbbbeb1ff1e98e46074a65399b58e",
+      "tools/compat-broad/batch_adapter.py": "5f42ec0ad88d350aff0925a435049cdb05a67f97bc1825888ccfe0c2ebff0d36",
       "tools/compat-broad/second_production_contract.py": "dde658d32a4ebbf88832522e714027355ea7d9b9f61a0df436bca7e08008c227",
       "tools/compat-broad/test_read_time_replay.py": "ffd152e9e8cab0ee2e65b5c1a17e46f00a87112d2b72906757a6aa672c654db2",
       "tools/compat-broad/shared_production.py": "fc2d4f8caec930b9a1905d40012024257c2d9b47459a5d8e4aee37a4b8a156ce",
@@ -471,7 +471,7 @@
       "tools/compat-inventory/owned_runner.py": "3485eb580aa04265f1cf8ec26edcb85faa0e300e7cf68ade38fdd28027d714b3",
       "tools/compat-inventory/evidence_common.py": "bf9a5839ab0ea0b4039e00d7e42eac6a6c99c58ade5ebfd461e612d6170f99ba"
     },
-    "configurationDigest": "ca12665c5e50170fd6ad9e6985d04dec1d57065a458794a1b0243c32a4213835",
+    "configurationDigest": "707c839d30fa9a04db5def1dd304c3ec1bfc36d92bcfa10d76e9e4718623f28b",
     "configuration": {
       "schemaVersion": 1,
       "profile": "strict",
@@ -668,7 +668,7 @@
         "--message-format=json"
       ],
       "exitCode": 0,
-      "artifactSha256": "233e8911e0e7bb0ca7e25e3334b94e95f8933ab3d7280f731a4471b57807f73a",
+      "artifactSha256": "5512ab4ad481be4d6e0ad708f402b8a07a0d841ba2d23587adc11b371915bd4a",
       "inputs": {
         ".cargo/mutants.toml": "a93fcfc891d19ad6a3ef41c3914f6afd95a954fddf39eb0f635d8e112cfbbf33",
         "Cargo.lock": "3646a0440871b536c9018520d343214d2aca7cf737ee93f94f66a321196adf05",
@@ -1186,7 +1186,7 @@
     ],
     "exitCode": 0,
     "stopReason": "child-completed",
-    "partialResultSha256": "310faabbc71be7ecc01871f46d08d55976098a0dcc236d4a8b01906a3ec1d60c",
+    "partialResultSha256": "529e29b3ce801970b10e9037424f45551d2c904dd757e93c8dd51a504ab34484",
     "schemaVersion": 1,
     "stateValidation": true,
     "requestStats": {
@@ -1194,15 +1194,15 @@
       "observation": 18,
       "recovery": 19,
       "bindings": [
-        "changed-b954251732e341e78b801d59a5654caeIdToken",
-        "changed-b954251732e341e78b801d59a5654caePrincipal",
-        "changed-b954251732e341e78b801d59a5654caeRefresh",
-        "changed-b954251732e341e78b801d59a5654caeUid",
+        "changed-51008bfd0c63485da23d6de4aa409f98IdToken",
+        "changed-51008bfd0c63485da23d6de4aa409f98Principal",
+        "changed-51008bfd0c63485da23d6de4aa409f98Refresh",
+        "changed-51008bfd0c63485da23d6de4aa409f98Uid",
         "pagedToken",
-        "reference-b954251732e341e78b801d59a5654caeIdToken",
-        "reference-b954251732e341e78b801d59a5654caePrincipal",
-        "reference-b954251732e341e78b801d59a5654caeRefresh",
-        "reference-b954251732e341e78b801d59a5654caeUid"
+        "reference-51008bfd0c63485da23d6de4aa409f98IdToken",
+        "reference-51008bfd0c63485da23d6de4aa409f98Principal",
+        "reference-51008bfd0c63485da23d6de4aa409f98Refresh",
+        "reference-51008bfd0c63485da23d6de4aa409f98Uid"
       ]
     },
     "target": "owned-fireemu-artifact",
@@ -1211,7 +1211,7 @@
     "profile": "strict",
     "formalCompatibilityClaim": false,
     "ownedProcess": {
-      "pid": 99771,
+      "pid": 37661,
       "stopped": true,
       "listenersClosed": true
     },
@@ -1246,7 +1246,7 @@
       "independentGapCount": null,
       "note": "Triage groups are not independent confirmed causes. See reviewed triage for minimization and fixability."
     },
-    "parentManifestSha256": "8c992e440b6aa2b02aa63b6bb0282a1902026393452676e37577e11e518ad47f"
+    "parentManifestSha256": "f0285e37f680f5e6f96aef75a5a96da9afa5066f6cac8502457a71c3040dca51"
   },
   "recordingComplete": true,
   "cleanupComplete": true,
@@ -1254,7 +1254,7 @@
   "rows": [
     {
       "operationType": "firestore-document-create",
-      "resource": "projects/demo-firestore-probe/databases/(default)/documents/child-b954251732e341e78b801d59a5654cae/doc",
+      "resource": "projects/demo-firestore-probe/databases/(default)/documents/child-51008bfd0c63485da23d6de4aa409f98/doc",
       "principal": "owned-firestore-admin",
       "status": 200,
       "bodyKeys": [
@@ -1266,7 +1266,7 @@
     },
     {
       "operationType": "firestore-document-create",
-      "resource": "projects/demo-firestore-probe/databases/(default)/documents/missing-parent-b954251732e341e78b801d59a5654cae/parent/children/doc",
+      "resource": "projects/demo-firestore-probe/databases/(default)/documents/missing-parent-51008bfd0c63485da23d6de4aa409f98/parent/children/doc",
       "principal": "owned-firestore-admin",
       "status": 200,
       "bodyKeys": [
@@ -1278,7 +1278,7 @@
     },
     {
       "operationType": "firestore-document-create",
-      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-b954251732e341e78b801d59a5654cae/rootdoc",
+      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-51008bfd0c63485da23d6de4aa409f98/rootdoc",
       "principal": "owned-firestore-admin",
       "status": 200,
       "bodyKeys": [
@@ -1290,7 +1290,7 @@
     },
     {
       "operationType": "firestore-document-create",
-      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-b954251732e341e78b801d59a5654cae/rootdoc/alpha/doc",
+      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-51008bfd0c63485da23d6de4aa409f98/rootdoc/alpha/doc",
       "principal": "owned-firestore-admin",
       "status": 200,
       "bodyKeys": [
@@ -1302,7 +1302,7 @@
     },
     {
       "operationType": "firestore-document-create",
-      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-b954251732e341e78b801d59a5654cae/rootdoc/beta/doc",
+      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-51008bfd0c63485da23d6de4aa409f98/rootdoc/beta/doc",
       "principal": "owned-firestore-admin",
       "status": 200,
       "bodyKeys": [
@@ -1314,7 +1314,7 @@
     },
     {
       "operationType": "auth-sign-up",
-      "resource": "changed-b954251732e341e78b801d59a5654cae",
+      "resource": "changed-51008bfd0c63485da23d6de4aa409f98",
       "principal": "owned-auth-bootstrap",
       "status": 200,
       "bodyKeys": [
@@ -1328,8 +1328,8 @@
     },
     {
       "operationType": "auth-sign-in",
-      "resource": "changed-b954251732e341e78b801d59a5654cae",
-      "principal": "owned-account:gqmMWYuoufEkSHxE3fRB6GwVj0mm",
+      "resource": "changed-51008bfd0c63485da23d6de4aa409f98",
+      "principal": "owned-account:FcpKdB6TJcreHSnR0B034R7gaP4R",
       "status": 200,
       "bodyKeys": [
         "displayName",
@@ -1344,8 +1344,8 @@
     },
     {
       "operationType": "auth-refresh",
-      "resource": "changed-b954251732e341e78b801d59a5654cae",
-      "principal": "owned-account:gqmMWYuoufEkSHxE3fRB6GwVj0mm",
+      "resource": "changed-51008bfd0c63485da23d6de4aa409f98",
+      "principal": "owned-account:FcpKdB6TJcreHSnR0B034R7gaP4R",
       "status": 200,
       "bodyKeys": [
         "access_token",
@@ -1359,8 +1359,8 @@
     },
     {
       "operationType": "auth-lookup",
-      "resource": "changed-b954251732e341e78b801d59a5654cae",
-      "principal": "owned-account:gqmMWYuoufEkSHxE3fRB6GwVj0mm",
+      "resource": "changed-51008bfd0c63485da23d6de4aa409f98",
+      "principal": "owned-account:FcpKdB6TJcreHSnR0B034R7gaP4R",
       "status": 200,
       "bodyKeys": [
         "kind",
@@ -1369,7 +1369,7 @@
     },
     {
       "operationType": "auth-sign-up",
-      "resource": "reference-b954251732e341e78b801d59a5654cae",
+      "resource": "reference-51008bfd0c63485da23d6de4aa409f98",
       "principal": "owned-auth-bootstrap",
       "status": 200,
       "bodyKeys": [
@@ -1383,8 +1383,8 @@
     },
     {
       "operationType": "auth-sign-in",
-      "resource": "reference-b954251732e341e78b801d59a5654cae",
-      "principal": "owned-account:cgfBa3AJIGFHDcSqcrycrqJTdJmM",
+      "resource": "reference-51008bfd0c63485da23d6de4aa409f98",
+      "principal": "owned-account:TH1TGlsGEHRrg8gm2G4OWnWKH31v",
       "status": 200,
       "bodyKeys": [
         "displayName",
@@ -1399,8 +1399,8 @@
     },
     {
       "operationType": "auth-refresh",
-      "resource": "reference-b954251732e341e78b801d59a5654cae",
-      "principal": "owned-account:cgfBa3AJIGFHDcSqcrycrqJTdJmM",
+      "resource": "reference-51008bfd0c63485da23d6de4aa409f98",
+      "principal": "owned-account:TH1TGlsGEHRrg8gm2G4OWnWKH31v",
       "status": 200,
       "bodyKeys": [
         "access_token",
@@ -1414,8 +1414,8 @@
     },
     {
       "operationType": "auth-lookup",
-      "resource": "reference-b954251732e341e78b801d59a5654cae",
-      "principal": "owned-account:cgfBa3AJIGFHDcSqcrycrqJTdJmM",
+      "resource": "reference-51008bfd0c63485da23d6de4aa409f98",
+      "principal": "owned-account:TH1TGlsGEHRrg8gm2G4OWnWKH31v",
       "status": 200,
       "bodyKeys": [
         "kind",
@@ -1433,7 +1433,7 @@
     },
     {
       "operationType": "firestore-document-read",
-      "resource": "projects/demo-firestore-probe/databases/(default)/documents/missing-parent-b954251732e341e78b801d59a5654cae/parent",
+      "resource": "projects/demo-firestore-probe/databases/(default)/documents/missing-parent-51008bfd0c63485da23d6de4aa409f98/parent",
       "principal": "owned-firestore-admin",
       "status": 404,
       "bodyKeys": [
@@ -1442,7 +1442,7 @@
     },
     {
       "operationType": "firestore-list-collection-ids",
-      "resource": "projects/demo-firestore-probe/databases/(default)/documents/missing-parent-b954251732e341e78b801d59a5654cae/parent",
+      "resource": "projects/demo-firestore-probe/databases/(default)/documents/missing-parent-51008bfd0c63485da23d6de4aa409f98/parent",
       "principal": "owned-firestore-admin",
       "status": 200,
       "bodyKeys": [
@@ -1451,7 +1451,7 @@
     },
     {
       "operationType": "firestore-list-collection-ids",
-      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-b954251732e341e78b801d59a5654cae/rootdoc",
+      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-51008bfd0c63485da23d6de4aa409f98/rootdoc",
       "principal": "owned-firestore-admin",
       "status": 200,
       "bodyKeys": [
@@ -1461,7 +1461,7 @@
     },
     {
       "operationType": "firestore-list-collection-ids",
-      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-b954251732e341e78b801d59a5654cae/rootdoc",
+      "resource": "projects/demo-firestore-probe/databases/(default)/documents/paged-parent-51008bfd0c63485da23d6de4aa409f98/rootdoc",
       "principal": "owned-firestore-admin",
       "status": 200,
       "bodyKeys": [
@@ -1474,21 +1474,21 @@
     "observation": 18,
     "recovery": 19,
     "bindings": [
-      "changed-b954251732e341e78b801d59a5654caeIdToken",
-      "changed-b954251732e341e78b801d59a5654caePrincipal",
-      "changed-b954251732e341e78b801d59a5654caeRefresh",
-      "changed-b954251732e341e78b801d59a5654caeUid",
+      "changed-51008bfd0c63485da23d6de4aa409f98IdToken",
+      "changed-51008bfd0c63485da23d6de4aa409f98Principal",
+      "changed-51008bfd0c63485da23d6de4aa409f98Refresh",
+      "changed-51008bfd0c63485da23d6de4aa409f98Uid",
       "pagedToken",
-      "reference-b954251732e341e78b801d59a5654caeIdToken",
-      "reference-b954251732e341e78b801d59a5654caePrincipal",
-      "reference-b954251732e341e78b801d59a5654caeRefresh",
-      "reference-b954251732e341e78b801d59a5654caeUid"
+      "reference-51008bfd0c63485da23d6de4aa409f98IdToken",
+      "reference-51008bfd0c63485da23d6de4aa409f98Principal",
+      "reference-51008bfd0c63485da23d6de4aa409f98Refresh",
+      "reference-51008bfd0c63485da23d6de4aa409f98Uid"
     ]
   },
   "failure": null,
   "stopReason": "child-completed",
-  "artifactSha256": "233e8911e0e7bb0ca7e25e3334b94e95f8933ab3d7280f731a4471b57807f73a",
-  "executionCommit": "91a31197b79b3324f51530cf76e261f98353dfa3",
+  "artifactSha256": "5512ab4ad481be4d6e0ad708f402b8a07a0d841ba2d23587adc11b371915bd4a",
+  "executionCommit": "34bcbdfbe1ca79305bd5cc5b591380b21f99458e",
   "observerSha256": "f4724b420f1a2da2db0fec200478f8b78aeaa394b1c1e4194533047fa74c91ea",
-  "parentManifestSha256": "8c992e440b6aa2b02aa63b6bb0282a1902026393452676e37577e11e518ad47f"
+  "parentManifestSha256": "f0285e37f680f5e6f96aef75a5a96da9afa5066f6cac8502457a71c3040dca51"
 }

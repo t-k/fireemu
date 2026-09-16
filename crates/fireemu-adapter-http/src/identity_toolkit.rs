@@ -2654,12 +2654,13 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
     let force = object.get("forceUpgradeOnSignin").map_or(Ok(false), |v| {
         v.as_bool().ok_or_else(|| error(400, "INVALID_ARGUMENT"))
     })?;
-    let options = object
-        .get("passwordPolicyVersions")
-        .and_then(Value::as_array)
-        .filter(|versions| versions.len() == 1)
-        .and_then(|versions| versions[0].get("customStrengthOptions"))
-        .and_then(Value::as_object);
+    let options = match object.get("passwordPolicyVersions") {
+        None => None,
+        Some(Value::Array(versions)) if versions.len() == 1 => versions[0]
+            .get("customStrengthOptions")
+            .and_then(Value::as_object),
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
     let number = |key: &str, default: usize| {
         options.and_then(|o| o.get(key)).map_or(Ok(default), |v| {
             v.as_u64()
@@ -3750,6 +3751,12 @@ fn tenant_management(
             } else {
                 None
             };
+            // Validate namespace existence before committing metadata. The registry currently
+            // exposes separate metadata/policy mutators; preflighting both prevents ordinary
+            // invalid-target failures from producing a metadata-only update.
+            if password_policy.is_some() && registry.tenant_store(project, tenant).is_none() {
+                return error(404, "TENANT_NOT_FOUND");
+            }
             let patch = match tenant_metadata_patch(body, query) {
                 Ok(patch) => patch,
                 Err(response) => return response,
@@ -4028,7 +4035,10 @@ fn sign_up(
     };
     // Validated before the account exists: a rejected password leaves no user behind.
     if let Some(password) = password {
-        if let Err(e) = AuthStore::validate_password(password) {
+        if let Err(e) = store.validate_password_for(
+            fireemu_core_auth::password_policy::Operation::Registration,
+            password,
+        ) {
             return auth_error(&e);
         }
     }
@@ -4062,7 +4072,12 @@ fn sign_up(
         }
     };
     if let Some(password) = password {
-        if let Err(e) = store.set_password(&uid, password, at) {
+        if let Err(e) = store.set_password_for(
+            &uid,
+            password,
+            at,
+            fireemu_core_auth::password_policy::Operation::Registration,
+        ) {
             return auth_error(&e);
         }
     }
@@ -5042,6 +5057,14 @@ fn update(
         Ok(p) => p,
         Err(r) => return r,
     };
+    if let Some(password) = &plan.password {
+        if let Err(e) = store.validate_password_for(
+            fireemu_core_auth::password_policy::Operation::Change,
+            password,
+        ) {
+            return auth_error(&e);
+        }
+    }
     // Improved email privacy requires a proof-of-ownership OOB flow for address changes.
     // It also removes the legacy setAccountInfo email/password linking path; clients link
     // through accounts:signUp with the current ID token instead. Privileged Admin updates
@@ -5137,7 +5160,12 @@ fn update(
         }
     }
     if let Some(password) = &plan.password {
-        if let Err(e) = store.set_password(&uid, password, at) {
+        if let Err(e) = store.set_password_for(
+            &uid,
+            password,
+            at,
+            fireemu_core_auth::password_policy::Operation::Change,
+        ) {
             return auth_error(&e);
         }
         // Setting a password over a session makes it a password session, so the session's
@@ -6457,7 +6485,10 @@ fn reset_password(
         }
         Err(r) => return r,
     };
-    if let Err(e) = AuthStore::validate_password(new_password) {
+    if let Err(e) = store.validate_password_for(
+        fireemu_core_auth::password_policy::Operation::Reset,
+        new_password,
+    ) {
         return auth_error(&e);
     }
     if store.user(&uid).is_none_or(|u| u.disabled) {
@@ -6466,7 +6497,12 @@ fn reset_password(
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at) {
         return auth_error(&e);
     }
-    if let Err(e) = store.set_password(&uid, new_password, at) {
+    if let Err(e) = store.set_password_for(
+        &uid,
+        new_password,
+        at,
+        fireemu_core_auth::password_policy::Operation::Reset,
+    ) {
         return auth_error(&e);
     }
     // A reset advances `validSince` and verifies the address (the user read the mail). The
@@ -8124,5 +8160,26 @@ mod tests {
             .unwrap();
 
         assert!(wall_clock.now() >= start.checked_add(LogicalDuration::from_seconds(2)).unwrap());
+    }
+
+    #[test]
+    fn password_policy_versions_rejects_malformed_presence() {
+        for versions in [
+            json!(null),
+            json!([]),
+            json!([{}, {}]),
+            json!([{"customStrengthOptions": {}} , {}]),
+        ] {
+            let body = json!({
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": versions,
+            });
+            assert!(password_policy_from_config_json(&body).is_err());
+        }
+        assert!(password_policy_from_config_json(&json!({
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
+        }))
+        .is_ok());
     }
 }

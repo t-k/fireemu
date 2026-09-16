@@ -24,6 +24,7 @@ async fn respond(
     state: Arc<AuthState>,
     control: Option<Arc<ControlState>>,
     blocking_auth_slots: Option<Arc<Semaphore>>,
+    peer_ip: Option<String>,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().as_str().to_owned();
@@ -123,6 +124,7 @@ async fn respond(
             .iter()
             .map(|v| v.to_str().unwrap_or_default().to_owned())
             .collect(),
+        peer_ip,
     };
     // Bound the body before reading it (spec 33.3): oversized payloads never allocate fully.
     let collected =
@@ -373,7 +375,8 @@ async fn serve_inner(
         ))
     });
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, peer_addr) = listener.accept().await?;
+        let peer_ip = Some(peer_addr.ip().to_string());
         let state = state.clone();
         let control = control.clone();
         let blocking_auth_slots = blocking_auth_slots.clone();
@@ -384,6 +387,7 @@ async fn serve_inner(
                     state.clone(),
                     control.clone(),
                     blocking_auth_slots.clone(),
+                    peer_ip.clone(),
                     req,
                 )
             });

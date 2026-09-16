@@ -343,6 +343,15 @@ fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
 #[test]
 fn blocking_auth_rejection_rolls_back_user_creation() {
     let mut s = state();
+    s.store
+        .lock()
+        .unwrap()
+        .set_signup_quota_config(fireemu_core_auth::signup_quota::SignupQuotaConfig {
+            mode: fireemu_core_auth::signup_quota::QuotaMode::Enforce,
+            default_quota_per_hour: 1,
+            ..Default::default()
+        })
+        .unwrap();
     let events = Arc::new(Mutex::new(Vec::new()));
     s.blocking = Some(Arc::new(RecordingBlockingHook {
         events: events.clone(),
@@ -370,6 +379,14 @@ fn blocking_auth_rejection_rolls_back_user_creation() {
         .unwrap()
         .user_by_email("blocked@example.com")
         .is_none());
+    assert_eq!(
+        s.store.lock().unwrap().signup_quota().usage(
+            "demo-app",
+            "127.0.0.1",
+            LogicalInstant::from_unix_seconds(1_788_004_860)
+        ),
+        (0, 0)
+    );
 }
 
 #[test]
@@ -1636,6 +1653,7 @@ fn owner() -> RequestHeaders {
         content_type: Some("application/json".to_owned()),
         host: None,
         app_check: Vec::new(),
+        peer_ip: None,
     }
 }
 fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Value) {
@@ -7314,6 +7332,244 @@ fn tenant_password_policy_leaf_mask_preserves_unselected_fields() {
             ["maxPasswordLength"],
         100
     );
+}
+
+#[test]
+fn project_client_permissions_are_exposed_and_applied_atomically() {
+    let s = state();
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let before = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(before.0, 200, "{}", before.1);
+    assert_eq!(
+        before.1["client"]["permissions"]["disabledUserSignup"],
+        false
+    );
+    assert_eq!(
+        before.1["client"]["permissions"]["disabledUserDeletion"],
+        false
+    );
+
+    let updated = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=client.permissions.disabledUserSignup,client.permissions.disabledUserDeletion"),
+        &json!({"client": {"permissions": {
+            "disabledUserSignup": true,
+            "disabledUserDeletion": true
+        }}}),
+    );
+    assert_eq!(updated.0, 200, "{}", updated.1);
+    assert_eq!(
+        updated.1["client"]["permissions"]["disabledUserSignup"],
+        true
+    );
+    assert_eq!(
+        updated.1["client"]["permissions"]["disabledUserDeletion"],
+        true
+    );
+
+    let refused = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=client.permissions.disabledUserSignup"),
+        &json!({"client": {"permissions": {"disabledUserSignup": "true"}}}),
+    );
+    assert_eq!(refused.0, 400, "{}", refused.1);
+    let after = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(after.0, 200, "{}", after.1);
+    assert_eq!(after.1["client"]["permissions"]["disabledUserSignup"], true);
+    assert_eq!(
+        after.1["client"]["permissions"]["disabledUserDeletion"],
+        true
+    );
+
+    let denied = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "client-permission@example.com", "password": "password1"}),
+    );
+    assert_eq!(denied.0, 400, "{}", denied.1);
+    let admin_created = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "client-permission-admin", "email": "client-permission@example.com", "password": "password1"}),
+    );
+    assert_eq!(admin_created.0, 200, "{}", admin_created.1);
+}
+
+#[test]
+fn tenant_client_permissions_and_privacy_are_namespaced_and_atomic_with_password_policy() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    s.registry = Some(registry);
+    let path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/tenant-a";
+    let updated = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=client.permissions.disabledUserSignup,client.permissions.disabledUserDeletion,emailPrivacyConfig.enableImprovedEmailPrivacy,passwordPolicyConfig"),
+        &json!({
+            "client": {"permissions": {
+                "disabledUserSignup": true,
+                "disabledUserDeletion": true
+            }},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true},
+            "passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
+            }
+        }),
+    );
+    assert_eq!(updated.0, 200, "{}", updated.1);
+    assert_eq!(
+        updated.1["client"]["permissions"]["disabledUserSignup"],
+        true
+    );
+    assert_eq!(
+        updated.1["client"]["permissions"]["disabledUserDeletion"],
+        true
+    );
+    assert_eq!(
+        updated.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+    assert_eq!(
+        updated.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["minPasswordLength"],
+        12
+    );
+
+    let refused = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=client.permissions.disabledUserSignup,passwordPolicyConfig"),
+        &json!({
+            "client": {"permissions": {"disabledUserSignup": false}},
+            "passwordPolicyConfig": {"passwordPolicyEnforcementState": "NOTIFY"}
+        }),
+    );
+    assert_eq!(refused.0, 400, "{}", refused.1);
+    let after = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(after.0, 200, "{}", after.1);
+    assert_eq!(after.1["client"]["permissions"]["disabledUserSignup"], true);
+    assert_eq!(
+        after.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+    assert_eq!(
+        after.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["minPasswordLength"],
+        12
+    );
+
+    let denied = handle_with(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &RequestHeaders::default(),
+        &json!({"tenantId": "tenant-a", "email": "tenant-a@example.com", "password": "password1"}),
+    );
+    assert_eq!(denied.status, 400, "{}", denied.body);
+}
+
+#[test]
+fn signup_quota_is_enforced_for_end_user_creation_without_trusting_forwarded_headers() {
+    use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
+
+    let s = state();
+    s.store
+        .lock()
+        .unwrap()
+        .set_signup_quota_config(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 1,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+    let headers = RequestHeaders {
+        peer_ip: Some("192.0.2.20".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let first = handle_with(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp?X-Forwarded-For=198.51.100.99"),
+        &headers,
+        &json!({"email": "quota-one@example.com", "password": "password1"}),
+    );
+    assert_eq!(first.status, 200, "{}", first.body);
+    let second = handle_with(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp?X-Forwarded-For=198.51.100.99"),
+        &headers,
+        &json!({"email": "quota-two@example.com", "password": "password1"}),
+    );
+    assert_eq!(second.status, 400, "{}", second.body);
+    assert_eq!(second.body["error"]["message"], "SIGNUP_QUOTA_EXCEEDED");
+    let store = s.store.lock().unwrap();
+    assert!(store.user_by_email("quota-one@example.com").is_some());
+    assert!(store.user_by_email("quota-two@example.com").is_none());
+    assert_eq!(
+        store.signup_quota().usage(
+            "demo-app",
+            "192.0.2.20",
+            LogicalInstant::from_unix_seconds(1_788_004_860)
+        ),
+        (1, 0)
+    );
+}
+
+#[test]
+fn self_deletion_permission_denies_end_user_but_admin_delete_still_succeeds() {
+    let s = state();
+    s.store
+        .lock()
+        .unwrap()
+        .set_config(fireemu_core_auth::store::ProjectAuthConfig {
+            disabled_user_deletion: true,
+            ..fireemu_core_auth::store::ProjectAuthConfig::default()
+        });
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "delete-permission@example.com", "password": "password1"}),
+    );
+    let denied = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_eq!(denied.0, 400, "{}", denied.1);
+    assert_eq!(denied.1["error"]["message"], "OPERATION_NOT_ALLOWED");
+    let lookup = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [signed["localId"]]}),
+    );
+    assert_eq!(lookup.0, 200, "{}", lookup.1);
+    assert_eq!(lookup.1["users"].as_array().map(Vec::len), Some(1));
+
+    let deleted = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:delete"),
+        &json!({"localId": signed["localId"]}),
+    );
+    assert_eq!(deleted.0, 200, "{}", deleted.1);
+    let after = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [signed["localId"]]}),
+    );
+    assert_eq!(after.0, 200, "{}", after.1);
+    assert!(after.1["users"].as_array().is_none_or(Vec::is_empty));
 }
 
 #[test]

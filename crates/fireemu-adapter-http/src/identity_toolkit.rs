@@ -26,10 +26,10 @@ use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with,
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
 use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy, ViolationCode};
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, CredentialNotice, FederatedIdentity, InboundSamlProviderConfig, LocalId,
-    NewUser, OAuthResponseType, OidcProviderConfig, OobRequestType, PendingSignInId, PhoneCodeUse,
-    ProjectAuthConfigPatch, RoutedStoreInstall, SecondFactorAssertion, VerificationCode,
-    VerificationPurpose,
+    AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
+    InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
+    OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch, RoutedStoreInstall,
+    SecondFactorAssertion, VerificationCode, VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -719,7 +719,14 @@ fn auth_error(e: &AuthError) -> JsonResponse {
             400,
             "WEAK_PASSWORD : Password should be at least 6 characters",
         ),
-        AuthError::PasswordTooLong => error(400, "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"),
+        AuthError::PasswordTooLong | AuthError::PasswordPolicyViolation => {
+            error(400, "PASSWORD_DOES_NOT_MEET_REQUIREMENTS")
+        }
+        AuthError::UserSignupDisabled | AuthError::UserDeletionDisabled => {
+            error(400, "OPERATION_NOT_ALLOWED")
+        }
+        AuthError::SignupQuotaExceeded => error(400, "SIGNUP_QUOTA_EXCEEDED"),
+        AuthError::SignupQuotaUnavailable => error(500, "SIGNUP_QUOTA_UNAVAILABLE"),
         AuthError::InvalidCredentials => error(400, "INVALID_LOGIN_CREDENTIALS"),
         AuthError::InvalidPassword => error(400, "INVALID_PASSWORD"),
         AuthError::UserDisabled => error(400, "USER_DISABLED"),
@@ -998,6 +1005,9 @@ pub struct RequestHeaders {
     /// Every `X-Firebase-AppCheck` field instance, in wire order. A value the transport could
     /// not render as text is carried as an empty string, which classifies as malformed.
     pub app_check: Vec<String>,
+    /// Trusted transport peer address. The HTTP server populates this from `peer_addr`; callers
+    /// of the in-process handler may leave it absent and receive the loopback test default.
+    pub peer_ip: Option<String>,
 }
 
 /// The exact credential the emulator's Admin SDK surface requires. It is the privileged
@@ -2325,6 +2335,11 @@ fn handle_with_policy(
             return denial;
         }
     }
+    if route.class == routes::RouteClass::EndUser {
+        if let Some(denial) = end_user_client_permission_denial(route.handler, &store, body, at) {
+            return denial;
+        }
+    }
     // Verify the selected namespace and assertion before any account or transient mutation.
     if route.handler == routes::Handler::SignInWithIdp {
         if let Some(trust) = oidc_trust {
@@ -2340,6 +2355,18 @@ fn handle_with_policy(
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
+    let quota_before = store.user_count();
+    let quota_reservation = if route.class == routes::RouteClass::EndUser
+        && request_may_create_end_user(route.handler, &store, body, at)
+    {
+        let peer_ip = headers.peer_ip.as_deref().unwrap_or("127.0.0.1");
+        match store.reserve_signup(AuthPrincipal::EndUser, peer_ip, at) {
+            Ok(reservation) => Some(reservation),
+            Err(e) => return auth_error(&e),
+        }
+    } else {
+        None
+    };
     if route.class != routes::RouteClass::EndUser {
         let signer = store.signer_arc();
         let response = dispatch(
@@ -2413,7 +2440,26 @@ fn handle_with_policy(
     } else {
         response
     };
-    finish_token_response(response, signer.as_deref(), &store_arc, at)
+    let response = finish_token_response(response, signer.as_deref(), &store_arc, at);
+    if let Some(reservation) = quota_reservation {
+        let created = response.status == 200
+            && store_arc
+                .lock()
+                .map(|store| store.user_count() > quota_before)
+                .unwrap_or(false);
+        let Ok(mut store) = store_arc.lock() else {
+            return error(500, "INTERNAL");
+        };
+        let result = if created {
+            store.commit_signup(reservation)
+        } else {
+            store.release_signup(reservation)
+        };
+        if let Err(e) = result {
+            return auth_error(&e);
+        }
+    }
+    response
 }
 
 /// The credential and project checks of a route class.
@@ -2641,6 +2687,32 @@ fn apply_project_config_fields(
                     body,
                     "emailPrivacyConfig",
                     "enableImprovedEmailPrivacy",
+                )?);
+            }
+            "client.permissions" => {
+                apply_project_config_parent_path(
+                    body,
+                    &["client", "permissions"],
+                    "disabledUserSignup",
+                    &mut config.disabled_user_signup,
+                )?;
+                apply_project_config_parent_path(
+                    body,
+                    &["client", "permissions"],
+                    "disabledUserDeletion",
+                    &mut config.disabled_user_deletion,
+                )?;
+            }
+            "client.permissions.disabledUserSignup" => {
+                config.disabled_user_signup = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserSignup"],
+                )?);
+            }
+            "client.permissions.disabledUserDeletion" => {
+                config.disabled_user_deletion = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserDeletion"],
                 )?);
             }
             field
@@ -2873,6 +2945,94 @@ fn nested_bool_default_false(
     }
 }
 
+fn apply_project_config_parent_path(
+    body: &Value,
+    parent_path: &[&str],
+    child: &str,
+    current: &mut Option<bool>,
+) -> Result<(), JsonResponse> {
+    let object = nested_object(body, parent_path)?;
+    if let Some(value) = object.get(child) {
+        *current = Some(
+            value
+                .as_bool()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+        );
+    }
+    Ok(())
+}
+
+fn valid_project_config_field(field: &str) -> bool {
+    matches!(
+        field,
+        "signIn"
+            | "signIn.allowDuplicateEmails"
+            | "emailPrivacyConfig"
+            | "emailPrivacyConfig.enableImprovedEmailPrivacy"
+            | "client.permissions"
+            | "client.permissions.disabledUserSignup"
+            | "client.permissions.disabledUserDeletion"
+            | "passwordPolicyConfig"
+            | "passwordPolicyConfig.passwordPolicyEnforcementState"
+            | "passwordPolicyConfig.forceUpgradeOnSignin"
+            | "passwordPolicyConfig.passwordPolicyVersions"
+    )
+}
+
+fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
+    let object = body
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "signIn" | "emailPrivacyConfig" | "client" | "passwordPolicyConfig"
+        ) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    if let Some(value) = object.get("signIn") {
+        let sign_in = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if sign_in.keys().any(|key| key != "allowDuplicateEmails") {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    if let Some(value) = object.get("emailPrivacyConfig") {
+        let privacy = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if privacy
+            .keys()
+            .any(|key| key != "enableImprovedEmailPrivacy")
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    if let Some(value) = object.get("client") {
+        let client = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if client.keys().any(|key| key != "permissions") {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        let permissions = client
+            .get("permissions")
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if permissions
+            .keys()
+            .any(|key| key != "disabledUserSignup" && key != "disabledUserDeletion")
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
 fn project_config_management(
     state: &AuthState,
     handler: routes::Handler,
@@ -2898,13 +3058,26 @@ fn project_config_management(
     if !body.is_object() {
         return error(400, "INVALID_ARGUMENT");
     }
+    if let Err(response) = validate_project_config_payload(body) {
+        return response;
+    }
     let fields = match update_mask(query) {
         Ok(Some(fields)) => fields,
         Ok(None) => {
-            let mut fields = vec![
-                "signIn.allowDuplicateEmails".to_owned(),
-                "emailPrivacyConfig.enableImprovedEmailPrivacy".to_owned(),
-            ];
+            let mut fields = Vec::new();
+            if body.get("signIn").is_some() {
+                fields.push("signIn".to_owned());
+            }
+            if body.get("emailPrivacyConfig").is_some() {
+                fields.push("emailPrivacyConfig".to_owned());
+            }
+            if body
+                .get("client")
+                .and_then(|value| value.get("permissions"))
+                .is_some()
+            {
+                fields.push("client.permissions".to_owned());
+            }
             if body.get("passwordPolicyConfig").is_some() {
                 fields.push("passwordPolicyConfig".to_owned());
             }
@@ -2913,7 +3086,8 @@ fn project_config_management(
         Err(response) => return response,
     };
     if fields.iter().any(|field| {
-        field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field)
+        (field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field))
+            || !valid_project_config_field(field)
     }) {
         return error(400, "INVALID_ARGUMENT");
     }
@@ -3686,6 +3860,23 @@ fn tenant_metadata(body: &Value) -> fireemu_core_auth::store::TenantMetadata {
             .get("disableAuth")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        disabled_user_signup: body
+            .get("client")
+            .and_then(|value| value.get("permissions"))
+            .and_then(|value| value.get("disabledUserSignup"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        disabled_user_deletion: body
+            .get("client")
+            .and_then(|value| value.get("permissions"))
+            .and_then(|value| value.get("disabledUserDeletion"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        enable_improved_email_privacy: body
+            .get("emailPrivacyConfig")
+            .and_then(|value| value.get("enableImprovedEmailPrivacy"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -3693,19 +3884,31 @@ fn tenant_metadata_patch(
     body: &Value,
     query: Option<&str>,
 ) -> Result<fireemu_core_auth::store::TenantMetadataPatch, JsonResponse> {
-    const FIELDS: [&str; 5] = [
+    const FIELDS: [&str; 10] = [
         "displayName",
         "allowPasswordSignup",
         "enableEmailLinkSignin",
         "enableAnonymousUser",
         "disableAuth",
+        "client.permissions.disabledUserSignup",
+        "client.permissions.disabledUserDeletion",
+        "emailPrivacyConfig.enableImprovedEmailPrivacy",
+        "client.permissions",
+        "emailPrivacyConfig",
     ];
     let params = query_params(query);
     let fields: Vec<&str> = params.get("updateMask").map_or_else(
         || {
             FIELDS
                 .into_iter()
-                .filter(|field| body.get(*field).is_some())
+                .filter(|field| match *field {
+                    "client.permissions" => body
+                        .get("client")
+                        .and_then(|value| value.get("permissions"))
+                        .is_some(),
+                    "emailPrivacyConfig" => body.get("emailPrivacyConfig").is_some(),
+                    field => body.get(field).is_some(),
+                })
                 .collect()
         },
         |mask| mask.split(',').filter(|field| !field.is_empty()).collect(),
@@ -3736,11 +3939,81 @@ fn tenant_metadata_patch(
                 patch.enable_anonymous_user = Some(bool_update(body, field)?);
             }
             "disableAuth" => patch.disable_auth = Some(bool_update(body, field)?),
+            "client.permissions.disabledUserSignup" => {
+                patch.disabled_user_signup = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserSignup"],
+                )?);
+            }
+            "client.permissions.disabledUserDeletion" => {
+                patch.disabled_user_deletion = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserDeletion"],
+                )?);
+            }
+            "emailPrivacyConfig.enableImprovedEmailPrivacy" => {
+                patch.enable_improved_email_privacy = Some(nested_bool_default_false_path(
+                    body,
+                    &["emailPrivacyConfig", "enableImprovedEmailPrivacy"],
+                )?);
+            }
+            "client.permissions" => {
+                let _ = nested_object(body, &["client", "permissions"])?;
+                patch.disabled_user_signup = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserSignup"],
+                )?);
+                patch.disabled_user_deletion = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserDeletion"],
+                )?);
+            }
+            "emailPrivacyConfig" => {
+                let _ = nested_object(body, &["emailPrivacyConfig"])?;
+                patch.enable_improved_email_privacy = Some(nested_bool_default_false_path(
+                    body,
+                    &["emailPrivacyConfig", "enableImprovedEmailPrivacy"],
+                )?);
+            }
             field if valid_password_policy_field(field) => {}
             _ => unreachable!("tenant update mask was validated"),
         }
     }
     Ok(patch)
+}
+
+fn nested_object<'a>(
+    body: &'a Value,
+    path: &[&str],
+) -> Result<&'a serde_json::Map<String, Value>, JsonResponse> {
+    let mut value = body;
+    for key in path {
+        value = match value.get(*key) {
+            None | Some(Value::Null) => return Err(error(400, "INVALID_ARGUMENT")),
+            Some(value) => value,
+        };
+    }
+    value
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+}
+
+fn nested_bool_default_false_path(body: &Value, path: &[&str]) -> Result<bool, JsonResponse> {
+    let mut value = body;
+    for key in &path[..path.len().saturating_sub(1)] {
+        value = match value.get(*key) {
+            None | Some(Value::Null) => return Ok(false),
+            Some(value) => value,
+        };
+        if !value.is_object() {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    match value.get(path[path.len() - 1]) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
 }
 
 fn bool_update(body: &Value, field: &str) -> Result<bool, JsonResponse> {
@@ -3763,6 +4036,13 @@ fn tenant_json(
         "enableEmailLinkSignin": metadata.enable_email_link_signin,
         "enableAnonymousUser": metadata.enable_anonymous_user,
         "disableAuth": metadata.disable_auth,
+        "client": {"permissions": {
+            "disabledUserSignup": metadata.disabled_user_signup,
+            "disabledUserDeletion": metadata.disabled_user_deletion,
+        }},
+        "emailPrivacyConfig": {
+            "enableImprovedEmailPrivacy": metadata.enable_improved_email_privacy,
+        },
         "mfaConfig": {"state": "DISABLED", "enabledProviders": []},
     })
 }
@@ -3780,6 +4060,17 @@ fn tenant_json_with_policy(
     )["passwordPolicyConfig"]
         .clone();
     result
+}
+
+fn tenant_client_config_patch(
+    metadata: &fireemu_core_auth::store::TenantMetadata,
+) -> fireemu_core_auth::store::TenantMetadataPatch {
+    fireemu_core_auth::store::TenantMetadataPatch {
+        disabled_user_signup: Some(metadata.disabled_user_signup),
+        disabled_user_deletion: Some(metadata.disabled_user_deletion),
+        enable_improved_email_privacy: Some(metadata.enable_improved_email_privacy),
+        ..Default::default()
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -3804,6 +4095,13 @@ fn tenant_management(
             let Some(tenant) = registry.create_tenant(project, metadata.clone()) else {
                 return error(400, "INVALID_PROJECT_ID");
             };
+            if registry
+                .patch_tenant(project, &tenant, tenant_client_config_patch(&metadata))
+                .is_none()
+            {
+                let _ = registry.delete_tenant(project, &tenant);
+                return error(500, "INTERNAL");
+            }
             JsonResponse {
                 status: 200,
                 body: tenant_json(project, &tenant, &metadata),
@@ -3863,11 +4161,32 @@ fn tenant_management(
             let fields = match update_mask(query) {
                 Ok(Some(fields)) => fields,
                 Ok(None) => {
-                    if body.get("passwordPolicyConfig").is_some() {
-                        vec!["passwordPolicyConfig".to_owned()]
-                    } else {
-                        Vec::new()
+                    let mut fields = Vec::new();
+                    for field in [
+                        "displayName",
+                        "allowPasswordSignup",
+                        "enableEmailLinkSignin",
+                        "enableAnonymousUser",
+                        "disableAuth",
+                    ] {
+                        if body.get(field).is_some() {
+                            fields.push(field.to_owned());
+                        }
                     }
+                    if body
+                        .get("client")
+                        .and_then(|value| value.get("permissions"))
+                        .is_some()
+                    {
+                        fields.push("client.permissions".to_owned());
+                    }
+                    if body.get("emailPrivacyConfig").is_some() {
+                        fields.push("emailPrivacyConfig".to_owned());
+                    }
+                    if body.get("passwordPolicyConfig").is_some() {
+                        fields.push("passwordPolicyConfig".to_owned());
+                    }
+                    fields
                 }
                 Err(response) => return response,
             };
@@ -3896,33 +4215,18 @@ fn tenant_management(
                 },
                 None => None,
             };
-            // Validate namespace existence before committing metadata. The registry currently
-            // exposes separate metadata/policy mutators; preflighting both prevents ordinary
-            // invalid-target failures from producing a metadata-only update.
-            if password_policy.is_some() && registry.tenant_store(project, tenant).is_none() {
-                return error(404, "TENANT_NOT_FOUND");
-            }
             let patch = match tenant_metadata_patch(body, query) {
                 Ok(patch) => patch,
                 Err(response) => return response,
             };
-            let Some(metadata) = registry.patch_tenant(project, tenant, patch) else {
+            let Some((metadata, policy)) =
+                registry.patch_tenant_with_password_policy(project, tenant, patch, password_policy)
+            else {
                 return error(404, "TENANT_NOT_FOUND");
-            };
-            if let Some(policy) = password_policy {
-                if !registry.set_tenant_password_policy(project, tenant, policy) {
-                    return error(404, "TENANT_NOT_FOUND");
-                }
-            }
-            let Some(store) = registry.tenant_store(project, tenant) else {
-                return error(404, "TENANT_NOT_FOUND");
-            };
-            let Ok(store) = store.lock() else {
-                return error(500, "INTERNAL");
             };
             JsonResponse {
                 status: 200,
-                body: tenant_json_with_policy(project, tenant, &metadata, store.password_policy()),
+                body: tenant_json_with_policy(project, tenant, &metadata, &policy),
             }
         }
         Handler::TenantDelete => {
@@ -3999,6 +4303,76 @@ fn tenant_policy_denial_with_metadata(
         }
     }
     None
+}
+
+fn end_user_client_permission_denial(
+    handler: routes::Handler,
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> Option<JsonResponse> {
+    if !store.allows_user_signup(AuthPrincipal::EndUser)
+        && request_may_create_end_user(handler, store, body, at)
+    {
+        return Some(auth_error(&AuthError::UserSignupDisabled));
+    }
+    None
+}
+
+fn request_may_create_end_user(
+    handler: routes::Handler,
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> bool {
+    match handler {
+        routes::Handler::SignUp => body.get("idToken").is_none_or(Value::is_null),
+        routes::Handler::SignInWithCustomToken => {
+            custom_token_uid(body).is_some_and(|uid| store.user_by_id(&uid).is_none())
+        }
+        routes::Handler::SignInWithEmailLink => {
+            body.get("idToken").is_none_or(Value::is_null)
+                && str_field(body, "email")
+                    .map(canonicalize_email)
+                    .is_some_and(|email| store.user_by_email(&email).is_none())
+        }
+        routes::Handler::SignInWithPhoneNumber => {
+            if body.get("idToken").is_some_and(|value| !value.is_null()) {
+                return false;
+            }
+            let (Some(session), Some(code)) =
+                (str_field(body, "sessionInfo"), str_field(body, "code"))
+            else {
+                return false;
+            };
+            store
+                .check_phone_code(session, code, at)
+                .ok()
+                .is_some_and(|verified| store.user_by_phone(&verified.phone_number).is_none())
+        }
+        routes::Handler::SignInWithIdp => {
+            if body.get("idToken").is_some_and(|value| !value.is_null()) {
+                return false;
+            }
+            let Ok(resolved) = resolve_idp_credential(body) else {
+                return false;
+            };
+            if store
+                .user_by_federated(&resolved.provider_id, &resolved.info.raw_id)
+                .is_some()
+            {
+                return false;
+            }
+            store.config().allow_duplicate_emails
+                || resolved
+                    .info
+                    .email
+                    .as_deref()
+                    .and_then(|email| store.user_by_email(email))
+                    .is_none()
+        }
+        _ => false,
+    }
 }
 
 /// The store a request is for. Project-scoped routes (Admin SDK, emulator inspection)
@@ -4187,7 +4561,7 @@ fn sign_up(
             return auth_error(&e);
         }
     }
-    let uid = if has_session {
+    let (uid, created_new) = if has_session {
         let uid = match verify(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
@@ -4209,10 +4583,10 @@ fn sign_up(
             u.email_verified = false;
             u.provider = fireemu_core_auth::store::Provider::Password;
         }
-        uid
+        (uid, false)
     } else {
-        match store.create_user_with_id(new_user, forced_local_id, at) {
-            Ok(uid) => uid,
+        match store.create_user_with_id_as(AuthPrincipal::EndUser, new_user, forced_local_id, at) {
+            Ok(uid) => (uid, true),
             Err(e) => return auth_error(&e),
         }
     };
@@ -4223,6 +4597,9 @@ fn sign_up(
             at,
             fireemu_core_auth::password_policy::Operation::Registration,
         ) {
+            if created_new {
+                let _ = store.delete_user_by_id(uid.as_str());
+            }
             return auth_error(&e);
         }
     }
@@ -4242,7 +4619,12 @@ fn sign_up(
             body["displayName"] = json!(display_name);
             JsonResponse { status: 200, body }
         }
-        Err(r) => r,
+        Err(r) => {
+            if created_new {
+                let _ = store.delete_user_by_id(uid.as_str());
+            }
+            r
+        }
     }
 }
 
@@ -4338,7 +4720,7 @@ fn sign_in_with_custom_token(
             email_verified: false,
             provider: fireemu_core_auth::store::Provider::Custom,
         };
-        match store.create_user_with_id(new_user, Some(uid), at) {
+        match store.create_user_with_id_as(AuthPrincipal::EndUser, new_user, Some(uid), at) {
             Ok(id) => (id, true),
             Err(e) => return auth_error(&e),
         }
@@ -5464,7 +5846,14 @@ fn delete_account(
             Err(r) => return r,
         }
     };
-    match store.delete_user_by_id(uid.as_str()) {
+    match store.delete_user_by_id_as(
+        if admin {
+            AuthPrincipal::Admin
+        } else {
+            AuthPrincipal::EndUser
+        },
+        uid.as_str(),
+    ) {
         Ok(()) => JsonResponse {
             status: 200,
             body: json!({"kind": "identitytoolkit#DeleteAccountResponse"}),
@@ -5531,7 +5920,12 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         },
         None => NewUser::anonymous(),
     };
-    let uid = match store.create_user_with_id(new_user, requested_id.as_deref(), at) {
+    let uid = match store.create_user_with_id_as(
+        AuthPrincipal::Admin,
+        new_user,
+        requested_id.as_deref(),
+        at,
+    ) {
         Ok(uid) => uid,
         Err(e) => return auth_error(&e),
     };
@@ -8025,6 +8419,22 @@ fn emulator_route(
             {
                 config.enable_improved_email_privacy = v;
             }
+            if let Some(v) = body
+                .get("client")
+                .and_then(|s| s.get("permissions"))
+                .and_then(|s| s.get("disabledUserSignup"))
+                .and_then(Value::as_bool)
+            {
+                config.disabled_user_signup = v;
+            }
+            if let Some(v) = body
+                .get("client")
+                .and_then(|s| s.get("permissions"))
+                .and_then(|s| s.get("disabledUserDeletion"))
+                .and_then(Value::as_bool)
+            {
+                config.disabled_user_deletion = v;
+            }
             store.set_config(config);
             JsonResponse {
                 status: 200,
@@ -8042,6 +8452,10 @@ fn emulator_route(
 fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> Value {
     json!({
         "signIn": {"allowDuplicateEmails": config.allow_duplicate_emails},
+        "client": {"permissions": {
+            "disabledUserSignup": config.disabled_user_signup,
+            "disabledUserDeletion": config.disabled_user_deletion,
+        }},
         "emailPrivacyConfig": {"enableImprovedEmailPrivacy": config.enable_improved_email_privacy},
     })
 }

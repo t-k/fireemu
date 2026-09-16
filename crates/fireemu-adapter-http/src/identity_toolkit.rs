@@ -3207,6 +3207,24 @@ fn valid_blocking_config_field(field: &str) -> bool {
     )
 }
 
+/// Decodes the complete blocking-functions message using `ProtoJSON` message-null semantics.
+///
+/// A null nested message is equivalent to an omitted nested message. Keep this normalization at
+/// the HTTP boundary so the blocking bridge receives the same object it would receive when the
+/// nested fields were omitted, while malformed non-null siblings still reach the normal full
+/// candidate validation path.
+fn normalize_complete_blocking_functions(value: Value) -> Value {
+    let Value::Object(mut object) = value else {
+        return value;
+    };
+    for key in ["triggers", "forwardInboundCredentials"] {
+        if object.get(key).is_some_and(Value::is_null) {
+            object.remove(key);
+        }
+    }
+    Value::Object(object)
+}
+
 fn project_blocking_settings_update(
     state: &AuthState,
     project: &str,
@@ -3236,7 +3254,9 @@ fn project_blocking_settings_update(
             .get("blockingFunctions")
             .filter(|value| !value.is_null());
         let value = match field {
-            "blockingFunctions" => input.cloned().unwrap_or_else(|| json!({})),
+            "blockingFunctions" => {
+                normalize_complete_blocking_functions(input.cloned().unwrap_or_else(|| json!({})))
+            }
             "blockingFunctions.triggers" => input
                 .and_then(|value| value.get("triggers"))
                 .filter(|value| !value.is_null())

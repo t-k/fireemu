@@ -1884,6 +1884,71 @@ fn project_blocking_settings_get_patch_preserves_masked_values_and_rejects_atomi
 }
 
 #[test]
+fn project_blocking_complete_update_treats_nested_null_messages_as_absent_atomically() {
+    let settings = Arc::new(Mutex::new(json!({
+        "triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/checkRegistration"},
+            "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+        },
+        "forwardInboundCredentials": {
+            "idToken": true,
+            "accessToken": true,
+            "refreshToken": true
+        }
+    })));
+    let mut s = state();
+    s.blocking = Some(Arc::new(ConfigurableBlockingHook {
+        settings: settings.clone(),
+    }));
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+
+    let (status, before) = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(status, 200, "{before}");
+
+    // A malformed non-null sibling must fail before the candidate is committed, leaving the
+    // explicit configuration untouched.
+    let (status, rejected) = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=blockingFunctions"),
+        &json!({
+            "blockingFunctions": {
+                "triggers": null,
+                "forwardInboundCredentials": {"idToken": "yes"}
+            }
+        }),
+    );
+    assert_eq!(status, 400, "{rejected}");
+    let (status, unchanged) = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(status, 200, "{unchanged}");
+    assert_eq!(unchanged["blockingFunctions"], before["blockingFunctions"]);
+    assert_eq!(
+        settings.lock().unwrap().clone(),
+        before["blockingFunctions"]
+    );
+
+    // A complete ProtoJSON message treats null nested messages as absent. The replacement must
+    // therefore select the default blocking state and disable all inbound credential forwarding.
+    let (status, cleared) = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=blockingFunctions"),
+        &json!({
+            "blockingFunctions": {
+                "triggers": null,
+                "forwardInboundCredentials": null
+            }
+        }),
+    );
+    assert_eq!(status, 200, "{cleared}");
+    assert_eq!(cleared["blockingFunctions"], json!({}));
+    let (status, after) = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after["blockingFunctions"], json!({}));
+    assert_eq!(settings.lock().unwrap().clone(), json!({}));
+}
+
+#[test]
 fn project_blocking_settings_are_isolated_to_the_bridge_project() {
     let settings = Arc::new(Mutex::new(json!({
         "triggers": {

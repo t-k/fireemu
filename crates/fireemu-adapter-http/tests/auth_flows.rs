@@ -7468,6 +7468,28 @@ fn routed_project_config_uses_selected_store_and_publishes_only_successful_write
                 .config()
                 .enable_improved_email_privacy
         );
+        let policy_only = handle_with(
+            &state,
+            "PATCH",
+            &format!("{path}?updateMask=passwordPolicyConfig"),
+            &owner(),
+            &json!({
+                "passwordPolicyConfig": {
+                    "passwordPolicyEnforcementState": "ENFORCE",
+                    "passwordPolicyVersions": [{
+                        "customStrengthOptions": {"minPasswordLength": 12}
+                    }]
+                }
+            }),
+        );
+        assert_eq!(policy_only.status, 200, "{}", policy_only.body);
+        assert_eq!(
+            policy_only.body["passwordPolicyConfig"]["passwordPolicyVersions"][0]
+                ["customStrengthOptions"]["minPasswordLength"],
+            12
+        );
+        let routed = registry.routed_store_for(project).unwrap();
+        assert_eq!(routed.lock().unwrap().password_policy().min_length, 12);
     }
 }
 

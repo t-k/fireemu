@@ -3103,16 +3103,21 @@ fn project_config_management(
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
+    let has_policy = password_policy.is_some();
     let config = if let Some(registry) = state
         .registry
         .as_ref()
         .filter(|_| pending_project.is_none())
     {
-        let Some(config) = registry.patch_project_config(project, patch) else {
+        let Some(config) =
+            registry.patch_project_config_with_password_policy(project, patch, password_policy)
+        else {
             return error(500, "INTERNAL");
         };
         config
     } else {
+        // A pending routed project is not published in the registry yet. Keep its config and
+        // policy transition under the selected store lock until the candidate is installed.
         let Ok(mut store) = selected_store.lock() else {
             return error(500, "INTERNAL");
         };
@@ -3120,21 +3125,12 @@ fn project_config_management(
         if !patch.is_empty() {
             store.set_config(config);
         }
-        config
-    };
-    if let Some(policy) = password_policy {
-        let updated = state
-            .registry
-            .as_ref()
-            .is_some_and(|registry| registry.set_project_password_policy(project, policy.clone()));
-        if !updated {
-            let Ok(mut store) = selected_store.lock() else {
-                return error(500, "INTERNAL");
-            };
+        if let Some(policy) = password_policy {
             store.set_password_policy(policy);
         }
-    }
-    if !patch.is_empty() {
+        config
+    };
+    if !patch.is_empty() || has_policy {
         if let Some(project) = pending_project {
             if let Err(response) = install_routed_candidate(state, project, selected_store) {
                 return response;

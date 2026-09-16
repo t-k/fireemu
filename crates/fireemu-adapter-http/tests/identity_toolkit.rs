@@ -7383,6 +7383,27 @@ fn project_client_permissions_are_exposed_and_applied_atomically() {
         true
     );
 
+    let mixed_refused = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=client.permissions.disabledUserSignup,passwordPolicyConfig"),
+        &json!({
+            "client": {"permissions": {"disabledUserSignup": false}},
+            "passwordPolicyConfig": {"passwordPolicyEnforcementState": "NOTIFY"}
+        }),
+    );
+    assert_eq!(mixed_refused.0, 400, "{}", mixed_refused.1);
+    let after_mixed = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(after_mixed.0, 200, "{}", after_mixed.1);
+    assert_eq!(
+        after_mixed.1["client"]["permissions"]["disabledUserSignup"],
+        true
+    );
+    assert_eq!(
+        after_mixed.1["passwordPolicyConfig"],
+        updated.1["passwordPolicyConfig"]
+    );
+
     let denied = post(
         &s,
         &format!("{V1}/accounts:signUp"),

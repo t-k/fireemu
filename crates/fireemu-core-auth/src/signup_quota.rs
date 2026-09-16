@@ -5,7 +5,7 @@
 //! obtain a trusted transport peer address and pass the normalized address here; request bodies
 //! and `X-Forwarded-For` values are not accepted as an address source by this module.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
@@ -272,6 +272,7 @@ impl SignupQuota {
             window_start: window_start(now),
         };
         let limit = self.limit_at(now);
+        self.prune_expired_buckets(now);
         let bucket_was_tracked = if self.buckets.contains_key(&key) {
             true
         } else {
@@ -410,6 +411,17 @@ impl SignupQuota {
                 temporary.quota
             })
     }
+
+    fn prune_expired_buckets(&mut self, now: LogicalInstant) {
+        let active_keys: BTreeSet<BucketKey> = self.active_reservations.values().cloned().collect();
+        self.buckets.retain(|key, bucket| {
+            let expired = key
+                .window_start
+                .checked_add(LogicalDuration::from_nanos(NANOS_PER_HOUR))
+                .is_some_and(|end| end <= now);
+            !expired || bucket.reserved != 0 || active_keys.contains(key)
+        });
+    }
 }
 
 fn window_start(now: LogicalInstant) -> LogicalInstant {
@@ -476,6 +488,86 @@ mod tests {
         let other_key = quota.reserve("project", "192.0.2.2", T0);
         assert_eq!(other_key, Err(QuotaError::Exceeded));
         assert_eq!(quota.tracked_bucket_count(), 0);
+    }
+
+    #[test]
+    fn expired_buckets_are_pruned_before_capacity_refusal() {
+        let mut quota = SignupQuota::new(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 10,
+            max_tracked_buckets: 2,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+
+        for peer_ip in ["192.0.2.1", "192.0.2.2"] {
+            let reservation = quota.reserve("project", peer_ip, T0).unwrap();
+            quota.commit(reservation, T0).unwrap();
+        }
+        assert_eq!(quota.tracked_bucket_count(), 2);
+
+        let next_window = T0
+            .checked_add(LogicalDuration::from_seconds(3_600))
+            .unwrap();
+        let reservation = quota
+            .reserve("project", "192.0.2.3", next_window)
+            .expect("expired buckets should make room for the new window");
+        assert_eq!(quota.tracked_bucket_count(), 1);
+        quota.commit(reservation, next_window).unwrap();
+        assert_eq!(quota.usage("project", "192.0.2.3", next_window), (1, 0));
+    }
+
+    #[test]
+    fn active_reservations_are_never_pruned_for_capacity() {
+        let mut quota = SignupQuota::new(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 10,
+            max_tracked_buckets: 1,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+        let held = quota.reserve("project", "192.0.2.1", T0).unwrap();
+        let next_window = T0
+            .checked_add(LogicalDuration::from_seconds(3_600))
+            .unwrap();
+
+        assert_eq!(
+            quota.reserve("project", "192.0.2.2", next_window),
+            Err(QuotaError::BucketCapacity)
+        );
+        assert_eq!(quota.tracked_bucket_count(), 1);
+        quota.release(held).unwrap();
+
+        let retry = quota
+            .reserve("project", "192.0.2.2", next_window)
+            .expect("released expired reservations should no longer consume capacity");
+        quota.commit(retry, next_window).unwrap();
+    }
+
+    #[test]
+    fn committed_usage_in_an_active_window_is_never_pruned_for_capacity() {
+        let mut quota = SignupQuota::new(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 10,
+            max_tracked_buckets: 1,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+        let first = quota.reserve("project", "192.0.2.1", T0).unwrap();
+        quota.commit(first, T0).unwrap();
+        let before_window_end = T0
+            .checked_add(LogicalDuration::from_seconds(3_599))
+            .unwrap();
+
+        assert_eq!(
+            quota.reserve("project", "192.0.2.2", before_window_end),
+            Err(QuotaError::BucketCapacity)
+        );
+        assert_eq!(
+            quota.usage("project", "192.0.2.1", before_window_end),
+            (1, 0)
+        );
+        assert_eq!(quota.tracked_bucket_count(), 1);
     }
 
     #[test]

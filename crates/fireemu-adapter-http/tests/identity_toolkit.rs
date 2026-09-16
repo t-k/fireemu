@@ -7820,3 +7820,173 @@ fn forced_password_policy_rejection_preserves_auth_error_precedence_and_state() 
         "forced rejection must not mutate the account"
     );
 }
+
+#[test]
+fn sign_up_link_authenticates_before_password_policy_and_preserves_state() {
+    let policy = || {
+        PasswordPolicy::try_new(
+            EnforcementState::Enforce,
+            false,
+            12,
+            None,
+            false,
+            false,
+            false,
+            false,
+            default_allowed_non_alphanumeric(),
+        )
+        .unwrap()
+    };
+
+    for (label, expected_error) in [
+        ("invalid", "INVALID_ID_TOKEN"),
+        ("expired", "TOKEN_EXPIRED"),
+        ("mismatched-audience", "INVALID_ID_TOKEN"),
+    ] {
+        let s = state();
+        let (_, anonymous) = post(&s, &format!("{V1}/accounts:signUp"), &json!({}));
+        assert_eq!(anonymous["kind"], "identitytoolkit#SignupNewUserResponse");
+        let valid_token = anonymous["idToken"].as_str().unwrap().to_owned();
+        let token = match label {
+            "invalid" => "not-a-token".to_owned(),
+            "expired" => {
+                advance(&s, 3_601);
+                valid_token
+            }
+            "mismatched-audience" => {
+                let payload = fireemu_core_auth::jwt::decode_unsigned(&valid_token)
+                    .unwrap()
+                    .payload_json
+                    .replace("\"aud\":\"demo-app\"", "\"aud\":\"other-app\"");
+                fireemu_core_auth::jwt::encode_payload_with(&payload, None)
+            }
+            _ => unreachable!(),
+        };
+        s.store.lock().unwrap().set_password_policy(policy());
+
+        let email = format!("link-{label}@example.com");
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({
+                "idToken": token,
+                "email": email,
+                "password": "weakpass",
+                "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 400, "{label}: {refused}");
+        assert_eq!(refused["error"]["message"], expected_error, "{label}");
+        assert!(refused.get("idToken").is_none(), "{label}: {refused}");
+        let store = s.store.lock().unwrap();
+        assert!(store.user_by_email(&email).is_none(), "{label}");
+        assert_eq!(
+            store.user_count(),
+            1,
+            "{label}: invalid link must not create a user"
+        );
+    }
+
+    let s = state();
+    let (_, anonymous) = post(&s, &format!("{V1}/accounts:signUp"), &json!({}));
+    s.store.lock().unwrap().set_password_policy(policy());
+    let email = "valid-session-weak-link@example.com";
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "idToken": anonymous["idToken"],
+            "email": email,
+            "password": "weakpass",
+            "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+        "a valid session reaches policy evaluation after authentication"
+    );
+    assert!(s.store.lock().unwrap().user_by_email(email).is_none());
+}
+
+#[test]
+fn client_namespace_selectors_fail_closed_without_default_fallback() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    assert!(registry.register(
+        "worker-auth",
+        AuthStore::new("worker-auth", SplitMix64::new(17), TotpPolicy::default()),
+    ));
+    registry.ensure_tenant("worker-auth", "tenant-a").unwrap();
+    s.registry = Some(registry.clone());
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("worker-auth", &[], &["worker-key".to_owned()])
+        .unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=unknown-key"),
+        &json!({"email": "unknown-key@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_API_KEY");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("unknown-key@example.com")
+        .is_none());
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=worker-key"),
+        &json!({
+            "tenantId": "missing-tenant",
+            "email": "missing-tenant@example.com",
+            "password": "password1"
+        }),
+    );
+    assert_eq!(status, 404, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND");
+    assert!(registry
+        .store_for("worker-auth")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_email("missing-tenant@example.com")
+        .is_none());
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?tenantId=missing-tenant"),
+        &json!({"email": "missing-query-tenant@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 404, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("missing-query-tenant@example.com")
+        .is_none());
+
+    let (status, worker) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=worker-key"),
+        &json!({"email": "worker-auth@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200, "{worker}");
+    assert_eq!(worker["tenantId"], Value::Null);
+    assert!(registry
+        .store_for("worker-auth")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_email("worker-auth@example.com")
+        .is_some());
+}

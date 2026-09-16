@@ -4451,20 +4451,30 @@ fn select_store(
     }
     let (api_key, query_tenant) = query_selectors(query);
     if let Some(key) = api_key.as_deref() {
-        let project = state
+        let Some(project) = state
             .tenancy
             .as_ref()
             .and_then(|t| t.read().ok())
-            .and_then(|t| t.project_of_api_key(key).map(str::to_owned));
-        if let Some(project) = project {
-            let tenant = str_field(body, "tenantId").or(query_tenant.as_deref());
-            if let Some(store) = tenant
-                .and_then(|tenant| registry.tenant_store(&project, tenant))
-                .or_else(|| registry.store_for(&project))
-            {
-                return Ok(store);
-            }
+            .and_then(|t| t.project_of_api_key(key).map(str::to_owned))
+        else {
+            // An explicit API-key selector is an assertion about the target project. Never
+            // silently route an unknown key to the default namespace.
+            return Err(error(400, "INVALID_API_KEY"));
+        };
+        let tenant = str_field(body, "tenantId").or(query_tenant.as_deref());
+        if let Some(tenant) = tenant {
+            let Some(store) = registry.tenant_store(&project, tenant) else {
+                return Err(error(404, "TENANT_NOT_FOUND"));
+            };
+            return Ok(store);
         }
+        let Some(store) = registry
+            .store_for(&project)
+            .or_else(|| registry.routed_store_for(&project))
+        else {
+            return Err(error(400, "INVALID_PROJECT_ID"));
+        };
+        return Ok(store);
     }
     let exchanges_custom_token = matches!(
         resolution,
@@ -4526,10 +4536,17 @@ fn select_store(
             RefreshTokenStoreMatch::NotFound => {}
         }
     }
-    if let Some(tenant) = str_field(body, "tenantId").or(query_tenant.as_deref()) {
-        if let Some(store) = registry.tenant_store(registry.default_project(), tenant) {
-            return Ok(store);
-        }
+    let body_tenant = str_field(body, "tenantId");
+    if let Some(tenant) = body_tenant.or(query_tenant.as_deref()) {
+        let Some(store) = registry.tenant_store(registry.default_project(), tenant) else {
+            // Preserve the client-body tenant error shape while refusing to route an
+            // unknown query tenant to the default project namespace.
+            return Err(error(
+                if body_tenant.is_some() { 400 } else { 404 },
+                "TENANT_NOT_FOUND",
+            ));
+        };
+        return Ok(store);
     }
     Ok(state.store.clone())
 }
@@ -4605,20 +4622,21 @@ fn sign_up(
     } else {
         NewUser::anonymous()
     };
-    // Validated before the account exists: a rejected password leaves no user behind.
-    if let Some(password) = password {
-        if let Err(e) = store.validate_password_for(
-            fireemu_core_auth::password_policy::Operation::Registration,
-            password,
-        ) {
-            return auth_error(&e);
-        }
-    }
     let (uid, created_new) = if has_session {
         let uid = match verify(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
         };
+        // Authenticate the session before evaluating a supplied password. This keeps invalid,
+        // expired, or cross-session tokens from being classified as password-policy failures.
+        if let Some(password) = password {
+            if let Err(e) = store.validate_password_for(
+                fireemu_core_auth::password_policy::Operation::Registration,
+                password,
+            ) {
+                return auth_error(&e);
+            }
+        }
         let Some(email) = new_user.email.as_deref() else {
             return error(400, "MISSING_EMAIL");
         };
@@ -4638,6 +4656,15 @@ fn sign_up(
         }
         (uid, false)
     } else {
+        // Validate before creating a new account so rejected passwords leave no user behind.
+        if let Some(password) = password {
+            if let Err(e) = store.validate_password_for(
+                fireemu_core_auth::password_policy::Operation::Registration,
+                password,
+            ) {
+                return auth_error(&e);
+            }
+        }
         match store.create_user_with_id_as(AuthPrincipal::EndUser, new_user, forced_local_id, at) {
             Ok(uid) => (uid, true),
             Err(e) => return auth_error(&e),

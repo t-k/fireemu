@@ -181,6 +181,8 @@ struct PreparedAuth {
     /// did not (the official emulator's export without the key, or no config.json at all),
     /// the running store's setting is kept: an import must not switch the protection off.
     email_privacy_declared: bool,
+    /// Whether `signIn.allowDuplicateEmails` was explicitly declared in `config.json`.
+    allow_duplicate_emails_declared: bool,
     /// The optional fireemu-only password policy sidecar. The official Auth export has no
     /// equivalent, so a missing sidecar leaves the running policy unchanged.
     password_policies: Option<PasswordPolicies>,
@@ -229,7 +231,11 @@ impl PreparedAuth {
             } else {
                 current.disabled_user_deletion
             },
-            allow_duplicate_emails: self.config.allow_duplicate_emails,
+            allow_duplicate_emails: if self.allow_duplicate_emails_declared {
+                self.config.allow_duplicate_emails
+            } else {
+                current.allow_duplicate_emails
+            },
         }
     }
 }
@@ -1320,54 +1326,60 @@ fn read_auth_text(
     .map_err(|error| ArtifactError::new("auth", path, error))
 }
 
-/// The optional `config.json` of the Auth section: the project configuration and whether it
-/// declared the email privacy setting.
+/// The optional `config.json` of the Auth section and the declaration state of each setting.
 fn read_auth_config(
     dir: &Path,
     section_dir: &Path,
     remaining_bytes: &mut u64,
-) -> Result<(ProjectAuthConfig, bool, bool, bool), ArtifactError> {
+) -> Result<(ProjectAuthConfig, bool, bool, bool, bool), ArtifactError> {
     let config_path = section_dir.join(CONFIG_FILE);
-    let (config, email_privacy_declared, signup_declared, deletion_declared) =
-        match std::fs::symlink_metadata(&config_path) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-                    return Err(ArtifactError::new(
-                        "auth",
-                        &config_path,
-                        "the optional config is not a regular no-symlink file",
-                    ));
-                }
-                let text = read_auth_text(dir, &config_path, remaining_bytes)?;
-                let parsed = AuthConfig::parse(&text)
-                    .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
-                (
-                    ProjectAuthConfig {
-                        allow_duplicate_emails: parsed.allow_duplicate_emails,
-                        enable_improved_email_privacy: parsed
-                            .enable_improved_email_privacy
-                            .unwrap_or(false),
-                        disabled_user_signup: parsed.disabled_user_signup.unwrap_or(false),
-                        disabled_user_deletion: parsed.disabled_user_deletion.unwrap_or(false),
-                    },
-                    parsed.enable_improved_email_privacy.is_some(),
-                    parsed.disabled_user_signup.is_some(),
-                    parsed.disabled_user_deletion.is_some(),
-                )
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                (ProjectAuthConfig::default(), false, false, false)
-            }
-            Err(e) => {
+    let (
+        config,
+        allow_duplicate_emails_declared,
+        email_privacy_declared,
+        signup_declared,
+        deletion_declared,
+    ) = match std::fs::symlink_metadata(&config_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
                 return Err(ArtifactError::new(
                     "auth",
                     &config_path,
-                    format!("cannot inspect the optional config: {e}"),
-                ))
+                    "the optional config is not a regular no-symlink file",
+                ));
             }
-        };
+            let text = read_auth_text(dir, &config_path, remaining_bytes)?;
+            let parsed = AuthConfig::parse(&text)
+                .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
+            (
+                ProjectAuthConfig {
+                    allow_duplicate_emails: parsed.allow_duplicate_emails.unwrap_or(false),
+                    enable_improved_email_privacy: parsed
+                        .enable_improved_email_privacy
+                        .unwrap_or(false),
+                    disabled_user_signup: parsed.disabled_user_signup.unwrap_or(false),
+                    disabled_user_deletion: parsed.disabled_user_deletion.unwrap_or(false),
+                },
+                parsed.allow_duplicate_emails.is_some(),
+                parsed.enable_improved_email_privacy.is_some(),
+                parsed.disabled_user_signup.is_some(),
+                parsed.disabled_user_deletion.is_some(),
+            )
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            (ProjectAuthConfig::default(), false, false, false, false)
+        }
+        Err(e) => {
+            return Err(ArtifactError::new(
+                "auth",
+                &config_path,
+                format!("cannot inspect the optional config: {e}"),
+            ))
+        }
+    };
     Ok((
         config,
+        allow_duplicate_emails_declared,
         email_privacy_declared,
         signup_declared,
         deletion_declared,
@@ -1446,8 +1458,13 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
         Some(IMPORT_AUTH_FILE_BYTES_LIMIT),
     )?;
     let mut remaining_bytes = IMPORT_AUTH_TOTAL_BYTES_LIMIT;
-    let (config, email_privacy_declared, signup_declared, deletion_declared) =
-        read_auth_config(dir, &section_dir, &mut remaining_bytes)?;
+    let (
+        config,
+        allow_duplicate_emails_declared,
+        email_privacy_declared,
+        signup_declared,
+        deletion_declared,
+    ) = read_auth_config(dir, &section_dir, &mut remaining_bytes)?;
     let password_policies = read_auth_password_policies(dir, &section_dir, &mut remaining_bytes)?;
     let auth_settings = read_auth_settings(dir, &section_dir, &mut remaining_bytes)?;
     let mut tenants = BTreeMap::new();
@@ -1528,6 +1545,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
         users,
         password_updated_at,
         config,
+        allow_duplicate_emails_declared,
         client_permissions_declared: (signup_declared, deletion_declared),
         email_privacy_declared,
         password_policies,
@@ -1785,7 +1803,9 @@ fn parse_protobuf_duration_text(text: &str, path: &Path) -> Result<LogicalDurati
 
 fn auth_config_from_settings(config: &AuthConfig, current: ProjectAuthConfig) -> ProjectAuthConfig {
     ProjectAuthConfig {
-        allow_duplicate_emails: config.allow_duplicate_emails,
+        allow_duplicate_emails: config
+            .allow_duplicate_emails
+            .unwrap_or(current.allow_duplicate_emails),
         enable_improved_email_privacy: config
             .enable_improved_email_privacy
             .unwrap_or(current.enable_improved_email_privacy),
@@ -2518,7 +2538,7 @@ fn export_auth(
     let config = store.config();
     let config_path = section_dir.join(CONFIG_FILE);
     let document = AuthConfig {
-        allow_duplicate_emails: config.allow_duplicate_emails,
+        allow_duplicate_emails: Some(config.allow_duplicate_emails),
         enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
         disabled_user_signup: Some(config.disabled_user_signup),
         disabled_user_deletion: Some(config.disabled_user_deletion),
@@ -2566,7 +2586,7 @@ fn export_auth(
                 tenant_id: Some(tenant.clone()),
                 settings: AuthSettingsRecord {
                     config: Some(AuthConfig {
-                        allow_duplicate_emails: tenant_config.allow_duplicate_emails,
+                        allow_duplicate_emails: Some(tenant_config.allow_duplicate_emails),
                         enable_improved_email_privacy: Some(
                             tenant_config.enable_improved_email_privacy,
                         ),
@@ -3430,7 +3450,7 @@ mod tests {
             disabled_user_deletion: true,
         };
         let config = AuthConfig {
-            allow_duplicate_emails: false,
+            allow_duplicate_emails: None,
             enable_improved_email_privacy: None,
             disabled_user_signup: Some(true),
             disabled_user_deletion: None,
@@ -3438,12 +3458,28 @@ mod tests {
         assert_eq!(
             super::auth_config_from_settings(&config, destination),
             ProjectAuthConfig {
-                allow_duplicate_emails: false,
+                allow_duplicate_emails: true,
                 enable_improved_email_privacy: false,
                 disabled_user_signup: true,
                 disabled_user_deletion: true,
             }
         );
+    }
+
+    #[test]
+    fn omitted_duplicate_email_setting_preserves_import_destination_value() {
+        let destination = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            ..ProjectAuthConfig::default()
+        };
+        let mut omitted = super::PreparedAuth::default();
+        omitted.config.allow_duplicate_emails = false;
+        assert!(omitted.config_over(destination).allow_duplicate_emails);
+
+        let mut explicit = super::PreparedAuth::default();
+        explicit.config.allow_duplicate_emails = false;
+        explicit.allow_duplicate_emails_declared = true;
+        assert!(!explicit.config_over(destination).allow_duplicate_emails);
     }
 
     #[cfg(not(unix))]

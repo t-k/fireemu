@@ -756,8 +756,9 @@ pub struct AccountsFile {
 /// A parsed `config.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthConfig {
-    /// `signIn.allowDuplicateEmails`.
-    pub allow_duplicate_emails: bool,
+    /// `signIn.allowDuplicateEmails`; `None` when the artifact does not declare it, so an
+    /// import keeps the running namespace setting instead of silently applying the default.
+    pub allow_duplicate_emails: Option<bool>,
     /// `emailPrivacyConfig.enableImprovedEmailPrivacy`; `None` when the artifact does not
     /// declare it, so an import keeps the running configuration instead of switching the
     /// protection off.
@@ -797,8 +798,7 @@ impl AuthConfig {
             }
         }
         Ok(Self {
-            allow_duplicate_emails: bool_member(&value, "signIn", "allowDuplicateEmails")?
-                .unwrap_or(false),
+            allow_duplicate_emails: bool_member(&value, "signIn", "allowDuplicateEmails")?,
             enable_improved_email_privacy: bool_member(
                 &value,
                 "emailPrivacyConfig",
@@ -821,12 +821,11 @@ impl AuthConfig {
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut doc = Json::object();
-        let mut sign_in = Json::object();
-        sign_in.insert(
-            "allowDuplicateEmails",
-            Json::Bool(self.allow_duplicate_emails),
-        );
-        doc.insert("signIn", sign_in);
+        if let Some(allow_duplicate_emails) = self.allow_duplicate_emails {
+            let mut sign_in = Json::object();
+            sign_in.insert("allowDuplicateEmails", Json::Bool(allow_duplicate_emails));
+            doc.insert("signIn", sign_in);
+        }
         // An undeclared setting stays undeclared: writing `false` would switch the protection
         // off on the next import.
         if let Some(enabled) = self.enable_improved_email_privacy {
@@ -1479,7 +1478,7 @@ mod tests {
         assert_eq!(
             config,
             AuthConfig {
-                allow_duplicate_emails: false,
+                allow_duplicate_emails: Some(false),
                 enable_improved_email_privacy: Some(false),
                 disabled_user_signup: None,
                 disabled_user_deletion: None,
@@ -1490,7 +1489,7 @@ mod tests {
             config
         );
         let enabled = AuthConfig {
-            allow_duplicate_emails: true,
+            allow_duplicate_emails: Some(true),
             enable_improved_email_privacy: Some(true),
             disabled_user_signup: None,
             disabled_user_deletion: None,
@@ -1501,11 +1500,12 @@ mod tests {
         );
         // An undeclared privacy setting survives a round trip undeclared.
         let undeclared = AuthConfig {
-            allow_duplicate_emails: false,
+            allow_duplicate_emails: None,
             enable_improved_email_privacy: None,
             disabled_user_signup: None,
             disabled_user_deletion: None,
         };
+        assert!(!undeclared.to_json().contains("signIn"));
         assert!(!undeclared.to_json().contains("emailPrivacyConfig"));
         assert_eq!(
             AuthConfig::parse(&undeclared.to_json()).expect("it parses"),
@@ -1514,9 +1514,21 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_email_setting_distinguishes_omitted_from_explicit_false() {
+        let omitted = AuthConfig::parse("{}").expect("empty config parses");
+        assert_eq!(omitted.allow_duplicate_emails, None);
+        assert!(!omitted.to_json().contains("allowDuplicateEmails"));
+
+        let disabled = AuthConfig::parse(r#"{"signIn":{"allowDuplicateEmails":false}}"#)
+            .expect("explicit false parses");
+        assert_eq!(disabled.allow_duplicate_emails, Some(false));
+        assert!(disabled.to_json().contains("allowDuplicateEmails"));
+    }
+
+    #[test]
     fn client_permissions_are_optional_and_round_trip_without_affecting_official_config() {
         let config = AuthConfig {
-            allow_duplicate_emails: true,
+            allow_duplicate_emails: Some(true),
             enable_improved_email_privacy: Some(true),
             disabled_user_signup: Some(true),
             disabled_user_deletion: Some(false),
@@ -1604,7 +1616,7 @@ mod tests {
                 tenant_id: Some("tenant-a".to_owned()),
                 settings: AuthSettingsRecord {
                     config: Some(AuthConfig {
-                        allow_duplicate_emails: false,
+                        allow_duplicate_emails: Some(false),
                         enable_improved_email_privacy: Some(true),
                         disabled_user_signup: Some(true),
                         disabled_user_deletion: Some(true),

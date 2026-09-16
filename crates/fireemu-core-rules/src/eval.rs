@@ -1307,6 +1307,7 @@ fn undetermined(v: &RulesValue) -> bool {
         | RulesValue::PartialList(_)
         | RulesValue::PartialListAny(_)
         | RulesValue::Range(_)
+        | RulesValue::RangeExcluding { .. }
         | RulesValue::OneOf(_)
         | RulesValue::NotOneOf(_) => true,
         RulesValue::List(items) | RulesValue::Set(items) => items.iter().any(undetermined),
@@ -1703,6 +1704,8 @@ impl<'a> Evaluator<'a> {
                 | RulesValue::PartialListAny(_)
                 | RulesValue::OneOf(_)
                 | RulesValue::NotOneOf(_)
+                | RulesValue::Range(_)
+                | RulesValue::RangeExcluding { .. }
         ) {
             return None;
         }
@@ -1868,7 +1871,7 @@ impl<'a> Evaluator<'a> {
                 if matches!(v, RulesValue::Unknown) {
                     return Err(EvalError::Unknown);
                 }
-                if let RulesValue::Range(r) = &v {
+                if let RulesValue::Range(r) | RulesValue::RangeExcluding { range: r, .. } = &v {
                     // Every member shares the range's class; `int` vs `float` stays open.
                     let class = r.class().ok_or(EvalError::Unknown)?;
                     return match type_name.as_str() {
@@ -1889,6 +1892,7 @@ impl<'a> Evaluator<'a> {
                 if matches!(
                     v,
                     RulesValue::NotOneOf(_)
+                        | RulesValue::RangeExcluding { .. }
                         | RulesValue::PartialMap(_)
                         | RulesValue::PartialList(_)
                         | RulesValue::PartialListAny(_)
@@ -2024,6 +2028,49 @@ impl<'a> Evaluator<'a> {
                     other => other,
                 };
                 V::Bool(range_relation(r, mirrored, c)?)
+            }
+            (
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge,
+                V::RangeExcluding { range, excluded },
+                c,
+            ) if !undetermined(c) => {
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                    && excluded.iter().any(|e| values_equal(e, c))
+                {
+                    V::Bool(op == BinaryOp::Ne)
+                } else {
+                    V::Bool(range_relation(range, op, c)?)
+                }
+            }
+            (
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge,
+                c,
+                V::RangeExcluding { range, excluded },
+            ) if !undetermined(c) => {
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                    && excluded.iter().any(|e| values_equal(e, c))
+                {
+                    V::Bool(op == BinaryOp::Ne)
+                } else {
+                    let mirrored = match op {
+                        BinaryOp::Lt => BinaryOp::Gt,
+                        BinaryOp::Le => BinaryOp::Ge,
+                        BinaryOp::Gt => BinaryOp::Lt,
+                        BinaryOp::Ge => BinaryOp::Le,
+                        other => other,
+                    };
+                    V::Bool(range_relation(range, mirrored, c)?)
+                }
             }
             // A set of candidates: decided when every candidate answers the same.
             (_, V::OneOf(members), c) if !undetermined(c) => V::Bool(unanimous(

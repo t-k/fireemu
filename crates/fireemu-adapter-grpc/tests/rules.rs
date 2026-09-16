@@ -1482,6 +1482,7 @@ async fn query_proof_preserves_same_field_range_with_negation_filters() {
 service cloud.firestore {
   match /databases/{database}/documents {
     match /scores/{id} { allow list: if resource.data.score > 0; }
+    match /excluded/{id} { allow list: if resource.data.score != 20; }
   }
 }",
         )
@@ -1489,8 +1490,8 @@ service cloud.firestore {
     let int = |value: i64| pb::Value {
         value_type: Some(pb::value::ValueType::IntegerValue(value)),
     };
-    let query = |range_value: i64, negation: sq::Filter| {
-        let mut request = list("scores");
+    let query = |collection: &str, range_value: i64, negation: sq::Filter| {
+        let mut request = list(collection);
         if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
             &mut request.query_type
         {
@@ -1540,19 +1541,33 @@ service cloud.firestore {
     // The range proves score > 0; the negation only removes values from that range.
     assert!(h
         .client
-        .run_query(with_bearer(query(10, not_equal(20)), &alice_token))
+        .run_query(with_bearer(
+            query("scores", 10, not_equal(20)),
+            &alice_token
+        ))
         .await
         .is_ok());
     assert!(h
         .client
-        .run_query(with_bearer(query(10, not_in), &alice_token))
+        .run_query(with_bearer(query("scores", 10, not_in), &alice_token))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("excluded", 10, not_equal(20)),
+            &alice_token
+        ))
         .await
         .is_ok());
 
     // A range that still includes non-positive values cannot prove the rule.
     assert_eq!(
         h.client
-            .run_query(with_bearer(query(-10, not_equal(20)), &alice_token))
+            .run_query(with_bearer(
+                query("scores", -10, not_equal(20)),
+                &alice_token
+            ))
             .await
             .unwrap_err()
             .code(),

@@ -981,6 +981,7 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
     // Inequality filters on one field combine into one range (Firestore requires every
     // range filter of a field to share the value's class); an equality wins over them.
     let mut ranges: BTreeMap<&FieldPath, Option<ValueRange>> = BTreeMap::new();
+    let mut exclusions: BTreeMap<&FieldPath, Vec<RulesValue>> = BTreeMap::new();
     for atom in disjunction {
         if let FilterExpr::Field { field, op, value } = atom {
             if !field.is_document_name() {
@@ -995,13 +996,6 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                 }
             }
         }
-    }
-    for (field, range) in &ranges {
-        set_nested(
-            &mut data,
-            field,
-            range.clone().map_or(RulesValue::Unknown, RulesValue::Range),
-        );
     }
     for atom in disjunction {
         match atom {
@@ -1040,23 +1034,17 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                 }
                 // Exists, is not null and differs from the listed values.
                 FieldOp::NotEqual => {
-                    if !ranges.contains_key(field) {
-                        set_nested(
-                            &mut data,
-                            field,
-                            RulesValue::NotOneOf(vec![rules_value(value)]),
-                        );
-                    }
+                    exclusions
+                        .entry(field)
+                        .or_default()
+                        .push(rules_value(value));
                 }
                 FieldOp::NotIn => {
-                    if !ranges.contains_key(field) {
-                        if let Value::Array(items) = value {
-                            set_nested(
-                                &mut data,
-                                field,
-                                RulesValue::NotOneOf(items.iter().map(rules_value).collect()),
-                            );
-                        }
+                    if let Value::Array(items) = value {
+                        exclusions
+                            .entry(field)
+                            .or_default()
+                            .extend(items.iter().map(rules_value));
                     }
                 }
                 _ => {}
@@ -1066,6 +1054,22 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                 op: UnaryOp::IsNull,
             } => set_nested(&mut data, field, RulesValue::Null),
             _ => {}
+        }
+    }
+    for (field, range) in &ranges {
+        let value = match (range.clone(), exclusions.get(field)) {
+            (Some(range), Some(excluded)) => RulesValue::RangeExcluding {
+                range,
+                excluded: excluded.clone(),
+            },
+            (Some(range), None) => RulesValue::Range(range),
+            (None, _) => RulesValue::Unknown,
+        };
+        set_nested(&mut data, field, value);
+    }
+    for (field, excluded) in exclusions {
+        if !ranges.contains_key(field) {
+            set_nested(&mut data, field, RulesValue::NotOneOf(excluded));
         }
     }
     let mut m = BTreeMap::new();

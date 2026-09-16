@@ -202,6 +202,7 @@ fn auth(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
         // credential above and takes the Admin bypass of specification section 12.2, so it
         // never forwards an App Check field of its own.
         app_check: Vec::new(),
+        peer_ip: None,
     };
     let response = fireemu_adapter_http::identity_toolkit::handle_with(
         &state.auth,

@@ -128,6 +128,37 @@ fn auth_notice_sink(
     })
 }
 
+/// Publishes password-policy overrides from the startup configuration without creating any
+/// project or tenant namespace. The registry keeps overrides for namespaces that are registered
+/// later, so a configured project or tenant receives its policy at its normal creation boundary.
+fn apply_auth_password_policy_overrides(
+    cfg: &RuntimeConfig,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+) -> Result<(), String> {
+    for (index, override_config) in cfg.auth_password_policy_overrides.iter().enumerate() {
+        let policy = override_config.password_policy.to_auth_policy();
+        let applied = match override_config.tenant_id.as_deref() {
+            Some(tenant) => registry.register_tenant_password_policy_override(
+                &override_config.project_id,
+                tenant,
+                policy,
+            ),
+            None => registry
+                .register_project_password_policy_override(&override_config.project_id, policy),
+        };
+        if !applied {
+            let namespace = override_config.tenant_id.as_deref().map_or_else(
+                || override_config.project_id.clone(),
+                |tenant| format!("{}/tenants/{tenant}", override_config.project_id),
+            );
+            return Err(format!(
+                "cannot apply auth.passwordPolicyOverrides[{index}] to {namespace}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let BoundStartup {
         cfg,
@@ -1028,18 +1059,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 crate::random_u128()?,
             ),
         );
-        for override_config in &cfg.auth_password_policy_overrides {
-            let policy = override_config.password_policy.to_auth_policy();
-            if let Some(tenant) = override_config.tenant_id.as_deref() {
-                if let Some(store) = registry.tenant_store(&override_config.project_id, tenant) {
-                    if let Ok(mut store) = store.lock() {
-                        store.set_password_policy(policy);
-                    }
-                }
-            } else {
-                registry.set_project_password_policy(&override_config.project_id, policy);
-            }
-        }
+        apply_auth_password_policy_overrides(&cfg, &registry)?;
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {
@@ -1238,8 +1258,17 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{close_functions_source_admission, function_log_input};
+    use std::sync::{Arc, Mutex};
+
     use fireemu_adapter_logging::wire::build_bundle;
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+    use fireemu_core_types::determinism::SplitMix64;
+    use serde_json::json;
+
+    use super::{
+        apply_auth_password_policy_overrides, close_functions_source_admission, function_log_input,
+    };
 
     #[test]
     fn function_user_logs_keep_the_official_logging_metadata() {
@@ -1288,5 +1317,69 @@ mod tests {
         drop(admitted);
         closed_rx.recv().unwrap();
         closer.join().unwrap();
+    }
+
+    #[test]
+    fn password_policy_overrides_wait_for_namespace_creation() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "passwordPolicyOverrides": [
+                    {
+                        "projectId": "future-project",
+                        "passwordPolicy": {
+                            "enforcementState": "ENFORCE",
+                            "constraints": {"minLength": 12}
+                        }
+                    },
+                    {
+                        "projectId": "demo-app",
+                        "tenantId": "tenant-a",
+                        "passwordPolicy": {
+                            "enforcementState": "ENFORCE",
+                            "constraints": {"minLength": 13}
+                        }
+                    }
+                ]
+            }
+        }))
+        .expect("valid password-policy overrides");
+        let default_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = AuthRegistry::new("demo-app", default_store);
+
+        apply_auth_password_policy_overrides(&cfg, &registry).expect("overrides apply");
+
+        assert!(registry.store_for("future-project").is_none());
+        assert!(registry.tenant_store("demo-app", "tenant-a").is_none());
+
+        assert!(registry.register(
+            "future-project",
+            AuthStore::new("future-project", SplitMix64::new(2), TotpPolicy::default(),),
+        ));
+        let project = registry.store_for("future-project").expect("project store");
+        assert_eq!(
+            project
+                .lock()
+                .expect("project store lock")
+                .password_policy()
+                .min_length,
+            12
+        );
+
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant store");
+        assert_eq!(
+            tenant
+                .lock()
+                .expect("tenant store lock")
+                .password_policy()
+                .min_length,
+            13
+        );
     }
 }

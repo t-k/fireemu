@@ -487,7 +487,10 @@ mod tests {
         assert!(second.would_exceed);
         quota.commit(second, T0).unwrap();
         assert_eq!(quota.usage("project", "192.0.2.1", T0), (2, 0));
-        assert_eq!(quota.buckets.values().next().unwrap().observed_over_limit, 1);
+        assert_eq!(
+            quota.buckets.values().next().unwrap().observed_over_limit,
+            1
+        );
     }
 
     #[test]

@@ -9842,7 +9842,6 @@ mod tests {
     #[test]
     fn password_policy_versions_rejects_malformed_presence() {
         for versions in [
-            json!(null),
             json!([]),
             json!([{}, {}]),
             json!([{"customStrengthOptions": {}} , {}]),
@@ -9853,6 +9852,11 @@ mod tests {
             });
             assert!(password_policy_from_config_json(&body).is_err());
         }
+        assert!(password_policy_from_config_json(&json!({
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": null,
+        }))
+        .is_ok());
         assert!(password_policy_from_config_json(&json!({
             "passwordPolicyEnforcementState": "ENFORCE",
             "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]

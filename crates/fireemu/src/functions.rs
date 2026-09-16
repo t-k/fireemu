@@ -3144,17 +3144,14 @@ impl BlockingAuthBridge {
                         "blockingFunctions.triggers contains an unsupported event".to_owned()
                     );
                 }
-                let empty = triggers.is_empty();
                 let parse = |event: &str| -> Result<
                     fireemu_core_functions::manifest::BlockingAuthSelection,
                     String,
                 > {
                     let Some(value) = triggers.get(event) else {
-                        return Ok(if empty {
-                            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled
-                        } else {
-                            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery
-                        });
+                        return Ok(
+                            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
+                        );
                     };
                     if value.is_null() {
                         return Ok(
@@ -3267,8 +3264,12 @@ impl BlockingAuthBridge {
         })
     }
 
-    fn blocking_auth_settings_value(&self) -> Option<serde_json::Value> {
-        let settings = self.settings_snapshot().ok()?;
+    fn blocking_auth_settings_value_for_export(&self) -> Result<Option<serde_json::Value>, String> {
+        let settings = self
+            .settings
+            .read()
+            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?
+            .clone();
         let mut object = serde_json::Map::new();
         let mut triggers = serde_json::Map::new();
         for (event_name, event, selection) in [
@@ -3285,22 +3286,33 @@ impl BlockingAuthBridge {
         ] {
             let value = match selection {
                 fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { .. } => {
-                    let Ok(Some(spec)) = self
+                    let spec = self
                         .runtime
                         .manifest()
                         .blocking_auth_target(event, selection)
-                    else {
-                        return None;
-                    };
+                        .map_err(|error| format!("blockingFunctions.{event_name}: {error}"))?
+                        .ok_or_else(|| {
+                            format!(
+                                "blockingFunctions.{event_name}: explicit target is no longer available"
+                            )
+                        })?;
                     blocking_auth_selection_uri(self.runtime.project(), selection, &spec.region)
+                        .ok_or_else(|| {
+                            format!(
+                                "blockingFunctions.{event_name}: explicit target has no exportable URI"
+                            )
+                        })
                 }
-                fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => {
-                    Some(serde_json::Value::Null)
+                fireemu_core_functions::manifest::BlockingAuthSelection::Disabled
+                | fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => {
+                    Ok(serde_json::Value::Null)
                 }
-                fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => None,
             };
-            if let Some(value) = value {
-                triggers.insert(event_name.to_owned(), value);
+            if !matches!(
+                selection,
+                fireemu_core_functions::manifest::BlockingAuthSelection::Discovery
+            ) {
+                triggers.insert(event_name.to_owned(), value?);
             }
         }
         if !triggers.is_empty() {
@@ -3316,7 +3328,100 @@ impl BlockingAuthBridge {
                 }),
             );
         }
-        Some(serde_json::Value::Object(object))
+        Ok(Some(serde_json::Value::Object(object)))
+    }
+
+    fn blocking_auth_settings_value(&self) -> Option<serde_json::Value> {
+        self.blocking_auth_settings_value_for_export()
+            .ok()
+            .flatten()
+    }
+
+    fn blocking_auth_settings_snapshot_value(&self) -> Result<Option<serde_json::Value>, String> {
+        let settings = self
+            .settings
+            .read()
+            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?
+            .clone();
+        let Some(mut value) = self.blocking_auth_settings_value_for_export()? else {
+            return Ok(None);
+        };
+        let mut discovery = Vec::new();
+        if matches!(
+            settings.selections.before_create,
+            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery
+        ) {
+            discovery.push(serde_json::Value::String("beforeCreate".to_owned()));
+        }
+        if matches!(
+            settings.selections.before_sign_in,
+            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery
+        ) {
+            discovery.push(serde_json::Value::String("beforeSignIn".to_owned()));
+        }
+        if let Some(object) = value.as_object_mut() {
+            if !discovery.is_empty() {
+                object.insert(
+                    "__fireemuDiscoveryEvents".to_owned(),
+                    serde_json::Value::Array(discovery),
+                );
+            }
+        }
+        Ok(Some(value))
+    }
+
+    fn restore_blocking_auth_settings_snapshot_value(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<(), String> {
+        let mut value = value.clone();
+        let discovery = value
+            .as_object_mut()
+            .and_then(|object| object.remove("__fireemuDiscoveryEvents"));
+        let mut settings = self.parse_blocking_auth_settings(&value)?;
+        if let Some(events) = discovery {
+            let events = events
+                .as_array()
+                .ok_or_else(|| "blocking Auth snapshot has invalid discovery markers".to_owned())?;
+            for event in events {
+                match event.as_str() {
+                    Some("beforeCreate") => {
+                        settings.selections.before_create =
+                            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery;
+                    }
+                    Some("beforeSignIn") => {
+                        settings.selections.before_sign_in =
+                            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery;
+                    }
+                    _ => {
+                        return Err(
+                            "blocking Auth snapshot has an unsupported discovery marker".to_owned()
+                        )
+                    }
+                }
+            }
+        }
+        for (event, selection) in [
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                &settings.selections.before_create,
+            ),
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                &settings.selections.before_sign_in,
+            ),
+        ] {
+            self.runtime
+                .manifest()
+                .blocking_auth_target(event, selection)
+                .map_err(|error| format!("blockingFunctions: {error}"))?;
+        }
+        let mut current = self
+            .settings
+            .write()
+            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?;
+        *current = settings;
+        Ok(())
     }
 
     /// Validates and atomically replaces the logical project-level blocking settings.
@@ -3327,6 +3432,124 @@ impl BlockingAuthBridge {
             .write()
             .map_err(|_| "blocking Auth settings are poisoned".to_owned())?;
         *current = settings;
+        Ok(())
+    }
+
+    /// Applies only the fields named by an Auth project update mask. A nested update must merge
+    /// against the internal selection state so an omitted Discovery event is not rewritten as
+    /// Disabled merely because the public projection does not serialize Discovery.
+    #[allow(clippy::too_many_lines)]
+    pub fn replace_blocking_auth_settings_masked(
+        &self,
+        value: &serde_json::Value,
+        fields: &[String],
+    ) -> Result<(), String> {
+        let mut next = self
+            .settings_snapshot()
+            .map_err(|()| "blocking Auth settings are poisoned".to_owned())?;
+
+        let has_complete_replacement = fields.iter().any(|field| field == "blockingFunctions");
+        if has_complete_replacement {
+            next = self.parse_blocking_auth_settings(value)?;
+        } else {
+            for field in fields {
+                match field.as_str() {
+                    "blockingFunctions.triggers" => {
+                        let triggers = value
+                            .get("triggers")
+                            .ok_or_else(|| "blockingFunctions.triggers is missing".to_owned())?;
+                        let parsed = self.parse_blocking_auth_settings(
+                            &serde_json::json!({ "triggers": triggers }),
+                        )?;
+                        next.selections = parsed.selections;
+                    }
+                    "blockingFunctions.triggers.beforeCreate"
+                    | "blockingFunctions.triggers.beforeSignIn" => {
+                        let event = field
+                            .strip_prefix("blockingFunctions.triggers.")
+                            .ok_or_else(|| "invalid blocking trigger field".to_owned())?;
+                        let trigger = value
+                            .get("triggers")
+                            .and_then(|triggers| triggers.get(event))
+                            .ok_or_else(|| {
+                                format!("blockingFunctions.triggers.{event} is missing")
+                            })?;
+                        let mut trigger_object = serde_json::Map::new();
+                        trigger_object.insert(event.to_owned(), trigger.clone());
+                        let parsed = self.parse_blocking_auth_settings(&serde_json::json!({
+                            "triggers": trigger_object
+                        }))?;
+                        if event == "beforeCreate" {
+                            next.selections.before_create = parsed.selections.before_create;
+                        } else {
+                            next.selections.before_sign_in = parsed.selections.before_sign_in;
+                        }
+                    }
+                    "blockingFunctions.forwardInboundCredentials" => {
+                        let forwarding =
+                            value.get("forwardInboundCredentials").ok_or_else(|| {
+                                "blockingFunctions.forwardInboundCredentials is missing".to_owned()
+                            })?;
+                        let parsed = self.parse_blocking_auth_settings(
+                            &serde_json::json!({ "forwardInboundCredentials": forwarding }),
+                        )?;
+                        next.forwarding_restrictions = parsed.forwarding_restrictions;
+                    }
+                    "blockingFunctions.forwardInboundCredentials.idToken"
+                    | "blockingFunctions.forwardInboundCredentials.accessToken"
+                    | "blockingFunctions.forwardInboundCredentials.refreshToken" => {
+                        let key = field
+                            .strip_prefix("blockingFunctions.forwardInboundCredentials.")
+                            .ok_or_else(|| "invalid blocking forwarding field".to_owned())?;
+                        let forwarding = value
+                            .get("forwardInboundCredentials")
+                            .and_then(|forwarding| forwarding.get(key))
+                            .ok_or_else(|| {
+                                format!(
+                                    "blockingFunctions.forwardInboundCredentials.{key} is missing"
+                                )
+                            })?;
+                        let enabled = forwarding.as_bool().ok_or_else(|| {
+                            format!("blocking forwarding {key} must be a boolean")
+                        })?;
+                        let mut policy = next.forwarding_restrictions.unwrap_or_default();
+                        match key {
+                            "idToken" => policy.id_token = enabled,
+                            "accessToken" => policy.access_token = enabled,
+                            "refreshToken" => policy.refresh_token = enabled,
+                            _ => unreachable!("validated blocking forwarding field"),
+                        }
+                        next.forwarding_restrictions = Some(policy);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        validate_blocking_auth_forwarding_policy(
+            self.forward_inbound_credentials,
+            next.forwarding_restrictions,
+        )?;
+        for (event, selection) in [
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                &next.selections.before_create,
+            ),
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                &next.selections.before_sign_in,
+            ),
+        ] {
+            self.runtime
+                .manifest()
+                .blocking_auth_target(event, selection)
+                .map_err(|error| format!("blockingFunctions: {error}"))?;
+        }
+        let mut current = self
+            .settings
+            .write()
+            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?;
+        *current = next;
         Ok(())
     }
 
@@ -3530,12 +3753,39 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         self.blocking_auth_settings_value()
     }
 
+    fn blocking_auth_settings_for_export(&self) -> Result<Option<serde_json::Value>, String> {
+        self.blocking_auth_settings_value_for_export()
+    }
+
+    fn blocking_auth_settings_snapshot(&self) -> Result<Option<serde_json::Value>, String> {
+        self.blocking_auth_settings_snapshot_value()
+    }
+
+    fn restore_blocking_auth_settings_snapshot(
+        &self,
+        snapshot: &serde_json::Value,
+    ) -> Result<(), String> {
+        self.restore_blocking_auth_settings_snapshot_value(snapshot)
+    }
+
+    fn blocking_auth_project(&self) -> Option<&str> {
+        Some(self.runtime.project())
+    }
+
     fn validate_blocking_auth_settings(&self, settings: &serde_json::Value) -> Result<(), String> {
         self.parse_blocking_auth_settings(settings).map(|_| ())
     }
 
     fn update_blocking_auth_settings(&self, settings: &serde_json::Value) -> Result<(), String> {
         self.replace_blocking_auth_settings(settings)
+    }
+
+    fn update_blocking_auth_settings_masked(
+        &self,
+        settings: &serde_json::Value,
+        fields: &[String],
+    ) -> Result<(), String> {
+        self.replace_blocking_auth_settings_masked(settings, fields)
     }
 
     fn invoke(
@@ -3759,11 +4009,12 @@ mod tests {
         hash_source_stamp_entry, node_engine_matches, owned_pubsub_topic, package_node_engine,
         parse_node_version, provision_function_pubsub_resources, select_node_installation,
         snapshot_functions_source, source_scan_pacing_delay, stream_source_chunks,
-        update_watch_hash, validate_functions_codebase_budget, FunctionsSourceEntryBudget,
-        FunctionsSourceFileVersion, FunctionsSourceScanBudget, FunctionsSourceStamp,
-        NodeInstallation, PubSubBridge, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
-        MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
-        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
+        update_watch_hash, validate_functions_codebase_budget, BlockingAuthBridge,
+        FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
+        FunctionsSourceStamp, NodeInstallation, PubSubBridge, BLOCKING_AUTH_DEADLINE,
+        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
+        SOURCE_IO_BUFFER_BYTES,
     };
     use super::{push_node_candidate, run_node_probe};
     use fireemu_adapter_functions::manifest_json::parse_manifest;
@@ -4208,6 +4459,65 @@ mod tests {
             &BlockingAuthSelection::Disabled,
             Some(("guardSignIn", "europe-west1"))
         ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn explicit_blocking_export_fails_when_its_manifest_target_disappears() {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_core_functions::manifest::{BlockingAuthSelection, BlockingAuthSelections};
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spec = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 1,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            Arc::new(runner),
+            Some(spec),
+        );
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "removedBeforeCreate".to_owned(),
+                    region: Some("us-central1".to_owned()),
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            false,
+        );
+
+        let error = fireemu_adapter_http::identity_toolkit::AuthBlockingHook::blocking_auth_settings_for_export(&bridge)
+            .unwrap_err();
+        assert!(error.contains("beforeCreate"), "{error}");
+        assert!(error.contains("not discovered"), "{error}");
+        runtime.runner().shutdown().await;
     }
 
     #[test]

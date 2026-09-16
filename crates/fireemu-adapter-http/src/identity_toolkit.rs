@@ -454,6 +454,25 @@ pub trait AuthBlockingHook: Send + Sync {
         None
     }
 
+    /// Returns the logical settings for an export, or an error when an explicit local target can
+    /// no longer be resolved. Export must not silently discard a configured target after a
+    /// Functions manifest change.
+    fn blocking_auth_settings_for_export(&self) -> Result<Option<Value>, String> {
+        Ok(self.blocking_auth_settings())
+    }
+
+    /// Captures enough logical state to restore a settings update if the paired Auth config
+    /// commit fails. Runtime-backed bridges may include private discovery markers here; this
+    /// value is never written to an export.
+    fn blocking_auth_settings_snapshot(&self) -> Result<Option<Value>, String> {
+        Ok(self.blocking_auth_settings())
+    }
+
+    /// Restores a snapshot captured by [`Self::blocking_auth_settings_snapshot`].
+    fn restore_blocking_auth_settings_snapshot(&self, snapshot: &Value) -> Result<(), String> {
+        self.update_blocking_auth_settings(snapshot)
+    }
+
     /// Validates a complete logical blocking settings projection without changing state.
     fn validate_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
         Err("blocking Auth settings are not configurable for this hook".to_owned())
@@ -462,6 +481,22 @@ pub trait AuthBlockingHook: Send + Sync {
     /// Atomically replaces a previously validated logical blocking settings projection.
     fn update_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
         Err("blocking Auth settings are not configurable for this hook".to_owned())
+    }
+
+    /// Applies a masked logical settings update. Runtime-backed hooks may override this to
+    /// preserve internal discovery selections while complete replacements still use explicit
+    /// omitted-event semantics. The default treats the supplied value as a complete projection.
+    fn update_blocking_auth_settings_masked(
+        &self,
+        settings: &Value,
+        _fields: &[String],
+    ) -> Result<(), String> {
+        self.update_blocking_auth_settings(settings)
+    }
+
+    /// Returns the project whose daemon-owned Functions manifest backs this hook.
+    fn blocking_auth_project(&self) -> Option<&str> {
+        None
     }
 }
 
@@ -3106,6 +3141,7 @@ fn valid_blocking_config_field(field: &str) -> bool {
 
 fn project_blocking_settings_update(
     state: &AuthState,
+    project: &str,
     body: &Value,
     fields: &[String],
 ) -> Result<Option<Value>, JsonResponse> {
@@ -3117,7 +3153,11 @@ fn project_blocking_settings_update(
     if blocking_fields.is_empty() {
         return Ok(None);
     }
-    let Some(blocking) = state.blocking.as_ref() else {
+    let Some(blocking) = state
+        .blocking
+        .as_ref()
+        .filter(|hook| hook.blocking_auth_project() == Some(project))
+    else {
         return Err(error(400, "FAILED_PRECONDITION"));
     };
     let mut candidate = blocking
@@ -3185,19 +3225,6 @@ fn project_blocking_settings_update(
             .as_object_mut()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
         group_object.insert(key.to_owned(), value.clone());
-    }
-    if fields.iter().any(|field| field == "blockingFunctions") {
-        let has_partial_triggers = candidate
-            .get("triggers")
-            .and_then(Value::as_object)
-            .is_some_and(|triggers| {
-                !triggers.is_empty()
-                    && (triggers.get("beforeCreate").is_none()
-                        || triggers.get("beforeSignIn").is_none())
-            });
-        if has_partial_triggers {
-            return Err(error(400, "INVALID_ARGUMENT"));
-        }
     }
     blocking
         .validate_blocking_auth_settings(&candidate)
@@ -3643,6 +3670,7 @@ fn project_config_management(
         if let Some(blocking) = state
             .blocking
             .as_ref()
+            .filter(|hook| hook.blocking_auth_project() == Some(project))
             .and_then(|hook| hook.blocking_auth_settings())
         {
             body["blockingFunctions"] = blocking;
@@ -3693,7 +3721,7 @@ fn project_config_management(
     }) {
         return error(400, "INVALID_ARGUMENT");
     }
-    let blocking_settings = match project_blocking_settings_update(state, body, &fields) {
+    let blocking_settings = match project_blocking_settings_update(state, project, body, &fields) {
         Ok(settings) => settings,
         Err(response) => return response,
     };
@@ -3701,6 +3729,37 @@ fn project_config_management(
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
+    // Keep a rollback snapshot while the paired Auth candidate is published. Runtime-backed
+    // bridges include private discovery markers in this snapshot so a failed Auth update cannot
+    // turn an omitted Discovery trigger into Disabled.
+    let blocking_transaction = if let Some(settings) = blocking_settings.as_ref() {
+        let Some(blocking) = state
+            .blocking
+            .as_ref()
+            .filter(|hook| hook.blocking_auth_project() == Some(project))
+        else {
+            return error(400, "FAILED_PRECONDITION");
+        };
+        let Ok(Some(snapshot)) = blocking.blocking_auth_settings_snapshot() else {
+            return error(400, "FAILED_PRECONDITION");
+        };
+        if blocking
+            .update_blocking_auth_settings_masked(settings, &fields)
+            .is_err()
+        {
+            return error(400, "INVALID_ARGUMENT");
+        }
+        Some((blocking, snapshot))
+    } else {
+        None
+    };
+
+    let rollback_blocking = |response: JsonResponse| {
+        if let Some((blocking, snapshot)) = &blocking_transaction {
+            let _ = blocking.restore_blocking_auth_settings_snapshot(snapshot);
+        }
+        response
+    };
     let config = if let Some(registry) = state
         .registry
         .as_ref()
@@ -3718,24 +3777,24 @@ fn project_config_management(
             },
         ) {
             Ok(Some(config)) => config,
-            Ok(None) => return error(500, "INTERNAL"),
-            Err(response) => return response,
+            Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
+            Err(response) => return rollback_blocking(response),
         }
     } else {
         // A pending routed project is not published in the registry yet. Keep its config and
         // policy transition under the selected store lock until the candidate is installed.
         let Ok(mut store) = selected_store.lock() else {
-            return error(500, "INTERNAL");
+            return rollback_blocking(error(500, "INTERNAL"));
         };
         let current_policy = store.password_policy().clone();
         let current_quota = store.signup_quota().config().clone();
         let password_policy = match password_policy_from_update(&current_policy, body, &fields) {
             Ok(policy) => policy,
-            Err(response) => return response,
+            Err(response) => return rollback_blocking(response),
         };
         let signup_quota = match quota_config_from_update(&current_quota, body, &fields) {
             Ok(quota) => quota,
-            Err(response) => return response,
+            Err(response) => return rollback_blocking(response),
         };
         let has_policy = password_policy.is_some();
         let has_quota = signup_quota.is_some();
@@ -3748,27 +3807,19 @@ fn project_config_management(
         }
         if let Some(quota) = signup_quota {
             if store.set_signup_quota_config(quota).is_err() {
-                return error(400, "INVALID_ARGUMENT");
+                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
             }
         }
         drop(store);
         if !patch.is_empty() || has_policy || has_quota {
             if let Some(project) = pending_project {
                 if let Err(response) = install_routed_candidate(state, project, selected_store) {
-                    return response;
+                    return rollback_blocking(response);
                 }
             }
         }
         config
     };
-    if let Some(settings) = blocking_settings {
-        let Some(blocking) = state.blocking.as_ref() else {
-            return error(400, "FAILED_PRECONDITION");
-        };
-        if blocking.update_blocking_auth_settings(&settings).is_err() {
-            return error(400, "INVALID_ARGUMENT");
-        }
-    }
     JsonResponse {
         status: 200,
         body: {
@@ -3783,6 +3834,7 @@ fn project_config_management(
             if let Some(blocking) = state
                 .blocking
                 .as_ref()
+                .filter(|hook| hook.blocking_auth_project() == Some(project))
                 .and_then(|hook| hook.blocking_auth_settings())
             {
                 body["blockingFunctions"] = blocking;

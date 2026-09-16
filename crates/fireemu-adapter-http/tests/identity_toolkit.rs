@@ -13,7 +13,7 @@ use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::password_policy::{
     default_allowed_non_alphanumeric, EnforcementState, PasswordPolicy,
 };
-use fireemu_core_auth::store::AuthStore;
+use fireemu_core_auth::store::{AuthRegistry, AuthStore};
 use fireemu_core_auth::totp::{totp_at, TotpParams};
 use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
@@ -45,6 +45,10 @@ impl AuthBlockingHook for ConfigurableBlockingHook {
 
     fn blocking_auth_settings(&self) -> Option<Value> {
         Some(self.settings.lock().unwrap().clone())
+    }
+
+    fn blocking_auth_project(&self) -> Option<&str> {
+        Some("demo-app")
     }
 
     fn validate_blocking_auth_settings(&self, settings: &Value) -> Result<(), String> {
@@ -1785,6 +1789,85 @@ fn project_blocking_settings_get_patch_preserves_masked_values_and_rejects_atomi
     assert_eq!(status, 200, "{after}");
     assert_eq!(after["blockingFunctions"], updated["blockingFunctions"]);
     assert_eq!(after["client"]["permissions"]["disabledUserSignup"], false);
+}
+
+#[test]
+fn project_blocking_settings_are_isolated_to_the_bridge_project() {
+    let settings = Arc::new(Mutex::new(json!({
+        "triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/checkRegistration"},
+            "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+        }
+    })));
+    let mut s = state();
+    s.blocking = Some(Arc::new(ConfigurableBlockingHook {
+        settings: settings.clone(),
+    }));
+    s.allow_routed_projects = true;
+    let other_store = Arc::new(Mutex::new(AuthStore::new(
+        "other-app",
+        SplitMix64::new(17),
+        TotpPolicy::default(),
+    )));
+    s.registry = Some(Arc::new(AuthRegistry::new("other-app", other_store)));
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/other-app/config";
+
+    let (status, before) = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(status, 200, "{before}");
+    assert!(before.get("blockingFunctions").is_none());
+
+    let (status, rejected) = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=blockingFunctions"),
+        &json!({"blockingFunctions": {"triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/other-app/us-central1/other"},
+            "beforeSignIn": null
+        }}}),
+    );
+    assert_eq!(status, 400, "{rejected}");
+    assert_eq!(rejected["error"]["message"], "FAILED_PRECONDITION");
+    assert_eq!(
+        settings.lock().unwrap()["triggers"]["beforeSignIn"],
+        json!({"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"})
+    );
+}
+
+#[test]
+fn project_blocking_update_rolls_back_when_auth_namespace_commit_fails() {
+    let settings = Arc::new(Mutex::new(json!({
+        "triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/checkRegistration"},
+            "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+        }
+    })));
+    let before = settings.lock().unwrap().clone();
+    let mut s = state();
+    s.blocking = Some(Arc::new(ConfigurableBlockingHook {
+        settings: settings.clone(),
+    }));
+
+    // An Auth registry that does not contain the routed project forces the Auth-side commit to
+    // fail after the blocking candidate has been accepted. The project-level blocking setting
+    // must be restored as part of the failed cross-store update.
+    let other_store = Arc::new(Mutex::new(AuthStore::new(
+        "other-app",
+        SplitMix64::new(19),
+        TotpPolicy::default(),
+    )));
+    s.registry = Some(Arc::new(AuthRegistry::new("other-app", other_store)));
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let (status, rejected) = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=blockingFunctions"),
+        &json!({"blockingFunctions": {"triggers": {
+            "beforeCreate": {"functionUri": "fireemu://functions/demo-app/us-central1/changed"},
+            "beforeSignIn": {"functionUri": "fireemu://functions/demo-app/us-central1/checkSignIn"}
+        }}}),
+    );
+    assert_eq!(status, 500, "{rejected}");
+    assert_eq!(settings.lock().unwrap().clone(), before);
 }
 
 struct ReentrantAdminHook {

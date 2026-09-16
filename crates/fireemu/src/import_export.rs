@@ -2659,11 +2659,25 @@ fn export_auth(
         write_private_file(&path, policies.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
-    let project_blocking = endpoints
-        .blocking
-        .and_then(fireemu_adapter_http::identity_toolkit::AuthBlockingHook::blocking_auth_settings)
-        .map(|value| blocking_settings_record_from_json(&value, &section_dir))
-        .transpose()?;
+    let project_blocking = if let Some(blocking) = endpoints.blocking {
+        if blocking
+            .blocking_auth_project()
+            .is_some_and(|project| project != endpoints.project)
+        {
+            return Err(ArtifactError::new(
+                "auth",
+                &section_dir,
+                "blocking settings belong to a different project",
+            ));
+        }
+        blocking
+            .blocking_auth_settings_for_export()
+            .map_err(|error| ArtifactError::new("auth", &section_dir, error))?
+            .map(|value| blocking_settings_record_from_json(&value, &section_dir))
+            .transpose()?
+    } else {
+        None
+    };
     if project_quota != SignupQuotaConfig::default()
         || project_blocking.is_some()
         || !tenant_settings.is_empty()

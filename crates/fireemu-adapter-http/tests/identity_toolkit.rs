@@ -7299,6 +7299,61 @@ fn admin_v2_project_quota_settings_patch_and_readback_are_atomic() {
 }
 
 #[test]
+fn admin_v2_password_policy_and_quota_patches_preserve_disjoint_updates() {
+    let mut base = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        base.store.clone(),
+    ));
+    base.registry = Some(registry);
+    let state = Arc::new(base);
+    let start = Arc::new(std::sync::Barrier::new(3));
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    std::thread::scope(|scope| {
+        let policy_state = Arc::clone(&state);
+        let policy_start = Arc::clone(&start);
+        scope.spawn(move || {
+            policy_start.wait();
+            let response = admin(
+                &policy_state,
+                "PATCH",
+                &format!(
+                    "{path}?updateMask=passwordPolicyConfig.passwordPolicyEnforcementState"
+                ),
+                &json!({
+                    "passwordPolicyConfig": {
+                        "passwordPolicyEnforcementState": "ENFORCE",
+                        "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
+                    }
+                }),
+            );
+            assert_eq!(response.0, 200, "{}", response.1);
+        });
+        let quota_state = Arc::clone(&state);
+        let quota_start = Arc::clone(&start);
+        scope.spawn(move || {
+            quota_start.wait();
+            let response = admin(
+                &quota_state,
+                "PATCH",
+                &format!("{path}?updateMask=quota.quotaSimulation.mode"),
+                &json!({"quota": {"quotaSimulation": {"mode": "enforce"}}}),
+            );
+            assert_eq!(response.0, 200, "{}", response.1);
+        });
+        start.wait();
+    });
+
+    let read = admin(&state, "GET", path, &json!({}));
+    assert_eq!(read.0, 200, "{}", read.1);
+    assert_eq!(
+        read.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+        "ENFORCE"
+    );
+    assert_eq!(read.1["quota"]["quotaSimulation"]["mode"], "enforce");
+}
+
+#[test]
 fn admin_v2_password_policy_invalid_selected_update_is_atomic() {
     let s = state();
     let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";

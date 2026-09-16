@@ -3419,48 +3419,48 @@ fn project_config_management(
     }) {
         return error(400, "INVALID_ARGUMENT");
     }
-    let current_policy = match selected_store.lock() {
-        Ok(store) => store.password_policy().clone(),
-        Err(_) => return error(500, "INTERNAL"),
-    };
-    let current_quota = match selected_store.lock() {
-        Ok(store) => store.signup_quota().config().clone(),
-        Err(_) => return error(500, "INTERNAL"),
-    };
-    let password_policy = match password_policy_from_update(&current_policy, body, &fields) {
-        Ok(policy) => policy,
-        Err(response) => return response,
-    };
     let mut patch = ProjectAuthConfigPatch::default();
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
-    let signup_quota = match quota_config_from_update(&current_quota, body, &fields) {
-        Ok(quota) => quota,
-        Err(response) => return response,
-    };
-    let has_policy = password_policy.is_some();
-    let has_quota = signup_quota.is_some();
     let config = if let Some(registry) = state
         .registry
         .as_ref()
         .filter(|_| pending_project.is_none())
     {
-        let Some(config) = registry.patch_project_config_with_password_policy_and_quota(
+        // Decode masked replacements after the registry has acquired the namespace gate. This
+        // keeps a concurrent PATCH from merging against a stale policy or quota snapshot.
+        match registry.patch_project_config_with_current_settings(
             project,
             patch,
-            password_policy,
-            signup_quota,
-        ) else {
-            return error(500, "INTERNAL");
-        };
-        config
+            |current_policy, current_quota| {
+                let password_policy = password_policy_from_update(current_policy, body, &fields)?;
+                let signup_quota = quota_config_from_update(current_quota, body, &fields)?;
+                Ok((password_policy, signup_quota))
+            },
+        ) {
+            Ok(Some(config)) => config,
+            Ok(None) => return error(500, "INTERNAL"),
+            Err(response) => return response,
+        }
     } else {
         // A pending routed project is not published in the registry yet. Keep its config and
         // policy transition under the selected store lock until the candidate is installed.
         let Ok(mut store) = selected_store.lock() else {
             return error(500, "INTERNAL");
         };
+        let current_policy = store.password_policy().clone();
+        let current_quota = store.signup_quota().config().clone();
+        let password_policy = match password_policy_from_update(&current_policy, body, &fields) {
+            Ok(policy) => policy,
+            Err(response) => return response,
+        };
+        let signup_quota = match quota_config_from_update(&current_quota, body, &fields) {
+            Ok(quota) => quota,
+            Err(response) => return response,
+        };
+        let has_policy = password_policy.is_some();
+        let has_quota = signup_quota.is_some();
         let config = patch.apply_to(store.config());
         if !patch.is_empty() {
             store.set_config(config);
@@ -3473,15 +3473,16 @@ fn project_config_management(
                 return error(400, "INVALID_ARGUMENT");
             }
         }
-        config
-    };
-    if !patch.is_empty() || has_policy || has_quota {
-        if let Some(project) = pending_project {
-            if let Err(response) = install_routed_candidate(state, project, selected_store) {
-                return response;
+        drop(store);
+        if !patch.is_empty() || has_policy || has_quota {
+            if let Some(project) = pending_project {
+                if let Err(response) = install_routed_candidate(state, project, selected_store) {
+                    return response;
+                }
             }
         }
-    }
+        config
+    };
     JsonResponse {
         status: 200,
         body: {

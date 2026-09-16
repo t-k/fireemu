@@ -4084,9 +4084,14 @@ impl AuthRegistry {
             Some(_) => Some(self.next_lifecycle_epoch()?),
             None => None,
         };
-        let (policy, config, signer) = {
+        let (policy, config, quota, signer) = {
             let default = self.default.lock().ok()?;
-            (*default.policy(), default.config(), default.signer_arc())
+            (
+                *default.policy(),
+                default.config(),
+                default.signup_quota().config().clone(),
+                default.signer_arc(),
+            )
         };
         let explicit_password_policy = self
             .project_password_policy_overrides
@@ -4113,6 +4118,7 @@ impl AuthRegistry {
             store.set_lifecycle_epoch(epoch);
         }
         store.set_config(explicit_config.map_or(config, |patch| patch.apply_to(config)));
+        store.set_signup_quota_config(quota).ok()?;
         store.set_project_number(self.project_numbers.get(project).copied());
         if let Some(signer) = signer {
             store.set_signer(signer);
@@ -5420,12 +5426,55 @@ impl AuthRegistry {
         password_policy: Option<PasswordPolicy>,
         signup_quota: Option<SignupQuotaConfig>,
     ) -> Option<ProjectAuthConfig> {
+        self.patch_project_config_with_current_settings(project, patch, |_, _| {
+            Ok::<_, ()>((password_policy, signup_quota))
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// Applies a project settings update after taking the namespace gate and reading the
+    /// current policy and quota under that same gate. The callback is used by adapters that
+    /// decode a masked replacement from the current value; keeping that merge inside the gate
+    /// prevents two disjoint concurrent PATCH requests from overwriting each other's fields.
+    /// A callback error is returned to the caller without publishing any state.
+    pub fn patch_project_config_with_current_settings<F, E>(
+        &self,
+        project: &str,
+        patch: ProjectAuthConfigPatch,
+        update: F,
+    ) -> Result<Option<ProjectAuthConfig>, E>
+    where
+        F: FnOnce(
+            &PasswordPolicy,
+            &SignupQuotaConfig,
+        ) -> Result<(Option<PasswordPolicy>, Option<SignupQuotaConfig>), E>,
+    {
+        let Some(gate) = self.operation_gate(project, None) else {
+            return Ok(None);
+        };
+        let Ok(_operation) = gate.lock() else {
+            return Ok(None);
+        };
+        let Some(parent) = self.project_store(project) else {
+            return Ok(None);
+        };
+        let (current_policy, current_quota) = {
+            let Ok(parent) = parent.lock() else {
+                return Ok(None);
+            };
+            (
+                parent.password_policy().clone(),
+                parent.signup_quota().config().clone(),
+            )
+        };
+        let (password_policy, signup_quota) = update(&current_policy, &current_quota)?;
         if let Some(quota) = signup_quota.as_ref() {
-            SignupQuota::new(quota.clone()).ok()?;
+            if SignupQuota::new(quota.clone()).is_err() {
+                return Ok(None);
+            }
         }
-        let gate = self.operation_gate(project, None)?;
-        let _operation = gate.lock().ok()?;
-        self.patch_project_config_under_gate(project, patch, password_policy, signup_quota)
+        Ok(self.patch_project_config_under_gate(project, patch, password_policy, signup_quota))
     }
 
     /// Registers a non-password Auth config override without creating the project namespace.
@@ -5752,6 +5801,18 @@ impl AuthRegistry {
             parent.set_signup_quota_config(quota).ok()?;
         }
         Some(config)
+    }
+
+    fn project_store(&self, project: &str) -> Option<SharedAuthStore> {
+        if project == self.default_project {
+            return Some(self.default.clone());
+        }
+        let projects = self.projects.lock().ok()?;
+        projects
+            .registered
+            .get(project)
+            .or_else(|| projects.routed.get(project))
+            .cloned()
     }
 
     /// Deletes a tenant namespace and its metadata.
@@ -7905,13 +7966,15 @@ mod broad_project_number_tests {
 #[cfg(test)]
 mod password_policy_namespace_tests {
     use super::{
-        AuthNamespaceConfigPatch, AuthRegistry, AuthSnapshot, AuthStore, ProjectAuthConfig,
-        ProjectAuthConfigPatch, TenantMetadataPatch,
+        AuthNamespaceConfigPatch, AuthPrincipal, AuthRegistry, AuthSnapshot, AuthStore,
+        ProjectAuthConfig, ProjectAuthConfigPatch, TenantMetadataPatch,
     };
     use crate::mfa::TotpPolicy;
     use crate::password_policy::{EnforcementState, PasswordPolicy};
+    use crate::signup_quota::{QuotaAlgorithm, QuotaMode, SignupQuotaConfig};
     use fireemu_core_types::determinism::SplitMix64;
-    use std::sync::{Arc, Mutex};
+    use fireemu_core_types::time::LogicalInstant;
+    use std::sync::{Arc, Barrier, Mutex};
 
     fn strict_policy() -> PasswordPolicy {
         PasswordPolicy::try_new(
@@ -8443,6 +8506,136 @@ mod password_policy_namespace_tests {
                 .expect("routed store")
                 .password_policy(),
             &policy
+        );
+    }
+
+    #[test]
+    fn concurrent_project_setting_updates_preserve_disjoint_changes() {
+        let registry = Arc::new(AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        ));
+        let ready = Arc::new(Barrier::new(3));
+        let policy_registry = Arc::clone(&registry);
+        let policy_ready = Arc::clone(&ready);
+        let policy_thread = std::thread::spawn(move || {
+            policy_ready.wait();
+            policy_registry
+                .patch_project_config_with_current_settings(
+                    "demo-app",
+                    ProjectAuthConfigPatch::default(),
+                    |current_policy, _| {
+                        let mut policy = current_policy.clone();
+                        policy.force_upgrade_on_signin = true;
+                        Ok::<_, ()>((Some(policy), None))
+                    },
+                )
+                .expect("policy update is accepted")
+                .expect("project exists");
+        });
+        let quota_registry = Arc::clone(&registry);
+        let quota_ready = Arc::clone(&ready);
+        let quota_thread = std::thread::spawn(move || {
+            quota_ready.wait();
+            quota_registry
+                .patch_project_config_with_current_settings(
+                    "demo-app",
+                    ProjectAuthConfigPatch::default(),
+                    |_, current_quota| {
+                        let mut quota = current_quota.clone();
+                        quota.mode = QuotaMode::Enforce;
+                        quota.default_quota_per_hour = 7;
+                        quota.algorithm = QuotaAlgorithm::FixedWindowV1;
+                        quota.max_tracked_buckets = 16;
+                        quota.temporary = Some(
+                            crate::signup_quota::TemporaryQuota::new(
+                                3,
+                                LogicalInstant::UNIX_EPOCH,
+                                fireemu_core_types::time::LogicalDuration::from_seconds(60),
+                            )
+                            .expect("temporary quota is valid"),
+                        );
+                        Ok::<_, ()>((None, Some(quota)))
+                    },
+                )
+                .expect("quota update is accepted")
+                .expect("project exists");
+        });
+        ready.wait();
+        policy_thread.join().expect("policy thread");
+        quota_thread.join().expect("quota thread");
+
+        let store = registry.default_store();
+        let store = store.lock().expect("default store");
+        assert!(store.password_policy().force_upgrade_on_signin);
+        assert_eq!(
+            store.signup_quota().config(),
+            &SignupQuotaConfig {
+                mode: QuotaMode::Enforce,
+                algorithm: QuotaAlgorithm::FixedWindowV1,
+                default_quota_per_hour: 7,
+                max_tracked_buckets: 16,
+                temporary: Some(
+                    crate::signup_quota::TemporaryQuota::new(
+                        3,
+                        LogicalInstant::UNIX_EPOCH,
+                        fireemu_core_types::time::LogicalDuration::from_seconds(60),
+                    )
+                    .expect("temporary quota is valid"),
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn routed_candidate_inherits_default_quota_configuration_without_usage() {
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let quota = SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour: 1,
+            max_tracked_buckets: 16,
+            temporary: None,
+        };
+        default
+            .lock()
+            .expect("default store")
+            .set_signup_quota_config(quota.clone())
+            .expect("quota is valid");
+        let registry = AuthRegistry::new("demo-app", Arc::clone(&default));
+        let reservation = default
+            .lock()
+            .expect("default store")
+            .reserve_signup(
+                AuthPrincipal::EndUser,
+                "192.0.2.1",
+                LogicalInstant::UNIX_EPOCH,
+            )
+            .expect("default reservation succeeds");
+        default
+            .lock()
+            .expect("default store")
+            .commit_signup(reservation)
+            .expect("default reservation commits");
+
+        let candidate = registry
+            .routed_candidate("worker-alpha")
+            .expect("routed candidate");
+        assert_eq!(candidate.signup_quota().config(), &quota);
+        assert_eq!(
+            candidate
+                .signup_quota()
+                .usage("worker-alpha", "192.0.2.1", LogicalInstant::UNIX_EPOCH),
+            (0, 0),
+            "routed projects inherit quota configuration, not counters"
         );
     }
 }

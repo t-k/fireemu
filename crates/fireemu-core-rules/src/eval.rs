@@ -1965,6 +1965,12 @@ impl<'a> Evaluator<'a> {
             ExprKind::Index { object, index } => {
                 let obj = self.eval(object)?;
                 let idx = self.eval(index)?;
+                if self.query_proof
+                    && self.query_derived_expression(index)
+                    && matches!(idx, RulesValue::Int(_) | RulesValue::Float(_))
+                {
+                    return Err(EvalError::Unknown);
+                }
                 match (obj, idx) {
                     (RulesValue::Map(m), RulesValue::String(k)) => m
                         .get(&k)
@@ -2002,6 +2008,14 @@ impl<'a> Evaluator<'a> {
                 let obj = self.eval(object)?;
                 let lo = self.eval(start)?;
                 let hi = self.eval(end)?;
+                if self.query_proof
+                    && ((self.query_derived_expression(start)
+                        && matches!(lo, RulesValue::Int(_) | RulesValue::Float(_)))
+                        || (self.query_derived_expression(end)
+                            && matches!(hi, RulesValue::Int(_) | RulesValue::Float(_))))
+                {
+                    return Err(EvalError::Unknown);
+                }
                 slice(&obj, &lo, &hi)
             }
             ExprKind::Call {
@@ -2053,15 +2067,27 @@ impl<'a> Evaluator<'a> {
                 for s in segments {
                     match s {
                         PathSegment::Literal(l) => out.push(l.clone()),
-                        PathSegment::Binding(e) => match self.eval(e)? {
-                            v if undetermined(&v) => return Err(EvalError::Unknown),
-                            RulesValue::String(s) => out.push(s),
-                            RulesValue::Path(p) => out.extend(p),
-                            RulesValue::Int(i) => out.push(i.to_string()),
-                            other => {
-                                return Err(soft(format!("path binding of {}", other.type_name())))
+                        PathSegment::Binding(e) => {
+                            let value = self.eval(e)?;
+                            if self.query_proof
+                                && self.query_derived_expression(e)
+                                && matches!(value, RulesValue::Int(_) | RulesValue::Float(_))
+                            {
+                                return Err(EvalError::Unknown);
                             }
-                        },
+                            match value {
+                                v if undetermined(&v) => return Err(EvalError::Unknown),
+                                RulesValue::String(s) => out.push(s),
+                                RulesValue::Path(p) => out.extend(p),
+                                RulesValue::Int(i) => out.push(i.to_string()),
+                                other => {
+                                    return Err(soft(format!(
+                                        "path binding of {}",
+                                        other.type_name()
+                                    )))
+                                }
+                            }
+                        }
                         PathSegment::Capture { .. } | PathSegment::RecursiveWildcard { .. } => {
                             return Err(soft("captures are not allowed in path literals"))
                         }

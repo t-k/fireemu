@@ -1624,6 +1624,100 @@ service cloud.firestore {
 }
 
 #[test]
+fn query_index_and_slice_bounds_reject_numeric_representation_variance() {
+    let index_rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{d}/documents {
+    match /notes/{id} {
+      allow read: if [true][resource.data.index] == true;
+    }
+  }
+}";
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("index", RulesValue::Int(0))],
+    );
+    assert!(!allows(index_rules, &query));
+
+    let mut concrete_float = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_float.resource = Some(doc(&[("index", RulesValue::Float(0.0))]));
+    assert!(!allows(index_rules, &concrete_float));
+
+    let mut concrete_int = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_int.resource = Some(doc(&[("index", RulesValue::Int(0))]));
+    assert!(allows(index_rules, &concrete_int));
+
+    let slice_rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{d}/documents {
+    match /notes/{id} {
+      allow read: if [true, false][resource.data.start:resource.data.end].size() == 1;
+    }
+  }
+}";
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("start", RulesValue::Int(0)), ("end", RulesValue::Int(1))],
+    );
+    assert!(!allows(slice_rules, &query));
+
+    let mut concrete_float = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_float.resource = Some(doc(&[
+        ("start", RulesValue::Float(0.0)),
+        ("end", RulesValue::Int(1)),
+    ]));
+    assert!(!allows(slice_rules, &concrete_float));
+
+    let mut concrete_int = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_int.resource = Some(doc(&[
+        ("start", RulesValue::Int(0)),
+        ("end", RulesValue::Int(1)),
+    ]));
+    assert!(allows(slice_rules, &concrete_int));
+}
+
+#[test]
+fn query_paths_reject_numeric_bindings_before_interpolation() {
+    use fireemu_core_rules::eval::evaluate_request_with;
+
+    let rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow read: if exists(/databases/$(database)/documents/other/$(resource.data.target));
+    }
+  }
+}";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let access = MapAccess(BTreeMap::from([(
+        "databases/(default)/documents/other/1".to_owned(),
+        resource(vec![]),
+    )]));
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("target", RulesValue::Int(1))],
+    );
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &query, Some(&access)).decision,
+        Decision::Deny(_)
+    ));
+
+    let mut concrete_float = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_float.resource = Some(doc(&[("target", RulesValue::Float(1.0))]));
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &concrete_float, Some(&access)).decision,
+        Decision::Deny(_)
+    ));
+
+    let mut concrete_string = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_string.resource = Some(doc(&[("target", RulesValue::String("1".to_owned()))]));
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &concrete_string, Some(&access)).decision,
+        Decision::Allow
+    ));
+}
+
+#[test]
 fn partial_query_list_membership_does_not_assume_nested_numeric_representation() {
     let rules = |condition: &str| {
         format!(

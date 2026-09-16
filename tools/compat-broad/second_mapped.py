@@ -568,9 +568,33 @@ def execute_45(a, output, runtime_identity):
                 "PATCH",
                 True,
             )
-            status, _ = a.send(op)
-            if status != 200:
-                raise ValueError("seed failed")
+            status, body = a.send(op)
+            if (
+                status != 200
+                or not isinstance(body, dict)
+                or body.get("name") != name
+                or body.get("fields") != seed_body["fields"]
+                or not isinstance(body.get("updateTime"), str)
+            ):
+                raise ValueError("seed acknowledgement mismatch")
+            # Cleanup requires the acknowledged creation version and field
+            # digest. Record the proof at the same boundary as ownership so
+            # every later conditional delete is bound to this seed.
+            a.creation_proofs[name] = {
+                "name": name,
+                "updateTime": body["updateTime"],
+                "fieldsDigest": digest(body["fields"]),
+                "responseDigest": digest(body),
+            }
+            a.record(
+                {
+                    "kind": "document-created",
+                    "name": name,
+                    "updateTime": body["updateTime"],
+                    "fieldsDigest": digest(body["fields"]),
+                    "responseDigest": digest(body),
+                }
+            )
             versions, reads = {}, {}
             a.versions = versions
             for step in program["steps"]:

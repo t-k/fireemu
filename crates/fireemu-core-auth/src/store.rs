@@ -22,6 +22,7 @@ use crate::mfa::{
     MAX_FACTORS_PER_USER,
 };
 use crate::password_policy::{Operation as PasswordPolicyOperation, PasswordPolicy, ViolationCode};
+use crate::signup_quota::{QuotaError, SignupQuota, SignupQuotaConfig, SignupReservation};
 
 /// ID token lifetime (`AUTH-LIMIT-ID-TOKEN-TTL-SECONDS`).
 const ID_TOKEN_TTL_SECONDS: i64 = 3_600;
@@ -397,11 +398,16 @@ impl PasswordDigest {
 /// fireemu records it so that an import followed by an export does not lose it. Both switches
 /// also affect the matching and error behavior of the emulated Identity Toolkit surface.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ProjectAuthConfig {
     /// `signIn.allowDuplicateEmails`.
     pub allow_duplicate_emails: bool,
     /// `emailPrivacyConfig.enableImprovedEmailPrivacy`.
     pub enable_improved_email_privacy: bool,
+    /// Whether end-user account creation is disabled. Admin operations bypass this switch.
+    pub disabled_user_signup: bool,
+    /// Whether end-user self-deletion is disabled. Admin operations bypass this switch.
+    pub disabled_user_deletion: bool,
 }
 
 /// Validated partial update to inherited project Auth settings.
@@ -411,13 +417,29 @@ pub struct ProjectAuthConfigPatch {
     pub allow_duplicate_emails: Option<bool>,
     /// `None` preserves the current email-privacy setting.
     pub enable_improved_email_privacy: Option<bool>,
+    /// `None` preserves the current end-user signup permission.
+    pub disabled_user_signup: Option<bool>,
+    /// `None` preserves the current end-user deletion permission.
+    pub disabled_user_deletion: Option<bool>,
+}
+
+/// The trust boundary used by operations affected by client permission settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthPrincipal {
+    /// A user request carrying an end-user credential.
+    EndUser,
+    /// An owner or Admin SDK request already authorized by the adapter.
+    Admin,
 }
 
 impl ProjectAuthConfigPatch {
     /// Whether the patch has no selected values and must perform no writes.
     #[must_use]
     pub const fn is_empty(self) -> bool {
-        self.allow_duplicate_emails.is_none() && self.enable_improved_email_privacy.is_none()
+        self.allow_duplicate_emails.is_none()
+            && self.enable_improved_email_privacy.is_none()
+            && self.disabled_user_signup.is_none()
+            && self.disabled_user_deletion.is_none()
     }
 
     /// Applies validated selected values to the current configuration.
@@ -428,6 +450,12 @@ impl ProjectAuthConfigPatch {
         }
         if let Some(value) = self.enable_improved_email_privacy {
             config.enable_improved_email_privacy = value;
+        }
+        if let Some(value) = self.disabled_user_signup {
+            config.disabled_user_signup = value;
+        }
+        if let Some(value) = self.disabled_user_deletion {
+            config.disabled_user_deletion = value;
         }
         config
     }
@@ -576,6 +604,16 @@ pub enum AuthError {
     WeakPassword,
     /// Password exceeds the configured UTF-16 length limit.
     PasswordTooLong,
+    /// Password meets the API hard limits but violates an enabled custom policy.
+    PasswordPolicyViolation,
+    /// End-user account creation is disabled by the namespace client permissions.
+    UserSignupDisabled,
+    /// End-user self-deletion is disabled by the namespace client permissions.
+    UserDeletionDisabled,
+    /// Local sign-up quota rejected an end-user reservation.
+    SignupQuotaExceeded,
+    /// The local sign-up quota could not make a safe decision.
+    SignupQuotaUnavailable,
     /// Unknown email or wrong password, undistinguished (the improved email privacy mode).
     InvalidCredentials,
     /// Wrong password, or no password credential, for a known email (the default mode of
@@ -620,6 +658,11 @@ impl fmt::Display for AuthError {
             Self::InvalidEmail => f.write_str("invalid email"),
             Self::WeakPassword => f.write_str("password must be at least 6 characters"),
             Self::PasswordTooLong => f.write_str("password exceeds the maximum length"),
+            Self::PasswordPolicyViolation => f.write_str("password does not meet requirements"),
+            Self::UserSignupDisabled => f.write_str("user signup is disabled"),
+            Self::UserDeletionDisabled => f.write_str("user deletion is disabled"),
+            Self::SignupQuotaExceeded => f.write_str("sign-up quota exceeded"),
+            Self::SignupQuotaUnavailable => f.write_str("sign-up quota unavailable"),
             Self::InvalidCredentials => f.write_str("invalid email or password"),
             Self::InvalidPassword => f.write_str("invalid password"),
             Self::UserDisabled => f.write_str("user is disabled"),
@@ -766,6 +809,9 @@ pub struct AuthStore {
     /// The project-level Auth configuration an import carried, kept so an export can write
     /// it back.
     config: ProjectAuthConfig,
+    /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
+    /// their caller explicitly requests a reservation through the typed API.
+    signup_quota: SignupQuota,
     /// OAuth/OIDC provider configurations in this namespace.
     oidc_configs: BTreeMap<String, OidcProviderConfig>,
     /// OAuth/OIDC configuration IDs in creation order.
@@ -982,6 +1028,7 @@ impl AuthStore {
             deleted_users: Vec::new(),
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
+            signup_quota: SignupQuota::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
             saml_configs: BTreeMap::new(),
@@ -1349,6 +1396,124 @@ impl AuthStore {
     /// Records the project-level Auth configuration an import carried.
     pub fn set_config(&mut self, config: ProjectAuthConfig) {
         self.config = config;
+    }
+
+    /// Whether a principal may create an end-user account in this namespace.
+    #[must_use]
+    pub const fn allows_user_signup(&self, principal: AuthPrincipal) -> bool {
+        matches!(principal, AuthPrincipal::Admin) || !self.config.disabled_user_signup
+    }
+
+    /// Whether a principal may delete an end-user account in this namespace.
+    #[must_use]
+    pub const fn allows_user_deletion(&self, principal: AuthPrincipal) -> bool {
+        matches!(principal, AuthPrincipal::Admin) || !self.config.disabled_user_deletion
+    }
+
+    /// Creates a user after applying the namespace's end-user signup permission.
+    pub fn create_user_as(
+        &mut self,
+        principal: AuthPrincipal,
+        new: NewUser,
+        now: LogicalInstant,
+    ) -> Result<LocalId, AuthError> {
+        if !self.allows_user_signup(principal) {
+            return Err(AuthError::UserSignupDisabled);
+        }
+        self.create_user(new, now)
+    }
+
+    /// Creates a caller-selected user ID after applying the namespace's signup permission.
+    pub fn create_user_with_id_as(
+        &mut self,
+        principal: AuthPrincipal,
+        new: NewUser,
+        id: Option<&str>,
+        now: LogicalInstant,
+    ) -> Result<LocalId, AuthError> {
+        if !self.allows_user_signup(principal) {
+            return Err(AuthError::UserSignupDisabled);
+        }
+        self.create_user_with_id(new, id, now)
+    }
+
+    /// Creates a password user after applying the namespace's signup permission.
+    pub fn create_user_with_password_as(
+        &mut self,
+        principal: AuthPrincipal,
+        new: NewUser,
+        password: &str,
+        now: LogicalInstant,
+    ) -> Result<LocalId, AuthError> {
+        if !self.allows_user_signup(principal) {
+            return Err(AuthError::UserSignupDisabled);
+        }
+        self.create_user_with_password(new, password, now)
+    }
+
+    /// Deletes a user after applying the namespace's end-user self-deletion permission.
+    pub fn delete_user_by_id_as(
+        &mut self,
+        principal: AuthPrincipal,
+        uid: &str,
+    ) -> Result<(), AuthError> {
+        if !self.allows_user_deletion(principal) {
+            return Err(AuthError::UserDeletionDisabled);
+        }
+        self.delete_user_by_id(uid)
+    }
+
+    /// The local sign-up quota simulator for this namespace.
+    #[must_use]
+    pub const fn signup_quota(&self) -> &SignupQuota {
+        &self.signup_quota
+    }
+
+    /// Replaces the local sign-up quota simulator configuration without changing usage.
+    pub fn set_signup_quota_config(
+        &mut self,
+        config: SignupQuotaConfig,
+    ) -> Result<(), crate::signup_quota::QuotaConfigError> {
+        self.signup_quota.set_config(config)
+    }
+
+    /// Reserves one end-user account creation against the trusted peer address.
+    pub fn reserve_signup(
+        &mut self,
+        principal: AuthPrincipal,
+        peer_ip: &str,
+        now: LogicalInstant,
+    ) -> Result<SignupReservation, AuthError> {
+        if !self.allows_user_signup(principal) {
+            return Err(AuthError::UserSignupDisabled);
+        }
+        self.signup_quota
+            .reserve(&self.project_id, peer_ip, now)
+            .map_err(Self::quota_error)
+    }
+
+    /// Commits a sign-up quota reservation once the account creation succeeded.
+    pub fn commit_signup(&mut self, reservation: SignupReservation) -> Result<(), AuthError> {
+        self.signup_quota
+            .commit(reservation)
+            .map_err(Self::quota_error)
+    }
+
+    /// Releases a sign-up quota reservation after account creation failed.
+    pub fn release_signup(&mut self, reservation: SignupReservation) -> Result<(), AuthError> {
+        self.signup_quota
+            .release(reservation)
+            .map_err(Self::quota_error)
+    }
+
+    fn quota_error(error: QuotaError) -> AuthError {
+        match error {
+            QuotaError::Exceeded => AuthError::SignupQuotaExceeded,
+            QuotaError::InvalidPeerAddress
+            | QuotaError::BucketCapacity
+            | QuotaError::InvalidConfiguration(_)
+            | QuotaError::InvalidReservation => AuthError::SignupQuotaUnavailable,
+        }
     }
 
     /// The effective password policy for this Auth namespace.
@@ -2523,10 +2688,12 @@ impl AuthStore {
             Vec::new()
         };
         if self.password_policy.rejects(operation, password) {
-            if violations.contains(&ViolationCode::MaximumPasswordLength) {
-                return Err(AuthError::PasswordTooLong);
+            if violations.contains(&ViolationCode::MinimumPasswordLength)
+                && password.encode_utf16().count() < Self::MIN_PASSWORD_CHARS
+            {
+                return Err(AuthError::WeakPassword);
             }
-            return Err(AuthError::WeakPassword);
+            return Err(AuthError::PasswordPolicyViolation);
         }
         Ok(violations)
     }
@@ -2549,10 +2716,7 @@ impl AuthStore {
             .password_policy
             .rejects(PasswordPolicyOperation::SignIn, password)
         {
-            if violations.contains(&ViolationCode::MaximumPasswordLength) {
-                return Err(AuthError::PasswordTooLong);
-            }
-            return Err(AuthError::WeakPassword);
+            return Err(AuthError::PasswordPolicyViolation);
         }
         Ok(violations)
     }
@@ -3483,6 +3647,10 @@ impl AuthSnapshot {
             // captured namespace. The destination policy belongs to the destination namespace
             // and remains effective until an explicit policy update changes it.
             restored.password_policy = live.password_policy.clone();
+            // Client permission and email privacy settings are control-plane state owned by
+            // the destination namespace as well. A cross-namespace data restore must not
+            // silently transfer those settings.
+            restored.config = live.config;
         }
         live.project_id.clone_into(&mut restored.project_id);
         restored.project_number = live.project_number;
@@ -3663,6 +3831,12 @@ pub struct TenantMetadata {
     pub enable_anonymous_user: bool,
     /// Whether all authentication is disabled.
     pub disable_auth: bool,
+    /// Whether end-user account creation is disabled in this tenant.
+    pub disabled_user_signup: bool,
+    /// Whether end-user self-deletion is disabled in this tenant.
+    pub disabled_user_deletion: bool,
+    /// Whether email enumeration protection is enabled in this tenant.
+    pub enable_improved_email_privacy: bool,
 }
 
 /// Fields changed by one atomic tenant PATCH operation.
@@ -3678,12 +3852,18 @@ pub struct TenantMetadataPatch {
     pub enable_anonymous_user: Option<bool>,
     /// `None` leaves the field unchanged.
     pub disable_auth: Option<bool>,
+    /// `None` leaves the end-user signup permission unchanged.
+    pub disabled_user_signup: Option<bool>,
+    /// `None` leaves the end-user deletion permission unchanged.
+    pub disabled_user_deletion: Option<bool>,
+    /// `None` leaves the tenant email privacy setting unchanged.
+    pub enable_improved_email_privacy: Option<bool>,
 }
 
 impl TenantMetadataPatch {
     fn apply_to(&self, value: &mut TenantMetadata) {
         if let Some(display_name) = &self.display_name {
-            value.display_name = display_name.clone();
+            value.display_name.clone_from(display_name);
         }
         if let Some(setting) = self.allow_password_signup {
             value.allow_password_signup = setting;
@@ -3696,6 +3876,27 @@ impl TenantMetadataPatch {
         }
         if let Some(setting) = self.disable_auth {
             value.disable_auth = setting;
+        }
+        if let Some(setting) = self.disabled_user_signup {
+            value.disabled_user_signup = setting;
+        }
+        if let Some(setting) = self.disabled_user_deletion {
+            value.disabled_user_deletion = setting;
+        }
+        if let Some(setting) = self.enable_improved_email_privacy {
+            value.enable_improved_email_privacy = setting;
+        }
+    }
+
+    fn apply_to_project_config(&self, config: &mut ProjectAuthConfig) {
+        if let Some(setting) = self.disabled_user_signup {
+            config.disabled_user_signup = setting;
+        }
+        if let Some(setting) = self.disabled_user_deletion {
+            config.disabled_user_deletion = setting;
+        }
+        if let Some(setting) = self.enable_improved_email_privacy {
+            config.enable_improved_email_privacy = setting;
         }
     }
 }
@@ -4696,10 +4897,8 @@ impl AuthRegistry {
         tenant: &str,
         patch: TenantMetadataPatch,
     ) -> Option<TenantMetadata> {
-        let mut values = self.tenant_metadata.lock().ok()?;
-        let value = values.get_mut(&(project.to_owned(), tenant.to_owned()))?;
-        patch.apply_to(value);
-        Some(value.clone())
+        self.patch_tenant_with_password_policy(project, tenant, patch, None)
+            .map(|(metadata, _)| metadata)
     }
 
     /// Atomically applies a tenant metadata patch and, when supplied, a password policy.
@@ -4709,6 +4908,7 @@ impl AuthRegistry {
     /// returns `None` without exposing a metadata-only or policy-only update to another
     /// request. The returned policy is the newly supplied policy, or the current policy when
     /// this operation only changes metadata.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn patch_tenant_with_password_policy(
         &self,
         project: &str,
@@ -4739,11 +4939,13 @@ impl AuthRegistry {
         let mut next_metadata = current_metadata;
         patch.apply_to(&mut next_metadata);
         let next_policy = password_policy
-            .as_ref()
-            .cloned()
+            .clone()
             .unwrap_or_else(|| store.password_policy.clone());
+        let mut next_config = store.config();
+        patch.apply_to_project_config(&mut next_config);
 
         *metadata.get_mut(&key)? = next_metadata.clone();
+        store.set_config(next_config);
         if let Some(policy) = password_policy {
             store.set_password_policy(policy.clone());
             overrides
@@ -4788,6 +4990,8 @@ impl AuthRegistry {
             ProjectAuthConfigPatch {
                 allow_duplicate_emails: Some(config.allow_duplicate_emails),
                 enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
+                disabled_user_signup: Some(config.disabled_user_signup),
+                disabled_user_deletion: Some(config.disabled_user_deletion),
             },
         )
         .is_some()
@@ -5688,6 +5892,7 @@ mod compatibility_routing_tests {
                     super::ProjectAuthConfig {
                         allow_duplicate_emails: true,
                         enable_improved_email_privacy: true,
+                        ..super::ProjectAuthConfig::default()
                     }
                 ),
                 "poisoned {target} must refuse the update"
@@ -5738,6 +5943,7 @@ mod compatibility_routing_tests {
                 .set_config(super::ProjectAuthConfig {
                     allow_duplicate_emails: true,
                     enable_improved_email_privacy: true,
+                    ..super::ProjectAuthConfig::default()
                 });
             drop(operation);
             let tenant = early
@@ -5801,6 +6007,8 @@ mod compatibility_routing_tests {
                     super::ProjectAuthConfigPatch {
                         allow_duplicate_emails: Some(true),
                         enable_improved_email_privacy: Some(true),
+                        disabled_user_signup: None,
+                        disabled_user_deletion: None,
                     },
                 )
             });
@@ -5869,6 +6077,7 @@ mod compatibility_routing_tests {
         tenant.lock().unwrap().set_config(super::ProjectAuthConfig {
             allow_duplicate_emails: true,
             enable_improved_email_privacy: true,
+            ..super::ProjectAuthConfig::default()
         });
         assert_eq!(
             registry.patch_project_config("demo-app", super::ProjectAuthConfigPatch::default()),

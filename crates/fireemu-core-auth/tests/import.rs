@@ -331,6 +331,7 @@ fn the_project_auth_configuration_survives_the_store() {
     let config = ProjectAuthConfig {
         allow_duplicate_emails: true,
         enable_improved_email_privacy: true,
+        ..ProjectAuthConfig::default()
     };
     store.set_config(config);
     assert_eq!(store.config(), config);

@@ -1982,6 +1982,34 @@ fn query_equality_keeps_nested_numeric_values_conservative() {
 }
 
 #[test]
+fn query_map_diff_changed_keys_does_not_prove_numeric_nested_difference() {
+    let rules = "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if timestamp.date(resource.data.before.diff(resource.data.after).changedKeys().size(), 1, 1) is timestamp; } } }";
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![
+            (
+                "before",
+                RulesValue::Map(BTreeMap::from([(
+                    "nested".to_owned(),
+                    RulesValue::Map(BTreeMap::from([(
+                        "value".to_owned(),
+                        RulesValue::Float(1.0),
+                    )])),
+                )])),
+            ),
+            (
+                "after",
+                RulesValue::Map(BTreeMap::from([(
+                    "nested".to_owned(),
+                    RulesValue::Map(BTreeMap::from([("value".to_owned(), RulesValue::Int(1))])),
+                )])),
+            ),
+        ],
+    );
+    assert!(!allows(rules, &query));
+}
+
+#[test]
 fn query_equality_provenance_survives_function_and_let_aliases() {
     let rules = |condition: &str| {
         format!(

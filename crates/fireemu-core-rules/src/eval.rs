@@ -5625,6 +5625,15 @@ fn method_call(
             let V::Map(other) = &args[0] else {
                 return Err(soft("diff() expects a map"));
             };
+            if query_derived
+                && (m.values().any(contains_nested_numeric)
+                    || other.values().any(contains_nested_numeric))
+            {
+                // Nested map/list equality is representation-sensitive in Rules while a query
+                // may widen an integer/float representation. Do not materialize a changed-key
+                // set from one representative and let its size become a proof.
+                return Err(EvalError::Unknown);
+            }
             let mut diff = MapDiff {
                 added: Vec::new(),
                 removed: Vec::new(),

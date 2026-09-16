@@ -5,14 +5,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_FILE = Path(__file__).resolve()
 SOURCE_PATH = "spec/compatibility/upstream/firestore-protobuf.json"
-OUTPUT_PATH = "spec/compatibility/denominators/firestore-v1-grpc-2026-09-16.v1.json"
-VERSION = "firestore-v1-grpc-2026-09-16.v1"
+OUTPUT_PATH = "spec/compatibility/denominators/firestore-v1-grpc-2026-09-16.v2.json"
+GENERATOR_PATH = "tools/compat-inventory/protobuf_denominator.py"
+VERSION = "firestore-v1-grpc-2026-09-16.v2"
 PINNED_SOURCE_SHA256 = (
     "0e4a9f8bbc8cf782f73fb3266960cd9ff09f8267d4614fbba997d107f29f0fd9"
 )
@@ -43,6 +45,36 @@ EXCLUSION_IDS = (
 
 class ValidationError(ValueError):
     """Raised when a denominator input or generated value is inconsistent."""
+
+
+def _pinned_file(root: Path, relative: str, label: str) -> Path:
+    """Resolve a repository input while rejecting symlinked path components."""
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or any(
+        part in ("", ".", "..") for part in relative_path.parts
+    ):
+        raise ValidationError(f"{label} path is not a safe repository path")
+    candidate = root
+    parts = relative_path.parts
+    for index, part in enumerate(parts):
+        candidate /= part
+        try:
+            if candidate.is_symlink():
+                raise ValidationError(f"{label} path contains a symlink: {relative}")
+            if index == len(parts) - 1 and not candidate.is_file():
+                raise ValidationError(f"{label} is not a regular file: {relative}")
+        except OSError as exc:
+            raise ValidationError(f"{label} cannot be inspected: {relative}") from exc
+    return candidate
+
+
+def _generator_bytes() -> bytes:
+    if SOURCE_FILE.is_symlink() or not SOURCE_FILE.is_file():
+        raise ValidationError("generator is not a regular file")
+    try:
+        return SOURCE_FILE.read_bytes()
+    except OSError as exc:
+        raise ValidationError("generator cannot be read") from exc
 
 
 def pipeline_surface(locator: str) -> bool:
@@ -179,7 +211,7 @@ def build(
         },
         "companionTo": PARENT_DENOMINATORS,
         "generator": {
-            "path": "tools/compat-inventory/protobuf_denominator.py",
+            "path": GENERATOR_PATH,
             "sha256": generator_sha256,
         },
         "surfaces": surfaces,
@@ -212,6 +244,10 @@ def validate(value: dict[str, Any], source: dict[str, Any], source_sha256: str) 
         raise ValidationError("unsupported protobuf denominator version")
     if source_sha256 != PINNED_SOURCE_SHA256:
         raise ValidationError("protobuf source is not the pinned snapshot")
+    source_file = _pinned_file(ROOT, SOURCE_PATH, "protobuf source")
+    actual_source_sha256 = hashlib.sha256(source_file.read_bytes()).hexdigest()
+    if source_sha256 != actual_source_sha256:
+        raise ValidationError("protobuf source digest does not match source file")
     if source.get("upstreamCommit") != PINNED_UPSTREAM_COMMIT:
         raise ValidationError("protobuf upstream commit is not pinned")
     if source.get("descriptorSha256") != PINNED_DESCRIPTOR_SHA256:
@@ -222,10 +258,12 @@ def validate(value: dict[str, Any], source: dict[str, Any], source_sha256: str) 
     if source_meta.get("sha256") != source_sha256:
         raise ValidationError("source digest does not match pinned protobuf input")
     generator = value.get("generator")
+    if not isinstance(generator, dict) or generator.get("path") != GENERATOR_PATH:
+        raise ValidationError("generator path is not pinned")
     generator_sha256 = generator.get("sha256") if isinstance(generator, dict) else None
     if not isinstance(generator_sha256, str) or len(generator_sha256) != 64:
         raise ValidationError("generator digest is missing")
-    actual_generator_sha256 = hashlib.sha256(SOURCE_FILE.read_bytes()).hexdigest()
+    actual_generator_sha256 = hashlib.sha256(_generator_bytes()).hexdigest()
     if generator_sha256 != actual_generator_sha256:
         raise ValidationError("generator digest does not match checked-in generator")
     companions = value.get("companionTo")
@@ -234,13 +272,11 @@ def validate(value: dict[str, Any], source: dict[str, Any], source_sha256: str) 
             "companion denominator anchors do not match pinned values"
         )
     for anchor in PARENT_DENOMINATORS:
-        parent_path = ROOT / anchor["path"]
         try:
+            parent_path = _pinned_file(ROOT, anchor["path"], "companion denominator")
             actual_parent_sha256 = hashlib.sha256(parent_path.read_bytes()).hexdigest()
-        except OSError as exc:
-            raise ValidationError(
-                f"companion denominator is missing: {anchor['path']}"
-            ) from exc
+        except ValidationError as exc:
+            raise ValidationError(str(exc)) from exc
         if actual_parent_sha256 != anchor["sha256"]:
             raise ValidationError(f"companion denominator changed: {anchor['path']}")
     expected = build(
@@ -265,14 +301,25 @@ def serialized(value: dict[str, Any]) -> str:
 
 
 def write_immutable(path: Path, contents: str) -> None:
-    if path.exists():
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise ValueError("immutable denominator output must not be a symlink")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o644,
+        )
+    except FileExistsError:
+        if path.is_symlink():
+            raise ValueError("immutable denominator output must not be a symlink")
         if path.read_text() == contents:
             return
         raise ValueError(
             "immutable denominator version already exists; bump VERSION and output path"
         )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(contents)
+    with os.fdopen(descriptor, "w") as stream:
+        stream.write(contents)
 
 
 def main() -> None:
@@ -284,16 +331,17 @@ def main() -> None:
         "--check", action="store_true", help="validate the checked-in companion"
     )
     args = parser.parse_args()
-    source_path = args.root / args.source
     output_path = args.root / args.output
-    source = json.loads(source_path.read_text())
-    source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    source_file = _pinned_file(args.root, args.source, "protobuf source")
+    source_bytes = source_file.read_bytes()
+    source = json.loads(source_bytes)
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
     if args.check:
         value = json.loads(output_path.read_text())
         validate(value, source, source_sha256)
         print("protobuf denominator: valid")
         return
-    generator_sha256 = hashlib.sha256(SOURCE_FILE.read_bytes()).hexdigest()
+    generator_sha256 = hashlib.sha256(_generator_bytes()).hexdigest()
     value = build(
         source,
         source_path=args.source,

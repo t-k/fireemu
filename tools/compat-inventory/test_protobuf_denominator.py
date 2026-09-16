@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 import protobuf_denominator as denominator
 import pytest
@@ -24,6 +25,15 @@ def source(*locators: tuple[str, str]) -> dict:
             for locator, kind in locators
         ],
     }
+
+
+def copy_pinned_source(root: Path) -> Path:
+    source_path = root / denominator.SOURCE_PATH
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(
+        (denominator.ROOT / denominator.SOURCE_PATH).read_bytes()
+    )
+    return source_path
 
 
 def test_build_marks_pipeline_rows_and_keeps_standard_rows_structural():
@@ -136,6 +146,16 @@ def test_current_companion_is_reproducible_and_immutable():
         )
 
 
+def test_write_immutable_rejects_symlink_output(tmp_path):
+    target = tmp_path / "target.json"
+    target.write_text("original\n")
+    output = tmp_path / "output.json"
+    output.symlink_to(target)
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        denominator.write_immutable(output, "replacement\n")
+    assert target.read_text() == "original\n"
+
+
 def test_validate_rejects_forged_generator_digest():
     source_path = denominator.ROOT / denominator.SOURCE_PATH
     source_value = json.loads(source_path.read_text())
@@ -149,9 +169,42 @@ def test_validate_rejects_forged_generator_digest():
         )
 
 
+def test_validate_rejects_generator_path_drift():
+    source_path = denominator.ROOT / denominator.SOURCE_PATH
+    source_value = json.loads(source_path.read_text())
+    value = json.loads((denominator.ROOT / denominator.OUTPUT_PATH).read_text())
+    value["generator"]["path"] = "tools/compat-inventory/other-generator.py"
+    with pytest.raises(denominator.ValidationError, match="generator path"):
+        denominator.validate(
+            value,
+            source_value,
+            hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        )
+
+
+def test_validate_rejects_source_symlink_with_pinned_contents(monkeypatch, tmp_path):
+    source_relative = Path(denominator.SOURCE_PATH)
+    source_path = tmp_path / source_relative
+    source_path.parent.mkdir(parents=True)
+    original = denominator.ROOT / denominator.SOURCE_PATH
+    real_source = tmp_path / "real-firestore-protobuf.json"
+    real_source.write_bytes(original.read_bytes())
+    source_path.symlink_to(real_source)
+    source_value = json.loads(original.read_text())
+    value = json.loads((denominator.ROOT / denominator.OUTPUT_PATH).read_text())
+    monkeypatch.setattr(denominator, "ROOT", tmp_path)
+    with pytest.raises(denominator.ValidationError, match="source.*symlink"):
+        denominator.validate(
+            value,
+            source_value,
+            hashlib.sha256(original.read_bytes()).hexdigest(),
+        )
+
+
 def test_validate_rejects_changed_companion_file(monkeypatch, tmp_path):
     source_path = denominator.ROOT / denominator.SOURCE_PATH
     source_value = json.loads(source_path.read_text())
+    copy_pinned_source(tmp_path)
     parent = tmp_path / "parent.json"
     parent.write_text("original\n")
     anchor = {
@@ -173,6 +226,37 @@ def test_validate_rejects_changed_companion_file(monkeypatch, tmp_path):
     with pytest.raises(
         denominator.ValidationError, match="companion denominator changed"
     ):
+        denominator.validate(
+            value,
+            source_value,
+            hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        )
+
+
+def test_validate_rejects_companion_symlink_with_pinned_contents(monkeypatch, tmp_path):
+    source_path = denominator.ROOT / denominator.SOURCE_PATH
+    source_value = json.loads(source_path.read_text())
+    copy_pinned_source(tmp_path)
+    parent = tmp_path / "parent.json"
+    parent_target = tmp_path / "parent-target.json"
+    parent_target.write_text("original\n")
+    parent.symlink_to(parent_target)
+    anchor = {
+        "path": "parent.json",
+        "version": "test.v1",
+        "sha256": hashlib.sha256(parent_target.read_bytes()).hexdigest(),
+    }
+    monkeypatch.setattr(denominator, "PARENT_DENOMINATORS", [anchor])
+    value = denominator.build(
+        source_value,
+        source_path=denominator.SOURCE_PATH,
+        source_sha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        generator_sha256=hashlib.sha256(
+            denominator.SOURCE_FILE.read_bytes()
+        ).hexdigest(),
+    )
+    monkeypatch.setattr(denominator, "ROOT", tmp_path)
+    with pytest.raises(denominator.ValidationError, match="companion.*symlink"):
         denominator.validate(
             value,
             source_value,

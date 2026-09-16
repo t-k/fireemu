@@ -220,6 +220,12 @@ struct AdvancingQuotaHook {
     advanced: AtomicBool,
 }
 
+struct DeletingUnrelatedUserHook {
+    store: Arc<Mutex<AuthStore>>,
+    uid: String,
+    deleted: AtomicBool,
+}
+
 impl Drop for DelayedHookRelease {
     fn drop(&mut self) {
         self.0.release.store(true, Ordering::SeqCst);
@@ -258,6 +264,19 @@ impl AuthBlockingHook for AdvancingQuotaHook {
     ) -> Result<Value, BlockingFunctionFailure> {
         if !self.advanced.swap(true, Ordering::SeqCst) {
             self.clock.lock().unwrap().advance(self.advance).unwrap();
+        }
+        Ok(json!({}))
+    }
+}
+
+impl AuthBlockingHook for DeletingUnrelatedUserHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if event == BlockingAuthEvent::BeforeCreate && !self.deleted.swap(true, Ordering::SeqCst) {
+            let _ = self.store.lock().unwrap().delete_user_by_id(&self.uid);
         }
         Ok(json!({}))
     }
@@ -7838,6 +7857,66 @@ fn admin_v2_password_policy_and_quota_patches_preserve_disjoint_updates() {
 }
 
 #[test]
+fn admin_v2_concurrent_password_policy_leaf_patches_preserve_disjoint_updates() {
+    let mut base = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        base.store.clone(),
+    ));
+    base.registry = Some(registry);
+    let state = Arc::new(base);
+    let start = Arc::new(std::sync::Barrier::new(3));
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    std::thread::scope(|scope| {
+        let enforcement_state = Arc::clone(&state);
+        let enforcement_start = Arc::clone(&start);
+        scope.spawn(move || {
+            enforcement_start.wait();
+            let response = admin(
+                &enforcement_state,
+                "PATCH",
+                &format!(
+                    "{path}?updateMask=passwordPolicyConfig.passwordPolicyEnforcementState"
+                ),
+                &json!({
+                    "passwordPolicyConfig": {
+                        "passwordPolicyEnforcementState": "ENFORCE",
+                        "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
+                    }
+                }),
+            );
+            assert_eq!(response.0, 200, "{}", response.1);
+        });
+        let force_state = Arc::clone(&state);
+        let force_start = Arc::clone(&start);
+        scope.spawn(move || {
+            force_start.wait();
+            let response = admin(
+                &force_state,
+                "PATCH",
+                &format!("{path}?updateMask=passwordPolicyConfig.forceUpgradeOnSignin"),
+                &json!({
+                    "passwordPolicyConfig": {
+                        "forceUpgradeOnSignin": true,
+                        "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 6}}]
+                    }
+                }),
+            );
+            assert_eq!(response.0, 200, "{}", response.1);
+        });
+        start.wait();
+    });
+
+    let read = admin(&state, "GET", path, &Value::Null);
+    assert_eq!(read.0, 200, "{}", read.1);
+    assert_eq!(
+        read.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+        "ENFORCE"
+    );
+    assert_eq!(read.1["passwordPolicyConfig"]["forceUpgradeOnSignin"], true);
+}
+
+#[test]
 fn admin_v2_password_policy_invalid_selected_update_is_atomic() {
     let s = state();
     let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
@@ -8618,6 +8697,78 @@ fn stale_signup_quota_commit_does_not_publish_the_account_or_tokens() {
             LogicalInstant::from_unix_seconds(1_788_004_860)
         ),
         (0, 0)
+    );
+}
+
+#[test]
+fn signup_quota_commit_survives_unrelated_deletion_during_blocking_hook() {
+    use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
+    use fireemu_core_auth::store::{AuthPrincipal, NewUser};
+
+    let mut s = state();
+    let unrelated_uid = s
+        .store
+        .lock()
+        .unwrap()
+        .create_user_with_password_as(
+            AuthPrincipal::Admin,
+            NewUser::email("unrelated-quota-user@example.com"),
+            "password1",
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        )
+        .unwrap()
+        .to_string();
+    s.store
+        .lock()
+        .unwrap()
+        .set_signup_quota_config(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 1,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+    s.blocking = Some(Arc::new(DeletingUnrelatedUserHook {
+        store: s.store.clone(),
+        uid: unrelated_uid,
+        deleted: AtomicBool::new(false),
+    }));
+
+    let first = handle_with(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &RequestHeaders::default(),
+        &json!({"email": "quota-during-hook-one@example.com", "password": "password1"}),
+    );
+    assert_eq!(first.status, 200, "{}", first.body);
+
+    let second = handle_with(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &RequestHeaders::default(),
+        &json!({"email": "quota-during-hook-two@example.com", "password": "password1"}),
+    );
+    assert_eq!(second.status, 400, "{}", second.body);
+    assert_eq!(second.body["error"]["message"], "SIGNUP_QUOTA_EXCEEDED");
+
+    let store = s.store.lock().unwrap();
+    assert!(store
+        .user_by_email("unrelated-quota-user@example.com")
+        .is_none());
+    assert!(store
+        .user_by_email("quota-during-hook-one@example.com")
+        .is_some());
+    assert!(store
+        .user_by_email("quota-during-hook-two@example.com")
+        .is_none());
+    assert_eq!(
+        store.signup_quota().usage(
+            "demo-app",
+            "127.0.0.1",
+            LogicalInstant::from_unix_seconds(1_788_004_860)
+        ),
+        (1, 0)
     );
 }
 

@@ -1737,7 +1737,6 @@ fn dispatch_with_blocking_hook(
     headers: &RequestHeaders,
     at: LogicalInstant,
     quota_reservation: &mut Option<SignupReservation>,
-    quota_before: usize,
 ) -> JsonResponse {
     let pending_continuation = (handler == routes::Handler::MfaSignInFinalize)
         .then(|| str_field(body, "mfaPendingCredential"))
@@ -2112,7 +2111,7 @@ fn dispatch_with_blocking_hook(
             }
         }
         if let Some(reservation) = quota_reservation.clone() {
-            if is_new && committed.user_count() > quota_before {
+            if is_new {
                 if let Err(error) = committed.commit_signup(reservation, now(state)) {
                     return auth_error(&error);
                 }
@@ -2474,7 +2473,6 @@ fn handle_with_policy(
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
-    let quota_before = store.user_count();
     let quota_request = route.class == routes::RouteClass::EndUser
         && request_may_create_end_user(route.handler, &store, body, at);
     // Configuration PATCHes use this same namespace gate. Hold it for the complete
@@ -2556,7 +2554,6 @@ fn handle_with_policy(
             headers,
             at,
             &mut quota_reservation,
-            quota_before,
         )
     } else if let Some(reservation) = quota_reservation.clone() {
         // Run quota-accounted creation on an isolated store copy. This gives the quota
@@ -2572,7 +2569,17 @@ fn handle_with_policy(
             at,
             state.into(),
         );
-        let created = response.status == 200 && candidate.user_count() > quota_before;
+        // Determine creation from the request's returned identity and the isolated store
+        // transition. A global user-count delta is not a per-request result: another actor may
+        // delete an unrelated account while this request is being processed.
+        let created = response.status == 200
+            && response
+                .body
+                .get("localId")
+                .and_then(Value::as_str)
+                .is_some_and(|uid| {
+                    store.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
+                });
         if created {
             if let Err(error) = candidate.commit_signup(reservation, now(state)) {
                 let _ = store.release_signup(
@@ -2616,20 +2623,15 @@ fn handle_with_policy(
         response
     };
     let response = finish_token_response(response, signer.as_deref(), &store_arc, at);
-    if let Some(reservation) = quota_reservation {
-        let created = response.status == 200
-            && store_arc
-                .lock()
-                .map(|store| store.user_count() > quota_before)
-                .unwrap_or(false);
+    if let Some(reservation) = quota_reservation.take() {
+        // Blocking dispatch commits a successful new-account reservation at its typed
+        // per-request creation boundary. Any reservation left here belongs to a failed or
+        // non-creating request and must be released; comparing the live user count with a stale
+        // preflight count would misclassify an unrelated deletion as a failed signup.
         let Ok(mut store) = store_arc.lock() else {
             return error(500, "INTERNAL");
         };
-        let result = if created {
-            store.commit_signup(reservation, now(state))
-        } else {
-            store.release_signup(reservation)
-        };
+        let result = store.release_signup(reservation);
         if let Err(e) = result {
             return auth_error(&e);
         }

@@ -281,6 +281,12 @@ struct Scope<'a> {
 }
 
 type FunctionBindings = Arc<Vec<(String, RulesValue)>>;
+type QueryFloatZeroProvenance = (bool, bool);
+type QueryFloatZeroFunctionCache = BTreeMap<(usize, Vec<QueryFloatZeroProvenance>), bool>;
+type QueryStringificationProvenance = (bool, bool);
+type QueryStringificationFunctionCache =
+    BTreeMap<(usize, Vec<QueryStringificationProvenance>), bool>;
+type QueryNumericSourceFunctionCache = BTreeMap<(usize, Vec<bool>), bool>;
 
 /// Immutable lexical function declarations for one scope. Parent environments are linked rather
 /// than flattened so nested scopes do not copy all ancestor declarations.
@@ -289,10 +295,18 @@ struct FunctionEnvironment<'a> {
     own: Vec<&'a FunctionDecl>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct Binding<'a> {
     name: String,
     visible_before: usize,
     query_derived: bool,
+    /// The value may be a numeric result whose representation still depends on the
+    /// integer/double encoding accepted by a query equality filter. This is distinct from
+    /// `query_derived`: `int()`/`float()` canonicalize ordinary Rules arithmetic, but a later
+    /// string conversion can still observe the original representation.
+    query_numeric_source: bool,
+    query_float_zero_ambiguous: bool,
+    query_numeric_stringification_sensitive: bool,
     state: BindingState<'a>,
 }
 
@@ -312,15 +326,29 @@ impl Binding<'_> {
             name,
             visible_before: 0,
             query_derived: false,
+            query_numeric_source: false,
+            query_float_zero_ambiguous: false,
+            query_numeric_stringification_sensitive: false,
             state: BindingState::Value(value),
         }
     }
 
-    fn query_value(name: String, value: RulesValue) -> Self {
+    #[allow(clippy::fn_params_excessive_bools)]
+    fn with_provenance(
+        name: String,
+        value: RulesValue,
+        query_derived: bool,
+        query_numeric_source: bool,
+        query_float_zero_ambiguous: bool,
+        query_numeric_stringification_sensitive: bool,
+    ) -> Self {
         Self {
             name,
             visible_before: 0,
-            query_derived: true,
+            query_derived,
+            query_numeric_source,
+            query_float_zero_ambiguous,
+            query_numeric_stringification_sensitive,
             state: BindingState::Value(value),
         }
     }
@@ -386,6 +414,27 @@ struct Evaluator<'a> {
     match_prefilter_work: Arc<AtomicU64>,
     /// Reachability results shared by structurally equivalent match paths in one request.
     pattern_reachability_cache: BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
+    /// Query-provenance results are static for one ruleset evaluation and can be reused across
+    /// repeated references to the same declaration.
+    query_derived_function_cache: core::cell::RefCell<BTreeMap<usize, bool>>,
+    /// Bound the work spent deriving query provenance. Exhaustion is conservative: the
+    /// expression is treated as query-derived rather than allowing an unproven result.
+    query_derived_analysis_work: core::cell::Cell<u64>,
+    /// Signed-zero provenance is also memoized by declaration and argument provenance so the
+    /// arithmetic guard cannot re-expand the same function graph.
+    query_float_zero_function_cache: core::cell::RefCell<QueryFloatZeroFunctionCache>,
+    query_float_zero_analysis_work: core::cell::Cell<u64>,
+    /// Stringification provenance is memoized by declaration and argument provenance so
+    /// wrappers such as `string(float(value))` do not rescan a function graph.
+    query_stringification_function_cache: core::cell::RefCell<QueryStringificationFunctionCache>,
+    query_stringification_analysis_work: core::cell::Cell<u64>,
+    /// Numeric-source analysis is also memoized by declaration and argument provenance so a
+    /// repeated function DAG remains linear in the number of distinct contexts.
+    query_numeric_source_function_cache: core::cell::RefCell<QueryNumericSourceFunctionCache>,
+    /// Bound the numeric-source graph walk independently from the other provenance analyses.
+    /// Exhaustion is conservative: a value is treated as representation-sensitive rather than
+    /// allowing an unproven query result.
+    query_numeric_source_analysis_work: core::cell::Cell<u64>,
 }
 
 const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
@@ -402,6 +451,8 @@ const MATCH_PATH_PREFILTER_WORK_MAX: u64 = 1_000_000;
 /// A request-local reachability cache must not grow without bound when a ruleset contains many
 /// distinct path shapes. Once full, the evaluator simply recomputes the bounded prefilter.
 const MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES: usize = 4_096;
+/// Maximum function-body declarations visited while deriving query provenance for one request.
+const QUERY_DERIVED_ANALYSIS_WORK_MAX: u64 = 100_000;
 
 /// Evaluates a request against a ruleset without document access (`get()` / `exists()` are
 /// unsupported and fail closed).
@@ -561,6 +612,14 @@ fn evaluate_prepared(
             match_path_work: Arc::new(AtomicU64::new(0)),
             match_prefilter_work: Arc::new(AtomicU64::new(0)),
             pattern_reachability_cache: BTreeMap::new(),
+            query_derived_function_cache: core::cell::RefCell::new(BTreeMap::new()),
+            query_derived_analysis_work: core::cell::Cell::new(0),
+            query_float_zero_function_cache: core::cell::RefCell::new(BTreeMap::new()),
+            query_float_zero_analysis_work: core::cell::Cell::new(0),
+            query_stringification_function_cache: core::cell::RefCell::new(BTreeMap::new()),
+            query_stringification_analysis_work: core::cell::Cell::new(0),
+            query_numeric_source_function_cache: core::cell::RefCell::new(BTreeMap::new()),
+            query_numeric_source_analysis_work: core::cell::Cell::new(0),
         };
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
         absent_resource_used |= ev.absent_resource_used.get();
@@ -1382,6 +1441,1695 @@ impl<'a> Evaluator<'a> {
         self.query_derived_expression_with(expr, &mut visiting)
     }
 
+    fn query_float_zero_ambiguous(&self, expr: &Expr, value: &RulesValue) -> bool {
+        if !self.query_proof || !matches!(value, RulesValue::Float(f) if *f == 0.0) {
+            return false;
+        }
+        let mut visiting = Vec::new();
+        self.query_float_zero_ambiguous_with(expr, &mut visiting)
+    }
+
+    fn query_float_zero_source(&self, expr: &Expr) -> bool {
+        if !self.query_proof {
+            return false;
+        }
+        let mut visiting = Vec::new();
+        self.query_float_zero_ambiguous_with(expr, &mut visiting)
+    }
+
+    /// Reports whether evaluating `expr` can expose a query-derived number through a
+    /// representation-sensitive string operation. Firestore equality treats integer and double
+    /// encodings as equivalent, while Rules stringification preserves their distinct textual
+    /// forms. A query proof cannot use such a string as a unique representative for a later
+    /// numeric conversion or length calculation.
+    fn query_numeric_stringification_sensitive(&self, expr: &Expr) -> bool {
+        if !self.query_proof {
+            return false;
+        }
+        self.query_numeric_stringification_sensitive_with(expr)
+    }
+
+    /// Resolves the statically known portion of a query-proof expression without evaluating it
+    /// or charging the request budget. This is used only to distinguish a known string query
+    /// value from a numeric value that may have an equivalent integer/double representation.
+    fn query_static_value(&self, expr: &Expr) -> Option<RulesValue> {
+        self.query_static_value_with_limit(expr, self.scope.bindings.len())
+    }
+
+    /// Resolve static values using only bindings visible at the expression's declaration site.
+    /// In particular, a lazy `let value = value` must see an earlier parameter/capture rather
+    /// than recursively resolving the let binding currently being defined.
+    fn query_static_value_with_limit(
+        &self,
+        expr: &Expr,
+        visible_limit: usize,
+    ) -> Option<RulesValue> {
+        let visible_limit = visible_limit.min(self.scope.bindings.len());
+        match expr.kind() {
+            ExprKind::Ident(name) => {
+                if let Some(index) = self
+                    .scope
+                    .bindings
+                    .get(..visible_limit)?
+                    .iter()
+                    .rposition(|binding| binding.name == *name)
+                {
+                    match &self.scope.bindings[index].state {
+                        BindingState::Lazy(source) => self.query_static_value_with_limit(
+                            source,
+                            self.scope.bindings[index].visible_before.min(visible_limit),
+                        ),
+                        BindingState::Value(value)
+                        | BindingState::Resolved {
+                            result: Ok(value), ..
+                        } => Some(value.clone()),
+                        BindingState::Evaluating | BindingState::Resolved { .. } => None,
+                    }
+                } else {
+                    match name.as_str() {
+                        "resource" => Some(self.resource.as_ref().clone()),
+                        "request" => Some(self.request.as_ref().clone()),
+                        _ => None,
+                    }
+                }
+            }
+            ExprKind::Member { object, name } => {
+                let value = self.query_static_value_with_limit(object, visible_limit)?;
+                match value {
+                    RulesValue::Map(fields) | RulesValue::PartialMap(fields) => {
+                        fields.get(name).cloned()
+                    }
+                    RulesValue::PartialMapExcluding { fields, .. } => fields.get(name).cloned(),
+                    _ => None,
+                }
+            }
+            ExprKind::Index { object, index } => {
+                let value = self.query_static_value_with_limit(object, visible_limit)?;
+                let RulesValue::String(key) =
+                    self.query_static_value_with_limit(index, visible_limit)?
+                else {
+                    return None;
+                };
+                match value {
+                    RulesValue::Map(fields) | RulesValue::PartialMap(fields) => {
+                        fields.get(&key).cloned()
+                    }
+                    RulesValue::PartialMapExcluding { fields, .. } => fields.get(&key).cloned(),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns whether an expression can evaluate to a query-derived number. This is deliberately
+    /// separate from `query_derived_expression`: `int()`/`float()` canonicalize a number for most
+    /// Rules operations, but a subsequent string conversion can still observe its representation.
+    #[allow(clippy::too_many_lines)]
+    fn query_numeric_expression_source(&self, expr: &Expr) -> bool {
+        match expr.kind() {
+            ExprKind::Ident(_) => {
+                if let ExprKind::Ident(name) = expr.kind() {
+                    if let Some(binding) = self
+                        .scope
+                        .bindings
+                        .iter()
+                        .rfind(|binding| binding.name == *name)
+                    {
+                        if binding.query_numeric_source {
+                            return true;
+                        }
+                    }
+                }
+                match self.query_static_value(expr) {
+                    Some(RulesValue::Int(_) | RulesValue::Float(_)) => {
+                        self.query_derived_expression(expr)
+                    }
+                    Some(_) => false,
+                    None => self.query_derived_expression(expr),
+                }
+            }
+            ExprKind::Member { object, .. } => {
+                self.query_numeric_expression_source(object)
+                    || match self.query_static_value(expr) {
+                        Some(RulesValue::Int(_) | RulesValue::Float(_)) => {
+                            self.query_derived_expression(expr)
+                        }
+                        Some(_) => false,
+                        None => self.query_derived_expression(expr),
+                    }
+            }
+            ExprKind::Index { object, index } => {
+                self.query_numeric_expression_source(object)
+                    || self.query_numeric_expression_source(index)
+                    || match self.query_static_value(expr) {
+                        Some(RulesValue::Int(_) | RulesValue::Float(_)) => {
+                            self.query_derived_expression(expr)
+                        }
+                        Some(_) => false,
+                        None => self.query_derived_expression(expr),
+                    }
+            }
+            ExprKind::Slice { object, start, end } => {
+                self.query_numeric_expression_source(object)
+                    || self.query_numeric_expression_source(start)
+                    || self.query_numeric_expression_source(end)
+            }
+            ExprKind::List(items) => items
+                .iter()
+                .any(|item| self.query_numeric_expression_source(item)),
+            ExprKind::Map(entries) => entries
+                .iter()
+                .any(|(_, value)| self.query_numeric_expression_source(value)),
+            ExprKind::Path(segments) => segments.iter().any(|segment| match segment {
+                PathSegment::Binding(expression) => {
+                    self.query_numeric_expression_source(expression)
+                }
+                PathSegment::Literal(_)
+                | PathSegment::Capture { .. }
+                | PathSegment::RecursiveWildcard { .. } => false,
+            }),
+            ExprKind::Unary { expr, .. } => self.query_numeric_expression_source(expr),
+            ExprKind::Binary { left, right, .. } => {
+                self.query_derived_expression(expr)
+                    || self.query_numeric_expression_source(left)
+                    || self.query_numeric_expression_source(right)
+            }
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.query_derived_expression(expr)
+                    || self.query_numeric_expression_source(cond)
+                    || self.query_numeric_expression_source(then)
+                    || self.query_numeric_expression_source(otherwise)
+            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if name == "float" && args.len() == 1 && self.function(name).is_none() =>
+                {
+                    self.query_derived_expression(&args[0])
+                        || self.query_numeric_expression_source(&args[0])
+                }
+                ExprKind::Ident(name)
+                    if name == "int" && args.len() == 1 && self.function(name).is_none() =>
+                {
+                    self.query_numeric_stringification_sensitive_with(&args[0])
+                }
+                ExprKind::Ident(name)
+                    if name == "string" && args.len() == 1 && self.function(name).is_none() =>
+                {
+                    false
+                }
+                ExprKind::Ident(name)
+                    if name == "debug" && args.len() == 1 && self.function(name).is_none() =>
+                {
+                    self.query_derived_expression(&args[0])
+                        || self.query_numeric_expression_source(&args[0])
+                }
+                ExprKind::Member { name, .. } if name == "size" => false,
+                ExprKind::Member { object, name } if name == "join" => {
+                    self.query_numeric_expression_source(object)
+                        || self.query_numeric_stringification_sensitive_with(object)
+                }
+                ExprKind::Ident(name) if self.function(name).is_some() => {
+                    let argument_provenance = args
+                        .iter()
+                        .map(|argument| self.query_numeric_expression_source(argument))
+                        .collect::<Vec<_>>();
+                    self.function(name).is_some_and(|function| {
+                        self.function_body_query_numeric_source(
+                            function,
+                            &argument_provenance,
+                            &mut Vec::new(),
+                        )
+                    })
+                }
+                _ => self.query_derived_expression(expr),
+            },
+            _ => false,
+        }
+    }
+
+    /// Reports whether a user function can return a query-derived numeric value. This analysis
+    /// keeps numeric provenance separate from the broader query-derived flag, because a function
+    /// parameter may carry a known query-derived string while another call carries a canonical
+    /// integer/double value whose representation remains relevant to stringification.
+    fn function_body_query_numeric_source(
+        &self,
+        function: &FunctionDecl,
+        parameter_provenance: &[bool],
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        let key = function_key(function);
+        if visiting.contains(&key) {
+            return true;
+        }
+        let cache_key = (key, parameter_provenance.to_vec());
+        if let Some(cached) = self
+            .query_numeric_source_function_cache
+            .borrow()
+            .get(&cache_key)
+        {
+            return *cached;
+        }
+        if self.query_numeric_source_analysis_work.get() >= QUERY_DERIVED_ANALYSIS_WORK_MAX {
+            return true;
+        }
+        self.query_numeric_source_analysis_work.set(
+            self.query_numeric_source_analysis_work
+                .get()
+                .saturating_add(1),
+        );
+        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+            return true;
+        };
+        visiting.push(key);
+        let mut numeric_locals = BTreeMap::new();
+        for (index, parameter) in function.params.iter().enumerate() {
+            numeric_locals.insert(
+                parameter.as_str(),
+                parameter_provenance.get(index).copied().unwrap_or(true),
+            );
+        }
+        for binding in &function.lets {
+            let source = self.function_expression_query_numeric_source_only(
+                &binding.value,
+                &numeric_locals,
+                environment,
+                visiting,
+            );
+            numeric_locals.insert(binding.name.as_str(), source);
+        }
+        let result = self.function_expression_query_numeric_source_only(
+            &function.body,
+            &numeric_locals,
+            environment,
+            visiting,
+        );
+        visiting.pop();
+        self.query_numeric_source_function_cache
+            .borrow_mut()
+            .insert(cache_key, result);
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn function_expression_query_numeric_source_only(
+        &self,
+        expr: &Expr,
+        numeric_locals: &BTreeMap<&str, bool>,
+        environment: &FunctionEnvironment<'a>,
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        match expr.kind() {
+            ExprKind::Ident(name) => numeric_locals
+                .get(name.as_str())
+                .copied()
+                .unwrap_or(name == "resource"),
+            ExprKind::Member { object, .. } => {
+                let source = self.function_expression_query_numeric_source_only(
+                    object,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                );
+                match self.query_static_value(expr) {
+                    Some(RulesValue::Int(_) | RulesValue::Float(_)) | None => source,
+                    Some(_) => false,
+                }
+            }
+            ExprKind::Index { object, index } => {
+                let source = self.function_expression_query_numeric_source_only(
+                    object,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_numeric_source_only(
+                    index,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                );
+                match self.query_static_value(expr) {
+                    Some(RulesValue::Int(_) | RulesValue::Float(_)) | None => source,
+                    Some(_) => false,
+                }
+            }
+            ExprKind::Slice { object, start, end } => {
+                self.function_expression_query_numeric_source_only(
+                    object,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_numeric_source_only(
+                    start,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_numeric_source_only(
+                    end,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::List(items) => items.iter().any(|item| {
+                self.function_expression_query_numeric_source_only(
+                    item,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                )
+            }),
+            ExprKind::Map(entries) => entries.iter().any(|(_, value)| {
+                self.function_expression_query_numeric_source_only(
+                    value,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                )
+            }),
+            ExprKind::Path(segments) => segments.iter().any(|segment| match segment {
+                PathSegment::Binding(expression) => self
+                    .function_expression_query_numeric_source_only(
+                        expression,
+                        numeric_locals,
+                        environment,
+                        visiting,
+                    ),
+                PathSegment::Literal(_)
+                | PathSegment::Capture { .. }
+                | PathSegment::RecursiveWildcard { .. } => false,
+            }),
+            ExprKind::Unary { expr, .. } => self.function_expression_query_numeric_source_only(
+                expr,
+                numeric_locals,
+                environment,
+                visiting,
+            ),
+            ExprKind::Binary { left, right, .. } => {
+                self.function_expression_query_numeric_source_only(
+                    left,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_numeric_source_only(
+                    right,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.function_expression_query_numeric_source_only(
+                    cond,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_numeric_source_only(
+                    then,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_numeric_source_only(
+                    otherwise,
+                    numeric_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if name == "string"
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    false
+                }
+                ExprKind::Ident(name)
+                    if matches!(name.as_str(), "int" | "float" | "debug")
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    self.function_expression_query_numeric_source_only(
+                        &args[0],
+                        numeric_locals,
+                        environment,
+                        visiting,
+                    )
+                }
+                ExprKind::Member { name, .. } if name == "size" => false,
+                ExprKind::Member { object, name } if name == "join" => self
+                    .function_expression_query_numeric_source_only(
+                        object,
+                        numeric_locals,
+                        environment,
+                        visiting,
+                    ),
+                ExprKind::Ident(name) => {
+                    let argument_provenance = args
+                        .iter()
+                        .map(|argument| {
+                            self.function_expression_query_numeric_source_only(
+                                argument,
+                                numeric_locals,
+                                environment,
+                                visiting,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    function_in_environment(environment, name).is_some_and(|function| {
+                        self.function_body_query_numeric_source(
+                            function,
+                            &argument_provenance,
+                            visiting,
+                        )
+                    })
+                }
+                _ => args.iter().any(|argument| {
+                    self.function_expression_query_numeric_source_only(
+                        argument,
+                        numeric_locals,
+                        environment,
+                        visiting,
+                    )
+                }),
+            },
+            _ => false,
+        }
+    }
+
+    fn function_body_query_stringification_sensitive(
+        &self,
+        function: &FunctionDecl,
+        parameter_provenance: &[QueryStringificationProvenance],
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        let key = function_key(function);
+        if visiting.contains(&key) {
+            return true;
+        }
+        let cache_key = (key, parameter_provenance.to_vec());
+        if let Some(cached) = self
+            .query_stringification_function_cache
+            .borrow()
+            .get(&cache_key)
+        {
+            return *cached;
+        }
+        if self.query_stringification_analysis_work.get() >= QUERY_DERIVED_ANALYSIS_WORK_MAX {
+            return true;
+        }
+        self.query_stringification_analysis_work.set(
+            self.query_stringification_analysis_work
+                .get()
+                .saturating_add(1),
+        );
+        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+            return true;
+        };
+        visiting.push(key);
+        let mut query_locals = BTreeMap::new();
+        let mut sensitive_locals = BTreeMap::new();
+        for (index, parameter) in function.params.iter().enumerate() {
+            let (derived, sensitive) = parameter_provenance
+                .get(index)
+                .copied()
+                .unwrap_or((true, true));
+            query_locals.insert(parameter.as_str(), derived);
+            sensitive_locals.insert(parameter.as_str(), sensitive);
+        }
+        for binding in &function.lets {
+            // A canonical numeric conversion (float()/int()) is not query-derived for ordinary
+            // Rules arithmetic, but its result can still expose the query's integer/double
+            // representation when passed to string(). Keep that provenance in the local map used
+            // by this stringification analysis without changing the arithmetic query proof.
+            let derived = self.function_expression_query_derived(
+                &binding.value,
+                &query_locals,
+                environment,
+                visiting,
+            ) || self.function_expression_query_numeric_source(
+                &binding.value,
+                &query_locals,
+                &sensitive_locals,
+                environment,
+                visiting,
+            );
+            let sensitive = self.function_expression_query_stringification_sensitive(
+                &binding.value,
+                &query_locals,
+                &sensitive_locals,
+                environment,
+                visiting,
+            );
+            query_locals.insert(binding.name.as_str(), derived);
+            sensitive_locals.insert(binding.name.as_str(), sensitive);
+        }
+        let result = self.function_expression_query_stringification_sensitive(
+            &function.body,
+            &query_locals,
+            &sensitive_locals,
+            environment,
+            visiting,
+        );
+        visiting.pop();
+        self.query_stringification_function_cache
+            .borrow_mut()
+            .insert(cache_key, result);
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn function_expression_query_stringification_sensitive(
+        &self,
+        expr: &Expr,
+        query_locals: &BTreeMap<&str, bool>,
+        sensitive_locals: &BTreeMap<&str, bool>,
+        environment: &FunctionEnvironment<'a>,
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        match expr.kind() {
+            ExprKind::Ident(name) => sensitive_locals
+                .get(name.as_str())
+                .copied()
+                .unwrap_or(false),
+            ExprKind::Member { object, .. } => self
+                .function_expression_query_stringification_sensitive(
+                    object,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ),
+            ExprKind::Index { object, index } => {
+                self.function_expression_query_stringification_sensitive(
+                    object,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_stringification_sensitive(
+                    index,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::Slice { object, start, end } => {
+                self.function_expression_query_stringification_sensitive(
+                    object,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_stringification_sensitive(
+                    start,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_stringification_sensitive(
+                    end,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::List(items) => items.iter().any(|item| {
+                self.function_expression_query_stringification_sensitive(
+                    item,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }),
+            ExprKind::Map(entries) => entries.iter().any(|(_, value)| {
+                self.function_expression_query_stringification_sensitive(
+                    value,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }),
+            ExprKind::Path(segments) => segments.iter().any(|segment| match segment {
+                PathSegment::Binding(expression) => self
+                    .function_expression_query_stringification_sensitive(
+                        expression,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    ),
+                PathSegment::Literal(_)
+                | PathSegment::Capture { .. }
+                | PathSegment::RecursiveWildcard { .. } => false,
+            }),
+            ExprKind::Unary { expr, .. } => self
+                .function_expression_query_stringification_sensitive(
+                    expr,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ),
+            ExprKind::Binary { left, right, .. } => {
+                self.function_expression_query_stringification_sensitive(
+                    left,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_stringification_sensitive(
+                    right,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.function_expression_query_stringification_sensitive(
+                    cond,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_stringification_sensitive(
+                    then,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_stringification_sensitive(
+                    otherwise,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if name == "string"
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    let derived = match args[0].kind() {
+                        ExprKind::Ident(local) => query_locals
+                            .get(local.as_str())
+                            .copied()
+                            .unwrap_or(self.function_expression_query_derived(
+                                &args[0],
+                                query_locals,
+                                environment,
+                                visiting,
+                            )),
+                        _ => self.function_expression_query_derived(
+                            &args[0],
+                            query_locals,
+                            environment,
+                            visiting,
+                        ),
+                    };
+                    derived
+                        || self.function_expression_query_numeric_source(
+                            &args[0],
+                            query_locals,
+                            sensitive_locals,
+                            environment,
+                            visiting,
+                        )
+                        || self.function_expression_query_stringification_sensitive(
+                            &args[0],
+                            query_locals,
+                            sensitive_locals,
+                            environment,
+                            visiting,
+                        )
+                }
+                ExprKind::Ident(name)
+                    if matches!(name.as_str(), "int" | "float")
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    self.function_expression_query_stringification_sensitive(
+                        &args[0],
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+                }
+                ExprKind::Ident(name)
+                    if name == "debug"
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    self.function_expression_query_numeric_source(
+                        &args[0],
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    ) || self.function_expression_query_stringification_sensitive(
+                        &args[0],
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+                }
+                ExprKind::Member { object, name } if name == "size" => self
+                    .function_expression_query_stringification_sensitive(
+                        object,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    ),
+                ExprKind::Member { object, name } if name == "join" => {
+                    self.function_expression_query_numeric_source(
+                        object,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    ) || self.function_expression_query_stringification_sensitive(
+                        object,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+                }
+                ExprKind::Ident(name) => {
+                    let argument_provenance = args
+                        .iter()
+                        .map(|argument| {
+                            self.function_expression_query_numeric_source(
+                                argument,
+                                query_locals,
+                                sensitive_locals,
+                                environment,
+                                visiting,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    function_in_environment(environment, name).is_some_and(|function| {
+                        self.function_body_query_numeric_source(
+                            function,
+                            &argument_provenance,
+                            visiting,
+                        )
+                    })
+                }
+                _ => {
+                    self.function_expression_query_stringification_sensitive(
+                        callee,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    ) || args.iter().any(|argument| {
+                        self.function_expression_query_stringification_sensitive(
+                            argument,
+                            query_locals,
+                            sensitive_locals,
+                            environment,
+                            visiting,
+                        )
+                    })
+                }
+            },
+            _ => false,
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn function_expression_query_numeric_source(
+        &self,
+        expr: &Expr,
+        query_locals: &BTreeMap<&str, bool>,
+        sensitive_locals: &BTreeMap<&str, bool>,
+        environment: &FunctionEnvironment<'a>,
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        match expr.kind() {
+            ExprKind::Ident(name) => query_locals
+                .get(name.as_str())
+                .copied()
+                .unwrap_or(name == "resource"),
+            ExprKind::Member { object, .. } => self.function_expression_query_numeric_source(
+                object,
+                query_locals,
+                sensitive_locals,
+                environment,
+                visiting,
+            ),
+            ExprKind::Index { object, index } => {
+                self.function_expression_query_numeric_source(
+                    object,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_numeric_source(
+                    index,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::Slice { object, start, end } => {
+                self.function_expression_query_numeric_source(
+                    object,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_numeric_source(
+                    start,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_numeric_source(
+                    end,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::List(items) => items.iter().any(|item| {
+                self.function_expression_query_numeric_source(
+                    item,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }),
+            ExprKind::Map(entries) => entries.iter().any(|(_, value)| {
+                self.function_expression_query_numeric_source(
+                    value,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                )
+            }),
+            ExprKind::Path(segments) => segments.iter().any(|segment| match segment {
+                PathSegment::Binding(expression) => self.function_expression_query_numeric_source(
+                    expression,
+                    query_locals,
+                    sensitive_locals,
+                    environment,
+                    visiting,
+                ),
+                PathSegment::Literal(_)
+                | PathSegment::Capture { .. }
+                | PathSegment::RecursiveWildcard { .. } => false,
+            }),
+            ExprKind::Unary { expr, .. } => self.function_expression_query_numeric_source(
+                expr,
+                query_locals,
+                sensitive_locals,
+                environment,
+                visiting,
+            ),
+            ExprKind::Binary { left, right, .. } => {
+                self.function_expression_query_derived(expr, query_locals, environment, visiting)
+                    || self.function_expression_query_numeric_source(
+                        left,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+                    || self.function_expression_query_numeric_source(
+                        right,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+            }
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.function_expression_query_derived(expr, query_locals, environment, visiting)
+                    || self.function_expression_query_numeric_source(
+                        cond,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+                    || self.function_expression_query_numeric_source(
+                        then,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+                    || self.function_expression_query_numeric_source(
+                        otherwise,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if name == "float"
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    self.function_expression_query_derived(
+                        &args[0],
+                        query_locals,
+                        environment,
+                        visiting,
+                    ) || self.function_expression_query_numeric_source(
+                        &args[0],
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+                }
+                ExprKind::Ident(name)
+                    if name == "int"
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    self.function_expression_query_stringification_sensitive(
+                        &args[0],
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+                }
+                ExprKind::Ident(name)
+                    if name == "string"
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    false
+                }
+                ExprKind::Member { object, name } if name == "size" => false,
+                ExprKind::Member { object, name } if name == "join" => {
+                    self.function_expression_query_numeric_source(
+                        object,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    ) || self.function_expression_query_stringification_sensitive(
+                        object,
+                        query_locals,
+                        sensitive_locals,
+                        environment,
+                        visiting,
+                    )
+                }
+                ExprKind::Ident(name) => {
+                    let argument_provenance = args
+                        .iter()
+                        .map(|argument| {
+                            (
+                                self.function_expression_query_derived(
+                                    argument,
+                                    query_locals,
+                                    environment,
+                                    visiting,
+                                ),
+                                self.function_expression_query_stringification_sensitive(
+                                    argument,
+                                    query_locals,
+                                    sensitive_locals,
+                                    environment,
+                                    visiting,
+                                ),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    function_in_environment(environment, name).is_some_and(|function| {
+                        self.function_body_query_stringification_sensitive(
+                            function,
+                            &argument_provenance,
+                            visiting,
+                        )
+                    })
+                }
+                _ => self.function_expression_query_derived(
+                    expr,
+                    query_locals,
+                    environment,
+                    visiting,
+                ),
+            },
+            _ => false,
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn query_numeric_stringification_sensitive_with(&self, expr: &Expr) -> bool {
+        match expr.kind() {
+            ExprKind::Ident(name) => {
+                let Some(index) = self
+                    .scope
+                    .bindings
+                    .iter()
+                    .rposition(|binding| binding.name == *name)
+                else {
+                    return false;
+                };
+                let binding = &self.scope.bindings[index];
+                match &binding.state {
+                    BindingState::Lazy(_)
+                    | BindingState::Value(_)
+                    | BindingState::Resolved { .. }
+                    | BindingState::Evaluating => binding.query_numeric_stringification_sensitive,
+                }
+            }
+            ExprKind::Member { object, .. } => {
+                self.query_numeric_stringification_sensitive_with(object)
+            }
+            ExprKind::Index { object, index } => {
+                self.query_numeric_stringification_sensitive_with(object)
+                    || self.query_numeric_stringification_sensitive_with(index)
+            }
+            ExprKind::Slice { object, start, end } => {
+                self.query_numeric_stringification_sensitive_with(object)
+                    || self.query_numeric_stringification_sensitive_with(start)
+                    || self.query_numeric_stringification_sensitive_with(end)
+            }
+            ExprKind::List(items) => items
+                .iter()
+                .any(|item| self.query_numeric_stringification_sensitive_with(item)),
+            ExprKind::Map(entries) => entries
+                .iter()
+                .any(|(_, value)| self.query_numeric_stringification_sensitive_with(value)),
+            ExprKind::Path(segments) => segments.iter().any(|segment| match segment {
+                PathSegment::Binding(expression) => {
+                    self.query_numeric_stringification_sensitive_with(expression)
+                }
+                PathSegment::Literal(_)
+                | PathSegment::Capture { .. }
+                | PathSegment::RecursiveWildcard { .. } => false,
+            }),
+            ExprKind::Unary { expr, .. } => self.query_numeric_stringification_sensitive_with(expr),
+            ExprKind::Binary { left, right, .. } => {
+                self.query_numeric_stringification_sensitive_with(left)
+                    || self.query_numeric_stringification_sensitive_with(right)
+            }
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.query_numeric_stringification_sensitive_with(cond)
+                    || self.query_numeric_stringification_sensitive_with(then)
+                    || self.query_numeric_stringification_sensitive_with(otherwise)
+            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if name == "string" && args.len() == 1 && self.function(name).is_none() =>
+                {
+                    self.query_numeric_expression_source(&args[0])
+                        || self.query_numeric_stringification_sensitive_with(&args[0])
+                }
+                // int()/float() canonicalize a numeric value. They do not erase uncertainty
+                // introduced by an earlier string conversion, so preserve that provenance.
+                ExprKind::Ident(name)
+                    if matches!(name.as_str(), "int" | "float")
+                        && args.len() == 1
+                        && self.function(name).is_none() =>
+                {
+                    self.query_numeric_stringification_sensitive_with(&args[0])
+                }
+                ExprKind::Ident(name)
+                    if name == "debug" && args.len() == 1 && self.function(name).is_none() =>
+                {
+                    self.query_numeric_expression_source(&args[0])
+                        || self.query_numeric_stringification_sensitive_with(&args[0])
+                }
+                ExprKind::Ident(name) if self.function(name).is_some() => {
+                    let argument_provenance = args
+                        .iter()
+                        .map(|argument| {
+                            (
+                                self.query_derived_expression(argument)
+                                    || self.query_numeric_expression_source(argument),
+                                self.query_numeric_stringification_sensitive_with(argument),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    self.function(name).is_some_and(|function| {
+                        self.function_body_query_stringification_sensitive(
+                            function,
+                            &argument_provenance,
+                            &mut Vec::new(),
+                        )
+                    })
+                }
+                // A size() call on a string whose contents came from numeric stringification is
+                // representation-sensitive. Collection shape remains independent of element
+                // values, so list/map literals are handled conservatively by their caller.
+                ExprKind::Member { object, name } if name == "size" => {
+                    self.query_numeric_stringification_sensitive_with(object)
+                }
+                ExprKind::Member { object, name } if name == "join" => {
+                    self.query_numeric_expression_source(object)
+                        || self.query_numeric_stringification_sensitive_with(object)
+                }
+                // Map/list lookup itself does not stringify numeric values. If the selected
+                // value is later converted to text, the enclosing string() branch will inspect
+                // its numeric source directly; do not taint a known string returned by get().
+                ExprKind::Member { object, name } if name == "get" => {
+                    self.query_numeric_stringification_sensitive_with(object)
+                        || args.iter().any(|argument| {
+                            self.query_numeric_stringification_sensitive_with(argument)
+                        })
+                }
+                ExprKind::Member { object, name }
+                    if matches!(
+                        name.as_str(),
+                        "hasAny"
+                            | "hasAll"
+                            | "hasOnly"
+                            | "removeAll"
+                            | "toSet"
+                            | "union"
+                            | "intersection"
+                            | "difference"
+                    ) =>
+                {
+                    self.query_numeric_stringification_sensitive_with(object)
+                        || args.iter().any(|argument| {
+                            self.query_numeric_stringification_sensitive_with(argument)
+                        })
+                }
+                // Unknown methods and user functions may preserve or inspect their arguments;
+                // a query-derived argument therefore cannot be treated as one representation.
+                _ => {
+                    self.query_derived_expression(expr)
+                        || self.query_numeric_stringification_sensitive_with(callee)
+                        || args.iter().any(|argument| {
+                            self.query_numeric_stringification_sensitive_with(argument)
+                        })
+                }
+            },
+            _ => false,
+        }
+    }
+
+    /// Like `query_numeric_stringification_sensitive`, but only for an expression used as the
+    /// receiver of `.size()`. A list/map's cardinality is shape-only even when an element was
+    /// derived from a query value; strings and methods that preserve their contents remain
+    /// sensitive.
+    fn query_size_stringification_sensitive(&self, expr: &Expr) -> bool {
+        if !self.query_proof {
+            return false;
+        }
+        match expr.kind() {
+            ExprKind::Ident(name) => {
+                let Some(index) = self
+                    .scope
+                    .bindings
+                    .iter()
+                    .rposition(|binding| binding.name == *name)
+                else {
+                    return false;
+                };
+                let binding = &self.scope.bindings[index];
+                match &binding.state {
+                    BindingState::Lazy(_) => binding.query_numeric_stringification_sensitive,
+                    BindingState::Value(value)
+                    | BindingState::Resolved {
+                        result: Ok(value), ..
+                    } => {
+                        binding.query_numeric_stringification_sensitive
+                            && matches!(value, RulesValue::String(_))
+                    }
+                    BindingState::Resolved { .. } | BindingState::Evaluating => {
+                        binding.query_derived
+                    }
+                }
+            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if name == "string" && args.len() == 1 && self.function(name).is_none() =>
+                {
+                    self.query_numeric_expression_source(&args[0])
+                        || self.query_numeric_stringification_sensitive_with(&args[0])
+                }
+                ExprKind::Ident(name)
+                    if name == "debug" && args.len() == 1 && self.function(name).is_none() =>
+                {
+                    self.query_numeric_expression_source(&args[0])
+                        || self.query_size_stringification_sensitive(&args[0])
+                }
+                ExprKind::Member { object, name } if name == "join" => {
+                    self.query_numeric_expression_source(object)
+                        || self.query_numeric_stringification_sensitive_with(object)
+                }
+                ExprKind::Member { object, .. } => {
+                    self.query_size_stringification_sensitive(object)
+                }
+                _ => self.query_numeric_stringification_sensitive(expr),
+            },
+            ExprKind::Member { object, .. } => self.query_size_stringification_sensitive(object),
+            ExprKind::List(_) | ExprKind::Map(_) => false,
+            _ => self.query_numeric_stringification_sensitive(expr),
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn query_float_zero_ambiguous_with(&self, expr: &Expr, visiting: &mut Vec<usize>) -> bool {
+        match expr.kind() {
+            ExprKind::Ident(name) => {
+                let Some(index) = self
+                    .scope
+                    .bindings
+                    .iter()
+                    .rposition(|binding| binding.name == *name)
+                else {
+                    return name == "resource";
+                };
+                let binding = &self.scope.bindings[index];
+                if binding.query_float_zero_ambiguous {
+                    return true;
+                }
+                if !binding.query_derived {
+                    return false;
+                }
+                match &binding.state {
+                    // Preserve the source expression through lazy aliases such as
+                    // `let value = float(resource.data.value)`.
+                    BindingState::Lazy(_) => binding.query_float_zero_ambiguous,
+                    // A resolved query-derived value has no retained expression. The caller
+                    // already observed a float zero, so the missing sign information is unsafe
+                    // to treat as canonical.
+                    BindingState::Value(_)
+                    | BindingState::Resolved { .. }
+                    | BindingState::Evaluating => true,
+                }
+            }
+            ExprKind::Member { object, .. } => {
+                self.query_float_zero_ambiguous_with(object, visiting)
+            }
+            ExprKind::Index { object, index } => {
+                self.query_float_zero_ambiguous_with(object, visiting)
+                    || self.query_derived_expression(index)
+            }
+            ExprKind::Slice { object, start, end } => {
+                self.query_float_zero_ambiguous_with(object, visiting)
+                    || self.query_derived_expression(start)
+                    || self.query_derived_expression(end)
+            }
+            ExprKind::List(items) => items
+                .iter()
+                .any(|item| self.query_float_zero_ambiguous_with(item, visiting)),
+            ExprKind::Map(entries) => entries
+                .iter()
+                .any(|(_, value)| self.query_float_zero_ambiguous_with(value, visiting)),
+            ExprKind::Path(segments) => segments.iter().any(|segment| match segment {
+                PathSegment::Binding(expression) => {
+                    self.query_float_zero_ambiguous_with(expression, visiting)
+                }
+                PathSegment::Literal(_)
+                | PathSegment::Capture { .. }
+                | PathSegment::RecursiveWildcard { .. } => false,
+            }),
+            ExprKind::Unary { expr, .. } => self.query_float_zero_ambiguous_with(expr, visiting),
+            ExprKind::Binary { left, right, .. } => {
+                self.query_float_zero_ambiguous_with(left, visiting)
+                    || self.query_float_zero_ambiguous_with(right, visiting)
+            }
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.query_float_zero_ambiguous_with(cond, visiting)
+                    || self.query_float_zero_ambiguous_with(then, visiting)
+                    || self.query_float_zero_ambiguous_with(otherwise, visiting)
+            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if name == "float" && args.len() == 1 && self.function("float").is_none() =>
+                {
+                    self.query_float_zero_ambiguous_with(&args[0], visiting)
+                }
+                ExprKind::Ident(name)
+                    if name == "int" && args.len() == 1 && self.function("int").is_none() =>
+                {
+                    // int() canonicalizes an equivalent integer/double value, including zero;
+                    // unlike float() it cannot preserve a signed-zero distinction.
+                    false
+                }
+                ExprKind::Member { name, .. } if name == "size" => false,
+                ExprKind::Ident(name) => {
+                    self.function(name).is_some_and(|function| {
+                        let argument_provenance = args
+                            .iter()
+                            .map(|argument| {
+                                (
+                                    self.query_derived_expression(argument),
+                                    self.query_float_zero_ambiguous_with(argument, visiting),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        self.function_body_query_float_zero_ambiguous(
+                            function,
+                            &argument_provenance,
+                            visiting,
+                        )
+                    }) || args
+                        .iter()
+                        .any(|argument| self.query_float_zero_ambiguous_with(argument, visiting))
+                }
+                _ => {
+                    self.query_float_zero_ambiguous_with(callee, visiting)
+                        || args.iter().any(|argument| {
+                            self.query_float_zero_ambiguous_with(argument, visiting)
+                        })
+                }
+            },
+            _ => false,
+        }
+    }
+
+    fn function_body_query_float_zero_ambiguous(
+        &self,
+        function: &FunctionDecl,
+        parameter_provenance: &[(bool, bool)],
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        let key = function_key(function);
+        if visiting.contains(&key) {
+            // A recursive back-edge may eventually reach a query-derived value. Returning
+            // false here and caching the parent result would make the answer depend on which
+            // declaration happened to be visited first. Fail closed for the proof instead.
+            return true;
+        }
+        let cache_key = (key, parameter_provenance.to_vec());
+        if let Some(cached) = self
+            .query_float_zero_function_cache
+            .borrow()
+            .get(&cache_key)
+        {
+            return *cached;
+        }
+        if self.query_float_zero_analysis_work.get() >= QUERY_DERIVED_ANALYSIS_WORK_MAX {
+            return true;
+        }
+        self.query_float_zero_analysis_work
+            .set(self.query_float_zero_analysis_work.get().saturating_add(1));
+        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+            return false;
+        };
+        visiting.push(key);
+        let mut query_locals = BTreeMap::new();
+        let mut float_locals = BTreeMap::new();
+        for (index, parameter) in function.params.iter().enumerate() {
+            let (derived, ambiguous) = parameter_provenance
+                .get(index)
+                .copied()
+                .unwrap_or((true, true));
+            query_locals.insert(parameter.as_str(), derived);
+            float_locals.insert(parameter.as_str(), derived || ambiguous);
+        }
+        for binding in &function.lets {
+            let derived = self.function_expression_query_derived(
+                &binding.value,
+                &query_locals,
+                environment,
+                visiting,
+            );
+            let ambiguous = self.function_expression_query_float_zero_ambiguous(
+                &binding.value,
+                &query_locals,
+                &float_locals,
+                environment,
+                visiting,
+            );
+            query_locals.insert(binding.name.as_str(), derived);
+            // A query-derived local whose concrete result is a float zero may have either sign;
+            // keep that uncertainty available through later aliases.
+            float_locals.insert(binding.name.as_str(), derived || ambiguous);
+        }
+        let result = self.function_expression_query_float_zero_ambiguous(
+            &function.body,
+            &query_locals,
+            &float_locals,
+            environment,
+            visiting,
+        );
+        visiting.pop();
+        self.query_float_zero_function_cache
+            .borrow_mut()
+            .insert(cache_key, result);
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn function_expression_query_float_zero_ambiguous(
+        &self,
+        expr: &Expr,
+        query_locals: &BTreeMap<&str, bool>,
+        float_locals: &BTreeMap<&str, bool>,
+        environment: &FunctionEnvironment<'a>,
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        match expr.kind() {
+            ExprKind::Ident(name) => float_locals
+                .get(name.as_str())
+                .copied()
+                .unwrap_or(name == "resource"),
+            ExprKind::Member { object, .. } => self.function_expression_query_float_zero_ambiguous(
+                object,
+                query_locals,
+                float_locals,
+                environment,
+                visiting,
+            ),
+            ExprKind::Index { object, index } => {
+                self.function_expression_query_float_zero_ambiguous(
+                    object,
+                    query_locals,
+                    float_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_derived(
+                    index,
+                    query_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::Slice { object, start, end } => {
+                self.function_expression_query_float_zero_ambiguous(
+                    object,
+                    query_locals,
+                    float_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_derived(
+                    start,
+                    query_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_derived(
+                    end,
+                    query_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::List(items) => items.iter().any(|item| {
+                self.function_expression_query_float_zero_ambiguous(
+                    item,
+                    query_locals,
+                    float_locals,
+                    environment,
+                    visiting,
+                )
+            }),
+            ExprKind::Map(entries) => entries.iter().any(|(_, value)| {
+                self.function_expression_query_float_zero_ambiguous(
+                    value,
+                    query_locals,
+                    float_locals,
+                    environment,
+                    visiting,
+                )
+            }),
+            ExprKind::Path(segments) => segments.iter().any(|segment| match segment {
+                PathSegment::Binding(expression) => self
+                    .function_expression_query_float_zero_ambiguous(
+                        expression,
+                        query_locals,
+                        float_locals,
+                        environment,
+                        visiting,
+                    ),
+                PathSegment::Literal(_)
+                | PathSegment::Capture { .. }
+                | PathSegment::RecursiveWildcard { .. } => false,
+            }),
+            ExprKind::Unary { expr, .. } => self.function_expression_query_float_zero_ambiguous(
+                expr,
+                query_locals,
+                float_locals,
+                environment,
+                visiting,
+            ),
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.function_expression_query_float_zero_ambiguous(
+                    cond,
+                    query_locals,
+                    float_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_float_zero_ambiguous(
+                    then,
+                    query_locals,
+                    float_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_float_zero_ambiguous(
+                    otherwise,
+                    query_locals,
+                    float_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.function_expression_query_float_zero_ambiguous(
+                    left,
+                    query_locals,
+                    float_locals,
+                    environment,
+                    visiting,
+                ) || self.function_expression_query_float_zero_ambiguous(
+                    right,
+                    query_locals,
+                    float_locals,
+                    environment,
+                    visiting,
+                )
+            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if name == "float"
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    self.function_expression_query_float_zero_ambiguous(
+                        &args[0],
+                        query_locals,
+                        float_locals,
+                        environment,
+                        visiting,
+                    )
+                }
+                ExprKind::Ident(name)
+                    if name == "int"
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    // int() canonicalizes an equivalent integer/double value, including zero.
+                    false
+                }
+                ExprKind::Member { name, .. } if name == "size" => false,
+                ExprKind::Ident(name) => {
+                    function_in_environment(environment, name).is_some_and(|function| {
+                        let argument_provenance = args
+                            .iter()
+                            .map(|argument| {
+                                (
+                                    self.function_expression_query_derived(
+                                        argument,
+                                        query_locals,
+                                        environment,
+                                        visiting,
+                                    ),
+                                    self.function_expression_query_float_zero_ambiguous(
+                                        argument,
+                                        query_locals,
+                                        float_locals,
+                                        environment,
+                                        visiting,
+                                    ),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        self.function_body_query_float_zero_ambiguous(
+                            function,
+                            &argument_provenance,
+                            visiting,
+                        )
+                    }) || args.iter().any(|argument| {
+                        self.function_expression_query_float_zero_ambiguous(
+                            argument,
+                            query_locals,
+                            float_locals,
+                            environment,
+                            visiting,
+                        )
+                    })
+                }
+                _ => {
+                    self.function_expression_query_float_zero_ambiguous(
+                        callee,
+                        query_locals,
+                        float_locals,
+                        environment,
+                        visiting,
+                    ) || args.iter().any(|argument| {
+                        self.function_expression_query_float_zero_ambiguous(
+                            argument,
+                            query_locals,
+                            float_locals,
+                            environment,
+                            visiting,
+                        )
+                    })
+                }
+            },
+            _ => false,
+        }
+    }
+
     fn query_derived_expression_with(&self, expr: &Expr, visiting: &mut Vec<usize>) -> bool {
         if !self.query_proof {
             return false;
@@ -1433,15 +3181,27 @@ impl<'a> Evaluator<'a> {
                     || self.query_derived_expression_with(then, visiting)
                     || self.query_derived_expression_with(otherwise, visiting)
             }
-            ExprKind::Call { callee, args, .. } => {
-                self.query_derived_expression_with(callee, visiting)
-                    || args
-                        .iter()
-                        .any(|argument| self.query_derived_expression_with(argument, visiting))
-                    || matches!(callee.kind(), ExprKind::Ident(name) if self
-                        .function(name)
-                        .is_some_and(|function| self.function_body_query_derived(function, visiting)))
-            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                // These built-ins canonicalize the numeric representation, so an equality
+                // query's integer/double ambiguity does not survive the call.
+                ExprKind::Ident(name)
+                    if matches!(name.as_str(), "int" | "float")
+                        && self.function(name).is_none() =>
+                {
+                    false
+                }
+                // Collection/string size is determined by the shape, not numeric encoding.
+                ExprKind::Member { name, .. } if name == "size" => false,
+                _ => {
+                    self.query_derived_expression_with(callee, visiting)
+                        || args
+                            .iter()
+                            .any(|argument| self.query_derived_expression_with(argument, visiting))
+                        || matches!(callee.kind(), ExprKind::Ident(name) if self
+                            .function(name)
+                            .is_some_and(|function| self.function_body_query_derived(function, visiting)))
+                }
+            },
             _ => false,
         }
     }
@@ -1453,8 +3213,18 @@ impl<'a> Evaluator<'a> {
     ) -> bool {
         let key = function_key(function);
         if visiting.contains(&key) {
-            return false;
+            // See the analogous float-zero analysis above: an in-progress declaration is not a
+            // completed, context-independent `false` result.
+            return true;
         }
+        if let Some(cached) = self.query_derived_function_cache.borrow().get(&key) {
+            return *cached;
+        }
+        if self.query_derived_analysis_work.get() >= QUERY_DERIVED_ANALYSIS_WORK_MAX {
+            return true;
+        }
+        self.query_derived_analysis_work
+            .set(self.query_derived_analysis_work.get().saturating_add(1));
         let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
             return true;
         };
@@ -1475,6 +3245,9 @@ impl<'a> Evaluator<'a> {
         let derived =
             self.function_expression_query_derived(&function.body, &locals, environment, visiting);
         visiting.pop();
+        self.query_derived_function_cache
+            .borrow_mut()
+            .insert(key, derived);
         derived
     }
 
@@ -1540,19 +3313,28 @@ impl<'a> Evaluator<'a> {
                         visiting,
                     )
             }
-            ExprKind::Call { callee, args, .. } => {
-                self.function_expression_query_derived(callee, locals, environment, visiting)
-                    || args.iter().any(|argument| {
-                        self.function_expression_query_derived(
-                            argument,
-                            locals,
-                            environment,
-                            visiting,
-                        )
-                    })
-                    || matches!(callee.kind(), ExprKind::Ident(name) if function_in_environment(environment, name)
-                        .is_some_and(|function| self.function_body_query_derived(function, visiting)))
-            }
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if matches!(name.as_str(), "int" | "float")
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    false
+                }
+                ExprKind::Member { name, .. } if name == "size" => false,
+                _ => {
+                    self.function_expression_query_derived(callee, locals, environment, visiting)
+                        || args.iter().any(|argument| {
+                            self.function_expression_query_derived(
+                                argument,
+                                locals,
+                                environment,
+                                visiting,
+                            )
+                        })
+                        || matches!(callee.kind(), ExprKind::Ident(name) if function_in_environment(environment, name)
+                            .is_some_and(|function| self.function_body_query_derived(function, visiting)))
+                }
+            },
             _ => false,
         }
     }
@@ -1965,6 +3747,12 @@ impl<'a> Evaluator<'a> {
             ExprKind::Index { object, index } => {
                 let obj = self.eval(object)?;
                 let idx = self.eval(index)?;
+                if self.query_proof && self.query_numeric_stringification_sensitive(index) {
+                    // A numeric value converted to a string can select a different map entry
+                    // for an equivalent integer/double query representation (for example `0`
+                    // versus `-0`). Such a lookup is not a sound query proof.
+                    return Err(EvalError::Unknown);
+                }
                 if self.query_proof
                     && self.query_derived_expression(index)
                     && matches!(idx, RulesValue::Int(_) | RulesValue::Float(_))
@@ -2070,8 +3858,12 @@ impl<'a> Evaluator<'a> {
                         PathSegment::Binding(e) => {
                             let value = self.eval(e)?;
                             if self.query_proof
-                                && self.query_derived_expression(e)
-                                && matches!(value, RulesValue::Int(_) | RulesValue::Float(_))
+                                && (self.query_numeric_stringification_sensitive(e)
+                                    || (self.query_derived_expression(e)
+                                        && matches!(
+                                            value,
+                                            RulesValue::Int(_) | RulesValue::Float(_)
+                                        )))
                             {
                                 return Err(EvalError::Unknown);
                             }
@@ -2226,8 +4018,49 @@ impl<'a> Evaluator<'a> {
         }
         let l = self.eval(left)?;
         let r = self.eval(right)?;
-        let query_resource_value =
-            self.query_derived_expression(left) || self.query_derived_expression(right);
+        let query_derived_left = self.query_derived_expression(left);
+        let query_derived_right = self.query_derived_expression(right);
+        let query_resource_value = query_derived_left || query_derived_right;
+        if self.query_proof
+            && matches!(
+                op,
+                BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Le
+                    | BinaryOp::Gt
+                    | BinaryOp::Ge
+            )
+            && (self.query_numeric_stringification_sensitive(left)
+                || self.query_numeric_stringification_sensitive(right))
+        {
+            // A string produced from a query-derived number may differ for an equivalent integer
+            // and double representation. Do not prove a comparison from that one text value.
+            return Err(EvalError::Unknown);
+        }
+        if self.query_proof
+            && op == BinaryOp::In
+            && (self.query_numeric_stringification_sensitive(left)
+                || self.query_numeric_stringification_sensitive(right))
+        {
+            // Membership observes stringified numeric representations just like a map lookup.
+            // A single integer/double representative cannot establish membership for every
+            // document accepted by the equality filter.
+            return Err(EvalError::Unknown);
+        }
+        if matches!(
+            op,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+        ) && ((query_derived_left && numeric_value(&l))
+            || (query_derived_right && numeric_value(&r))
+            || self.query_float_zero_ambiguous(left, &l)
+            || self.query_float_zero_ambiguous(right, &r))
+        {
+            // Equality filters preserve Firestore's numeric equivalence, but Rules arithmetic
+            // distinguishes integer and floating-point operands. A query representative cannot
+            // therefore establish an arithmetic result for every matching document.
+            return Err(EvalError::Unknown);
+        }
         Ok(match (op, &l, &r) {
             // Membership in a partially known container is provable only positively.
             (BinaryOp::In, item, V::PartialList(known)) if !undetermined(item) => {
@@ -2478,6 +4311,7 @@ impl<'a> Evaluator<'a> {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn call(
         &mut self,
         callee: &Expr,
@@ -2491,11 +4325,30 @@ impl<'a> Evaluator<'a> {
                         .iter()
                         .map(|a| self.eval(a))
                         .collect::<Result<Vec<_>, _>>()?;
-                    let query_derived = args
+                    let query_provenance = args
                         .iter()
-                        .map(|a| self.query_derived_expression(a))
+                        .map(|argument| {
+                            (
+                                self.query_derived_expression(argument),
+                                self.query_float_zero_source(argument),
+                            )
+                        })
                         .collect();
-                    return self.call_user(f, values, query_derived);
+                    let stringification_provenance = args
+                        .iter()
+                        .map(|argument| self.query_numeric_stringification_sensitive(argument))
+                        .collect();
+                    let numeric_source_provenance = args
+                        .iter()
+                        .map(|argument| self.query_numeric_expression_source(argument))
+                        .collect();
+                    return self.call_user(
+                        f,
+                        values,
+                        query_provenance,
+                        stringification_provenance,
+                        numeric_source_provenance,
+                    );
                 }
                 match name.as_str() {
                     "get" | "exists" | "getAfter" => {
@@ -2513,8 +4366,29 @@ impl<'a> Evaluator<'a> {
                         let [a] = args else {
                             return Err(soft(format!("{name}() takes one argument")));
                         };
+                        let query_derived = self.query_derived_expression(a);
+                        if self.query_proof
+                            && name == "path"
+                            && self.query_numeric_stringification_sensitive(a)
+                        {
+                            return Err(EvalError::Unknown);
+                        }
                         let v = self.eval(a)?;
-                        convert(name, v)
+                        let converted = convert(name, v)?;
+                        if self.query_proof
+                            && name == "int"
+                            && query_derived
+                            && (matches!(converted, RulesValue::Int(i64::MIN))
+                                || self.query_numeric_stringification_sensitive(a))
+                        {
+                            // Equality filters treat integer and double encodings as one
+                            // numeric value, but converting an equivalent double at the i64
+                            // boundary or after a representation-sensitive string conversion
+                            // can fail. Keep the query proof conservative after every accepted
+                            // representation, including a string conversion.
+                            return Err(EvalError::Unknown);
+                        }
+                        Ok(converted)
                     }
                     _ => Err(soft(format!("unknown function {name}"))),
                 }
@@ -2530,6 +4404,52 @@ impl<'a> Evaluator<'a> {
                     }
                 }
                 let receiver = self.eval(object)?;
+                if self.query_proof
+                    && name == "size"
+                    && self.query_size_stringification_sensitive(object)
+                {
+                    // A numeric query value converted to text can have a different length for
+                    // an equivalent integer/double representation (for example `0` vs `-0`).
+                    // Do not let the shape-only size exemption turn that uncertainty into a
+                    // query authorization proof.
+                    return Err(EvalError::Unknown);
+                }
+                if self.query_proof
+                    && matches!(receiver, RulesValue::String(_))
+                    && self.query_numeric_stringification_sensitive(object)
+                {
+                    // String methods can inspect the representation (matches, replace, case
+                    // conversion, and trimming included), so their result is not proof-safe.
+                    return Err(EvalError::Unknown);
+                }
+                if self.query_proof {
+                    let receiver_is_representation_sensitive =
+                        self.query_numeric_stringification_sensitive(object);
+                    let argument_is_representation_sensitive = args
+                        .iter()
+                        .any(|argument| self.query_numeric_stringification_sensitive(argument));
+                    let lookup_or_membership = matches!(
+                        name.as_str(),
+                        "get"
+                            | "hasAny"
+                            | "hasAll"
+                            | "hasOnly"
+                            | "removeAll"
+                            | "toSet"
+                            | "union"
+                            | "intersection"
+                            | "difference"
+                    );
+                    if lookup_or_membership
+                        && (receiver_is_representation_sensitive
+                            || argument_is_representation_sensitive)
+                    {
+                        // Map lookups and collection membership observe stringified numeric
+                        // representations. A representative key/member is not unique across
+                        // equivalent integer/double query encodings.
+                        return Err(EvalError::Unknown);
+                    }
+                }
                 let values = args
                     .iter()
                     .map(|a| self.eval(a))
@@ -2617,7 +4537,9 @@ impl<'a> Evaluator<'a> {
         &mut self,
         f: &'a FunctionDecl,
         values: Vec<RulesValue>,
-        query_derived: Vec<bool>,
+        query_provenance: Vec<QueryFloatZeroProvenance>,
+        stringification_provenance: Vec<bool>,
+        numeric_source_provenance: Vec<bool>,
     ) -> Result<RulesValue, EvalError> {
         if values.len() != f.params.len() {
             return Err(soft(format!(
@@ -2641,21 +4563,46 @@ impl<'a> Evaluator<'a> {
             .iter()
             .map(|(name, value)| Binding::value(name.clone(), value.clone()))
             .collect();
-        for ((p, v), query_derived) in f.params.iter().zip(values).zip(query_derived) {
-            self.scope.bindings.push(if query_derived {
-                Binding::query_value(p.clone(), v)
-            } else {
-                Binding::value(p.clone(), v)
-            });
+        for (
+            (((p, v), (query_derived, float_zero_ambiguous)), stringification_sensitive),
+            numeric_source,
+        ) in f
+            .params
+            .iter()
+            .zip(values)
+            .zip(query_provenance)
+            .zip(stringification_provenance)
+            .zip(numeric_source_provenance)
+        {
+            self.scope.bindings.push(Binding::with_provenance(
+                p.clone(),
+                v,
+                query_derived,
+                numeric_source,
+                float_zero_ambiguous,
+                stringification_sensitive,
+            ));
         }
         let result = {
             for l in &f.lets {
                 let visible_before = self.scope.bindings.len();
                 let query_derived = self.query_derived_expression(&l.value);
+                let query_float_zero_ambiguous = if self.query_proof {
+                    let mut visiting = Vec::new();
+                    self.query_float_zero_ambiguous_with(&l.value, &mut visiting)
+                } else {
+                    false
+                };
+                let query_numeric_stringification_sensitive =
+                    self.query_numeric_stringification_sensitive(&l.value);
+                let query_numeric_source = self.query_numeric_expression_source(&l.value);
                 self.scope.bindings.push(Binding {
                     name: l.name.clone(),
                     visible_before,
                     query_derived,
+                    query_numeric_source,
+                    query_float_zero_ambiguous,
+                    query_numeric_stringification_sensitive,
                     state: BindingState::Lazy(&l.value),
                 });
             }
@@ -2884,6 +4831,10 @@ fn cmp_int_double(i: i64, d: f64) -> core::cmp::Ordering {
         }
         o => o,
     }
+}
+
+fn numeric_value(v: &RulesValue) -> bool {
+    matches!(v, RulesValue::Int(_) | RulesValue::Float(_))
 }
 
 #[allow(clippy::cast_precision_loss)]

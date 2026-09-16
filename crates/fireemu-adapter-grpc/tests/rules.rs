@@ -1363,6 +1363,77 @@ service cloud.firestore {
 }
 
 #[tokio::test]
+async fn query_proof_does_not_prove_numeric_arithmetic_from_equivalent_encoding() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("arithmetic@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.score / 2 == 1;
+    }
+  }
+}",
+        )
+        .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "records/arithmetic",
+                &[("score", double(3.0))],
+            )]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+
+    let query = list_where("records", "score", integer(3));
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(query.clone(), "owner"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner query should return the stored document")
+            .unwrap()
+            .document
+            .expect("owner query document")
+            .name,
+        format!("{DOCS}/records/arithmetic")
+    );
+    assert!(owner_stream.next().await.is_none());
+
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/arithmetic"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h.client.run_query(with_bearer(query, &alice_token)).await {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+    h.handle.abort();
+}
+
+#[tokio::test]
 async fn query_proof_rejects_numeric_path_bindings() {
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");

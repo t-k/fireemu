@@ -1425,6 +1425,344 @@ fn undetermined_values_never_prove_a_condition() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
+    let rules = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{d}/documents {\n    match /notes/{id} {\n      allow list: if resource.data.value / 2 == 0;\n    }\n  }\n}";
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(1))],
+    );
+    // Firestore query equality permits a stored double 1.0 for an integer equality filter,
+    // while concrete Rules arithmetic preserves the stored representation (1.0 / 2 != 0).
+    assert!(!allows(rules, &query));
+
+    let normalized_int = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(1))],
+    );
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if int(resource.data.value) / 2 == 0; } } }",
+        &normalized_int
+    ));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if float(resource.data.value) / 2 == 0.5; } } }",
+        &normalized_int
+    ));
+    let zero = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(0))],
+    );
+    for condition in [
+        "1.0 / float(resource.data.value) > 0",
+        "(true ? float(resource.data.value) : 0.0) / 1.0 >= 0",
+    ] {
+        assert!(
+            !allows(
+                &format!(
+                    "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+                ),
+                &zero
+            ),
+            "{condition} must remain conservative for signed zero"
+        );
+    }
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function normalized() { let value = resource.data.value; return float(value); } match /databases/{d}/documents { match /notes/{id} { allow list: if 1.0 / normalized() > 0; } } }",
+        &zero
+    ));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { function normalized() { return int(resource.data.value); } match /notes/{id} { allow list: if normalized() / 2 == 0; } } }",
+        &normalized_int
+    ));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { function normalized() { let value = int(resource.data.value); return value; } match /notes/{id} { allow list: if normalized() / 2 == 0; } } }",
+        &normalized_int
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function int(value) { return value; } match /databases/{d}/documents { match /notes/{id} { allow list: if int(resource.data.value) / 2 == 0; } } }",
+        &normalized_int
+    ));
+
+    let minimum_int = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(i64::MIN))],
+    );
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if int(resource.data.value) is int; } } }",
+        &minimum_int
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function normalized() { return int(resource.data.value); } match /databases/{d}/documents { match /notes/{id} { allow list: if normalized() is int; } } }",
+        &minimum_int
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if int(string(resource.data.value)) is int; } } }",
+        &minimum_int
+    ));
+
+    let large_int = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(1_i64 << 60))],
+    );
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if int(string(resource.data.value)) / 2 == 576460752303423488; } } }",
+        &large_int
+    ));
+
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if 1.0 / float(float(resource.data.value)) > 0; } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function identity(value) { return value; } match /databases/{d}/documents { match /notes/{id} { allow list: if 1.0 / identity(float(resource.data.value)) > 0; } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if 1.0 / [float(resource.data.value)][0] > 0; } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function normalized() { let value = float(resource.data.value); return value; } match /databases/{d}/documents { match /notes/{id} { allow list: if 1.0 / normalized() > 0; } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function normalized() { let value = float(resource.data.value); return 1.0 / value > 0; } match /databases/{d}/documents { match /notes/{id} { allow list: if normalized(); } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function positive(value) { return 1.0 / value > 0; } match /databases/{d}/documents { match /notes/{id} { allow list: if positive(float(resource.data.value)); } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function positive(value) { return 1.0 / value[0] > 0; } match /databases/{d}/documents { match /notes/{id} { allow list: if positive([float(resource.data.value)]); } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function positive(value) { return 1.0 / value.zero > 0; } match /databases/{d}/documents { match /notes/{id} { allow list: if positive({'zero': float(resource.data.value)}); } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if 1.0 / debug(float(resource.data.value)) > 0; } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if 1.0 / float(string(resource.data.value)) > 0; } } }",
+        &zero
+    ));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { function f(resource) { return 1.0 / resource > 0; } match /databases/{d}/documents { match /notes/{id} { allow list: if f(0.0); } } }",
+        &zero
+    ));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if float(int(resource.data.value)) + 1 == 1; } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if string(resource.data.value).size() + 1 == 2; } } }",
+        &zero
+    ));
+    for condition in [
+        "(true ? string(resource.data.value) : '').size() + 1 == 2",
+        "[string(resource.data.value)][0].size() + 1 == 2",
+        "('' + string(resource.data.value)).size() + 1 == 2",
+        "[resource.data.value].join('').size() + 1 == 2",
+    ] {
+        assert!(
+            !allows(
+                &format!(
+                    "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+                ),
+                &zero
+            ),
+            "{condition} must remain conservative for representation-sensitive strings"
+        );
+    }
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function text() { return string(float(resource.data.value)); } match /databases/{d}/documents { match /notes/{id} { allow list: if text().size() + 1 == 2; } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function identity(value) { return value; } match /databases/{d}/documents { match /notes/{id} { allow list: if string(identity(float(resource.data.value))).size() + 1 == 2; } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function pick(value) { return string(value[0]).size() + 1 == 2; } match /databases/{d}/documents { match /notes/{id} { allow list: if pick([float(resource.data.value)]); } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function pick(value) { return string(value.zero).size() + 1 == 2; } match /databases/{d}/documents { match /notes/{id} { allow list: if pick({'zero': float(resource.data.value)}); } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function joined() { return [resource.data.value].join(''); } match /databases/{d}/documents { match /notes/{id} { allow list: if joined().size() + 1 == 2; } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function normalized() { let value = float(resource.data.value); return string(value).size() + 1 == 2; } match /databases/{d}/documents { match /notes/{id} { allow list: if normalized(); } } }",
+        &zero
+    ));
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function identity(value) { return string(value).size() + 1 == 2; } match /databases/{d}/documents { match /notes/{id} { allow list: if identity(float(resource.data.value)); } } }",
+        &zero
+    ));
+    for condition in [
+        "{'0': true, '-0': false}[string(float(resource.data.value))]",
+        "{'0': true, '-0': false}.get(string(float(resource.data.value)), false)",
+        "string(float(resource.data.value)) in ['0']",
+        "['0'].hasAny([string(float(resource.data.value))])",
+        "['0', string(float(resource.data.value))].hasOnly(['0'])",
+        "['0', string(float(resource.data.value))].toSet().size() == 1",
+        "path('/notes/{id}').bind({id: string(float(resource.data.value))}) == path('/notes/0')",
+    ] {
+        assert!(
+            !allows(
+                &format!(
+                    "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+                ),
+                &zero
+            ),
+            "{condition} must not use one numeric string representation as a query proof"
+        );
+    }
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { function check(resource) { return int(string(resource)) / 2 == 576460752303423488; } match /databases/{d}/documents { match /notes/{id} { allow list: if check(resource.data.value); } } }",
+        &large_int
+    ));
+    let empty = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::String(String::new()))],
+    );
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if float(resource.data.value.size()) + 1 == 1; } } }",
+        &empty
+    ));
+
+    let sized_string = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::String("abc".to_owned()))],
+    );
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if string(resource.data.value).size() == 3; } } }",
+        &sized_string
+    ));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { function length(value) { return string(value).size() == 1; } match /databases/{d}/documents { match /notes/{id} { allow list: if length(1); } } }",
+        &sized_string
+    ));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { function shadow(value) { let value = value; let text = string(value); return text.size() == 1; } match /databases/{d}/documents { match /notes/{id} { allow list: if shadow(1); } } }",
+        &sized_string
+    ));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if resource.data.value.size() + 1 == 4; } } }",
+        &sized_string
+    ));
+}
+
+#[test]
+fn query_provenance_reuses_repeated_function_declarations() {
+    use std::fmt::Write as _;
+
+    let mut source = String::from("rules_version = '2';\nservice cloud.firestore {\n");
+    for depth in 0..=6 {
+        if depth == 0 {
+            source.push_str("  function f0() { return false; }\n");
+            continue;
+        }
+        let calls = (0..8)
+            .map(|_| format!("f{}()", depth - 1))
+            .collect::<Vec<_>>();
+        writeln!(
+            source,
+            "  function f{depth}() {{ return {}; }}",
+            calls.join(" || ")
+        )
+        .unwrap();
+    }
+    source.push_str(
+        "  match /databases/{d}/documents { match /notes/{id} { allow list: if f6(); } }\n}",
+    );
+    let context = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(1))],
+    );
+    assert!(!allows(&source, &context));
+}
+
+#[test]
+fn query_numeric_source_analysis_reuses_repeated_function_dag() {
+    use std::fmt::Write as _;
+
+    let mut source = String::from("rules_version = '2';\nservice cloud.firestore {\n");
+    source.push_str("  function f0() { return 0; }\n");
+    for depth in 1..=6 {
+        let calls = (0..8).fold(format!("f{}()", depth - 1), |nested, _| {
+            format!("false ? f{}() : ({nested})", depth - 1)
+        });
+        writeln!(source, "  function f{depth}() {{ return {calls}; }}").unwrap();
+    }
+    source.push_str(
+        "  match /databases/{d}/documents/notes/{id} { allow list: if string(f6()).size() == 1; }\n}",
+    );
+    let ctx = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(0))],
+    );
+    assert!(allows(&source, &ctx));
+}
+
+#[test]
+fn query_provenance_cycle_does_not_cache_context_dependent_false() {
+    let source = "rules_version = '2';
+service cloud.firestore {
+  function a() { return false ? b() : resource.data.value; }
+  function b() { return a(); }
+  match /databases/{d}/documents {
+    match /notes/{id} {
+      allow list: if a() == 1 && b() / 2 == 0;
+    }
+  }
+}";
+    let context = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(1))],
+    );
+    // A matching integer equality filter may represent a stored double. The concrete double
+    // makes the second arithmetic condition false, so the query proof must not allow it.
+    assert!(!allows(source, &context));
+}
+
+#[test]
+fn query_provenance_cache_preserves_short_circuit_function_graphs() {
+    use std::fmt::Write as _;
+
+    let mut source = String::from("rules_version = '2';\nservice cloud.firestore {\n");
+    for depth in 0..=6 {
+        if depth == 0 {
+            source.push_str("  function f0() { return true; }\n");
+            continue;
+        }
+        let calls = (0..8)
+            .map(|_| format!("f{}()", depth - 1))
+            .collect::<Vec<_>>();
+        writeln!(
+            source,
+            "  function f{depth}() {{ return {}; }}",
+            calls.join(" || ")
+        )
+        .unwrap();
+    }
+    source.push_str(
+        "  match /databases/{d}/documents { match /notes/{id} { allow list: if f6() is bool; } }\n}",
+    );
+    let context = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(1))],
+    );
+    assert!(allows(&source, &context));
+}
+
+#[test]
 fn query_equality_keeps_nested_numeric_values_conservative() {
     let rules = |condition: &str| {
         format!(

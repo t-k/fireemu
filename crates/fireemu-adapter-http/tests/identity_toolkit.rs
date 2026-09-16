@@ -2185,6 +2185,44 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
 }
 
 #[test]
+fn oidc_provider_update_rejects_ambiguous_update_masks_atomically() {
+    let s = state();
+    let collection = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/oauthIdpConfigs";
+    let item = format!("{collection}/oidc.ambiguous");
+    let created = handle_with(
+        &s,
+        "POST",
+        &format!("{collection}?oauthIdpConfigId=oidc.ambiguous"),
+        &owner(),
+        &json!({
+            "clientId": "client",
+            "issuer": "https://issuer.example",
+            "displayName": "Original",
+            "enabled": true
+        }),
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+
+    for query in [
+        "updateMask=enabled&updateMask=displayName",
+        "updateMask=enabled,enabled",
+    ] {
+        let refused = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?{query}"),
+            &owner(),
+            &json!({"displayName": "Changed", "enabled": false}),
+        );
+        assert_eq!(refused.status, 400, "{}", refused.body);
+        let unchanged = handle_with(&s, "GET", &item, &owner(), &json!({}));
+        assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+        assert_eq!(unchanged.body["displayName"], "Original");
+        assert_eq!(unchanged.body["enabled"], true);
+    }
+}
+
+#[test]
 fn project_provider_configs_accept_client_v2_paths() {
     let s = state();
     let oidc = "/identitytoolkit.googleapis.com/v2/projects/demo-app/oauthIdpConfigs";
@@ -2903,6 +2941,37 @@ fn batch_import_treats_null_optional_fields_as_unset() {
     assert_eq!(status, 200, "{lookup}");
     assert_eq!(lookup["users"][0]["email"], "batch-null-fields@example.com");
     assert_ne!(lookup["users"][0]["displayName"], "must-not-replace");
+}
+
+#[test]
+fn batch_import_reports_each_missing_local_id_without_blocking_neighbors() {
+    let s = state();
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "users": [
+                {"localId": null},
+                {},
+                {"localId": "batch-valid-after-missing-ids", "email": "after@example.com"}
+            ]
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["error"].as_array().map(Vec::len),
+        Some(2),
+        "{response}"
+    );
+    assert_eq!(response["error"][0]["index"], 0, "{response}");
+    assert_eq!(response["error"][1]["index"], 1, "{response}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-valid-after-missing-ids")
+        .is_some());
 }
 
 #[test]

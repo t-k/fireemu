@@ -3224,23 +3224,12 @@ fn malformed_query_component(value: &str) -> bool {
     false
 }
 
-fn selected_fields(query: Option<&str>) -> Vec<String> {
-    query_params(query)
-        .get("updateMask")
-        .map_or_else(Vec::new, |mask| {
-            mask.split(',')
-                .filter(|field| !field.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-}
-
 fn patch_oidc(
     mut current: OidcProviderConfig,
     body: &Value,
     query: Option<&str>,
 ) -> Result<OidcProviderConfig, JsonResponse> {
-    for field in selected_fields(query) {
+    for field in update_mask(query)?.unwrap_or_default() {
         match field.as_str() {
             "displayName" => current.display_name = optional_string(body, "displayName")?,
             "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
@@ -5688,9 +5677,10 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
     if !allow_overwrite {
         let mut seen = std::collections::BTreeSet::new();
         for row in rows {
-            let id = str_field(row, "localId").unwrap_or("");
-            if !seen.insert(id) {
-                return error(400, &format!("DUPLICATE_LOCAL_ID : {id}"));
+            if let Some(id) = str_field(row, "localId").filter(|id| !id.is_empty()) {
+                if !seen.insert(id) {
+                    return error(400, &format!("DUPLICATE_LOCAL_ID : {id}"));
+                }
             }
         }
     }

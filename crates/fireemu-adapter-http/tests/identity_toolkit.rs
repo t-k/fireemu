@@ -10,6 +10,9 @@ use fireemu_adapter_http::identity_toolkit::{
 use fireemu_adapter_http::signing::RsaSigner;
 use fireemu_core_auth::base32;
 use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::password_policy::{
+    default_allowed_non_alphanumeric, EnforcementState, PasswordPolicy,
+};
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_auth::totp::{totp_at, TotpParams};
 use fireemu_core_functions::manifest::BlockingAuthEvent;
@@ -7310,5 +7313,154 @@ fn tenant_password_policy_leaf_mask_preserves_unselected_fields() {
         state_only.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
             ["maxPasswordLength"],
         100
+    );
+}
+
+#[test]
+fn password_sign_in_notify_returns_each_policy_notification() {
+    let s = state();
+    let email = "password-policy-notify@example.com";
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": email, "password": "password", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    let notify_policy = PasswordPolicy::try_new(
+        EnforcementState::Enforce,
+        false,
+        12,
+        Some(20),
+        true,
+        true,
+        true,
+        true,
+        default_allowed_non_alphanumeric(),
+    )
+    .unwrap();
+    s.store.lock().unwrap().set_password_policy(notify_policy);
+
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "password", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["localId"], created["localId"]);
+    assert!(response["idToken"].is_string(), "{response}");
+    assert_eq!(
+        response["userNotifications"],
+        json!([
+            {
+                "notificationCode": "MINIMUM_PASSWORD_LENGTH",
+                "notificationMessage": "Password must be at least 12 characters"
+            },
+            {
+                "notificationCode": "MISSING_UPPERCASE_CHARACTER",
+                "notificationMessage": "Password must contain an uppercase character"
+            },
+            {
+                "notificationCode": "MISSING_NUMERIC_CHARACTER",
+                "notificationMessage": "Password must contain a numeric character"
+            },
+            {
+                "notificationCode": "MISSING_NON_ALPHANUMERIC_CHARACTER",
+                "notificationMessage": "Password must contain a non-alphanumeric character"
+            }
+        ])
+    );
+
+    // The maximum-length notification is independently exercised because a valid policy
+    // cannot have a maximum shorter than its minimum.
+    let maximum_policy = PasswordPolicy::try_new(
+        EnforcementState::Enforce,
+        false,
+        6,
+        Some(7),
+        false,
+        false,
+        false,
+        false,
+        default_allowed_non_alphanumeric(),
+    )
+    .unwrap();
+    s.store.lock().unwrap().set_password_policy(maximum_policy);
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "password", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["userNotifications"],
+        json!([{
+            "notificationCode": "MAXIMUM_PASSWORD_LENGTH",
+            "notificationMessage": "Password must be at most 7 characters"
+        }])
+    );
+}
+
+#[test]
+fn forced_password_policy_rejection_preserves_auth_error_precedence_and_state() {
+    let s = state();
+    let email = "password-policy-forced@example.com";
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": email, "password": "password", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let uid = created["localId"].as_str().unwrap();
+    let before = s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id(uid)
+        .map(|user| user.last_sign_in_at);
+
+    let forced_policy = PasswordPolicy::try_new(
+        EnforcementState::Enforce,
+        true,
+        12,
+        Some(20),
+        true,
+        true,
+        true,
+        true,
+        default_allowed_non_alphanumeric(),
+    )
+    .unwrap();
+    s.store.lock().unwrap().set_password_policy(forced_policy);
+
+    let (status, wrong_password) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "wrong-password", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 400, "{wrong_password}");
+    assert_eq!(
+        wrong_password["error"]["message"], "INVALID_PASSWORD",
+        "policy evaluation must not precede credential verification"
+    );
+    assert!(wrong_password.get("idToken").is_none());
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "password", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert!(refused.get("idToken").is_none(), "{refused}");
+    assert!(refused.get("refreshToken").is_none(), "{refused}");
+    let after = s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id(uid)
+        .map(|user| user.last_sign_in_at);
+    assert_eq!(
+        after, before,
+        "forced rejection must not mutate the account"
     );
 }

@@ -24,7 +24,7 @@ use fireemu_core_auth::base32;
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
-use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy};
+use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy, ViolationCode};
 use fireemu_core_auth::store::{
     AuthError, AuthStore, CredentialNotice, FederatedIdentity, InboundSamlProviderConfig, LocalId,
     NewUser, OAuthResponseType, OidcProviderConfig, OobRequestType, PendingSignInId, PhoneCodeUse,
@@ -4364,6 +4364,34 @@ fn sign_in_with_custom_token(
     }
 }
 
+fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) -> Value {
+    let message = match code {
+        ViolationCode::MissingLowercaseCharacter => {
+            "Password must contain a lowercase character".to_owned()
+        }
+        ViolationCode::MissingUppercaseCharacter => {
+            "Password must contain an uppercase character".to_owned()
+        }
+        ViolationCode::MissingNumericCharacter => {
+            "Password must contain a numeric character".to_owned()
+        }
+        ViolationCode::MissingNonAlphanumericCharacter => {
+            "Password must contain a non-alphanumeric character".to_owned()
+        }
+        ViolationCode::MinimumPasswordLength => {
+            format!("Password must be at least {} characters", policy.min_length)
+        }
+        ViolationCode::MaximumPasswordLength => policy.max_length.map_or_else(
+            || "Password exceeds the maximum allowed length".to_owned(),
+            |max| format!("Password must be at most {max} characters"),
+        ),
+    };
+    json!({
+        "notificationCode": code.as_str(),
+        "notificationMessage": message,
+    })
+}
+
 fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
     // The official order: the email is checked (present, well-formed) before the password.
     let Some(email) = str_field(body, "email") else {
@@ -4375,8 +4403,8 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
     let Some(password) = str_field(body, "password").filter(|p| !p.is_empty()) else {
         return error(400, "MISSING_PASSWORD");
     };
-    let uid = match store.verify_password(email, password, at) {
-        Ok(uid) => uid,
+    let (uid, violations) = match store.verify_password_with_policy(email, password, at) {
+        Ok(result) => result,
         Err(e) => return auth_error(&e),
     };
     // Production always carries `displayName`, empty when the account has none.
@@ -4384,16 +4412,29 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         .user(&uid)
         .and_then(|u| u.display_name.clone())
         .unwrap_or_default();
+    let mut extra = vec![
+        ("kind", json!("identitytoolkit#VerifyPasswordResponse")),
+        ("registered", json!(true)),
+        ("displayName", json!(display_name)),
+    ];
+    if !violations.is_empty() {
+        let policy = store.password_policy().clone();
+        extra.push((
+            "userNotifications",
+            Value::Array(
+                violations
+                    .into_iter()
+                    .map(|code| password_policy_notification(code, &policy))
+                    .collect(),
+            ),
+        ));
+    }
     finish_sign_in(
         store,
         &uid,
         at,
         Some(fireemu_core_auth::store::Provider::Password),
-        &[
-            ("kind", json!("identitytoolkit#VerifyPasswordResponse")),
-            ("registered", json!(true)),
-            ("displayName", json!(display_name)),
-        ],
+        &extra,
     )
 }
 

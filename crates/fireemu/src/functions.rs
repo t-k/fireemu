@@ -3069,12 +3069,12 @@ impl BlockingAuthBridge {
 
     fn selection_for(
         &self,
-        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> &fireemu_core_functions::manifest::BlockingAuthSelection {
         // The first version of the local config exposes one trigger map for both supported
         // events through the bridge. Keeping this accessor event-shaped leaves the call site
         // ready for per-event selections without changing the admission boundary.
-        self.selections.for_event(_event)
+        self.selections.for_event(event)
     }
 
     fn require_selected_target(
@@ -3236,7 +3236,7 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         self.forward_inbound_credentials
             && self
                 .forwarding_restrictions
-                .is_none_or(|restriction| restriction.any())
+                .is_none_or(fireemu_core_functions::manifest::BlockingAuthTokenPolicy::any)
     }
 
     fn inbound_credential_policy(

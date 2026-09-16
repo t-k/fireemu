@@ -21,6 +21,7 @@ use crate::mfa::{
     PendingSignInContext, PhoneFactor, TotpEnrollmentMaterial, TotpFactor, TotpPolicy, TotpSecret,
     MAX_FACTORS_PER_USER,
 };
+use crate::password_policy::{Operation as PasswordPolicyOperation, PasswordPolicy, ViolationCode};
 
 /// ID token lifetime (`AUTH-LIMIT-ID-TOKEN-TTL-SECONDS`).
 const ID_TOKEN_TTL_SECONDS: i64 = 3_600;
@@ -705,6 +706,8 @@ pub struct AuthStore {
     tenant_id: Option<String>,
     rng: SplitMix64,
     policy: TotpPolicy,
+    /// Effective password policy for this project or tenant namespace.
+    password_policy: PasswordPolicy,
     /// User records, each behind an `Arc` so an unchanged user is shared by reference between
     /// the live store and every snapshot and only copied on mutation (`SNAP-MEM-03`, the Auth
     /// analogue of the Storage `Arc<Vec<u8>>` blobs). Every mutation site clones exactly the
@@ -955,6 +958,7 @@ impl AuthStore {
             tenant_id: None,
             rng,
             policy,
+            password_policy: PasswordPolicy::default(),
             users: BTreeMap::new(),
             local_id_for_email: BTreeMap::new(),
             local_ids_for_email: BTreeMap::new(),
@@ -1347,6 +1351,18 @@ impl AuthStore {
         self.config = config;
     }
 
+    /// The effective password policy for this Auth namespace.
+    #[must_use]
+    pub const fn password_policy(&self) -> &PasswordPolicy {
+        &self.password_policy
+    }
+
+    /// Atomically replaces the effective password policy. Callers should construct it with
+    /// [`PasswordPolicy::try_new`] so invalid settings never become active.
+    pub fn set_password_policy(&mut self, policy: PasswordPolicy) {
+        self.password_policy = policy;
+    }
+
     /// Lists OAuth/OIDC configurations in creation order.
     pub fn oidc_configs(&self) -> impl Iterator<Item = &OidcProviderConfig> {
         self.oidc_order
@@ -1459,6 +1475,7 @@ impl AuthStore {
         self.import_user_with_password_policy(user, false)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn import_user_with_password_policy(
         &mut self,
         mut user: ImportedUser,
@@ -1502,7 +1519,9 @@ impl AuthStore {
         let password = match user.password {
             Some((salt, plaintext)) => {
                 if enforce_password_policy {
-                    Self::validate_password(&plaintext).map_err(ImportUserError::Account)?;
+                    self.validate_password_for(PasswordPolicyOperation::Registration, &plaintext)
+                        .map(|_| ())
+                        .map_err(ImportUserError::Account)?;
                 }
                 // The digest is fireemu's own; the emulator form is kept beside it so an
                 // export can write back exactly what it read.
@@ -2488,6 +2507,67 @@ impl AuthStore {
         Ok(())
     }
 
+    /// Validates a password against the API hard limits and this namespace's policy. This is
+    /// side-effect free and can be called before any account, token, MFA, or OOB mutation.
+    pub fn validate_password_for(
+        &self,
+        operation: PasswordPolicyOperation,
+        password: &str,
+    ) -> Result<Vec<ViolationCode>, AuthError> {
+        Self::validate_password(password)?;
+        let violations = if self.password_policy.enforcement_state
+            == crate::password_policy::EnforcementState::Enforce
+        {
+            self.password_policy.violations(password)
+        } else {
+            Vec::new()
+        };
+        if self.password_policy.rejects(operation, password) {
+            if violations.contains(&ViolationCode::MaximumPasswordLength) {
+                return Err(AuthError::PasswordTooLong);
+            }
+            return Err(AuthError::WeakPassword);
+        }
+        Ok(violations)
+    }
+
+    /// Evaluates only the configured policy for an already stored credential. Existing
+    /// credentials may predate the current API hard input bound, so sign-in must not reuse the
+    /// new-password hard-limit check.
+    pub fn validate_existing_password_for_signin(
+        &self,
+        password: &str,
+    ) -> Result<Vec<ViolationCode>, AuthError> {
+        let violations = self.password_policy.violations(password);
+        if self
+            .password_policy
+            .rejects(PasswordPolicyOperation::SignIn, password)
+        {
+            if violations.contains(&ViolationCode::MaximumPasswordLength) {
+                return Err(AuthError::PasswordTooLong);
+            }
+            return Err(AuthError::WeakPassword);
+        }
+        Ok(violations)
+    }
+
+    /// Creates a password account as one transition. If credential installation fails, the
+    /// newly allocated account is removed before the error is returned.
+    pub fn create_user_with_password(
+        &mut self,
+        new: NewUser,
+        password: &str,
+        now: LogicalInstant,
+    ) -> Result<LocalId, AuthError> {
+        self.validate_password_for(PasswordPolicyOperation::Registration, password)?;
+        let uid = self.create_user(new, now)?;
+        if let Err(error) = self.set_password(&uid, password, now) {
+            let _ = self.delete_user_by_id(uid.as_str());
+            return Err(error);
+        }
+        Ok(uid)
+    }
+
     /// Removes every refresh token of `uid` (password change, explicit revocation).
     pub fn revoke_refresh_tokens(&mut self, uid: &LocalId) {
         self.remove_refresh_tokens_for(uid);
@@ -2510,7 +2590,19 @@ impl AuthStore {
         password: &str,
         now: LogicalInstant,
     ) -> Result<(), AuthError> {
-        Self::validate_password(password)?;
+        self.set_password_for(uid, password, now, PasswordPolicyOperation::Change)
+    }
+
+    /// Sets a password after evaluating the policy for the operation that requested it. The
+    /// operation is explicit so Admin restore/import callers can keep their separate contract.
+    pub fn set_password_for(
+        &mut self,
+        uid: &LocalId,
+        password: &str,
+        now: LogicalInstant,
+        operation: PasswordPolicyOperation,
+    ) -> Result<(), AuthError> {
+        self.validate_password_for(operation, password)?;
         let mut salt = [0u8; 16];
         salt[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
         salt[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
@@ -2634,6 +2726,9 @@ impl AuthStore {
                 AuthError::InvalidPassword
             });
         }
+        // Authenticate first, then apply the optional sign-in upgrade policy. A policy
+        // refusal therefore cannot advance sign-in timestamps or issue/retire credentials.
+        self.validate_existing_password_for_signin(password)?;
         if let Some(u) = self.users.get_mut(&uid).map(Arc::make_mut) {
             u.last_sign_in_at = Some(now);
         }
@@ -4572,6 +4667,67 @@ impl AuthRegistry {
         let gate = self.operation_gate(project, None)?;
         let _operation = gate.lock().ok()?;
         self.patch_project_config_under_gate(project, patch)
+    }
+
+    /// Replaces only the default project namespace's password policy. Tenant policies are
+    /// deliberately not inherited: callers must publish them through
+    /// [`Self::set_tenant_password_policy`] after resolving an explicit tenant override.
+    pub fn set_project_password_policy(&self, project: &str, policy: PasswordPolicy) -> bool {
+        let Some(gate) = self.operation_gate(project, None) else {
+            return false;
+        };
+        let Ok(_operation) = gate.lock() else {
+            return false;
+        };
+        let Ok(projects) = self.projects.lock() else {
+            return false;
+        };
+        let store = if project == self.default_project {
+            self.default.clone()
+        } else if let Some(store) = projects
+            .registered
+            .get(project)
+            .or_else(|| projects.routed.get(project))
+        {
+            store.clone()
+        } else {
+            return false;
+        };
+        drop(projects);
+        let Ok(mut store) = store.lock() else {
+            return false;
+        };
+        store.set_password_policy(policy);
+        true
+    }
+
+    /// Replaces one explicitly selected tenant's password policy. This operation does not
+    /// create a tenant and cannot cross a project boundary.
+    pub fn set_tenant_password_policy(
+        &self,
+        project: &str,
+        tenant: &str,
+        policy: PasswordPolicy,
+    ) -> bool {
+        let Some(gate) = self.operation_gate(project, Some(tenant)) else {
+            return false;
+        };
+        let Ok(_operation) = gate.lock() else {
+            return false;
+        };
+        let key = (project.to_owned(), tenant.to_owned());
+        let Ok(stores) = self.tenants.lock() else {
+            return false;
+        };
+        let Some(store) = stores.get(&key).cloned() else {
+            return false;
+        };
+        drop(stores);
+        let Ok(mut store) = store.lock() else {
+            return false;
+        };
+        store.set_password_policy(policy);
+        true
     }
 
     fn patch_project_config_under_gate(

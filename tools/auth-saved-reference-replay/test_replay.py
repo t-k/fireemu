@@ -269,6 +269,29 @@ def test_evaluate_validates_a_complete_failed_profile_fixture(tmp_path):
     assert result["corpora"]["auth-profile"]["classification"] == "MATCH"
 
 
+def test_complete_failed_report_reaches_semantic_mismatch_evaluation(tmp_path):
+    bundle, source = write_complete_failed_bundle(tmp_path)
+    local_path = bundle / "auth-profile/local.json"
+    local = json.loads(local_path.read_text())
+    local["cases"][2]["photoState"] = "other"
+    local["cases"][2]["checks"]["photoMatches"] = False
+    local["cases"][2]["passed"] = False
+    local_path.write_text(json.dumps(local, sort_keys=True) + "\n")
+    manifest_path = bundle / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["corpora"]["auth-profile"]["localReportSha256"] = file_digest(local_path)
+    manifest["corpora"]["auth-profile"]["localReportBytes"] = local_path.stat().st_size
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+
+    result = evaluate(bundle, tmp_path / "result.json", source)
+
+    assert result["allCasesMatch"] is False
+    assert result["corpora"]["auth-profile"]["classification"] == "SEMANTIC_MISMATCH"
+    assert result["corpora"]["auth-profile"]["mismatchCases"] == [
+        local["cases"][2]["id"]
+    ]
+
+
 def test_evaluate_rejects_tampered_failed_status_after_real_validation(tmp_path):
     bundle, source = write_complete_failed_bundle(tmp_path)
     manifest_path = bundle / "run-manifest.json"

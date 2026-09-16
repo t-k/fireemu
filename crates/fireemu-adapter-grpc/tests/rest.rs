@@ -458,7 +458,7 @@ fn batch_write_rest_rejects_non_array_writes_without_mutation() {
         assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
     }
 
-    let (status, body) = call(&s, "GET", target, Value::Null);
+    let (status, body) = call(&s, "GET", &format!("/v1/{target}"), Value::Null);
     assert_eq!(
         status, 404,
         "malformed batch requests must not mutate state: {body}"

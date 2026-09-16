@@ -418,9 +418,6 @@ mod tests {
         quota.commit(first).unwrap();
         assert!(quota.reserve("project", "192.0.2.1", T0).is_ok());
         let before = T0.checked_add(LogicalDuration::from_seconds(-1)).unwrap();
-        assert!(matches!(
-            quota.reserve("project", "192.0.2.2", before),
-            Ok(_)
-        ));
+        assert!(quota.reserve("project", "192.0.2.2", before).is_ok());
     }
 }

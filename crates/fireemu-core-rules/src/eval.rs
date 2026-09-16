@@ -287,6 +287,7 @@ type QueryStringificationProvenance = (bool, bool);
 type QueryStringificationFunctionCache =
     BTreeMap<(usize, Vec<QueryStringificationProvenance>), bool>;
 type QueryNumericSourceFunctionCache = BTreeMap<(usize, Vec<bool>), bool>;
+type QueryNumericErrorFunctionCache = BTreeMap<usize, bool>;
 
 /// Immutable lexical function declarations for one scope. Parent environments are linked rather
 /// than flattened so nested scopes do not copy all ancestor declarations.
@@ -305,6 +306,8 @@ struct Binding<'a> {
     /// `query_derived`: `int()`/`float()` canonicalize ordinary Rules arithmetic, but a later
     /// string conversion can still observe the original representation.
     query_numeric_source: bool,
+    /// The value may still change unary numeric success/error based on query representation.
+    query_numeric_error_source: bool,
     query_float_zero_ambiguous: bool,
     query_numeric_stringification_sensitive: bool,
     state: BindingState<'a>,
@@ -327,6 +330,7 @@ impl Binding<'_> {
             visible_before: 0,
             query_derived: false,
             query_numeric_source: false,
+            query_numeric_error_source: false,
             query_float_zero_ambiguous: false,
             query_numeric_stringification_sensitive: false,
             state: BindingState::Value(value),
@@ -339,6 +343,7 @@ impl Binding<'_> {
         value: RulesValue,
         query_derived: bool,
         query_numeric_source: bool,
+        query_numeric_error_source: bool,
         query_float_zero_ambiguous: bool,
         query_numeric_stringification_sensitive: bool,
     ) -> Self {
@@ -347,6 +352,7 @@ impl Binding<'_> {
             visible_before: 0,
             query_derived,
             query_numeric_source,
+            query_numeric_error_source,
             query_float_zero_ambiguous,
             query_numeric_stringification_sensitive,
             state: BindingState::Value(value),
@@ -435,6 +441,9 @@ struct Evaluator<'a> {
     /// Exhaustion is conservative: a value is treated as representation-sensitive rather than
     /// allowing an unproven query result.
     query_numeric_source_analysis_work: core::cell::Cell<u64>,
+    /// Canonical numeric return analysis for unary error provenance.
+    query_numeric_error_function_cache: core::cell::RefCell<QueryNumericErrorFunctionCache>,
+    query_numeric_error_analysis_work: core::cell::Cell<u64>,
 }
 
 const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
@@ -620,6 +629,8 @@ fn evaluate_prepared(
             query_stringification_analysis_work: core::cell::Cell::new(0),
             query_numeric_source_function_cache: core::cell::RefCell::new(BTreeMap::new()),
             query_numeric_source_analysis_work: core::cell::Cell::new(0),
+            query_numeric_error_function_cache: core::cell::RefCell::new(BTreeMap::new()),
+            query_numeric_error_analysis_work: core::cell::Cell::new(0),
         };
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
         absent_resource_used |= ev.absent_resource_used.get();
@@ -1687,6 +1698,15 @@ impl<'a> Evaluator<'a> {
     /// the broader numeric-source analysis remains representation-sensitive for stringification.
     fn query_numeric_error_source(&self, expr: &Expr) -> bool {
         match expr.kind() {
+            ExprKind::Ident(name) => self
+                .scope
+                .bindings
+                .iter()
+                .rposition(|binding| binding.name == *name)
+                .map_or_else(
+                    || self.query_numeric_expression_source(expr),
+                    |index| self.scope.bindings[index].query_numeric_error_source,
+                ),
             ExprKind::Call { callee, args, .. } => match callee.kind() {
                 ExprKind::Ident(name)
                     if matches!(name.as_str(), "int" | "float")
@@ -1700,9 +1720,104 @@ impl<'a> Evaluator<'a> {
                 {
                     self.query_numeric_error_source(&args[0])
                 }
+                ExprKind::Ident(name) if self.function(name).is_some() => {
+                    self.function(name).is_none_or(|function| {
+                        !self.function_returns_canonical_numeric(function, &mut Vec::new())
+                    }) && self.query_numeric_expression_source(expr)
+                }
                 _ => self.query_numeric_expression_source(expr),
             },
             _ => self.query_numeric_expression_source(expr),
+        }
+    }
+
+    fn function_returns_canonical_numeric(
+        &self,
+        function: &FunctionDecl,
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        let key = function_key(function);
+        if visiting.contains(&key) {
+            return false;
+        }
+        if let Some(cached) = self.query_numeric_error_function_cache.borrow().get(&key) {
+            return *cached;
+        }
+        if self.query_numeric_error_analysis_work.get() >= QUERY_DERIVED_ANALYSIS_WORK_MAX {
+            return false;
+        }
+        self.query_numeric_error_analysis_work.set(
+            self.query_numeric_error_analysis_work
+                .get()
+                .saturating_add(1),
+        );
+        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+            return false;
+        };
+        visiting.push(key);
+        let mut locals = BTreeMap::new();
+        for parameter in &function.params {
+            locals.insert(parameter.as_str(), false);
+        }
+        for binding in &function.lets {
+            let canonical = self.expression_returns_canonical_numeric(
+                &binding.value,
+                &locals,
+                environment,
+                visiting,
+            );
+            locals.insert(binding.name.as_str(), canonical);
+        }
+        let result = self.expression_returns_canonical_numeric(
+            &function.body,
+            &locals,
+            environment,
+            visiting,
+        );
+        visiting.pop();
+        self.query_numeric_error_function_cache
+            .borrow_mut()
+            .insert(key, result);
+        result
+    }
+
+    fn expression_returns_canonical_numeric(
+        &self,
+        expr: &Expr,
+        locals: &BTreeMap<&str, bool>,
+        environment: &FunctionEnvironment<'a>,
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        match expr.kind() {
+            ExprKind::Ident(name) => locals.get(name.as_str()).copied().unwrap_or(false),
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if matches!(name.as_str(), "int" | "float")
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    true
+                }
+                ExprKind::Ident(name)
+                    if name == "debug"
+                        && args.len() == 1
+                        && function_in_environment(environment, name).is_none() =>
+                {
+                    self.expression_returns_canonical_numeric(
+                        &args[0],
+                        locals,
+                        environment,
+                        visiting,
+                    )
+                }
+                ExprKind::Ident(name) => {
+                    function_in_environment(environment, name).is_some_and(|function| {
+                        self.function_returns_canonical_numeric(function, visiting)
+                    })
+                }
+                _ => false,
+            },
+            _ => false,
         }
     }
 
@@ -4438,12 +4553,17 @@ impl<'a> Evaluator<'a> {
                         .iter()
                         .map(|argument| self.query_numeric_expression_source(argument))
                         .collect();
+                    let numeric_error_provenance = args
+                        .iter()
+                        .map(|argument| self.query_numeric_error_source(argument))
+                        .collect();
                     return self.call_user(
                         f,
                         values,
                         query_provenance,
                         stringification_provenance,
                         numeric_source_provenance,
+                        numeric_error_provenance,
                     );
                 }
                 match name.as_str() {
@@ -4671,6 +4791,7 @@ impl<'a> Evaluator<'a> {
         query_provenance: Vec<QueryFloatZeroProvenance>,
         stringification_provenance: Vec<bool>,
         numeric_source_provenance: Vec<bool>,
+        numeric_error_provenance: Vec<bool>,
     ) -> Result<RulesValue, EvalError> {
         if values.len() != f.params.len() {
             return Err(soft(format!(
@@ -4695,8 +4816,11 @@ impl<'a> Evaluator<'a> {
             .map(|(name, value)| Binding::value(name.clone(), value.clone()))
             .collect();
         for (
-            (((p, v), (query_derived, float_zero_ambiguous)), stringification_sensitive),
-            numeric_source,
+            (
+                (((p, v), (query_derived, float_zero_ambiguous)), stringification_sensitive),
+                numeric_source,
+            ),
+            numeric_error_source,
         ) in f
             .params
             .iter()
@@ -4704,12 +4828,14 @@ impl<'a> Evaluator<'a> {
             .zip(query_provenance)
             .zip(stringification_provenance)
             .zip(numeric_source_provenance)
+            .zip(numeric_error_provenance)
         {
             self.scope.bindings.push(Binding::with_provenance(
                 p.clone(),
                 v,
                 query_derived,
                 numeric_source,
+                numeric_error_source,
                 float_zero_ambiguous,
                 stringification_sensitive,
             ));
@@ -4727,11 +4853,13 @@ impl<'a> Evaluator<'a> {
                 let query_numeric_stringification_sensitive =
                     self.query_numeric_stringification_sensitive(&l.value);
                 let query_numeric_source = self.query_numeric_expression_source(&l.value);
+                let query_numeric_error_source = self.query_numeric_error_source(&l.value);
                 self.scope.bindings.push(Binding {
                     name: l.name.clone(),
                     visible_before,
                     query_derived,
                     query_numeric_source,
+                    query_numeric_error_source,
                     query_float_zero_ambiguous,
                     query_numeric_stringification_sensitive,
                     state: BindingState::Lazy(&l.value),

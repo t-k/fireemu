@@ -1780,16 +1780,23 @@ fn query_proof_rejects_numeric_representation_sensitive_integer_builtins() {
 
 #[test]
 fn query_proof_rejects_unary_negation_at_the_integer_boundary() {
-    let query = abstract_ctx(
-        "/databases/(default)/documents/notes/fireemu-placeholder",
-        vec![("value", RulesValue::Float(-(2f64.powi(63))))],
-    );
     let rules = "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if (-resource.data.value) == 9223372036854775808.0; } } }";
-
-    assert!(!allows(rules, &query));
-
-    let normalized = "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if (-float(resource.data.value)) == 9223372036854775808.0; } } }";
-    assert!(allows(normalized, &query));
+    let float_normalized = "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if (-float(resource.data.value)) == 9223372036854775808.0; } } }";
+    let helper_normalized = "rules_version = '2'; service cloud.firestore { function normalize(value) { return float(value); } match /databases/{d}/documents { match /notes/{id} { allow list: if (-normalize(resource.data.value)) == 9223372036854775808.0; } } }";
+    let let_normalized = "rules_version = '2'; service cloud.firestore { function normalize(value) { let converted = float(value); return converted; } match /databases/{d}/documents { match /notes/{id} { allow list: if (-normalize(resource.data.value)) == 9223372036854775808.0; } } }";
+    for value in [
+        RulesValue::Int(i64::MIN),
+        RulesValue::Float(-(2f64.powi(63))),
+    ] {
+        let query = abstract_ctx(
+            "/databases/(default)/documents/notes/fireemu-placeholder",
+            vec![("value", value)],
+        );
+        assert!(!allows(rules, &query));
+        assert!(allows(float_normalized, &query));
+        assert!(allows(helper_normalized, &query));
+        assert!(allows(let_normalized, &query));
+    }
 }
 
 #[test]

@@ -3680,6 +3680,26 @@ pub struct TenantMetadataPatch {
     pub disable_auth: Option<bool>,
 }
 
+impl TenantMetadataPatch {
+    fn apply_to(&self, value: &mut TenantMetadata) {
+        if let Some(display_name) = &self.display_name {
+            value.display_name = display_name.clone();
+        }
+        if let Some(setting) = self.allow_password_signup {
+            value.allow_password_signup = setting;
+        }
+        if let Some(setting) = self.enable_email_link_signin {
+            value.enable_email_link_signin = setting;
+        }
+        if let Some(setting) = self.enable_anonymous_user {
+            value.enable_anonymous_user = setting;
+        }
+        if let Some(setting) = self.disable_auth {
+            value.disable_auth = setting;
+        }
+    }
+}
+
 impl AuthRegistry {
     fn next_lifecycle_epoch(&self) -> Option<AuthLifecycleEpoch> {
         let incarnation = self.lifecycle_incarnation?;
@@ -4678,22 +4698,60 @@ impl AuthRegistry {
     ) -> Option<TenantMetadata> {
         let mut values = self.tenant_metadata.lock().ok()?;
         let value = values.get_mut(&(project.to_owned(), tenant.to_owned()))?;
-        if let Some(display_name) = patch.display_name {
-            value.display_name = display_name;
-        }
-        if let Some(setting) = patch.allow_password_signup {
-            value.allow_password_signup = setting;
-        }
-        if let Some(setting) = patch.enable_email_link_signin {
-            value.enable_email_link_signin = setting;
-        }
-        if let Some(setting) = patch.enable_anonymous_user {
-            value.enable_anonymous_user = setting;
-        }
-        if let Some(setting) = patch.disable_auth {
-            value.disable_auth = setting;
-        }
+        patch.apply_to(value);
         Some(value.clone())
+    }
+
+    /// Atomically applies a tenant metadata patch and, when supplied, a password policy.
+    ///
+    /// The tenant store, metadata entry, and explicit policy override are all validated and
+    /// locked before any of them is changed. A poisoned lock or an unknown tenant therefore
+    /// returns `None` without exposing a metadata-only or policy-only update to another
+    /// request. The returned policy is the newly supplied policy, or the current policy when
+    /// this operation only changes metadata.
+    pub fn patch_tenant_with_password_policy(
+        &self,
+        project: &str,
+        tenant: &str,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(TenantMetadata, PasswordPolicy)> {
+        if project.is_empty()
+            || project.contains(['/', '\\'])
+            || tenant.is_empty()
+            || tenant.contains(['/', '\\'])
+        {
+            return None;
+        }
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        let key = (project.to_owned(), tenant.to_owned());
+        let tenants = self.tenants.lock().ok()?;
+        let store = tenants.get(&key).cloned()?;
+        let mut metadata = self.tenant_metadata.lock().ok()?;
+        let current_metadata = metadata.get(&key)?.clone();
+        let mut store = store.lock().ok()?;
+        let mut overrides = match password_policy.as_ref() {
+            Some(_) => Some(self.password_policy_overrides.lock().ok()?),
+            None => None,
+        };
+
+        let mut next_metadata = current_metadata;
+        patch.apply_to(&mut next_metadata);
+        let next_policy = password_policy
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| store.password_policy.clone());
+
+        *metadata.get_mut(&key)? = next_metadata.clone();
+        if let Some(policy) = password_policy {
+            store.set_password_policy(policy.clone());
+            overrides
+                .as_mut()
+                .expect("a password policy patch holds the override lock")
+                .insert(key, policy);
+        }
+        Some((next_metadata, next_policy))
     }
 
     /// Replaces tenant metadata; `false` when the tenant is unknown.
@@ -4769,26 +4827,27 @@ impl AuthRegistry {
         let Ok(_operation) = gate.lock() else {
             return false;
         };
-        let existing = self.projects.lock().ok().and_then(|projects| {
-            if project == self.default_project {
-                Some(self.default.clone())
-            } else {
-                projects
-                    .registered
-                    .get(project)
-                    .or_else(|| projects.routed.get(project))
-                    .cloned()
-            }
-        });
+        let Ok(projects) = self.projects.lock() else {
+            return false;
+        };
+        let existing = if project == self.default_project {
+            Some(self.default.clone())
+        } else {
+            projects
+                .registered
+                .get(project)
+                .or_else(|| projects.routed.get(project))
+                .cloned()
+        };
+        let Ok(mut overrides) = self.project_password_policy_overrides.lock() else {
+            return false;
+        };
         if let Some(store) = existing {
             let Ok(mut store) = store.lock() else {
                 return false;
             };
             store.set_password_policy(policy.clone());
         }
-        let Ok(mut overrides) = self.project_password_policy_overrides.lock() else {
-            return false;
-        };
         overrides.insert(project.to_owned(), policy);
         true
     }
@@ -4800,23 +4859,30 @@ impl AuthRegistry {
         if project == self.default_project {
             return self.register_project_password_policy_override(project, policy);
         }
-        let Some(store) = self.store_for(project) else {
-            return false;
-        };
         let Some(gate) = self.operation_gate(project, None) else {
             return false;
         };
         let Ok(_operation) = gate.lock() else {
             return false;
         };
+        let Ok(projects) = self.projects.lock() else {
+            return false;
+        };
+        let Some(store) = projects
+            .registered
+            .get(project)
+            .or_else(|| projects.routed.get(project))
+            .cloned()
+        else {
+            return false;
+        };
+        let Ok(mut overrides) = self.project_password_policy_overrides.lock() else {
+            return false;
+        };
         let Ok(mut store) = store.lock() else {
             return false;
         };
         store.set_password_policy(policy.clone());
-        drop(store);
-        let Ok(mut overrides) = self.project_password_policy_overrides.lock() else {
-            return false;
-        };
         overrides.insert(project.to_owned(), policy);
         true
     }
@@ -4829,34 +4895,13 @@ impl AuthRegistry {
         tenant: &str,
         policy: PasswordPolicy,
     ) -> bool {
-        let Some(gate) = self.operation_gate(project, Some(tenant)) else {
-            return false;
-        };
-        let Ok(_operation) = gate.lock() else {
-            return false;
-        };
-        if tenant.is_empty() || tenant.contains(['/', '\\']) {
-            return false;
-        }
-        let key = (project.to_owned(), tenant.to_owned());
-        let Ok(stores) = self.tenants.lock() else {
-            return false;
-        };
-        let Some(store) = stores.get(&key).cloned() else {
-            return false;
-        };
-        drop(stores);
-        let Ok(mut store) = store.lock() else {
-            return false;
-        };
-        store.set_password_policy(policy.clone());
-        drop(store);
-        if let Ok(mut overrides) = self.password_policy_overrides.lock() {
-            overrides.insert(key, policy);
-        } else {
-            return false;
-        }
-        true
+        self.patch_tenant_with_password_policy(
+            project,
+            tenant,
+            TenantMetadataPatch::default(),
+            Some(policy),
+        )
+        .is_some()
     }
 
     /// Registers an explicit password policy for a tenant without creating that tenant.
@@ -4884,20 +4929,20 @@ impl AuthRegistry {
             return false;
         };
         let key = (project.to_owned(), tenant.to_owned());
-        let existing = self
-            .tenants
-            .lock()
-            .ok()
-            .and_then(|stores| stores.get(&key).cloned());
+        let tenants = self.tenants.lock().ok();
+        let Some(tenants) = tenants else {
+            return false;
+        };
+        let existing = tenants.get(&key).cloned();
+        let Ok(mut overrides) = self.password_policy_overrides.lock() else {
+            return false;
+        };
         if let Some(store) = existing {
             let Ok(mut store) = store.lock() else {
                 return false;
             };
             store.set_password_policy(policy.clone());
         }
-        let Ok(mut overrides) = self.password_policy_overrides.lock() else {
-            return false;
-        };
         overrides.insert(key, policy);
         true
     }
@@ -6741,7 +6786,7 @@ mod broad_project_number_tests {
 
 #[cfg(test)]
 mod password_policy_namespace_tests {
-    use super::{AuthRegistry, AuthSnapshot, AuthStore};
+    use super::{AuthRegistry, AuthSnapshot, AuthStore, TenantMetadataPatch};
     use crate::mfa::TotpPolicy;
     use crate::password_policy::{EnforcementState, PasswordPolicy};
     use fireemu_core_types::determinism::SplitMix64;
@@ -6882,6 +6927,145 @@ mod password_policy_namespace_tests {
         assert_eq!(
             other.lock().expect("tenant store").password_policy(),
             &PasswordPolicy::default()
+        );
+    }
+
+    #[test]
+    fn tenant_metadata_and_password_policy_patch_commit_as_one_update() {
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is created");
+        let policy = strict_policy();
+
+        let (metadata, returned_policy) = registry
+            .patch_tenant_with_password_policy(
+                "demo-app",
+                "tenant-a",
+                TenantMetadataPatch {
+                    display_name: Some(Some("Tenant A".to_owned())),
+                    disable_auth: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+                Some(policy.clone()),
+            )
+            .expect("existing tenant patch succeeds");
+
+        assert_eq!(metadata.display_name.as_deref(), Some("Tenant A"));
+        assert!(metadata.disable_auth);
+        assert_eq!(returned_policy, policy);
+        assert_eq!(
+            registry.tenant_metadata("demo-app", "tenant-a"),
+            Some(metadata)
+        );
+        assert_eq!(
+            registry
+                .tenant_store("demo-app", "tenant-a")
+                .expect("tenant store")
+                .lock()
+                .expect("tenant store lock")
+                .password_policy(),
+            &policy
+        );
+    }
+
+    #[test]
+    fn tenant_patch_refuses_without_mutation_when_policy_override_lock_is_poisoned() {
+        let registry = Arc::new(AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        ));
+        registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant is created");
+        let before_metadata = registry
+            .tenant_metadata("demo-app", "tenant-a")
+            .expect("tenant metadata");
+        let before_policy = registry
+            .tenant_store("demo-app", "tenant-a")
+            .expect("tenant store")
+            .lock()
+            .expect("tenant store lock")
+            .password_policy()
+            .clone();
+
+        let poison = registry.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = poison.password_policy_overrides.lock().unwrap();
+            panic!("poison password policy overrides");
+        })
+        .join()
+        .is_err());
+
+        assert!(registry
+            .patch_tenant_with_password_policy(
+                "demo-app",
+                "tenant-a",
+                TenantMetadataPatch {
+                    disable_auth: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+                Some(strict_policy()),
+            )
+            .is_none());
+        assert_eq!(
+            registry.tenant_metadata("demo-app", "tenant-a"),
+            Some(before_metadata)
+        );
+        assert_eq!(
+            registry
+                .tenant_store("demo-app", "tenant-a")
+                .expect("tenant store")
+                .lock()
+                .expect("tenant store lock")
+                .password_policy(),
+            &before_policy
+        );
+    }
+
+    #[test]
+    fn project_policy_update_refuses_without_mutation_when_override_lock_is_poisoned() {
+        let registry = Arc::new(AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        ));
+        let before = registry
+            .default_store()
+            .lock()
+            .expect("default store")
+            .password_policy()
+            .clone();
+        let poison = registry.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = poison.project_password_policy_overrides.lock().unwrap();
+            panic!("poison project password policy overrides");
+        })
+        .join()
+        .is_err());
+
+        assert!(!registry.register_project_password_policy_override("demo-app", strict_policy()));
+        assert_eq!(
+            registry
+                .default_store()
+                .lock()
+                .expect("default store")
+                .password_policy(),
+            &before
         );
     }
 

@@ -4,7 +4,7 @@
 //! that typos never silently change behaviour (the JSON schema in `spec/config` is the
 //! authority; this loader enforces the same rule on the subset it understands).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_auth::jwt::TokenAcceptance;
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -45,6 +45,39 @@ pub struct FirestoreDatabaseFiles {
     pub rules: Option<String>,
     /// Composite and single-field index configuration.
     pub indexes: Option<String>,
+}
+
+/// Password policy configured for one Auth namespace. This is a local configuration
+/// contract; the Identity Toolkit adapter projects it into its public API separately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordPolicyConfig {
+    /// `OFF` or `ENFORCE`.
+    pub enforcement_state: String,
+    /// Whether a non-compliant existing password must be upgraded at sign-in.
+    pub force_upgrade_on_signin: bool,
+    /// Password strength constraints.
+    pub constraints: PasswordPolicyConstraints,
+}
+
+/// Password strength constraints from `auth.passwordPolicy.constraints`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordPolicyConstraints {
+    /// Minimum UTF-16 code units accepted by the local policy evaluator.
+    pub min_length: u32,
+    /// Optional custom maximum. `None` is distinct from an explicit maximum.
+    pub max_length: Option<u32>,
+    pub require_uppercase: bool,
+    pub require_lowercase: bool,
+    pub require_numeric: bool,
+    pub require_non_alphanumeric: bool,
+}
+
+/// An explicit project/tenant password policy override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordPolicyOverride {
+    pub project_id: String,
+    pub tenant_id: Option<String>,
+    pub password_policy: PasswordPolicyConfig,
 }
 
 impl CompatibilityProfile {
@@ -133,6 +166,136 @@ const FIRESTORE_PLAN_OVERRIDE_KEYS: [&str; 3] = [
     "enterpriseIndexLimitOverride",
 ];
 
+const PASSWORD_POLICY_KEYS: [&str; 3] = ["enforcementState", "forceUpgradeOnSignin", "constraints"];
+const PASSWORD_CONSTRAINT_KEYS: [&str; 6] = [
+    "minLength",
+    "maxLength",
+    "requireUppercase",
+    "requireLowercase",
+    "requireNumeric",
+    "requireNonAlphanumeric",
+];
+
+fn parse_password_policy(value: &Value, path: &str) -> Result<PasswordPolicyConfig, ConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+    for key in object.keys() {
+        if !PASSWORD_POLICY_KEYS.contains(&key.as_str()) {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    let enforcement_state = object
+        .get("enforcementState")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ConfigError(format!("{path}.enforcementState must be OFF or ENFORCE")))?;
+    if !matches!(enforcement_state, "OFF" | "ENFORCE") {
+        return Err(ConfigError(format!(
+            "{path}.enforcementState must be OFF or ENFORCE"
+        )));
+    }
+    let force_upgrade_on_signin = match object.get("forceUpgradeOnSignin") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| ConfigError(format!("{path}.forceUpgradeOnSignin must be a boolean")))?,
+    };
+    let constraints = match object.get("constraints") {
+        None => PasswordPolicyConstraints::default(),
+        Some(value) => parse_password_constraints(value, &format!("{path}.constraints"))?,
+    };
+    Ok(PasswordPolicyConfig {
+        enforcement_state: enforcement_state.to_owned(),
+        force_upgrade_on_signin,
+        constraints,
+    })
+}
+
+fn parse_password_constraints(
+    value: &Value,
+    path: &str,
+) -> Result<PasswordPolicyConstraints, ConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+    for key in object.keys() {
+        if !PASSWORD_CONSTRAINT_KEYS.contains(&key.as_str()) {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    let integer = |key: &str, default: u32| -> Result<u32, ConfigError> {
+        match object.get(key) {
+            None => Ok(default),
+            Some(value) => value
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| ConfigError(format!("{path}.{key} must be an integer"))),
+        }
+    };
+    let boolean = |key: &str| -> Result<bool, ConfigError> {
+        match object.get(key) {
+            None => Ok(false),
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| ConfigError(format!("{path}.{key} must be a boolean"))),
+        }
+    };
+    let min_length = integer("minLength", 6)?;
+    if !(6..=30).contains(&min_length) {
+        return Err(ConfigError(format!(
+            "{path}.minLength must be between 6 and 30"
+        )));
+    }
+    let max_length = match object.get("maxLength") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| {
+                    ConfigError(format!("{path}.maxLength must be an integer or null"))
+                })?,
+        ),
+    };
+    if let Some(max) = max_length {
+        if !(min_length..=4096).contains(&max) {
+            return Err(ConfigError(format!(
+                "{path}.maxLength must be between minLength and 4096"
+            )));
+        }
+    }
+    Ok(PasswordPolicyConstraints {
+        min_length,
+        max_length,
+        require_uppercase: boolean("requireUppercase")?,
+        require_lowercase: boolean("requireLowercase")?,
+        require_numeric: boolean("requireNumeric")?,
+        require_non_alphanumeric: boolean("requireNonAlphanumeric")?,
+    })
+}
+
+impl Default for PasswordPolicyConstraints {
+    fn default() -> Self {
+        Self {
+            min_length: 6,
+            max_length: None,
+            require_uppercase: false,
+            require_lowercase: false,
+            require_numeric: false,
+            require_non_alphanumeric: false,
+        }
+    }
+}
+
+fn valid_policy_namespace_id(value: &str, path: &str) -> Result<String, ConfigError> {
+    if value.is_empty() || value.contains('/') {
+        return Err(ConfigError(format!(
+            "{path} must be a non-empty project or tenant ID"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
 /// Effective daemon configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
@@ -190,6 +353,10 @@ pub struct RuntimeConfig {
     /// standard output as the official Auth emulator does, on by default. `false` keeps the
     /// codes off the console; they stay readable from the emulator inspection routes.
     pub auth_log_action_codes: bool,
+    /// Optional default-project password policy from `auth.passwordPolicy`.
+    pub auth_password_policy: Option<PasswordPolicyConfig>,
+    /// Explicit project/tenant password policy overrides.
+    pub auth_password_policy_overrides: Vec<PasswordPolicyOverride>,
     /// Path of `firestore.indexes.json`, if configured.
     pub index_file: Option<String>,
     /// Path of `firestore.text-indexes.json`, if configured.
@@ -445,6 +612,8 @@ impl Default for RuntimeConfig {
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
             auth_log_action_codes: true,
+            auth_password_policy: None,
+            auth_password_policy_overrides: Vec::new(),
             index_file: None,
             text_index_file: None,
             rules_file: None,
@@ -494,7 +663,7 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 8] = [
+pub(crate) const AUTH_KEYS: [&str; 10] = [
     "enabled",
     "projectIssuer",
     "idTokenSigning",
@@ -503,6 +672,8 @@ pub(crate) const AUTH_KEYS: [&str; 8] = [
     "forwardInboundCredentials",
     "improvedEmailPrivacy",
     "logActionCodes",
+    "passwordPolicy",
+    "passwordPolicyOverrides",
 ];
 
 /// Configuration errors.
@@ -2347,6 +2518,75 @@ impl RuntimeConfig {
                     ConfigError("auth.logActionCodes must be a boolean".to_owned())
                 })?;
             }
+            if let Some(policy) = auth.get("passwordPolicy") {
+                if policy.is_null() {
+                    return Err(ConfigError(
+                        "auth.passwordPolicy must be an object when specified".to_owned(),
+                    ));
+                }
+                cfg.auth_password_policy =
+                    Some(parse_password_policy(policy, "auth.passwordPolicy")?);
+            }
+            if let Some(overrides) = auth.get("passwordPolicyOverrides") {
+                let overrides = overrides.as_array().ok_or_else(|| {
+                    ConfigError("auth.passwordPolicyOverrides must be an array".to_owned())
+                })?;
+                let mut seen = BTreeSet::new();
+                for (index, item) in overrides.iter().enumerate() {
+                    let path = format!("auth.passwordPolicyOverrides[{index}]");
+                    let item = item
+                        .as_object()
+                        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+                    for key in item.keys() {
+                        if !["projectId", "tenantId", "passwordPolicy"].contains(&key.as_str()) {
+                            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+                        }
+                    }
+                    let project_id = item
+                        .get("projectId")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| ConfigError(format!("{path}.projectId must be a string")))
+                        .and_then(|id| {
+                            valid_policy_namespace_id(id, &format!("{path}.projectId"))
+                        })?;
+                    let tenant_id = match item.get("tenantId") {
+                        None => None,
+                        Some(value) => Some(valid_policy_namespace_id(
+                            value.as_str().ok_or_else(|| {
+                                ConfigError(format!("{path}.tenantId must be a non-empty string"))
+                            })?,
+                            &format!("{path}.tenantId"),
+                        )?),
+                    };
+                    let key = (project_id.clone(), tenant_id.clone());
+                    if !seen.insert(key) {
+                        return Err(ConfigError(format!(
+                            "duplicate password policy namespace at {path}"
+                        )));
+                    }
+                    if tenant_id.is_none()
+                        && cfg.auth_password_policy.is_some()
+                        && project_id == cfg.auth_project
+                    {
+                        return Err(ConfigError(
+                            "auth.passwordPolicy and a default-project passwordPolicyOverrides entry are ambiguous"
+                                .to_owned(),
+                        ));
+                    }
+                    let policy = item
+                        .get("passwordPolicy")
+                        .ok_or_else(|| ConfigError(format!("{path}.passwordPolicy is required")))?;
+                    cfg.auth_password_policy_overrides
+                        .push(PasswordPolicyOverride {
+                            project_id,
+                            tenant_id,
+                            password_policy: parse_password_policy(
+                                policy,
+                                &format!("{path}.passwordPolicy"),
+                            )?,
+                        });
+                }
+            }
             if let Some(totp) = auth.get("totp") {
                 const TOTP_KEYS: [&str; 4] = [
                     "periodSeconds",
@@ -3728,5 +3968,82 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    #[test]
+    fn password_policy_config_is_strict_and_preserves_unset_maximum() {
+        let cfg = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "passwordPolicy": {
+                    "enforcementState": "ENFORCE",
+                    "forceUpgradeOnSignin": true,
+                    "constraints": {
+                        "minLength": 12,
+                        "requireUppercase": true,
+                        "requireNumeric": true
+                    }
+                },
+                "passwordPolicyOverrides": [{
+                    "projectId": "demo-other",
+                    "tenantId": "tenant-a",
+                    "passwordPolicy": {"enforcementState": "OFF"}
+                }]
+            }
+        }))
+        .unwrap();
+        let policy = cfg.auth_password_policy.unwrap();
+        assert_eq!(policy.enforcement_state, "ENFORCE");
+        assert!(policy.force_upgrade_on_signin);
+        assert_eq!(policy.constraints.min_length, 12);
+        assert_eq!(policy.constraints.max_length, None);
+        assert_eq!(cfg.auth_password_policy_overrides.len(), 1);
+        assert_eq!(
+            cfg.auth_password_policy_overrides[0].tenant_id.as_deref(),
+            Some("tenant-a")
+        );
+
+        for invalid in [
+            json!({"enforcementState":"NOTIFY"}),
+            json!({"enforcementState":"ENFORCE","constraints":{"minLength":5}}),
+            json!({"enforcementState":"ENFORCE","constraints":{"maxLength":5}}),
+            json!({"enforcementState":"ENFORCE","forceUpgradeOnSignin":"true"}),
+            json!({"enforcementState":"ENFORCE","constraints":{"requireNumeric":null}}),
+            json!({"enforcementState":"ENFORCE","unknown":true}),
+        ] {
+            assert!(
+                RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1,
+                    "auth": {"passwordPolicy": invalid}
+                }))
+                .is_err(),
+                "accepted invalid password policy: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn password_policy_overrides_reject_duplicate_or_ambiguous_namespaces() {
+        let duplicate = json!({
+            "schemaVersion": 1,
+            "auth": {"passwordPolicyOverrides": [
+                {"projectId":"demo-app","passwordPolicy":{"enforcementState":"OFF"}},
+                {"projectId":"demo-app","passwordPolicy":{"enforcementState":"ENFORCE"}}
+            ]}
+        });
+        assert!(RuntimeConfig::from_json(&duplicate).is_err());
+        let ambiguous = json!({
+            "schemaVersion": 1,
+            "auth": {
+                "passwordPolicy": {"enforcementState":"OFF"},
+                "passwordPolicyOverrides": [{"projectId":"demo-app","passwordPolicy":{"enforcementState":"OFF"}}]
+            }
+        });
+        assert!(RuntimeConfig::from_json(&ambiguous).is_err());
+        let null_tenant = json!({
+            "schemaVersion": 1,
+            "auth": {"passwordPolicyOverrides": [{"projectId":"demo-app","tenantId":null,"passwordPolicy":{"enforcementState":"OFF"}}]}
+        });
+        assert!(RuntimeConfig::from_json(&null_tenant).is_err());
     }
 }

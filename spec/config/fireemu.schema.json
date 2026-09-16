@@ -176,6 +176,20 @@
         "logActionCodes": {
           "type": "boolean",
           "description": "Print every email action link and SMS verification code to the daemon's standard output (and the Logging emulator) as the official Auth emulator does. Defaults to true. These lines carry credentials: set false where the console is shared or captured, and read the codes from /emulator/v1/projects/{project}/oobCodes and verificationCodes instead. --log-verbosity quiet also silences them."
+        },
+        "passwordPolicy": { "$ref": "#/$defs/passwordPolicy" },
+        "passwordPolicyOverrides": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["projectId", "passwordPolicy"],
+            "properties": {
+              "projectId": { "type": "string", "minLength": 1 },
+              "tenantId": { "type": "string", "minLength": 1 },
+              "passwordPolicy": { "$ref": "#/$defs/passwordPolicy" }
+            }
+          }
         }
       }
     },
@@ -287,6 +301,27 @@
     }
   },
   "$defs": {
+    "passwordPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enforcementState"],
+      "properties": {
+        "enforcementState": { "enum": ["OFF", "ENFORCE"] },
+        "forceUpgradeOnSignin": { "type": "boolean", "default": false },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "minLength": { "type": "integer", "minimum": 6, "maximum": 30, "default": 6 },
+            "maxLength": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 6, "maximum": 4096 }] },
+            "requireUppercase": { "type": "boolean", "default": false },
+            "requireLowercase": { "type": "boolean", "default": false },
+            "requireNumeric": { "type": "boolean", "default": false },
+            "requireNonAlphanumeric": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    },
     "appCheckMode": { "enum": ["off", "unenforced", "enforced"], "default": "off" },
     "authProjectNumber": {
       "type": "string",

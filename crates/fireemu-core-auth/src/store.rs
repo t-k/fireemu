@@ -3702,6 +3702,10 @@ impl AuthSnapshot {
             // the destination namespace as well. A cross-namespace data restore must not
             // silently transfer those settings.
             restored.config = live.config;
+            // The local sign-up quota is namespace-owned control state as well. Preserve both
+            // its configuration and already-counted destination usage instead of transferring
+            // the source project's quota window into a different project or tenant.
+            restored.signup_quota = live.signup_quota.clone();
         }
         live.project_id.clone_into(&mut restored.project_id);
         restored.project_number = live.project_number;
@@ -7667,6 +7671,104 @@ mod password_policy_namespace_tests {
                 .expect("routed store")
                 .password_policy(),
             &policy
+        );
+    }
+}
+
+#[cfg(test)]
+mod quota_snapshot_tests {
+    use super::{AuthPrincipal, AuthSnapshot, AuthStore};
+    use crate::mfa::TotpPolicy;
+    use crate::signup_quota::{QuotaAlgorithm, QuotaMode, SignupQuotaConfig};
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+
+    const NOW: LogicalInstant = LogicalInstant::UNIX_EPOCH;
+
+    fn quota(mode: QuotaMode, default_quota_per_hour: u64) -> SignupQuotaConfig {
+        SignupQuotaConfig {
+            mode,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour,
+            max_tracked_buckets: 64,
+            temporary: None,
+        }
+    }
+
+    #[test]
+    fn cross_project_snapshot_restore_preserves_destination_quota_config_and_usage() {
+        let mut source =
+            AuthStore::new("source-project", SplitMix64::new(1), TotpPolicy::default());
+        source
+            .set_signup_quota_config(quota(QuotaMode::Enforce, 1))
+            .expect("source quota is valid");
+        let source_reservation = source
+            .reserve_signup(AuthPrincipal::EndUser, "192.0.2.1", NOW)
+            .expect("source reservation succeeds");
+        source
+            .commit_signup(source_reservation)
+            .expect("source reservation commits");
+        let snapshot = AuthSnapshot::capture(&source);
+
+        let mut destination = AuthStore::new(
+            "destination-project",
+            SplitMix64::new(2),
+            TotpPolicy::default(),
+        );
+        let destination_config = quota(QuotaMode::Observe, 7);
+        destination
+            .set_signup_quota_config(destination_config.clone())
+            .expect("destination quota is valid");
+        let destination_reservation = destination
+            .reserve_signup(AuthPrincipal::EndUser, "192.0.2.1", NOW)
+            .expect("destination reservation succeeds");
+        destination
+            .commit_signup(destination_reservation)
+            .expect("destination reservation commits");
+
+        snapshot.restore_into(&mut destination);
+
+        assert_eq!(destination.signup_quota().config(), &destination_config);
+        assert_eq!(
+            destination
+                .signup_quota()
+                .usage("destination-project", "192.0.2.1", NOW),
+            (1, 0),
+            "destination quota usage must survive a cross-project data restore"
+        );
+    }
+
+    #[test]
+    fn cross_tenant_snapshot_restore_does_not_transfer_source_quota_state() {
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        source.tenant_id = Some("tenant-a".to_owned());
+        source
+            .set_signup_quota_config(quota(QuotaMode::Enforce, 1))
+            .expect("source quota is valid");
+        let source_reservation = source
+            .reserve_signup(AuthPrincipal::EndUser, "192.0.2.2", NOW)
+            .expect("source reservation succeeds");
+        source
+            .commit_signup(source_reservation)
+            .expect("source reservation commits");
+        let snapshot = AuthSnapshot::capture(&source);
+
+        let mut destination = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+        destination.tenant_id = Some("tenant-b".to_owned());
+        let destination_config = quota(QuotaMode::Observe, 9);
+        destination
+            .set_signup_quota_config(destination_config.clone())
+            .expect("destination quota is valid");
+
+        snapshot.restore_into(&mut destination);
+
+        assert_eq!(destination.signup_quota().config(), &destination_config);
+        assert_eq!(
+            destination
+                .signup_quota()
+                .usage("demo-app", "192.0.2.2", NOW),
+            (0, 0),
+            "tenant quota usage must remain isolated across tenant restore"
         );
     }
 }

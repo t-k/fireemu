@@ -18,6 +18,7 @@ from replay import (
     expected_probe_inputs,
     expected_runtime_inputs,
     file_digest,
+    load_contract,
     load_spec,
     typed_equal,
 )
@@ -335,13 +336,11 @@ def test_evaluate_rejects_collision_with_bound_input_paths(
 ):
     bundle, source = write_complete_failed_bundle(tmp_path)
     if input_kind == "production-receipt":
-        target = tmp_path / "saved-production" / "auth-profile-receipt.json"
-        target.parent.mkdir()
-        target.write_bytes(CORPORA["auth-profile"]["receipt"].read_bytes())
+        protected = CORPORA["auth-profile"]["receipt"]
     elif input_kind == "local-report":
-        target = bundle / "auth-profile/local.json"
+        protected = bundle / "auth-profile/local.json"
     else:
-        target = bundle / "run-manifest.json"
+        protected = bundle / "run-manifest.json"
 
     original_inputs = {
         path: path.read_bytes()
@@ -351,11 +350,9 @@ def test_evaluate_rejects_collision_with_bound_input_paths(
         ]
     }
     if collision == "regular":
-        protected = target
+        target = protected
     else:
-        protected = tmp_path / f"{input_kind}-{collision}-target"
-        protected.write_bytes(target.read_bytes())
-        target.unlink()
+        target = tmp_path / f"{input_kind}-{collision}-target"
         if collision == "symlink":
             target.symlink_to(protected)
         else:
@@ -401,6 +398,98 @@ def test_run_accepts_a_complete_failed_report_and_writes_the_manifest(
     manifest = run_replay.run(tmp_path / "bundle")
     assert manifest["sourceCommit"] == "a" * 40
     assert (tmp_path / "bundle/run-manifest.json").is_file()
+
+
+def test_run_to_evaluate_preserves_complete_semantic_failure(tmp_path, monkeypatch):
+    """A complete failed probe must reach the comparator as a mismatch."""
+
+    source = "a" * 40
+    artifact = "b" * 64
+    inputs = expected_runtime_inputs()
+    configuration = {
+        "sha256": "c" * 64,
+        "fileSha256": "d" * 64,
+        "value": {"profile": "strict", "schemaVersion": 1},
+    }
+
+    def fake_run(output, name):
+        report = local_from_saved(name, source)
+        report.update(
+            {
+                "status": "failed",
+                "artifact": {"kind": "local-build", "sha256": artifact},
+                "build": {
+                    "command": BUILD_COMMAND,
+                    "artifactSha256": artifact,
+                    "exitCode": 0,
+                    "inputs": inputs,
+                },
+                "ownedProcess": {
+                    "exitCode": 0,
+                    "stopped": True,
+                    "listenersClosed": True,
+                },
+                "configuration": configuration,
+                "probeInputs": expected_probe_inputs(name),
+            }
+        )
+        if name == "auth-profile":
+            row = report["cases"][2]
+            row["photoState"] = "other"
+            row["checks"]["photoMatches"] = False
+            row["passed"] = False
+        output.mkdir(mode=0o700)
+        (output / "local.json").write_text(json.dumps(report, sort_keys=True) + "\n")
+        return report
+
+    runners = {}
+    for name in CORPORA:
+        contract = load_contract(CORPORA[name]["contract"])
+        runners[name] = types.SimpleNamespace(
+            run=lambda output, name=name: fake_run(output, name),
+            complete=contract.complete,
+        )
+    monkeypatch.setattr(
+        run_replay, "RUNNERS", {name: Path(name) for name in CORPORA}
+    )
+    monkeypatch.setattr(
+        run_replay, "load_runner", lambda path: runners[path.name]
+    )
+    monkeypatch.setattr(
+        owned_runner,
+        "build_artifact",
+        lambda: (
+            Path("artifact"),
+            {
+                "command": BUILD_COMMAND,
+                "artifactSha256": artifact,
+                "exitCode": 0,
+                "inputs": inputs,
+            },
+        ),
+    )
+    real_check_output = run_replay.subprocess.check_output
+
+    def fake_check_output(args, **kwargs):
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return source + "\n" if kwargs.get("text") else (source + "\n").encode()
+        return real_check_output(args, **kwargs)
+
+    monkeypatch.setattr(run_replay.subprocess, "check_output", fake_check_output)
+
+    local_root = tmp_path / "bundle"
+    manifest = run_replay.run(local_root)
+    assert manifest["corpora"]["auth-profile"]["status"] == "failed"
+    assert (local_root / "run-manifest.json").is_file()
+
+    result = evaluate(local_root, tmp_path / "result.json", source)
+    assert result["allCasesMatch"] is False
+    assert result["corpora"]["auth-profile"]["classification"] == (
+        "SEMANTIC_MISMATCH"
+    )
+    assert result["corpora"]["auth-profile"]["mismatchCases"] == [
+        "set-photo"
+    ]
 
 
 def test_run_stops_when_a_report_is_incomplete(tmp_path, monkeypatch):

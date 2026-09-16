@@ -6460,7 +6460,16 @@ fn emulator_action(
             ("change your email", "Try changing your email again."),
             |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
         ),
-        Some("signIn") => action_sign_in(query, &params, continue_url),
+        Some("signIn") => {
+            if store
+                .oob_code(code)
+                .is_none_or(|entry| entry.request_type != OobRequestType::EmailSignIn)
+            {
+                action_expired("sign in", "Try signing in again.")
+            } else {
+                action_sign_in(query, &params, continue_url)
+            }
+        }
         _ => action_response(400, json!({"error": "Invalid mode"})),
     }
 }

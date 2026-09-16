@@ -6905,6 +6905,34 @@ fn the_sign_in_link_forwards_its_parameters_to_the_continue_url() {
 }
 
 #[test]
+fn sign_in_action_rejects_a_code_owned_by_another_action_kind() {
+    let s = state();
+    sign_up(&s, "sign-in-kind@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "sign-in-kind@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let code = issued_code(&s, "PASSWORD_RESET");
+    let (status, response) = follow(
+        &s,
+        &format!(
+            "http://127.0.0.1:9099/emulator/action?mode=signIn&oobCode={code}&apiKey=fake-api-key&continueUrl=https%3A%2F%2Fapp.example%2Fdone"
+        ),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response,
+        json!({"authEmulator": {
+            "error": "Your request to sign in has expired or the link has already been used.",
+            "instructions": "Try signing in again."
+        }})
+    );
+    assert_eq!(issued_code(&s, "PASSWORD_RESET"), code);
+}
+
+#[test]
 fn the_verify_and_change_email_link_switches_the_address() {
     let s = state();
     let user = sign_up(&s, "before@example.com");

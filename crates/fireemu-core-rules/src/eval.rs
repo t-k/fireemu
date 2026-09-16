@@ -1378,49 +1378,136 @@ impl<'a> Evaluator<'a> {
     }
 
     fn query_derived_expression(&self, expr: &Expr) -> bool {
+        let mut visiting = Vec::new();
+        self.query_derived_expression_with(expr, &mut visiting)
+    }
+
+    fn query_derived_expression_with(&self, expr: &Expr, visiting: &mut Vec<usize>) -> bool {
         if !self.query_proof {
             return false;
         }
         match expr.kind() {
-            ExprKind::Ident(name) => {
-                name == "resource"
-                    || self
-                        .scope
-                        .bindings
-                        .iter()
-                        .rposition(|binding| binding.name == *name)
-                        .is_some_and(|index| self.scope.bindings[index].query_derived)
-            }
+            ExprKind::Ident(name) => self
+                .scope
+                .bindings
+                .iter()
+                .rposition(|binding| binding.name == *name)
+                .map_or(name == "resource", |index| {
+                    self.scope.bindings[index].query_derived
+                }),
             ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
-                self.query_derived_expression(object)
+                self.query_derived_expression_with(object, visiting)
             }
             ExprKind::Slice { object, start, end } => {
-                self.query_derived_expression(object)
-                    || self.query_derived_expression(start)
-                    || self.query_derived_expression(end)
+                self.query_derived_expression_with(object, visiting)
+                    || self.query_derived_expression_with(start, visiting)
+                    || self.query_derived_expression_with(end, visiting)
             }
-            ExprKind::List(items) => items.iter().any(|item| self.query_derived_expression(item)),
+            ExprKind::List(items) => items
+                .iter()
+                .any(|item| self.query_derived_expression_with(item, visiting)),
             ExprKind::Map(entries) => entries
                 .iter()
-                .any(|(_, value)| self.query_derived_expression(value)),
-            ExprKind::Unary { expr, .. } => self.query_derived_expression(expr),
+                .any(|(_, value)| self.query_derived_expression_with(value, visiting)),
+            ExprKind::Unary { expr, .. } => self.query_derived_expression_with(expr, visiting),
             ExprKind::Binary { left, right, .. } => {
-                self.query_derived_expression(left) || self.query_derived_expression(right)
+                self.query_derived_expression_with(left, visiting)
+                    || self.query_derived_expression_with(right, visiting)
             }
             ExprKind::Ternary {
                 cond,
                 then,
                 otherwise,
             } => {
-                self.query_derived_expression(cond)
-                    || self.query_derived_expression(then)
-                    || self.query_derived_expression(otherwise)
+                self.query_derived_expression_with(cond, visiting)
+                    || self.query_derived_expression_with(then, visiting)
+                    || self.query_derived_expression_with(otherwise, visiting)
             }
             ExprKind::Call { callee, args, .. } => {
-                self.query_derived_expression(callee)
+                self.query_derived_expression_with(callee, visiting)
                     || args
                         .iter()
-                        .any(|argument| self.query_derived_expression(argument))
+                        .any(|argument| self.query_derived_expression_with(argument, visiting))
+                    || matches!(callee.kind(), ExprKind::Ident(name) if self
+                        .function(name)
+                        .is_some_and(|function| self.function_body_query_derived(function, visiting)))
+            }
+            _ => false,
+        }
+    }
+
+    fn function_body_query_derived(
+        &self,
+        function: &FunctionDecl,
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        let key = function_key(function);
+        if visiting.contains(&key) {
+            return false;
+        }
+        visiting.push(key);
+        let mut locals = BTreeMap::new();
+        for parameter in &function.params {
+            locals.insert(parameter.as_str(), false);
+        }
+        for binding in &function.lets {
+            let derived = self.function_expression_query_derived(&binding.value, &locals, visiting);
+            locals.insert(binding.name.as_str(), derived);
+        }
+        let derived = self.function_expression_query_derived(&function.body, &locals, visiting);
+        visiting.pop();
+        derived
+    }
+
+    fn function_expression_query_derived(
+        &self,
+        expr: &Expr,
+        locals: &BTreeMap<&str, bool>,
+        visiting: &mut Vec<usize>,
+    ) -> bool {
+        match expr.kind() {
+            ExprKind::Ident(name) => locals
+                .get(name.as_str())
+                .copied()
+                .unwrap_or(name == "resource"),
+            ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+                self.function_expression_query_derived(object, locals, visiting)
+            }
+            ExprKind::Slice { object, start, end } => {
+                self.function_expression_query_derived(object, locals, visiting)
+                    || self.function_expression_query_derived(start, locals, visiting)
+                    || self.function_expression_query_derived(end, locals, visiting)
+            }
+            ExprKind::List(items) => items
+                .iter()
+                .any(|item| self.function_expression_query_derived(item, locals, visiting)),
+            ExprKind::Map(entries) => entries
+                .iter()
+                .any(|(_, value)| self.function_expression_query_derived(value, locals, visiting)),
+            ExprKind::Unary { expr, .. } => {
+                self.function_expression_query_derived(expr, locals, visiting)
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.function_expression_query_derived(left, locals, visiting)
+                    || self.function_expression_query_derived(right, locals, visiting)
+            }
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.function_expression_query_derived(cond, locals, visiting)
+                    || self.function_expression_query_derived(then, locals, visiting)
+                    || self.function_expression_query_derived(otherwise, locals, visiting)
+            }
+            ExprKind::Call { callee, args, .. } => {
+                self.function_expression_query_derived(callee, locals, visiting)
+                    || args.iter().any(|argument| {
+                        self.function_expression_query_derived(argument, locals, visiting)
+                    })
+                    || matches!(callee.kind(), ExprKind::Ident(name) if self
+                        .function(name)
+                        .is_some_and(|function| self.function_body_query_derived(function, visiting)))
             }
             _ => false,
         }
@@ -2382,7 +2469,11 @@ impl<'a> Evaluator<'a> {
                 {
                     self.string_regex_call(&receiver, name, &values, compiled_regex)
                 } else {
-                    method_call(&receiver, name, &values)
+                    let query_derived = self.query_derived_expression(object)
+                        || args
+                            .iter()
+                            .any(|argument| self.query_derived_expression(argument));
+                    method_call(&receiver, name, &values, query_derived)
                 }
             }
             _ => Err(soft("call target is not callable")),
@@ -2855,6 +2946,7 @@ fn method_call(
     receiver: &RulesValue,
     name: &str,
     args: &[RulesValue],
+    query_derived: bool,
 ) -> Result<RulesValue, EvalError> {
     use RulesValue as V;
     // An exact list / map holding an undetermined member, or an undetermined argument,
@@ -2990,29 +3082,17 @@ fn method_call(
         (V::List(items), "hasAll") => {
             arity(1)?;
             let wanted = list_arg(&args[0])?;
-            V::Bool(
-                wanted
-                    .iter()
-                    .all(|w| items.iter().any(|i| values_equal(i, w))),
-            )
+            V::Bool(all_members_present(items, &wanted, query_derived)?)
         }
         (V::List(items), "hasAny") => {
             arity(1)?;
             let wanted = list_arg(&args[0])?;
-            V::Bool(
-                wanted
-                    .iter()
-                    .any(|w| items.iter().any(|i| values_equal(i, w))),
-            )
+            V::Bool(membership_any(items, &wanted, query_derived)?)
         }
         (V::List(items), "hasOnly") => {
             arity(1)?;
             let allowed = list_arg(&args[0])?;
-            V::Bool(
-                items
-                    .iter()
-                    .all(|i| allowed.iter().any(|a| values_equal(i, a))),
-            )
+            V::Bool(all_values_allowed(items, &allowed, query_derived)?)
         }
         (V::List(items), "join") => {
             arity(1)?;
@@ -3061,20 +3141,19 @@ fn method_call(
                     args[0].type_name()
                 )));
             };
-            let member = |xs: &[RulesValue], v: &RulesValue| xs.iter().any(|x| values_equal(x, v));
             match name {
                 "union" => make_set(items.iter().chain(other).cloned()),
                 "intersection" => make_set(
                     items
                         .iter()
-                        .filter(|v| member(other, v))
+                        .filter(|v| other.iter().any(|x| values_equal(x, v)))
                         .cloned()
                         .collect::<Vec<_>>(),
                 ),
                 _ => make_set(
                     items
                         .iter()
-                        .filter(|v| !member(other, v))
+                        .filter(|v| !other.iter().any(|x| values_equal(x, v)))
                         .cloned()
                         .collect::<Vec<_>>(),
                 ),
@@ -3086,11 +3165,10 @@ fn method_call(
                 V::Set(xs) => xs.clone(),
                 _ => list_arg(&args[0])?,
             };
-            let member = |xs: &[RulesValue], v: &RulesValue| xs.iter().any(|x| values_equal(x, v));
             V::Bool(match name {
-                "hasAll" => other.iter().all(|w| member(items, w)),
-                "hasAny" => other.iter().any(|w| member(items, w)),
-                _ => items.iter().all(|i| member(&other, i)),
+                "hasAll" => all_members_present(items, &other, query_derived)?,
+                "hasAny" => membership_any(items, &other, query_derived)?,
+                _ => all_values_allowed(items, &other, query_derived)?,
             })
         }
         (V::Map(m), "keys") => {
@@ -3492,6 +3570,61 @@ fn query_membership_result(items: &[RulesValue], item: &RulesValue) -> Result<bo
     } else {
         Ok(false)
     }
+}
+
+fn membership_any(
+    items: &[RulesValue],
+    wanted: &[RulesValue],
+    query_derived: bool,
+) -> Result<bool, EvalError> {
+    if query_derived {
+        let mut uncertain = false;
+        for item in wanted {
+            match query_membership_result(items, item) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(EvalError::Unknown) => uncertain = true,
+                Err(error) => return Err(error),
+            }
+        }
+        return if uncertain {
+            Err(EvalError::Unknown)
+        } else {
+            Ok(false)
+        };
+    }
+    Ok(wanted
+        .iter()
+        .any(|item| items.iter().any(|candidate| values_equal(candidate, item))))
+}
+
+fn all_members_present(
+    items: &[RulesValue],
+    wanted: &[RulesValue],
+    query_derived: bool,
+) -> Result<bool, EvalError> {
+    let mut uncertain = false;
+    for item in wanted {
+        match membership_any(items, std::slice::from_ref(item), query_derived) {
+            Ok(true) => {}
+            Ok(false) => return Ok(false),
+            Err(EvalError::Unknown) => uncertain = true,
+            Err(error) => return Err(error),
+        }
+    }
+    if uncertain {
+        Err(EvalError::Unknown)
+    } else {
+        Ok(true)
+    }
+}
+
+fn all_values_allowed(
+    items: &[RulesValue],
+    allowed: &[RulesValue],
+    query_derived: bool,
+) -> Result<bool, EvalError> {
+    all_members_present(allowed, items, query_derived)
 }
 
 fn query_all_equal_result(candidates: &[RulesValue], item: &RulesValue) -> Result<(), EvalError> {

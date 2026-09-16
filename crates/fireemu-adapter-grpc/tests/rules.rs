@@ -1130,17 +1130,41 @@ service cloud.firestore {
             "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function getter() {
+      return resource.data.meta.payload;
+    }
     function gate(value) {
       let alias = value;
       return alias != [1.0];
     }
     match /records/{id} {
-      allow read: if gate(resource.data.meta.payload);
+      allow read: if gate(getter());
     }
   }
 }",
         )
         .unwrap();
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", arr(vec![integer(1)])),
+            "owner",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner alias query should return the stored document")
+            .unwrap()
+            .document
+            .expect("owner alias query document")
+            .name,
+        format!("{DOCS}/records/numeric")
+    );
+    assert!(owner_stream.next().await.is_none());
     assert_eq!(
         h.client
             .get_document(with_bearer(get("records/numeric"), &alice_token))

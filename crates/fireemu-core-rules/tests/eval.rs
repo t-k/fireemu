@@ -1495,7 +1495,7 @@ fn query_equality_keeps_nested_numeric_values_conservative() {
 fn query_equality_provenance_survives_function_and_let_aliases() {
     let rules = |condition: &str| {
         format!(
-            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function gate(value) {{ let alias = value; return {condition}; }} match /notes/{{id}} {{ allow list: if gate(resource.data.meta.payload); }} }} }}"
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function getter() {{ return resource.data.meta.payload; }} function gate(value) {{ let alias = value; return {condition}; }} match /notes/{{id}} {{ allow list: if gate(getter()); }} }} }}"
         )
     };
     let payload = RulesValue::List(vec![RulesValue::Int(1)]);
@@ -1526,6 +1526,30 @@ fn partial_query_list_membership_does_not_assume_nested_numeric_representation()
         &rules("{'score': 1.0} in resource.data.tags"),
         &tags
     ));
+}
+
+#[test]
+fn query_derived_list_and_set_membership_methods_remain_conservative() {
+    let rules = |condition: &str| {
+        format!(
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+        )
+    };
+    let tag = RulesValue::Map(BTreeMap::from([("score".to_owned(), RulesValue::Int(1))]));
+    let tags = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("tags", RulesValue::List(vec![tag]))],
+    );
+    for condition in [
+        "resource.data.tags.hasAny([{score: 1.0}])",
+        "resource.data.tags.hasAll([{score: 1.0}])",
+        "resource.data.tags.hasOnly([{score: 1.0}])",
+        "resource.data.tags.toSet().hasAny([{score: 1.0}])",
+        "resource.data.tags.toSet().hasAll([{score: 1.0}])",
+        "resource.data.tags.toSet().hasOnly([{score: 1.0}])",
+    ] {
+        assert!(!allows(&rules(condition), &tags), "condition: {condition}");
+    }
 }
 
 #[test]

@@ -1769,6 +1769,10 @@ fn query_proof_rejects_numeric_representation_sensitive_integer_builtins() {
         &normalized
     ));
     assert!(allows(
+        "rules_version = '2'; service cloud.firestore { function normalize(value) { return int(value); } match /databases/{d}/documents { match /notes/{id} { allow list: if timestamp.value(normalize(resource.data.value)) is timestamp; } } }",
+        &normalized
+    ));
+    assert!(allows(
         &rules("duration.time(1, 2, 3, 4) is duration"),
         &normalized
     ));
@@ -1783,6 +1787,9 @@ fn query_proof_rejects_unary_negation_at_the_integer_boundary() {
     let rules = "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if (-resource.data.value) == 9223372036854775808.0; } } }";
 
     assert!(!allows(rules, &query));
+
+    let normalized = "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if (-float(resource.data.value)) == 9223372036854775808.0; } } }";
+    assert!(allows(normalized, &query));
 }
 
 #[test]

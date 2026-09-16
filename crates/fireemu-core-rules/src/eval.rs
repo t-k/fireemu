@@ -1682,6 +1682,30 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    /// Reports whether a query-derived numeric expression can still change the success or error
+    /// result of unary negation. Explicit numeric conversions establish the runtime type, while
+    /// the broader numeric-source analysis remains representation-sensitive for stringification.
+    fn query_numeric_error_source(&self, expr: &Expr) -> bool {
+        match expr.kind() {
+            ExprKind::Call { callee, args, .. } => match callee.kind() {
+                ExprKind::Ident(name)
+                    if matches!(name.as_str(), "int" | "float")
+                        && args.len() == 1
+                        && self.function(name).is_none() =>
+                {
+                    false
+                }
+                ExprKind::Ident(name)
+                    if name == "debug" && args.len() == 1 && self.function(name).is_none() =>
+                {
+                    self.query_numeric_error_source(&args[0])
+                }
+                _ => self.query_numeric_expression_source(expr),
+            },
+            _ => self.query_numeric_expression_source(expr),
+        }
+    }
+
     /// Reports whether a user function can return a query-derived numeric value. This analysis
     /// keeps numeric provenance separate from the broader query-derived flag, because a function
     /// parameter may carry a known query-derived string while another call carries a canonical
@@ -1925,12 +1949,16 @@ impl<'a> Evaluator<'a> {
                         && args.len() == 1
                         && function_in_environment(environment, name).is_none() =>
                 {
-                    self.function_expression_query_numeric_source_only(
-                        &args[0],
-                        numeric_locals,
-                        environment,
-                        visiting,
-                    )
+                    if name == "int" {
+                        false
+                    } else {
+                        self.function_expression_query_numeric_source_only(
+                            &args[0],
+                            numeric_locals,
+                            environment,
+                            visiting,
+                        )
+                    }
                 }
                 ExprKind::Member { name, .. } if name == "size" => false,
                 ExprKind::Member { object, name } if name == "join" => self
@@ -3875,7 +3903,7 @@ impl<'a> Evaluator<'a> {
                 if self.query_proof
                     && *op == UnaryOp::Neg
                     && negation_boundary
-                    && self.query_numeric_expression_source(expr)
+                    && self.query_numeric_error_source(expr)
                 {
                     // `-i64::MIN` raises, while the equivalent double representative can be
                     // negated successfully. Do not authorize from either representative.

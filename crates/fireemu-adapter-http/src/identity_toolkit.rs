@@ -5483,6 +5483,31 @@ fn select_store(
                 Some((audience, tenant))
             })
     });
+    let exchanges_custom_token = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if route.handler == routes::Handler::SignInWithCustomToken
+    );
+    let exchanges_refresh_token = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if route.handler == routes::Handler::Token
+    );
+    if exchanges_custom_token {
+        // A query tenant is an explicit namespace assertion. A valid custom token without a
+        // tenant claim is project-scoped and must not be silently rebound to the requested
+        // tenant; malformed tokens are left to the normal handler for its existing error shape.
+        if let Some(query_tenant) = query_tenant.as_deref() {
+            let token_mismatches = match custom_token_tenant(body) {
+                Some(CustomTokenTenant::ProjectScoped) => true,
+                Some(CustomTokenTenant::Tenant(token_tenant)) => token_tenant != query_tenant,
+                None => false,
+            };
+            if token_mismatches {
+                return Err(error(400, "TENANT_ID_MISMATCH"));
+            }
+        }
+    }
     if let Some((_, token_tenant)) = id_token_target.as_ref() {
         if query_tenant
             .as_ref()
@@ -5512,10 +5537,31 @@ fn select_store(
             };
             return Ok(store);
         }
+        if let Some(query_tenant) = query_tenant.as_deref() {
+            let Some(store) = registry.tenant_store(project, query_tenant) else {
+                return Err(error(404, "TENANT_NOT_FOUND"));
+            };
+            return Ok(store);
+        }
         return Ok(registry
             .store_for(project)
             .or_else(|| registry.routed_store_for(project))
             .unwrap_or_else(|| state.store.clone()));
+    }
+    if exchanges_refresh_token && query_tenant.is_some() {
+        if let Some(token) = str_field(body, "refresh_token") {
+            use fireemu_core_auth::store::RefreshTokenStoreMatch;
+
+            if let RefreshTokenStoreMatch::Unique(store) = registry.store_for_refresh_token(token) {
+                let token_tenant = store
+                    .lock()
+                    .ok()
+                    .and_then(|store| store.tenant_id().map(str::to_owned));
+                if token_tenant.as_deref() != query_tenant.as_deref() {
+                    return Err(error(400, "TENANT_ID_MISMATCH"));
+                }
+            }
+        }
     }
     if let Some(key) = api_key.as_deref() {
         // A registry without a tenancy selector is the single-namespace adapter/test
@@ -5561,11 +5607,6 @@ fn select_store(
         };
         return Ok(store);
     }
-    let exchanges_custom_token = matches!(
-        resolution,
-        routes::Resolution::Matched { route, .. }
-            if route.handler == routes::Handler::SignInWithCustomToken
-    );
     if state.allow_routed_projects && exchanges_custom_token {
         if let Some(uid) = custom_token_uid(body) {
             use fireemu_core_auth::store::CompatibilityUserStoreMatch;
@@ -5666,6 +5707,33 @@ fn custom_token_uid(body: &Value) -> Option<String> {
             JsonValue::Int(value) => Some(value.to_string()),
             _ => None,
         })
+}
+
+/// Returns the tenant scope of a syntactically valid custom token. `None` means that the token is
+/// absent or malformed, so the normal sign-in handler retains responsibility for its existing
+/// validation error. A valid project-scoped token is represented separately from a tenant token
+/// for query-tenant assertions.
+enum CustomTokenTenant {
+    /// A valid custom token without a tenant claim.
+    ProjectScoped,
+    /// A valid custom token carrying a tenant claim.
+    Tenant(String),
+}
+
+fn custom_token_tenant(body: &Value) -> Option<CustomTokenTenant> {
+    let token = str_field(body, "token")?;
+    let payload = if token.trim_start().starts_with('{') {
+        fireemu_core_types::json::parse(token).ok()?
+    } else {
+        let decoded = fireemu_core_auth::jwt::decode_unsigned(token).ok()?;
+        (decoded.payload.get("aud").and_then(JsonValue::as_str) == Some(CUSTOM_TOKEN_AUDIENCE))
+            .then_some(decoded.payload)?
+    };
+    match payload.get("tenant_id") {
+        None => Some(CustomTokenTenant::ProjectScoped),
+        Some(JsonValue::String(tenant)) => Some(CustomTokenTenant::Tenant(tenant.clone())),
+        Some(_) => None,
+    }
 }
 
 /// `accounts:signUp`: a password user when an email or a password is present (both are then

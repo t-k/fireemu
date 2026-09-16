@@ -9297,6 +9297,231 @@ fn body_tenant_mismatch_preserves_invalid_id_token_precedence() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn query_tenant_binds_custom_token_namespace_before_auth_work() {
+    use fireemu_core_auth::store::AuthRegistry;
+    use fireemu_core_session::tenancy::Tenancy;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    assert!(registry.register(
+        "worker-alpha",
+        AuthStore::new("worker-alpha", SplitMix64::new(7), TotpPolicy::default()),
+    ));
+    for tenant in ["customer-a", "customer-b"] {
+        registry.ensure_tenant("worker-alpha", tenant).unwrap();
+    }
+    s.registry = Some(registry.clone());
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("worker-alpha", &[], &["worker-key".to_owned()])
+        .unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+
+    let token = custom_token_from_payload(&json!({
+        "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
+        "uid": "query-custom-user",
+        "tenant_id": "customer-a",
+    }));
+    let before_a = registry
+        .tenant_store("worker-alpha", "customer-a")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_count();
+    let before_b = registry
+        .tenant_store("worker-alpha", "customer-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_count();
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key&tenantId=customer-b"),
+        &json!({"token": token}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_a
+    );
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_b
+    );
+
+    // A project-scoped custom token has no tenant claim and cannot be rebound to a tenant by
+    // an explicit query selector.
+    let project_token = custom_token_from_payload(&json!({
+        "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
+        "uid": "project-scoped-custom-user",
+    }));
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key&tenantId=customer-b"),
+        &json!({"token": project_token}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_a
+    );
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_b
+    );
+
+    let (status, accepted) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key&tenantId=customer-a"),
+        &json!({
+            "token": custom_token_from_payload(&json!({
+                "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
+                "uid": "query-custom-user",
+                "tenant_id": "customer-a",
+            })),
+        }),
+    );
+    assert_eq!(status, 200, "{accepted}");
+    assert_eq!(accepted["localId"], "query-custom-user");
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_b
+    );
+}
+
+#[test]
+fn query_tenant_binds_refresh_token_namespace_before_auth_work() {
+    use fireemu_core_auth::store::AuthRegistry;
+    use fireemu_core_session::tenancy::Tenancy;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    assert!(registry.register(
+        "worker-alpha",
+        AuthStore::new("worker-alpha", SplitMix64::new(7), TotpPolicy::default()),
+    ));
+    for tenant in ["customer-a", "customer-b"] {
+        registry.ensure_tenant("worker-alpha", tenant).unwrap();
+    }
+    s.registry = Some(registry.clone());
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("worker-alpha", &[], &["worker-key".to_owned()])
+        .unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=worker-key"),
+        &json!({
+            "tenantId": "customer-a",
+            "email": "query-refresh-user@example.com",
+            "password": "password1",
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let refresh = created["refreshToken"].clone();
+    let before_a = registry
+        .tenant_store("worker-alpha", "customer-a")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_count();
+    let before_b = registry
+        .tenant_store("worker-alpha", "customer-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_count();
+
+    let (status, project_created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=worker-key"),
+        &json!({
+            "email": "query-refresh-project-user@example.com",
+            "password": "password1",
+        }),
+    );
+    assert_eq!(status, 200, "{project_created}");
+    let project_store = registry.store_for("worker-alpha").unwrap();
+    let project_before = project_store.lock().unwrap().user_count();
+    let (status, refused_project) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token?key=worker-key&tenantId=customer-a",
+        &json!({
+            "grant_type": "refresh_token",
+            "refresh_token": project_created["refreshToken"],
+        }),
+    );
+    assert_eq!(status, 400, "{refused_project}");
+    assert_eq!(refused_project["error"]["message"], "TENANT_ID_MISMATCH");
+    assert_eq!(project_store.lock().unwrap().user_count(), project_before);
+
+    let (status, refused) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token?key=worker-key&tenantId=customer-b",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_a
+    );
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_b
+    );
+
+    let (status, renewed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token?key=worker-key&tenantId=customer-a",
+        &json!({"grant_type": "refresh_token", "refresh_token": created["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{renewed}");
+    assert_eq!(renewed["user_id"], created["localId"]);
+}
+
+#[test]
 fn query_tenant_selector_must_match_id_token_before_auth_work() {
     let mut s = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(

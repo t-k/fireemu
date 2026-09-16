@@ -2778,6 +2778,62 @@ fn rest_kindless_queries_and_transform_budget_follow_production() {
     );
 }
 
+#[test]
+fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
+    let (s, clock) = state_with_clock(None, TokenAcceptance::Verified);
+    let document = "projects/demo-app/databases/(default)/documents/expiry/doc";
+    let (status, seeded) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/expiry/doc"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{seeded}");
+
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let transaction = begun["transaction"].as_str().unwrap().to_owned();
+    let (status, held) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/expiry/doc?transaction={transaction}"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{held}");
+
+    let _ = clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(61));
+    let (status, expired) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({
+            "transaction": transaction,
+            "writes": [{"update": {"name": document, "fields": {"v": {"integerValue": "2"}}}}]
+        }),
+    );
+    assert_eq!(status, 409, "{expired}");
+    assert_eq!(expired["error"]["status"], "ABORTED");
+
+    let (status, released) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/expiry/doc"),
+        json!({"fields": {"v": {"integerValue": "3"}}}),
+    );
+    assert_eq!(status, 200, "{released}");
+    let (status, after) = call(&s, "GET", &format!("{DOCS}/expiry/doc"), Value::Null);
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after["fields"]["v"]["integerValue"], "3");
+}
+
 /// Over REST the contended writer blocks its (blocking-pool) thread until the transaction
 /// finishes, then goes through.
 #[test]

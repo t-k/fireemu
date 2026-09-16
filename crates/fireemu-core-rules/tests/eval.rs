@@ -1601,6 +1601,23 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
         "rules_version = '2';\nservice cloud.firestore { function value() { return resource.data.value; } match /databases/{d}/documents { match /notes/{id} { allow list: if string(value()) == 'abc'; } } }",
         &known_string
     ));
+    let list_zero = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::List(vec![RulesValue::Int(0)]))],
+    );
+    for condition in [
+        "string(pick()) == '0'",
+        "string(pick()) in ['0']",
+        "{'0': true, '-0': false}[string(pick())]",
+    ] {
+        let list_helper_rules = format!(
+            "rules_version = '2';\nservice cloud.firestore {{ function pick() {{ return resource.data.value[0]; }} match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+        );
+        assert!(
+            !allows(&list_helper_rules, &list_zero),
+            "{condition} must preserve numeric provenance through a list member"
+        );
+    }
     for condition in ["{'0': true, '-0': false}[text()]", "['0'].hasAny([text()])"] {
         let nested_numeric_rules = format!(
             "rules_version = '2';\nservice cloud.firestore {{ function number() {{ return float(resource.data.value); }} function text() {{ return string(number()); }} match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"

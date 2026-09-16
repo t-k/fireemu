@@ -1781,7 +1781,11 @@ impl<'a> Evaluator<'a> {
                         | RulesValue::Float(_)
                         | RulesValue::Map(_)
                         | RulesValue::PartialMap(_)
-                        | RulesValue::PartialMapExcluding { .. },
+                        | RulesValue::PartialMapExcluding { .. }
+                        | RulesValue::List(_)
+                        | RulesValue::Set(_)
+                        | RulesValue::PartialList(_)
+                        | RulesValue::PartialListAny(_),
                     )
                     | None => source,
                     Some(_) => false,

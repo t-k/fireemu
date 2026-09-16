@@ -2650,6 +2650,10 @@ pub struct BlockingAuthBridge {
     deadline: Duration,
     forward_inbound_credentials: bool,
     selections: fireemu_core_functions::manifest::BlockingAuthSelections,
+    /// Optional project-level upper bound for raw token forwarding. `None` preserves the legacy
+    /// discovery-only policy; `Some` means every token kind is additionally required to be true
+    /// here before it can reach a handler.
+    forwarding_restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
 }
 
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
@@ -2702,6 +2706,7 @@ fn narrow_blocking_auth_credentials(
     context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
     globally_enabled: bool,
     policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
 ) -> fireemu_adapter_http::identity_toolkit::AuthBlockingContext {
     let mut narrowed = context.clone();
     let available = context.credential.as_ref().map_or_else(
@@ -2712,7 +2717,8 @@ fn narrow_blocking_auth_credentials(
             refresh_token: credential.refresh_token.is_some(),
         },
     );
-    let policy = policy.effective(globally_enabled, available);
+    let policy =
+        effective_blocking_auth_token_policy(policy, globally_enabled, restrictions, available);
     if let Some(credential) = &mut narrowed.credential {
         if !policy.access_token {
             credential.access_token = None;
@@ -2725,6 +2731,43 @@ fn narrow_blocking_auth_credentials(
         }
     }
     narrowed
+}
+
+fn restrict_blocking_auth_token_policy(
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+    let Some(restrictions) = restrictions else {
+        return policy;
+    };
+    fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        access_token: policy.access_token && restrictions.access_token,
+        id_token: policy.id_token && restrictions.id_token,
+        refresh_token: policy.refresh_token && restrictions.refresh_token,
+    }
+}
+
+fn effective_blocking_auth_token_policy(
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    globally_enabled: bool,
+    restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+    available: fireemu_core_functions::manifest::BlockingAuthCredentialPresence,
+) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+    restrict_blocking_auth_token_policy(policy.effective(globally_enabled, available), restrictions)
+}
+
+fn validate_blocking_auth_forwarding_policy(
+    globally_enabled: bool,
+    restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+) -> Result<(), String> {
+    if !globally_enabled
+        && restrictions.is_some_and(fireemu_core_functions::manifest::BlockingAuthTokenPolicy::any)
+    {
+        return Err(
+            "blockingFunctions.forwardInboundCredentials requests token forwarding while the global auth.forwardInboundCredentials switch is disabled".to_owned(),
+        );
+    }
+    Ok(())
 }
 
 fn blocking_auth_selection_accepts_target(
@@ -2925,10 +2968,26 @@ impl BlockingAuthBridge {
         if !forward_inbound_credentials {
             return Self::new(runtime);
         }
-        Self::new_with_selection(
+        Self::try_new_with_forwarding_policy(runtime, forward_inbound_credentials, None)
+            .expect("the legacy Blocking Auth bridge forwarding configuration is valid")
+    }
+
+    /// Builds a bridge with a project-level per-token forwarding restriction.
+    ///
+    /// A configured restriction is an upper bound on the discovered function policy. Supplying a
+    /// `true` bit while the global switch is disabled is rejected instead of being silently
+    /// ignored, because that configuration would claim to enable a capability the daemon has
+    /// globally disabled.
+    pub fn try_new_with_forwarding_policy(
+        runtime: Arc<FunctionsRuntime>,
+        forward_inbound_credentials: bool,
+        forwarding_restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+    ) -> Result<Self, String> {
+        Self::try_new_with_selections_and_forwarding_policy(
             runtime,
-            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery,
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
             forward_inbound_credentials,
+            forwarding_restrictions,
         )
     }
 
@@ -2944,12 +3003,33 @@ impl BlockingAuthBridge {
         selections: fireemu_core_functions::manifest::BlockingAuthSelections,
         forward_inbound_credentials: bool,
     ) -> Self {
-        Self {
+        Self::try_new_with_selections_and_forwarding_policy(
+            runtime,
+            selections,
+            forward_inbound_credentials,
+            None,
+        )
+        .expect("the legacy Blocking Auth bridge forwarding configuration is valid")
+    }
+
+    /// Builds a bridge with both per-event target selection and per-token forwarding limits.
+    pub fn try_new_with_selections_and_forwarding_policy(
+        runtime: Arc<FunctionsRuntime>,
+        selections: fireemu_core_functions::manifest::BlockingAuthSelections,
+        forward_inbound_credentials: bool,
+        forwarding_restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+    ) -> Result<Self, String> {
+        validate_blocking_auth_forwarding_policy(
+            forward_inbound_credentials,
+            forwarding_restrictions,
+        )?;
+        Ok(Self {
             runtime,
             deadline: BLOCKING_AUTH_DEADLINE,
             forward_inbound_credentials,
             selections,
-        }
+            forwarding_restrictions,
+        })
     }
 
     /// Builds a bridge applying the same selection to both supported Auth events.
@@ -2978,6 +3058,7 @@ impl BlockingAuthBridge {
             deadline,
             forward_inbound_credentials: false,
             selections: fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            forwarding_restrictions: None,
         }
     }
 
@@ -3062,6 +3143,7 @@ impl BlockingAuthBridge {
             context,
             self.forward_inbound_credentials,
             target.token_policy,
+            self.forwarding_restrictions,
         );
         let user_json = blocking_auth_user_json(user, tenant);
         let event_context = blocking_auth_context_json(
@@ -3147,6 +3229,9 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
 
     fn forward_inbound_credentials(&self) -> bool {
         self.forward_inbound_credentials
+            && self
+                .forwarding_restrictions
+                .is_none_or(|restriction| restriction.any())
     }
 
     fn inbound_credential_policy(
@@ -3154,7 +3239,10 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
         if self.forward_inbound_credentials {
-            self.runtime.blocking_auth_token_policy(event)
+            restrict_blocking_auth_token_policy(
+                self.runtime.blocking_auth_token_policy(event),
+                self.forwarding_restrictions,
+            )
         } else {
             fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default()
         }
@@ -3720,6 +3808,7 @@ mod tests {
                     id_token: bits & 2 != 0,
                     refresh_token: bits & 4 != 0,
                 },
+                None,
             );
             let credential = narrowed.credential.unwrap();
             assert_eq!(credential.access_token.is_some(), bits & 1 != 0);
@@ -3730,19 +3819,76 @@ mod tests {
 
         let mut absent = context.clone();
         absent.credential.as_mut().unwrap().id_token = None;
-        let narrowed =
-            super::narrow_blocking_auth_credentials(&absent, true, BlockingAuthTokenPolicy::ALL);
+        let narrowed = super::narrow_blocking_auth_credentials(
+            &absent,
+            true,
+            BlockingAuthTokenPolicy::ALL,
+            None,
+        );
         let credential = narrowed.credential.unwrap();
         assert!(credential.access_token.is_some());
         assert!(credential.id_token.is_none());
         assert!(credential.refresh_token.is_some());
 
-        let narrowed =
-            super::narrow_blocking_auth_credentials(&context, false, BlockingAuthTokenPolicy::ALL);
+        let narrowed = super::narrow_blocking_auth_credentials(
+            &context,
+            false,
+            BlockingAuthTokenPolicy::ALL,
+            None,
+        );
         let credential = narrowed.credential.unwrap();
         assert!(credential.access_token.is_none());
         assert!(credential.id_token.is_none());
         assert!(credential.refresh_token.is_none());
+    }
+
+    #[test]
+    fn blocking_auth_forwarding_restrictions_intersect_manifest_and_global_policy() {
+        use fireemu_core_functions::manifest::{
+            BlockingAuthCredentialPresence, BlockingAuthTokenPolicy,
+        };
+
+        let manifest_policy = BlockingAuthTokenPolicy::ALL;
+        let configured = BlockingAuthTokenPolicy {
+            access_token: false,
+            id_token: true,
+            refresh_token: true,
+        };
+        let available = BlockingAuthCredentialPresence {
+            access_token: true,
+            id_token: false,
+            refresh_token: true,
+        };
+        assert_eq!(
+            super::effective_blocking_auth_token_policy(
+                manifest_policy,
+                true,
+                Some(configured),
+                available,
+            ),
+            BlockingAuthTokenPolicy {
+                access_token: false,
+                id_token: false,
+                refresh_token: true,
+            }
+        );
+
+        let global_disabled = super::validate_blocking_auth_forwarding_policy(
+            false,
+            Some(BlockingAuthTokenPolicy {
+                access_token: true,
+                id_token: false,
+                refresh_token: false,
+            }),
+        )
+        .unwrap_err();
+        assert!(global_disabled.contains("global auth.forwardInboundCredentials"));
+
+        super::validate_blocking_auth_forwarding_policy(
+            false,
+            Some(BlockingAuthTokenPolicy::default()),
+        )
+        .expect("an all-false project restriction cannot widen a disabled global switch");
     }
 
     #[test]

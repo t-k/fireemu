@@ -481,6 +481,10 @@ def test_documented_shadow_runs_real_server_and_closes_listeners(real_shadow):
         assert socket_closed(local["instance"][key])
     assert len(local["receipt"]["rows"]) == 12
     assert len(local["receipt"]["cleanup"]) == 6
+    partial = json.loads((directory / "cases.json").read_bytes())
+    assert partial["recordingComplete"] is True
+    assert partial["stateValidation"] is True
+    assert partial["cleanupComplete"] is True
 
 
 @pytest.mark.parametrize(

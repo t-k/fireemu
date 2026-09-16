@@ -2538,7 +2538,13 @@ impl AuthStore {
         &self,
         password: &str,
     ) -> Result<Vec<ViolationCode>, AuthError> {
-        let violations = self.password_policy.violations(password);
+        let violations = if self.password_policy.enforcement_state
+            == crate::password_policy::EnforcementState::Enforce
+        {
+            self.password_policy.violations(password)
+        } else {
+            Vec::new()
+        };
         if self
             .password_policy
             .rejects(PasswordPolicyOperation::SignIn, password)
@@ -2683,19 +2689,24 @@ impl AuthStore {
         self.users.get(uid).is_some_and(|u| u.password.is_some())
     }
 
-    /// Verifies an email + password sign-in; returns the user ID.
+    /// Verifies an email + password sign-in and returns policy notifications, if any.
+    ///
+    /// Credential verification is deliberately completed before the policy is evaluated. This
+    /// preserves credential-error precedence and prevents policy configuration from revealing
+    /// information about unknown users or incorrect passwords. The returned violation codes are
+    /// metadata only and never contain the candidate password.
     ///
     /// The refusal follows the project's email privacy setting the way the official emulator's
     /// does: by default an unknown email is [`AuthError::EmailNotFound`] and a wrong password
     /// [`AuthError::InvalidPassword`]; with `enableImprovedEmailPrivacy` both collapse into
     /// [`AuthError::InvalidCredentials`] so the response no longer reveals whether the email
     /// is registered.
-    pub fn verify_password(
+    pub fn verify_password_with_policy(
         &mut self,
         email: &str,
         password: &str,
         now: LogicalInstant,
-    ) -> Result<LocalId, AuthError> {
+    ) -> Result<(LocalId, Vec<ViolationCode>), AuthError> {
         let private = self.config.enable_improved_email_privacy;
         let Some(user) = self.user_by_email(email) else {
             if private {
@@ -2728,12 +2739,26 @@ impl AuthStore {
         }
         // Authenticate first, then apply the optional sign-in upgrade policy. A policy
         // refusal therefore cannot advance sign-in timestamps or issue/retire credentials.
-        self.validate_existing_password_for_signin(password)?;
+        let violations = self.validate_existing_password_for_signin(password)?;
         if let Some(u) = self.users.get_mut(&uid).map(Arc::make_mut) {
             u.last_sign_in_at = Some(now);
         }
         self.activate_email_owner(&uid);
-        Ok(uid)
+        Ok((uid, violations))
+    }
+
+    /// Verifies an email + password sign-in; returns the user ID.
+    ///
+    /// This compatibility wrapper preserves the historical API for callers that do not need
+    /// password-policy notification metadata.
+    pub fn verify_password(
+        &mut self,
+        email: &str,
+        password: &str,
+        now: LogicalInstant,
+    ) -> Result<LocalId, AuthError> {
+        self.verify_password_with_policy(email, password, now)
+            .map(|(uid, _violations)| uid)
     }
 
     /// Looks up a user by email.

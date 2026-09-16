@@ -158,3 +158,73 @@ fn project_and_tenant_password_policies_are_explicitly_isolated() {
     );
     assert!(!registry.set_tenant_password_policy("demo-app", "tenant-b", strict(true)));
 }
+
+#[test]
+fn non_forced_signin_returns_policy_violations_after_authentication() {
+    let mut store = store();
+    let uid = store
+        .create_user(NewUser::email("user@example.com"), NOW)
+        .unwrap();
+    // This credential predates the stricter policy and is valid under the original policy.
+    store
+        .set_password(&uid, "OnlyLettersPassword", NOW)
+        .unwrap();
+    store.set_password_policy(strict(false));
+
+    let result = store.verify_password_with_policy("user@example.com", "OnlyLettersPassword", NOW);
+
+    assert_eq!(
+        result,
+        Ok((
+            uid.clone(),
+            vec![
+                ViolationCode::MissingNumericCharacter,
+                ViolationCode::MissingNonAlphanumericCharacter,
+            ],
+        ))
+    );
+    assert_eq!(store.user(&uid).unwrap().last_sign_in_at, Some(NOW));
+}
+
+#[test]
+fn forced_signin_rejection_preserves_existing_signin_timestamp() {
+    let mut store = store();
+    let uid = store
+        .create_user(NewUser::email("user@example.com"), NOW)
+        .unwrap();
+    store
+        .set_password(&uid, "OnlyLettersPassword", NOW)
+        .unwrap();
+
+    let established_at = LogicalInstant::from_unix_seconds(10);
+    store
+        .verify_password("user@example.com", "OnlyLettersPassword", established_at)
+        .unwrap();
+    store.set_password_policy(strict(true));
+    let before = store.user(&uid).cloned().unwrap();
+
+    let refused_at = LogicalInstant::from_unix_seconds(20);
+    assert_eq!(
+        store.verify_password_with_policy("user@example.com", "OnlyLettersPassword", refused_at),
+        Err(AuthError::WeakPassword)
+    );
+    assert_eq!(store.user(&uid), Some(&before));
+}
+
+#[test]
+fn signin_checks_credentials_before_forced_policy_rejection() {
+    let mut store = store();
+    let uid = store
+        .create_user(NewUser::email("user@example.com"), NOW)
+        .unwrap();
+    store
+        .set_password(&uid, "OnlyLettersPassword", NOW)
+        .unwrap();
+    store.set_password_policy(strict(true));
+
+    assert_eq!(
+        store.verify_password_with_policy("user@example.com", "WrongPassword", NOW),
+        Err(AuthError::InvalidPassword)
+    );
+    assert_eq!(store.user(&uid).unwrap().last_sign_in_at, None);
+}

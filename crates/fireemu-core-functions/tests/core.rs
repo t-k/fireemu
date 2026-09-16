@@ -4,6 +4,7 @@ use fireemu_core_functions::cron::{
     fixed_offset_seconds, Civil, FixedOffset, RunCount, Schedule, ScheduleError, ZoneRules,
 };
 use fireemu_core_functions::manifest::{
+    BlockingAuthEvent, BlockingAuthSelection, BlockingAuthSelectionError, BlockingAuthTokenPolicy,
     DocumentEvent, FunctionGeneration, FunctionManifest, FunctionSpec, ManifestError, ObjectEvent,
     PlatformOptions, Trigger, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
@@ -164,6 +165,132 @@ fn manifests_match_firestore_and_storage_triggers() {
         ignored: Vec::new(),
     };
     assert!(dup.validate().is_err());
+}
+
+#[test]
+fn blocking_auth_selection_is_resolved_against_discovered_event_and_region() {
+    let manifest = FunctionManifest {
+        functions: vec![
+            function(
+                "createGuard",
+                Trigger::BlockingAuth {
+                    event: BlockingAuthEvent::BeforeCreate,
+                    token_policy: BlockingAuthTokenPolicy::default(),
+                },
+            ),
+            {
+                let mut spec = function(
+                    "signInGuard",
+                    Trigger::BlockingAuth {
+                        event: BlockingAuthEvent::BeforeSignIn,
+                        token_policy: BlockingAuthTokenPolicy::ALL,
+                    },
+                );
+                spec.region = "europe-west1".to_owned();
+                spec
+            },
+        ],
+        ignored: Vec::new(),
+    };
+
+    let target = manifest
+        .blocking_auth_target(
+            BlockingAuthEvent::BeforeSignIn,
+            &BlockingAuthSelection::Explicit {
+                function: "signInGuard".to_owned(),
+                region: Some("europe-west1".to_owned()),
+            },
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(target.name, "signInGuard");
+
+    let inherited = manifest
+        .blocking_auth_target(
+            BlockingAuthEvent::BeforeCreate,
+            &BlockingAuthSelection::Discovery,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(inherited.name, "createGuard");
+    assert!(manifest
+        .blocking_auth_target(
+            BlockingAuthEvent::BeforeCreate,
+            &BlockingAuthSelection::Disabled,
+        )
+        .unwrap()
+        .is_none());
+
+    let wrong_region = manifest
+        .blocking_auth_target(
+            BlockingAuthEvent::BeforeSignIn,
+            &BlockingAuthSelection::Explicit {
+                function: "signInGuard".to_owned(),
+                region: Some("asia-northeast1".to_owned()),
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        wrong_region,
+        BlockingAuthSelectionError::RegionMismatch { .. }
+    ));
+}
+
+#[test]
+fn blocking_auth_selection_fails_closed_for_missing_or_wrong_event_targets() {
+    let manifest = FunctionManifest {
+        functions: vec![function("http", Trigger::http(false))],
+        ignored: Vec::new(),
+    };
+    let missing = manifest
+        .blocking_auth_target(
+            BlockingAuthEvent::BeforeCreate,
+            &BlockingAuthSelection::Explicit {
+                function: "missing".to_owned(),
+                region: None,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        missing,
+        BlockingAuthSelectionError::FunctionNotFound { .. }
+    ));
+
+    let wrong_event = manifest
+        .blocking_auth_target(
+            BlockingAuthEvent::BeforeCreate,
+            &BlockingAuthSelection::Explicit {
+                function: "http".to_owned(),
+                region: None,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        wrong_event,
+        BlockingAuthSelectionError::WrongEvent { .. }
+    ));
+}
+
+#[test]
+fn blocking_auth_token_policy_intersects_global_switch_and_request_presence() {
+    let requested = BlockingAuthTokenPolicy::ALL;
+    let present = fireemu_core_functions::manifest::BlockingAuthCredentialPresence {
+        access_token: true,
+        id_token: false,
+        refresh_token: true,
+    };
+    assert_eq!(
+        requested.effective(true, present),
+        BlockingAuthTokenPolicy {
+            access_token: true,
+            id_token: false,
+            refresh_token: true,
+        }
+    );
+    assert_eq!(
+        requested.effective(false, present),
+        BlockingAuthTokenPolicy::default()
+    );
 }
 
 #[test]

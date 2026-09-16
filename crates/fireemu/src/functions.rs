@@ -2649,6 +2649,7 @@ pub struct BlockingAuthBridge {
     runtime: Arc<FunctionsRuntime>,
     deadline: Duration,
     forward_inbound_credentials: bool,
+    selections: fireemu_core_functions::manifest::BlockingAuthSelections,
 }
 
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
@@ -2699,9 +2700,19 @@ fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
 
 fn narrow_blocking_auth_credentials(
     context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    globally_enabled: bool,
     policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
 ) -> fireemu_adapter_http::identity_toolkit::AuthBlockingContext {
     let mut narrowed = context.clone();
+    let available = context.credential.as_ref().map_or_else(
+        fireemu_core_functions::manifest::BlockingAuthCredentialPresence::default,
+        |credential| fireemu_core_functions::manifest::BlockingAuthCredentialPresence {
+            access_token: credential.access_token.is_some(),
+            id_token: credential.id_token.is_some(),
+            refresh_token: credential.refresh_token.is_some(),
+        },
+    );
+    let policy = policy.effective(globally_enabled, available);
     if let Some(credential) = &mut narrowed.credential {
         if !policy.access_token {
             credential.access_token = None;
@@ -2714,6 +2725,25 @@ fn narrow_blocking_auth_credentials(
         }
     }
     narrowed
+}
+
+fn blocking_auth_selection_accepts_target(
+    selection: &fireemu_core_functions::manifest::BlockingAuthSelection,
+    target: Option<(&str, &str)>,
+) -> bool {
+    match selection {
+        fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => target.is_some(),
+        fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => false,
+        fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { function, region } => {
+            let Some((actual_function, actual_region)) = target else {
+                return false;
+            };
+            actual_function == function
+                && region
+                    .as_deref()
+                    .is_none_or(|expected| expected == actual_region)
+        }
+    }
 }
 
 fn blocking_auth_context_json(
@@ -2879,11 +2909,11 @@ impl BlockingAuthBridge {
     /// Builds the production bridge with Identity Platform's seven-second deadline.
     #[must_use]
     pub fn new(runtime: Arc<FunctionsRuntime>) -> Self {
-        Self {
+        Self::new_with_selection(
             runtime,
-            deadline: BLOCKING_AUTH_DEADLINE,
-            forward_inbound_credentials: false,
-        }
+            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery,
+            false,
+        )
     }
 
     /// Builds a bridge with the explicit raw credential forwarding policy.
@@ -2895,11 +2925,50 @@ impl BlockingAuthBridge {
         if !forward_inbound_credentials {
             return Self::new(runtime);
         }
+        Self::new_with_selection(
+            runtime,
+            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery,
+            forward_inbound_credentials,
+        )
+    }
+
+    /// Builds a bridge with an explicit local selection for the synchronous Auth hooks.
+    ///
+    /// The selection must be resolved against the discovered manifest before the bridge is
+    /// installed. The bridge repeats the selected target check for every invocation so a source
+    /// reload cannot silently switch Auth to another function. The underlying Functions runtime
+    /// remains responsible for runner generations and admission.
+    #[must_use]
+    pub fn new_with_selections(
+        runtime: Arc<FunctionsRuntime>,
+        selections: fireemu_core_functions::manifest::BlockingAuthSelections,
+        forward_inbound_credentials: bool,
+    ) -> Self {
         Self {
             runtime,
             deadline: BLOCKING_AUTH_DEADLINE,
             forward_inbound_credentials,
+            selections,
         }
+    }
+
+    /// Builds a bridge applying the same selection to both supported Auth events.
+    ///
+    /// Prefer [`Self::new_with_selections`] when `beforeCreate` and `beforeSignIn` differ.
+    #[must_use]
+    pub fn new_with_selection(
+        runtime: Arc<FunctionsRuntime>,
+        selection: fireemu_core_functions::manifest::BlockingAuthSelection,
+        forward_inbound_credentials: bool,
+    ) -> Self {
+        Self::new_with_selections(
+            runtime,
+            fireemu_core_functions::manifest::BlockingAuthSelections {
+                before_create: selection.clone(),
+                before_sign_in: selection,
+            },
+            forward_inbound_credentials,
+        )
     }
 
     #[cfg(test)]
@@ -2908,7 +2977,34 @@ impl BlockingAuthBridge {
             runtime,
             deadline,
             forward_inbound_credentials: false,
+            selections: fireemu_core_functions::manifest::BlockingAuthSelections::default(),
         }
+    }
+
+    fn selection_for(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> &fireemu_core_functions::manifest::BlockingAuthSelection {
+        // The first version of the local config exposes one trigger map for both supported
+        // events through the bridge. Keeping this accessor event-shaped leaves the call site
+        // ready for per-event selections without changing the admission boundary.
+        self.selections.for_event(_event)
+    }
+
+    fn require_selected_target(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        target: &fireemu_adapter_functions::runtime::BlockingAuthTarget,
+    ) -> Result<(), fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+        if !blocking_auth_selection_accepts_target(
+            self.selection_for(event),
+            Some((&target.function, &target.region)),
+        ) {
+            return Err(
+                fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::unhandled(),
+            );
+        }
+        Ok(())
     }
 
     fn invoke_for_namespace(
@@ -2940,14 +3036,33 @@ impl BlockingAuthBridge {
     > {
         use fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure;
 
+        if matches!(
+            self.selection_for(event),
+            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled
+        ) {
+            return Ok(None);
+        }
+
         let admitted = self
             .runtime
             .try_admit_blocking_auth(event)
             .map_err(|_| BlockingFunctionFailure::unhandled())?;
         let Some((target, _admission)) = admitted else {
-            return Ok(None);
+            return if matches!(
+                self.selection_for(event),
+                fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { .. }
+            ) {
+                Err(BlockingFunctionFailure::unhandled())
+            } else {
+                Ok(None)
+            };
         };
-        let context = narrow_blocking_auth_credentials(context, target.token_policy);
+        self.require_selected_target(event, &target)?;
+        let context = narrow_blocking_auth_credentials(
+            context,
+            self.forward_inbound_credentials,
+            target.token_policy,
+        );
         let user_json = blocking_auth_user_json(user, tenant);
         let event_context = blocking_auth_context_json(
             project,
@@ -3019,7 +3134,15 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
     }
 
     fn handles(&self, event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
-        self.runtime.handles_blocking_auth(event)
+        match self.selection_for(event) {
+            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => false,
+            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => {
+                self.runtime.handles_blocking_auth(event)
+            }
+            // Explicit configuration is a fail-closed contract. Invocation turns a missing
+            // live target into an error instead of allowing Auth to proceed.
+            fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { .. } => true,
+        }
     }
 
     fn forward_inbound_credentials(&self) -> bool {
@@ -3591,6 +3714,7 @@ mod tests {
         for bits in 0_u8..8 {
             let narrowed = super::narrow_blocking_auth_credentials(
                 &context,
+                true,
                 BlockingAuthTokenPolicy {
                     access_token: bits & 1 != 0,
                     id_token: bits & 2 != 0,
@@ -3603,6 +3727,51 @@ mod tests {
             assert_eq!(credential.refresh_token.is_some(), bits & 4 != 0);
             assert_eq!(credential.claims, Some(json!({"sub": "provider-user"})));
         }
+
+        let mut absent = context.clone();
+        absent.credential.as_mut().unwrap().id_token = None;
+        let narrowed =
+            super::narrow_blocking_auth_credentials(&absent, true, BlockingAuthTokenPolicy::ALL);
+        let credential = narrowed.credential.unwrap();
+        assert!(credential.access_token.is_some());
+        assert!(credential.id_token.is_none());
+        assert!(credential.refresh_token.is_some());
+
+        let narrowed =
+            super::narrow_blocking_auth_credentials(&context, false, BlockingAuthTokenPolicy::ALL);
+        let credential = narrowed.credential.unwrap();
+        assert!(credential.access_token.is_none());
+        assert!(credential.id_token.is_none());
+        assert!(credential.refresh_token.is_none());
+    }
+
+    #[test]
+    fn blocking_auth_selection_rejects_missing_or_changed_live_target() {
+        use fireemu_core_functions::manifest::BlockingAuthSelection;
+
+        let selection = BlockingAuthSelection::Explicit {
+            function: "guardSignIn".to_owned(),
+            region: Some("europe-west1".to_owned()),
+        };
+        assert!(super::blocking_auth_selection_accepts_target(
+            &selection,
+            Some(("guardSignIn", "europe-west1"))
+        ));
+        assert!(!super::blocking_auth_selection_accepts_target(
+            &selection, None
+        ));
+        assert!(!super::blocking_auth_selection_accepts_target(
+            &selection,
+            Some(("otherGuard", "europe-west1"))
+        ));
+        assert!(!super::blocking_auth_selection_accepts_target(
+            &selection,
+            Some(("guardSignIn", "us-central1"))
+        ));
+        assert!(!super::blocking_auth_selection_accepts_target(
+            &BlockingAuthSelection::Disabled,
+            Some(("guardSignIn", "europe-west1"))
+        ));
     }
 
     #[test]

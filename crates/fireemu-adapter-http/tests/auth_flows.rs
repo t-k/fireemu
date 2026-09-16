@@ -3410,14 +3410,15 @@ fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
     base.registry = Some(registry.clone());
     let state = base;
     let config_path =
-        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy";
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy,client.permissions.disabledUserSignup";
     let enabled = handle_with(
         &state,
         "PATCH",
         config_path,
         &owner(),
         &json!({
-            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true},
+            "client": {"permissions": {"disabledUserSignup": true}}
         }),
     );
     assert_eq!(enabled.status, 200, "{}", enabled.body);
@@ -3430,6 +3431,14 @@ fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
         &json!({"displayName": "inherited config tenant"}),
     );
     assert_eq!(created.status, 200, "{}", created.body);
+    assert_eq!(
+        created.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+    assert_eq!(
+        created.body["client"]["permissions"]["disabledUserSignup"],
+        true
+    );
     let tenant = created.body["name"]
         .as_str()
         .unwrap()
@@ -3439,7 +3448,50 @@ fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
     assert!(registry
         .tenant_store("demo-app", tenant)
         .and_then(|store| store.lock().ok().map(|store| store.config()))
-        .is_some_and(|config| config.enable_improved_email_privacy));
+        .is_some_and(|config| {
+            config.enable_improved_email_privacy && config.disabled_user_signup
+        }));
+    assert!(registry
+        .tenant_metadata("demo-app", tenant)
+        .is_some_and(|metadata| {
+            metadata.enable_improved_email_privacy && metadata.disabled_user_signup
+        }));
+    let read = handle_with(
+        &state,
+        "GET",
+        &format!("/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/{tenant}"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(read.status, 200, "{}", read.body);
+    assert_eq!(
+        read.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+    assert_eq!(
+        read.body["client"]["permissions"]["disabledUserSignup"],
+        true
+    );
+
+    let explicit_false = handle_with(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
+        &owner(),
+        &json!({
+            "client": {"permissions": {"disabledUserSignup": false}},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}
+        }),
+    );
+    assert_eq!(explicit_false.status, 200, "{}", explicit_false.body);
+    assert_eq!(
+        explicit_false.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        false
+    );
+    assert_eq!(
+        explicit_false.body["client"]["permissions"]["disabledUserSignup"],
+        false
+    );
 }
 
 #[test]

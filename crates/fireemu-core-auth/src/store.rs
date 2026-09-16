@@ -3961,6 +3961,20 @@ impl TenantMetadataPatch {
     }
 }
 
+impl TenantMetadata {
+    /// Keeps the tenant's published metadata aligned with its effective runtime configuration.
+    ///
+    /// These fields are read by the adapter before an end-user operation, while the same values
+    /// are enforced by the tenant store. Keeping them in sync is part of the publication
+    /// boundary; omitted settings inherit from the project, whereas an explicit `false` remains
+    /// false in the candidate passed by the caller.
+    fn apply_effective_config(&mut self, config: ProjectAuthConfig) {
+        self.disabled_user_signup = config.disabled_user_signup;
+        self.disabled_user_deletion = config.disabled_user_deletion;
+        self.enable_improved_email_privacy = config.enable_improved_email_privacy;
+    }
+}
+
 impl AuthRegistry {
     fn next_lifecycle_epoch(&self) -> Option<AuthLifecycleEpoch> {
         let incarnation = self.lifecycle_incarnation?;
@@ -5136,6 +5150,8 @@ impl AuthRegistry {
         if let Some(patch) = self.tenant_config_overrides.lock().ok()?.get(&key).copied() {
             patch.apply_to_metadata(&mut tenant_metadata);
         }
+        let effective_config = store.lock().ok()?.config();
+        tenant_metadata.apply_effective_config(effective_config);
         match self.publish_tenant(key, store, tenant_metadata) {
             TenantPublication::Published(store)
             | TenantPublication::Existing {
@@ -5202,6 +5218,7 @@ impl AuthRegistry {
             let mut next_config = store_guard.config();
             patch.apply_to_project_config(&mut next_config);
             store_guard.set_config(next_config);
+            next_metadata.apply_effective_config(next_config);
             let next_policy = password_policy
                 .clone()
                 .unwrap_or_else(|| store_guard.password_policy.clone());
@@ -5308,6 +5325,7 @@ impl AuthRegistry {
             .unwrap_or_else(|| store.password_policy.clone());
         let mut next_config = store.config();
         patch.apply_to_project_config(&mut next_config);
+        next_metadata.apply_effective_config(next_config);
 
         *metadata.get_mut(&key)? = next_metadata.clone();
         store.set_config(next_config);
@@ -5648,7 +5666,7 @@ impl AuthRegistry {
         }
         if !patch.is_empty() {
             let tenants = self.tenants.lock().ok()?;
-            let metadata = self.tenant_metadata.lock().ok()?;
+            let mut metadata = self.tenant_metadata.lock().ok()?;
             if tenants
                 .keys()
                 .filter(|(candidate, _)| candidate == project)
@@ -5661,8 +5679,14 @@ impl AuthRegistry {
             let tenant_stores = tenants
                 .iter()
                 .filter(|((candidate, _), _)| candidate == project)
-                .map(|(_, store)| store)
+                .map(|(key, store)| (key.clone(), store))
                 .collect::<Vec<_>>();
+            if tenant_stores
+                .iter()
+                .any(|(key, _)| !metadata.contains_key(key))
+            {
+                return None;
+            }
             let mut overrides = match password_policy.as_ref() {
                 Some(_) => Some(self.project_password_policy_overrides.lock().ok()?),
                 None => None,
@@ -5670,12 +5694,15 @@ impl AuthRegistry {
             let mut parent = parent.lock().ok()?;
             let config = patch.apply_to(parent.config());
             let mut tenant_guards = Vec::with_capacity(tenant_stores.len());
-            for store in tenant_stores {
+            for (_, store) in &tenant_stores {
                 tenant_guards.push(store.lock().ok()?);
             }
             parent.set_config(config);
             for tenant in &mut tenant_guards {
                 tenant.set_config(config);
+            }
+            for (key, _) in &tenant_stores {
+                metadata.get_mut(key)?.apply_effective_config(config);
             }
             if let Some(password_policy) = password_policy {
                 parent.set_password_policy(password_policy.clone());
@@ -6687,13 +6714,136 @@ mod compatibility_routing_tests {
                 None,
             )
             .unwrap();
+        let runtime = registry
+            .tenant_store("demo-app", &tenant)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .config();
+        let metadata = registry.tenant_metadata("demo-app", &tenant).unwrap();
+        assert!(runtime.enable_improved_email_privacy);
+        assert_eq!(
+            metadata.enable_improved_email_privacy,
+            runtime.enable_improved_email_privacy
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn tenant_effective_config_preserves_explicit_false_and_project_isolation() {
+        let default = store("demo-app", 1);
+        let registry = AuthRegistry::new("demo-app", default.clone());
+        registry.ensure_tenant("demo-app", "existing").unwrap();
+        let inherited = super::ProjectAuthConfig {
+            enable_improved_email_privacy: true,
+            disabled_user_signup: true,
+            disabled_user_deletion: true,
+            ..super::ProjectAuthConfig::default()
+        };
+        assert!(registry.set_project_config("demo-app", inherited));
+        let existing_config = registry
+            .tenant_store("demo-app", "existing")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .config();
+        let existing_metadata = registry.tenant_metadata("demo-app", "existing").unwrap();
+        assert_eq!(
+            existing_metadata.disabled_user_signup,
+            existing_config.disabled_user_signup
+        );
+        assert_eq!(
+            existing_metadata.disabled_user_deletion,
+            existing_config.disabled_user_deletion
+        );
+        assert_eq!(
+            existing_metadata.enable_improved_email_privacy,
+            existing_config.enable_improved_email_privacy
+        );
+
+        let (inherited_tenant, _, _) = registry
+            .create_tenant_with_password_policy(
+                "demo-app",
+                TenantMetadata::default(),
+                TenantMetadataPatch::default(),
+                None,
+            )
+            .unwrap();
+        let inherited_store = registry
+            .tenant_store("demo-app", &inherited_tenant)
+            .unwrap();
+        let inherited_store_config = inherited_store.lock().unwrap().config();
+        let inherited_metadata = registry
+            .tenant_metadata("demo-app", &inherited_tenant)
+            .unwrap();
+        assert_eq!(
+            inherited_metadata.enable_improved_email_privacy,
+            inherited_store_config.enable_improved_email_privacy
+        );
+        assert_eq!(
+            inherited_metadata.disabled_user_signup,
+            inherited_store_config.disabled_user_signup
+        );
+        assert_eq!(
+            inherited_metadata.disabled_user_deletion,
+            inherited_store_config.disabled_user_deletion
+        );
+
+        let (explicit_false_tenant, _, _) = registry
+            .create_tenant_with_password_policy(
+                "demo-app",
+                TenantMetadata::default(),
+                TenantMetadataPatch {
+                    enable_improved_email_privacy: Some(false),
+                    disabled_user_signup: Some(false),
+                    disabled_user_deletion: Some(false),
+                    ..TenantMetadataPatch::default()
+                },
+                None,
+            )
+            .unwrap();
+        let explicit_false_store = registry
+            .tenant_store("demo-app", &explicit_false_tenant)
+            .unwrap();
+        let explicit_false_config = explicit_false_store.lock().unwrap().config();
+        let explicit_false_metadata = registry
+            .tenant_metadata("demo-app", &explicit_false_tenant)
+            .unwrap();
+        assert_eq!(explicit_false_config, super::ProjectAuthConfig::default());
+        assert_eq!(
+            explicit_false_metadata.enable_improved_email_privacy,
+            explicit_false_config.enable_improved_email_privacy
+        );
+        assert_eq!(
+            explicit_false_metadata.disabled_user_signup,
+            explicit_false_config.disabled_user_signup
+        );
+        assert_eq!(
+            explicit_false_metadata.disabled_user_deletion,
+            explicit_false_config.disabled_user_deletion
+        );
+
+        let other = AuthStore::new("other-project", SplitMix64::new(2), TotpPolicy::default());
+        assert!(registry.register("other-project", other));
+        let (other_tenant, _, _) = registry
+            .create_tenant_with_password_policy(
+                "other-project",
+                TenantMetadata::default(),
+                TenantMetadataPatch::default(),
+                None,
+            )
+            .unwrap();
+        let other_store = registry
+            .tenant_store("other-project", &other_tenant)
+            .unwrap();
+        assert_eq!(
+            other_store.lock().unwrap().config(),
+            super::ProjectAuthConfig::default()
+        );
         assert!(
-            registry
-                .tenant_store("demo-app", &tenant)
+            !registry
+                .tenant_metadata("other-project", &other_tenant)
                 .unwrap()
-                .lock()
-                .unwrap()
-                .config()
                 .enable_improved_email_privacy
         );
     }

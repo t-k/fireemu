@@ -9197,6 +9197,119 @@ fn scoped_tenant_selectors_must_match_body_and_query_before_auth_work() {
 }
 
 #[test]
+fn query_tenant_selector_must_match_id_token_before_auth_work() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    for tenant in ["tenant-a", "tenant-b"] {
+        registry.ensure_tenant("demo-app", tenant).unwrap();
+    }
+    s.registry = Some(registry.clone());
+
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "tenantId": "tenant-a",
+            "email": "query-tenant-owner@example.com",
+            "password": "password1"
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let id_token = created["idToken"].as_str().unwrap();
+
+    let (status, default_created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "query-tenant-project-owner@example.com",
+            "password": "password1"
+        }),
+    );
+    assert_eq!(status, 200, "{default_created}");
+    let project_id_token = default_created["idToken"].as_str().unwrap();
+
+    let before = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/tenant-a/accounts:lookup"),
+        &json!({"localId": [created["localId"].clone()]}),
+    );
+    assert_eq!(before.0, 200, "{}", before.1);
+
+    let default_before = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [default_created["localId"].clone()]}),
+    );
+    assert_eq!(default_before.0, 200, "{}", default_before.1);
+
+    let (status, project_refused) = post(
+        &s,
+        &format!("{V1}/accounts:update?key=fake-api-key&tenantId=tenant-a"),
+        &json!({
+            "idToken": project_id_token,
+            "displayName": "must-not-apply",
+            "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 400, "{project_refused}");
+    assert_eq!(project_refused["error"]["message"], "TENANT_ID_MISMATCH");
+    assert!(project_refused.get("idToken").is_none());
+    assert!(project_refused.get("refreshToken").is_none());
+
+    let default_after = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [default_created["localId"].clone()]}),
+    );
+    assert_eq!(default_after.0, 200, "{}", default_after.1);
+    assert_eq!(default_after.1, default_before.1);
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:update?tenantId=tenant-b"),
+        &json!({
+            "idToken": id_token,
+            "displayName": "must-not-apply",
+            "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+    assert!(refused.get("idToken").is_none());
+    assert!(refused.get("refreshToken").is_none());
+
+    let after = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/tenant-a/accounts:lookup"),
+        &json!({"localId": [created["localId"].clone()]}),
+    );
+    assert_eq!(after.0, 200, "{}", after.1);
+    assert_eq!(after.1, before.1);
+    assert!(registry
+        .tenant_store("demo-app", "tenant-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_email("query-tenant-owner@example.com")
+        .is_none());
+
+    let (status, same_tenant) = post(
+        &s,
+        &format!("{V1}/accounts:lookup?tenantId=tenant-a"),
+        &json!({"idToken": id_token}),
+    );
+    assert_eq!(status, 200, "{same_tenant}");
+    assert_eq!(same_tenant["users"][0]["localId"], created["localId"]);
+}
+
+#[test]
 fn conflicting_body_and_query_tenants_fail_without_mutation() {
     let mut s = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(

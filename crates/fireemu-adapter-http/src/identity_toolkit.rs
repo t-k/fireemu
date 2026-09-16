@@ -5444,6 +5444,33 @@ fn select_store(
             return Err(error(400, "TENANT_ID_MISMATCH"));
         }
     }
+    let id_token_target = str_field(body, "idToken").and_then(|token| {
+        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+        fireemu_core_auth::jwt::decode_token(token, signer.as_deref())
+            .ok()
+            .and_then(|d| {
+                let audience = d
+                    .payload
+                    .get("aud")
+                    .and_then(fireemu_core_types::json::JsonValue::as_str)
+                    .map(str::to_owned)?;
+                let tenant = d
+                    .payload
+                    .get("firebase")
+                    .and_then(|firebase| firebase.get("tenant"))
+                    .and_then(fireemu_core_types::json::JsonValue::as_str)
+                    .map(str::to_owned);
+                Some((audience, tenant))
+            })
+    });
+    if let Some((_, token_tenant)) = id_token_target.as_ref() {
+        if requested_tenant.is_some_and(|requested| token_tenant.as_deref() != Some(requested)) {
+            // A query tenant is an explicit namespace assertion. Do not let a tenant
+            // embedded in the ID token override it, and do not let a project-scoped token
+            // silently fall back to the project store for a tenant request.
+            return Err(error(400, "TENANT_ID_MISMATCH"));
+        }
+    }
     let Some(registry) = &state.registry else {
         if requested_tenant.is_some()
             || routes::scoped_target(path).is_some_and(|(_, tenant)| tenant.is_some())
@@ -5530,33 +5557,14 @@ fn select_store(
             }
         }
     }
-    if let Some(token) = str_field(body, "idToken") {
-        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        let target = fireemu_core_auth::jwt::decode_token(token, signer.as_deref())
-            .ok()
-            .and_then(|d| {
-                let audience = d
-                    .payload
-                    .get("aud")
-                    .and_then(fireemu_core_types::json::JsonValue::as_str)
-                    .map(str::to_owned)?;
-                let tenant = d
-                    .payload
-                    .get("firebase")
-                    .and_then(|firebase| firebase.get("tenant"))
-                    .and_then(fireemu_core_types::json::JsonValue::as_str)
-                    .map(str::to_owned);
-                Some((audience, tenant))
-            });
-        if let Some((project, tenant)) = target {
-            if let Some(store) = tenant
-                .as_deref()
-                .and_then(|tenant| registry.tenant_store(&project, tenant))
-                .or_else(|| registry.store_for(&project))
-                .or_else(|| registry.routed_store_for(&project))
-            {
-                return Ok(store);
-            }
+    if let Some((project, tenant)) = id_token_target {
+        if let Some(store) = tenant
+            .as_deref()
+            .and_then(|tenant| registry.tenant_store(&project, tenant))
+            .or_else(|| registry.store_for(&project))
+            .or_else(|| registry.routed_store_for(&project))
+        {
+            return Ok(store);
         }
     }
     if let Some(token) = str_field(body, "refresh_token") {

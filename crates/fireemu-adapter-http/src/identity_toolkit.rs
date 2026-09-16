@@ -4452,7 +4452,7 @@ fn select_store(
     body: &Value,
     resolution: routes::Resolution<'_>,
 ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
-    let (api_key, query_tenant) = query_selectors(query);
+    let (api_key, query_tenant) = query_selectors(query)?;
     let body_tenant = str_field(body, "tenantId");
     if let Some((body_tenant, query_tenant)) = body_tenant.as_ref().zip(query_tenant.as_ref()) {
         if body_tenant != query_tenant {
@@ -4609,19 +4609,27 @@ fn select_store(
 /// The API key (`key`, or the action link's `apiKey`) and the action link's `tenantId` a
 /// query carries, decoded. Keys are declared from [A-Za-z0-9._-], but a client may still
 /// percent-encode them.
-fn query_selectors(query: Option<&str>) -> (Option<String>, Option<String>) {
+fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String>), JsonResponse> {
     let decode = |value: &str| {
         fireemu_core_types::codec::percent_decode(value, fireemu_core_types::codec::PlusMode::Space)
     };
-    let find = |names: &[&str]| {
-        query
-            .and_then(|q| {
-                q.split('&')
-                    .find_map(|kv| names.iter().find_map(|name| kv.strip_prefix(name)))
-            })
-            .map(decode)
-    };
-    (find(&["key=", "apiKey="]), find(&["tenantId="]))
+    let mut api_key = None;
+    let mut tenant = None;
+    for kv in query.unwrap_or("").split('&').filter(|kv| !kv.is_empty()) {
+        let Some((name, value)) = kv.split_once('=') else {
+            continue;
+        };
+        let slot = match name {
+            "key" | "apiKey" => &mut api_key,
+            "tenantId" => &mut tenant,
+            _ => continue,
+        };
+        if slot.is_some() {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        *slot = Some(decode(value));
+    }
+    Ok((api_key, tenant))
 }
 
 fn custom_token_uid(body: &Value) -> Option<String> {

@@ -8301,3 +8301,71 @@ fn conflicting_body_and_query_tenants_fail_without_mutation() {
         );
     }
 }
+
+#[test]
+fn duplicate_query_selectors_fail_closed_without_mutation() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    let tenant = registry.tenant_store("demo-app", "tenant-a").unwrap();
+    s.registry = Some(registry.clone());
+
+    for query in [
+        "tenantId=tenant-a&tenantId=tenant-a",
+        "tenantId=tenant-a&tenantId=tenant-b",
+        "tenantId=tenant-b&tenantId=tenant-a",
+    ] {
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:signUp?{query}"),
+            &json!({
+                "email": "duplicate-query-tenant@example.com",
+                "password": "password1",
+            }),
+        );
+        assert_eq!(status, 400, "{query}: {refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_ARGUMENT", "{query}");
+        assert!(s
+            .store
+            .lock()
+            .unwrap()
+            .user_by_email("duplicate-query-tenant@example.com")
+            .is_none());
+        assert!(tenant
+            .lock()
+            .unwrap()
+            .user_by_email("duplicate-query-tenant@example.com")
+            .is_none());
+    }
+
+    for query in [
+        "key=fake-api-key&key=fake-api-key",
+        "key=fake-api-key&apiKey=fake-api-key",
+        "apiKey=fake-api-key&key=fake-api-key",
+        "key=first-key&apiKey=second-key",
+        "apiKey=second-key&key=first-key",
+    ] {
+        let response = admin(
+            &s,
+            "GET",
+            &format!("{V2}/passwordPolicy?{query}"),
+            &Value::Null,
+        );
+        assert_eq!(response.0, 400, "{query}: {}", response.1);
+        assert_eq!(
+            response.1["error"]["message"], "INVALID_ARGUMENT",
+            "{query}"
+        );
+    }
+
+    let policy = admin(
+        &s,
+        "GET",
+        &format!("{V2}/passwordPolicy?tenantId=tenant-a"),
+        &Value::Null,
+    );
+    assert_eq!(policy.0, 200, "{}", policy.1);
+}

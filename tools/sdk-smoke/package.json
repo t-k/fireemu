@@ -28,8 +28,10 @@
     "smoke:pending-switch": "node pending-switch.mjs",
     "smoke:auth-config": "node auth-config-sdk.mjs",
     "smoke:password-policy": "node password-policy-sdk.mjs",
+    "smoke:auth-settings-oracle": "node auth-settings-sdk-oracle.mjs",
     "test:sdk-pins": "node --test sdk-pins.test.mjs",
     "test:password-policy": "node --test password-policy-sdk.test.mjs",
+    "test:auth-settings-oracle": "node --test auth-settings-sdk-oracle.test.mjs",
     "smoke:server-timestamp-query": "node server-timestamp-transaction-query.mjs",
     "smoke:listener-replacement": "node listener-replacement.mjs",
     "test:listener-runtime": "node --test listener-runtime-compat.test.mjs"

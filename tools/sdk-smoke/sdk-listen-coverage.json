@@ -71,6 +71,18 @@
       ]
     },
     {
+      "id": "AUTH-CONFIG-SDK.integrated-settings-oracle-shadow",
+      "runner": "auth-settings-sdk-oracle.mjs",
+      "transport": "firebase-auth-client-sdk-local-shadow",
+      "obligations": [
+        "duplicate email linking collision and no mutation on refusal",
+        "client/Admin permission boundary and email privacy projection",
+        "blocking selection and token forwarding principal binding",
+        "bounded signup quota simulation with complete cleanup",
+        "production and saved-reference evidence remain unobserved"
+      ]
+    },
+    {
       "id": "AUTH-FS-CROSS.auth-switch-rules-listen",
       "runner": "pending-switch.mjs",
       "transport": "firebase-auth-and-firestore",

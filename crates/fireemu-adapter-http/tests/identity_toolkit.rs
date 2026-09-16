@@ -171,6 +171,10 @@ struct ClearingClaimsHook;
 struct OverlappingClaimHook;
 
 impl AuthBlockingHook for OverlappingClaimHook {
+    fn blocking_auth_project(&self) -> Option<&str> {
+        Some("worker-alpha")
+    }
+
     fn invoke(
         &self,
         event: BlockingAuthEvent,

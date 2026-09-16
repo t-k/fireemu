@@ -3779,6 +3779,7 @@ pub struct AuthExportSnapshot {
     default: AuthStore,
     tenants: Vec<(String, AuthStore)>,
     tenant_metadata: BTreeMap<String, TenantMetadata>,
+    tenant_config_overrides: BTreeMap<String, AuthNamespaceConfigPatch>,
 }
 
 impl AuthExportSnapshot {
@@ -3806,6 +3807,16 @@ impl AuthExportSnapshot {
     #[must_use]
     pub fn tenant_metadata(&self, tenant: &str) -> Option<&TenantMetadata> {
         self.tenant_metadata.get(tenant)
+    }
+
+    /// The explicitly configured non-password settings for a tenant, if any.
+    ///
+    /// An absent value means the tenant inherits the project configuration. Effective values
+    /// are intentionally not returned here: exporting those as explicit overrides would change
+    /// the behavior of a later project update after import.
+    #[must_use]
+    pub fn tenant_config_override(&self, tenant: &str) -> Option<AuthNamespaceConfigPatch> {
+        self.tenant_config_overrides.get(tenant).copied()
     }
 }
 
@@ -4996,7 +5007,38 @@ impl AuthRegistry {
         default: AuthStore,
         tenants: Vec<(String, AuthStore, TenantMetadata)>,
     ) -> Result<(), &'static str> {
+        self.replace_default_scope_with_config_overrides(
+            project,
+            default,
+            tenants,
+            &BTreeMap::new(),
+        )
+    }
+
+    /// Atomically replaces the default project and imported tenants, restoring the explicit
+    /// non-password settings that were serialized for each tenant. A missing entry preserves
+    /// inheritance from the replacement project configuration.
+    #[allow(clippy::too_many_lines)]
+    pub fn replace_default_scope_with_config_overrides(
+        &self,
+        project: &str,
+        default: AuthStore,
+        tenants: Vec<(String, AuthStore, TenantMetadata)>,
+        config_overrides: &BTreeMap<String, AuthNamespaceConfigPatch>,
+    ) -> Result<(), &'static str> {
         self.validate_default_scope_import_candidates(project, &default, &tenants)?;
+
+        let tenant_ids = tenants
+            .iter()
+            .map(|(tenant, _, _)| tenant.as_str())
+            .collect::<BTreeSet<_>>();
+        if config_overrides
+            .keys()
+            .any(|tenant| !tenant_ids.contains(tenant.as_str()))
+            || config_overrides.values().any(|patch| patch.is_empty())
+        {
+            return Err("invalid tenant Auth config override");
+        }
 
         let gate = self
             .operation_gate(project, None)
@@ -5027,6 +5069,10 @@ impl AuthRegistry {
             .tenant_runtime_config_overrides
             .lock()
             .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut startup_overrides = self
+            .tenant_config_overrides
+            .lock()
+            .map_err(|_| "tenant config override registry is poisoned")?;
         let current_tenant_keys = live_tenants
             .keys()
             .filter(|(candidate, _)| candidate == project)
@@ -5078,11 +5124,15 @@ impl AuthRegistry {
         *default_store = default;
         live_tenants.retain(|(candidate, _), _| candidate != project);
         live_metadata.retain(|(candidate, _), _| candidate != project);
+        startup_overrides.retain(|(candidate, _), _| candidate != project);
         runtime_overrides.retain(|(candidate, _), _| candidate != project);
         operation_gates.retain(|(candidate, tenant), _| candidate != project || tenant.is_empty());
         for (key, store, metadata) in replacement_stores {
             live_tenants.insert(key.clone(), store);
             live_metadata.insert(key, metadata);
+        }
+        for (tenant, patch) in config_overrides {
+            startup_overrides.insert((project.to_owned(), tenant.clone()), *patch);
         }
         self.membership_generation.fetch_add(1, Ordering::Release);
         Ok(())
@@ -5320,6 +5370,24 @@ impl AuthRegistry {
                     .ok_or("tenant metadata disappeared during Auth export")
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let startup_overrides = self
+            .tenant_config_overrides
+            .lock()
+            .map_err(|_| "tenant config override registry is poisoned")?;
+        let runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let tenant_config_overrides = tenant_entries
+            .iter()
+            .filter_map(|(tenant, _)| {
+                let key = (project.to_owned(), tenant.clone());
+                let startup = startup_overrides.get(&key).copied().unwrap_or_default();
+                let runtime = runtime_overrides.get(&key).copied().unwrap_or_default();
+                let merged = startup.merge(runtime);
+                (!merged.is_empty()).then_some((tenant.clone(), merged))
+            })
+            .collect();
         let snapshot = AuthExportSnapshot {
             project: project.to_owned(),
             default: default_guard.clone(),
@@ -5329,6 +5397,7 @@ impl AuthRegistry {
                 .map(|((tenant, _), store)| (tenant.clone(), (*store).clone()))
                 .collect(),
             tenant_metadata,
+            tenant_config_overrides,
         };
         Ok(Some(snapshot))
     }

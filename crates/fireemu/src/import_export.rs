@@ -584,6 +584,7 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
     };
     let default_config = default_candidate.config();
     let mut tenant_candidates = Vec::with_capacity(auth.tenants.len());
+    let mut imported_tenant_config_overrides = BTreeMap::new();
     for (tenant, users) in &auth.tenants {
         let mut candidate = endpoints
             .auth
@@ -600,18 +601,24 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         let mut metadata =
             settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
                 .and_then(|settings| settings.metadata.as_ref())
-                .map(imported_tenant_metadata)
-                .unwrap_or_else(|| TenantMetadata {
-                    allow_password_signup: true,
-                    enable_email_link_signin: true,
-                    enable_anonymous_user: true,
-                    ..TenantMetadata::default()
-                });
+                .map_or_else(
+                    || TenantMetadata {
+                        allow_password_signup: true,
+                        enable_email_link_signin: true,
+                        enable_anonymous_user: true,
+                        ..TenantMetadata::default()
+                    },
+                    imported_tenant_metadata,
+                );
         if let Some(settings) =
             settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
         {
             if let Some(config) = &settings.settings.config {
                 candidate.set_config(auth_config_from_settings(config, candidate.config()));
+                let config_patch = auth_namespace_config_patch(config);
+                if !config_patch.is_empty() {
+                    imported_tenant_config_overrides.insert(tenant.clone(), config_patch);
+                }
                 metadata.disabled_user_signup = config
                     .disabled_user_signup
                     .unwrap_or(metadata.disabled_user_signup);
@@ -706,10 +713,11 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         }
     }
 
-    if let Err(error) = endpoints.auth.replace_default_scope(
+    if let Err(error) = endpoints.auth.replace_default_scope_with_config_overrides(
         endpoints.project,
         default_candidate,
         tenant_candidates,
+        &imported_tenant_config_overrides,
     ) {
         if let (Some(snapshot), Some(blocking)) = (blocking_snapshot.as_ref(), endpoints.blocking) {
             if let Err(restore_error) = restore_blocking_settings_if_unchanged(
@@ -729,36 +737,6 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
             }
         }
         return Err(ArtifactError::new("auth", PathBuf::from(AUTH_PATH), error));
-    }
-    // A tenant settings entry is a point-in-time namespace snapshot. Preserve its explicitly
-    // serialized config as a tenant override after publication, including values equal to the
-    // project/default config. Without this registration, a later project PATCH would treat an
-    // imported tenant as inherited and silently replace the restored setting.
-    if let Some(settings) = auth
-        .auth_settings
-        .as_ref()
-        .filter(|settings| settings.project_id == endpoints.project)
-    {
-        for namespace in &settings.namespaces {
-            let Some(tenant) = namespace.tenant_id.as_deref() else {
-                continue;
-            };
-            let Some(config) = namespace.settings.config.as_ref() else {
-                continue;
-            };
-            let patch = auth_namespace_config_patch(config);
-            if !patch.is_empty()
-                && !endpoints
-                    .auth
-                    .register_tenant_config_override(endpoints.project, tenant, patch)
-            {
-                return Err(ArtifactError::new(
-                    "auth",
-                    settings_path.clone(),
-                    format!("cannot restore explicit config for tenant {tenant:?}"),
-                ));
-            }
-        }
     }
     Ok(())
 }
@@ -2173,12 +2151,12 @@ fn auth_namespace_config_patch(config: &AuthConfig) -> AuthNamespaceConfigPatch 
     }
 }
 
-fn exported_tenant_config(config: ProjectAuthConfig) -> AuthConfig {
+fn exported_tenant_config_patch(patch: AuthNamespaceConfigPatch) -> AuthConfig {
     AuthConfig {
-        allow_duplicate_emails: Some(config.allow_duplicate_emails),
-        enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
-        disabled_user_signup: Some(config.disabled_user_signup),
-        disabled_user_deletion: Some(config.disabled_user_deletion),
+        allow_duplicate_emails: patch.allow_duplicate_emails,
+        enable_improved_email_privacy: patch.enable_improved_email_privacy,
+        disabled_user_signup: patch.disabled_user_signup,
+        disabled_user_deletion: patch.disabled_user_deletion,
     }
 }
 
@@ -2205,7 +2183,6 @@ fn imported_tenant_metadata(metadata: &TenantMetadataRecord) -> TenantMetadata {
         disabled_user_signup: metadata.disabled_user_signup,
         disabled_user_deletion: metadata.disabled_user_deletion,
         enable_improved_email_privacy: metadata.enable_improved_email_privacy,
-        ..TenantMetadata::default()
     }
 }
 
@@ -2993,12 +2970,13 @@ fn export_auth(
                 policy: tenant_policy,
             });
         }
-        let tenant_config = tenant_store.config();
         let tenant_quota = tenant_store.signup_quota().config().clone();
         tenant_settings.push(AuthSettingsNamespace {
             tenant_id: Some(tenant.to_owned()),
             settings: AuthSettingsRecord {
-                config: Some(exported_tenant_config(tenant_config)),
+                config: snapshot
+                    .tenant_config_override(tenant)
+                    .map(exported_tenant_config_patch),
                 quota: (tenant_quota != SignupQuotaConfig::default())
                     .then(|| exported_quota_settings(&tenant_quota)),
                 blocking: None,
@@ -3988,6 +3966,9 @@ mod tests {
         source_auth
             .ensure_tenant("demo-app", "tenant-a")
             .expect("source tenant is created");
+        source_auth
+            .ensure_tenant("demo-app", "tenant-inherited")
+            .expect("inherited source tenant is created");
         // Every selected value equals the project/default value. The override's presence, not
         // a value difference, is the state this round trip must preserve.
         assert!(source_auth.register_tenant_config_override(
@@ -4033,6 +4014,14 @@ mod tests {
         .expect("Auth settings sidecar exists");
         assert!(sidecar.contains("\"config\""));
         assert!(sidecar.contains("\"allowDuplicateEmails\": false"));
+        let sidecar_value: serde_json::Value = serde_json::from_str(&sidecar).unwrap();
+        let inherited_entry = sidecar_value["namespaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["tenantId"] == "tenant-inherited")
+            .expect("inherited tenant sidecar entry");
+        assert!(inherited_entry["settings"]["config"].is_null());
 
         let destination_clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
         let destination_default = Arc::new(Mutex::new(AuthStore::new(
@@ -4074,10 +4063,20 @@ mod tests {
         let tenant = destination_auth
             .tenant_store("demo-app", "tenant-a")
             .expect("imported tenant exists");
+        let inherited_tenant = destination_auth
+            .tenant_store("demo-app", "tenant-inherited")
+            .expect("imported inherited tenant exists");
         assert!(
             !tenant
                 .lock()
                 .expect("imported tenant lock")
+                .config()
+                .allow_duplicate_emails
+        );
+        assert!(
+            !inherited_tenant
+                .lock()
+                .expect("inherited tenant lock")
                 .config()
                 .allow_duplicate_emails
         );
@@ -4095,6 +4094,13 @@ mod tests {
             !tenant
                 .lock()
                 .expect("restored tenant lock")
+                .config()
+                .allow_duplicate_emails
+        );
+        assert!(
+            inherited_tenant
+                .lock()
+                .expect("restored inherited tenant lock")
                 .config()
                 .allow_duplicate_emails
         );

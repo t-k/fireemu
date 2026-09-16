@@ -7498,6 +7498,85 @@ fn tenant_client_permissions_and_privacy_are_namespaced_and_atomic_with_password
 }
 
 #[test]
+fn tenant_create_rejects_malformed_settings_before_publishing_and_reads_back_supported_values() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    s.registry = Some(registry.clone());
+    let collection = format!("{V2}/projects/demo-app/tenants");
+    let malformed = [
+        json!({"client": true}),
+        json!({"client": null}),
+        json!({"client": {"permissions": "invalid"}}),
+        json!({"client": {"permissions": null}}),
+        json!({"client": {"permissions": {"disabledUserSignup": null}}}),
+        json!({"client": {"permissions": {"unknown": true}}}),
+        json!({"emailPrivacyConfig": []}),
+        json!({"emailPrivacyConfig": null}),
+        json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": null}}),
+        json!({"emailPrivacyConfig": {"unknown": true}}),
+        json!({"allowPasswordSignup": "true"}),
+        json!({"unknownField": true}),
+        json!({"passwordPolicyConfig": null}),
+    ];
+    for body in malformed {
+        let refused = handle_with(&s, "POST", &collection, &owner(), &body);
+        assert_eq!(refused.status, 400, "{}", refused.body);
+        assert!(registry.tenants("demo-app").is_empty(), "{body}");
+    }
+
+    let created = handle_with(
+        &s,
+        "POST",
+        &collection,
+        &owner(),
+        &json!({
+            "displayName": "Configured tenant",
+            "allowPasswordSignup": true,
+            "client": {"permissions": {
+                "disabledUserSignup": true,
+                "disabledUserDeletion": true
+            }},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true},
+            "passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": [{
+                    "customStrengthOptions": {"minPasswordLength": 12}
+                }]
+            }
+        }),
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+    let tenant = created.body["name"].as_str().unwrap().to_owned();
+    assert_eq!(
+        created.body["client"]["permissions"]["disabledUserSignup"],
+        true
+    );
+    assert_eq!(
+        created.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+    assert_eq!(
+        created.body["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["minPasswordLength"],
+        12
+    );
+    let read_path = format!("{V2}/{tenant}");
+    let read = handle_with(&s, "GET", &read_path, &owner(), &json!({}));
+    assert_eq!(read.status, 200, "{}", read.body);
+    assert_eq!(
+        read.body["client"]["permissions"]["disabledUserDeletion"],
+        true
+    );
+    assert_eq!(
+        read.body["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["minPasswordLength"],
+        12
+    );
+}
+
+#[test]
 fn signup_quota_is_enforced_for_end_user_creation_without_trusting_forwarded_headers() {
     use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
 

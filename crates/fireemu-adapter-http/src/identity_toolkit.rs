@@ -3837,43 +3837,88 @@ fn saml_json(name: &str, config: &InboundSamlProviderConfig) -> Value {
     body
 }
 
-fn tenant_metadata(body: &Value) -> fireemu_core_auth::store::TenantMetadata {
-    fireemu_core_auth::store::TenantMetadata {
-        display_name: str_field(body, "displayName").map(str::to_owned),
-        allow_password_signup: body
-            .get("allowPasswordSignup")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        enable_email_link_signin: body
-            .get("enableEmailLinkSignin")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        enable_anonymous_user: body
-            .get("enableAnonymousUser")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        disable_auth: body
-            .get("disableAuth")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        disabled_user_signup: body
-            .get("client")
-            .and_then(|value| value.get("permissions"))
-            .and_then(|value| value.get("disabledUserSignup"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        disabled_user_deletion: body
-            .get("client")
-            .and_then(|value| value.get("permissions"))
-            .and_then(|value| value.get("disabledUserDeletion"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        enable_improved_email_privacy: body
-            .get("emailPrivacyConfig")
-            .and_then(|value| value.get("enableImprovedEmailPrivacy"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+fn tenant_metadata(body: &Value) -> Result<fireemu_core_auth::store::TenantMetadata, JsonResponse> {
+    let object = body
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "displayName"
+                | "allowPasswordSignup"
+                | "enableEmailLinkSignin"
+                | "enableAnonymousUser"
+                | "disableAuth"
+                | "client"
+                | "emailPrivacyConfig"
+                | "passwordPolicyConfig"
+        )
+    }) {
+        return Err(error(400, "INVALID_ARGUMENT"));
     }
+    let display_name = match object.get("displayName") {
+        None => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let scalar_bool = |key: &str| match object.get(key) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let client = match object.get("client") {
+        None => None,
+        Some(Value::Object(value)) => Some(value),
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let permissions = match client {
+        None => None,
+        Some(client) => {
+            if client.keys().any(|key| key != "permissions") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            match client.get("permissions") {
+                Some(Value::Object(value)) => Some(value),
+                Some(_) | None => return Err(error(400, "INVALID_ARGUMENT")),
+            }
+        }
+    };
+    if permissions.is_some_and(|value| {
+        value
+            .keys()
+            .any(|key| key != "disabledUserSignup" && key != "disabledUserDeletion")
+    }) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let nested_bool = |key: &str| match permissions.and_then(|value| value.get(key)) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let privacy = match object.get("emailPrivacyConfig") {
+        None => None,
+        Some(Value::Object(value)) => Some(value),
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    if privacy.is_some_and(|value| value.keys().any(|key| key != "enableImprovedEmailPrivacy")) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let improved_email_privacy =
+        match privacy.and_then(|value| value.get("enableImprovedEmailPrivacy")) {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+        };
+    Ok(fireemu_core_auth::store::TenantMetadata {
+        display_name,
+        allow_password_signup: scalar_bool("allowPasswordSignup")?,
+        enable_email_link_signin: scalar_bool("enableEmailLinkSignin")?,
+        enable_anonymous_user: scalar_bool("enableAnonymousUser")?,
+        disable_auth: scalar_bool("disableAuth")?,
+        disabled_user_signup: nested_bool("disabledUserSignup")?,
+        disabled_user_deletion: nested_bool("disabledUserDeletion")?,
+        enable_improved_email_privacy: improved_email_privacy,
+    })
 }
 
 fn tenant_metadata_patch(
@@ -4087,20 +4132,32 @@ fn tenant_management(
     };
     match handler {
         Handler::TenantCreate => {
-            let metadata = tenant_metadata(body);
+            let metadata = match tenant_metadata(body) {
+                Ok(metadata) => metadata,
+                Err(response) => return response,
+            };
+            let password_policy = match body.get("passwordPolicyConfig") {
+                None => None,
+                Some(value) => match password_policy_from_config_json(value) {
+                    Ok(policy) => Some(policy),
+                    Err(response) => return response,
+                },
+            };
             let Some(tenant) = registry.create_tenant(project, metadata.clone()) else {
                 return error(400, "INVALID_PROJECT_ID");
             };
-            if registry
-                .patch_tenant(project, &tenant, tenant_client_config_patch(&metadata))
-                .is_none()
-            {
+            let Some((metadata, policy)) = registry.patch_tenant_with_password_policy(
+                project,
+                &tenant,
+                tenant_client_config_patch(&metadata),
+                password_policy,
+            ) else {
                 let _ = registry.delete_tenant(project, &tenant);
                 return error(500, "INTERNAL");
-            }
+            };
             JsonResponse {
                 status: 200,
-                body: tenant_json(project, &tenant, &metadata),
+                body: tenant_json_with_policy(project, &tenant, &metadata, &policy),
             }
         }
         Handler::TenantList => {
